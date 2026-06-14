@@ -53,8 +53,8 @@ class RecordQuestArgs(BaseModel):
         max_length=64,
         description=(
             "Stable quest identifier. A NEW id mints a quest; an EXISTING id "
-            "updates it (status evolution). Do not mint gratuitously — a quiet "
-            "scene does not need a quest."
+            "updates it (status evolution). Mint as soon as a concrete objective "
+            "forms; only a quiet scene with no objective should be left unminted."
         ),
     )
     title: str = Field(
@@ -91,7 +91,14 @@ class RecordQuestArgs(BaseModel):
         "Mint a new quest or evolve an existing one for the campaign spine. "
         "Use a NEW quest_id to create a quest (title + objective); reuse an "
         "EXISTING quest_id to update its status. Optionally anchor the quest to "
-        "a beat/location id. Mint only when the story gains a real objective."
+        "a beat/location id. MINT when the story gains a real objective — when a "
+        "giver names a task the player takes up, or the player commits to a goal "
+        "(find X, settle a debt, rescue Y, reach Z). Promoting an objective in "
+        "PROSE ALONE is not enough: the engine only tracks — and the player only "
+        "sees in their quest log — quests minted through this tool. If you wrote a "
+        "concrete objective into the narration, mint it here the same turn. (The "
+        "only restraint: a quiet scene with no objective does not need a quest — "
+        "do not mint mood or scenery.)"
     ),
     category=ToolCategory.WRITE,
 )

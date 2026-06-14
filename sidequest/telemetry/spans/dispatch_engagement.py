@@ -58,6 +58,16 @@ SPAN_DISPATCH_ENGAGEMENT_WATCHER_CRASHED = "dispatch_engagement.watcher.crashed"
 # backing" the OTEL panel exists to catch, in its narrator-improvised form.
 SPAN_NARRATION_IMPROVISED_COMBAT = "narration.improvised_combat.suspected"
 
+# QUEST-MAJOR (sq-playtest 2026-06-14, heavy_metal/barsoom): the narrator
+# authored a concrete objective in prose (a giver + a task + a clock — "find the
+# missing egg-keeper, settle the debt, claim the egg") but NEVER called the
+# ``record_quest`` WRITE tool, so ``quest_log`` stayed empty and the engine filed
+# the hook as a dormant ghost. The prose and the engine disagreed about whether a
+# live thread exists. This span fires when objective-establishing prose appears
+# with an empty quest_log — the quest analogue of improvised_combat: a promotion
+# that happened in narration but not in state (SOUL: Diamonds & Coal / taken bait).
+SPAN_NARRATION_UNMINTED_OBJECTIVE = "narration.unminted_objective.suspected"
+
 
 def _extract(span: Any) -> dict[str, Any]:
     attrs = span.attributes or {}
@@ -215,6 +225,44 @@ def narration_improvised_combat_span(
         yield span
 
 
+def _extract_unminted_objective(span: Any) -> dict[str, Any]:
+    attrs = span.attributes or {}
+    return {
+        "field": "narration.unminted_objective",
+        "evidence": attrs.get("evidence", ""),
+    }
+
+
+# Routed to component="narrator": the SUSPECT is the narrator (it authored an
+# objective in prose but did not call record_quest), the same attribution as the
+# improvised-combat span above.
+SPAN_ROUTES[SPAN_NARRATION_UNMINTED_OBJECTIVE] = SpanRoute(
+    event_type="state_transition",
+    component="narrator",
+    extract=_extract_unminted_objective,
+)
+
+
+@contextmanager
+def narration_unminted_objective_span(
+    *,
+    evidence: str,
+    _tracer: trace.Tracer | None = None,
+) -> Iterator[trace.Span]:
+    """Emit a ``narration.unminted_objective.suspected`` span.
+
+    Fired by ``run_unminted_objective_watcher`` when narration establishes a
+    concrete objective while ``quest_log`` is empty — the narrator promoted a
+    hook in prose but never minted it via ``record_quest`` (QUEST-MAJOR).
+    """
+    with Span.open(
+        SPAN_NARRATION_UNMINTED_OBJECTIVE,
+        {"evidence": evidence},
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
 __all__ = [
     "SPAN_DISPATCH_ENGAGEMENT_CONFRONTATION_MISMATCH",
     "SPAN_DISPATCH_ENGAGEMENT_MAGIC_WORKING_MISMATCH",
@@ -226,8 +274,10 @@ __all__ = [
     "SPAN_DISPATCH_ENGAGEMENT_MOVEMENT_MISMATCH",
     "SPAN_DISPATCH_ENGAGEMENT_WATCHER_CRASHED",
     "SPAN_NARRATION_IMPROVISED_COMBAT",
+    "SPAN_NARRATION_UNMINTED_OBJECTIVE",
     "dispatch_engagement_mismatch_span",
     "dispatch_engagement_watcher_crashed_span",
     "narration_improvised_combat_span",
+    "narration_unminted_objective_span",
     "span_name_for_subsystem",
 ]

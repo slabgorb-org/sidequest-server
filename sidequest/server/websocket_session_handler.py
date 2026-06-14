@@ -30,6 +30,7 @@ from sidequest.agents.claude_client import LlmClient
 from sidequest.agents.dispatch_engagement_watcher import (
     run_dispatch_engagement_watcher,
     run_improvised_combat_watcher,
+    run_unminted_objective_watcher,
 )
 from sidequest.agents.intent_router import IntentRouterFailure
 from sidequest.agents.llm_factory import _INTENT_ROUTER_MODEL, build_llm_client
@@ -1153,6 +1154,18 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     run_improvised_combat_watcher(
                         narration=getattr(result, "narration", "") or "",
                         package=turn_context.dispatch_package,
+                        snapshot=snapshot,
+                    )
+
+                    # QUEST-MAJOR lie-detector (sq-playtest 2026-06-14, barsoom):
+                    # the narrator authored a concrete objective in prose ("find
+                    # the keeper, settle the debt, claim the egg") but never called
+                    # record_quest, so quest_log stayed empty and the engine filed
+                    # the hook as a ghost. Beep when objective-establishing prose
+                    # appears with no minted quest — the quest analogue of the
+                    # improvised-combat detector above.
+                    run_unminted_objective_watcher(
+                        narration=getattr(result, "narration", "") or "",
                         snapshot=snapshot,
                     )
 

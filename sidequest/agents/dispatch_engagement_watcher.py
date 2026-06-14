@@ -58,6 +58,7 @@ from sidequest.telemetry.spans.dispatch_engagement import (
     dispatch_engagement_mismatch_span,
     dispatch_engagement_watcher_crashed_span,
     narration_improvised_combat_span,
+    narration_unminted_objective_span,
 )
 
 logger = logging.getLogger(__name__)
@@ -87,6 +88,29 @@ _IMPROVISED_COMBAT_MARKERS: tuple[str, ...] = (
     "blade across",
     "blood wells",
     "spurts blood",
+)
+
+# QUEST-MAJOR (sq-playtest 2026-06-14): curated objective-GIVING phrases — the
+# specific constructions a narrator uses when a hook becomes a concrete quest (a
+# giver names a task). Kept deliberately tight and biased toward precision: this
+# fires a GM-panel beep (observability), never a control-flow block, and the
+# empty-quest_log gate does the heavy discriminating, so a missed phrasing is far
+# cheaper than crying wolf on every early-game scene that merely mentions a goal.
+# Matched case-insensitively as substrings. Tunable as findings accrue.
+_UNMINTED_OBJECTIVE_MARKERS: tuple[str, ...] = (
+    "if you can find",
+    "find the missing",
+    "settle the debt",
+    "pay the debt",
+    "pay her debt",
+    "pay his debt",
+    "your task is",
+    "i need you to find",
+    "you must find",
+    "find her and bring",
+    "find him and bring",
+    "bring it back to",
+    "has not returned",
 )
 
 
@@ -564,10 +588,87 @@ def run_improvised_combat_watcher(
             pass
 
 
+def detect_unminted_objective(
+    *,
+    narration: str,
+    snapshot: GameSnapshot,
+) -> str | None:
+    """Detect a concrete objective authored in prose with no minted quest.
+
+    Returns a short evidence string when BOTH hold, else ``None``:
+
+    1. ``snapshot.quest_log`` is empty — no quest is tracked. A correct
+       ``record_quest`` call mutates ``quest_log`` DURING narration (before this
+       post-narration pass runs), so a minted quest fills the log and stands the
+       detector down; only a TRULY un-minted objective trips it. (A quest minted
+       on a prior turn also fills the log — v1 deliberately scopes to the
+       zero-quest case, the QUEST-MAJOR barsoom repro: ``quest_log={}`` after 16
+       turns despite an authored "find the keeper, settle the debt" objective.)
+    2. The narration contains a curated objective-GIVING marker — the prose
+       actually establishes a quest (a giver + a task), not merely a mood.
+
+    The quest analogue of :func:`detect_improvised_combat`: a promotion that
+    happened in narration but not in state (SOUL: Diamonds & Coal — taken bait
+    must earn promotion into persistent state, not live only in prose). Pure — no
+    I/O, no tracer touch — so callers can introspect without an exporter; the
+    wrapper emits the span.
+    """
+    if not narration:
+        return None
+    quest_log = getattr(snapshot, "quest_log", None) or {}
+    if quest_log:
+        return None
+    lowered = narration.lower()
+    hits = [marker for marker in _UNMINTED_OBJECTIVE_MARKERS if marker in lowered]
+    if not hits:
+        return None
+    return (
+        f"narration establishes a concrete objective ({', '.join(hits[:3])}) but "
+        "quest_log is empty — the hook was promoted in prose, never minted via "
+        "record_quest"
+    )
+
+
+def run_unminted_objective_watcher(
+    *,
+    narration: str,
+    snapshot: GameSnapshot,
+    tracer: trace.Tracer | None = None,
+) -> None:
+    """Run the unminted-objective detector and emit one span on a hit.
+
+    **Non-fatal by contract** — identical discipline to
+    :func:`run_improvised_combat_watcher`: a pure-observability post-narration
+    pass, so any exception is caught, logged, and surfaced as the watcher-crashed
+    span rather than tearing down turn delivery.
+    """
+    try:
+        evidence = detect_unminted_objective(narration=narration, snapshot=snapshot)
+        if evidence is not None:
+            with narration_unminted_objective_span(evidence=evidence, _tracer=tracer):
+                pass
+    except Exception as exc:  # noqa: BLE001 — observability must never abort the turn
+        logger.error(
+            "unminted_objective.watcher_crashed error_type=%s error=%s "
+            "(turn pipeline continues; unminted-objective coverage lost this turn)",
+            type(exc).__name__,
+            exc,
+            exc_info=True,
+        )
+        with dispatch_engagement_watcher_crashed_span(
+            error_type=type(exc).__name__,
+            error=str(exc),
+            _tracer=tracer,
+        ):
+            pass
+
+
 __all__ = [
     "DispatchMismatch",
     "detect_dispatch_engagement_mismatch",
     "detect_improvised_combat",
+    "detect_unminted_objective",
     "run_dispatch_engagement_watcher",
     "run_improvised_combat_watcher",
+    "run_unminted_objective_watcher",
 ]

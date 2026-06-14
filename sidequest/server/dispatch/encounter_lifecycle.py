@@ -41,6 +41,8 @@ from sidequest.server.dispatch.sealed_letter import ROLE_BLUE, ROLE_RED
 from sidequest.telemetry.spans import (
     encounter_confrontation_initiated_span,
     encounter_no_opponent_available_span,
+    encounter_opponent_minted_stub_span,
+    encounter_opponent_resolved_from_roster_span,
     encounter_opponent_toothless_span,
     encounter_resolved_span,
     encounter_sealed_letter_arity_rejected_span,
@@ -133,6 +135,49 @@ def reap_resolved_encounter_husk(
     enc = snapshot.encounter
     if is_dice_replay or enc is None or not enc.resolved:
         return False
+
+    # 108-2 (MINTING-MAJOR persist): a FABRICATED combat stub (ephemeral, no
+    # backing roster/bestiary entry — the "Arena Opponent" / "Hold-Dead" stubs)
+    # must not survive its fight as durable canon the narrator can re-reference
+    # as a living NPC on later turns (snapshot showed it lingering at hp 0/10,
+    # `npc.referenced match=npcs_hit` turns 7-8). Reap any ephemeral opponent of
+    # the resolved encounter together with the husk. Bound creatures
+    # (``creature_id`` set, ephemeral=False) and narrator-declared NPCs are NEVER
+    # touched — only engine-fabricated stubs are quarantined.
+    opponent_names = {a.name for a in enc.actors if a.side == "opponent"}
+    reaped_stubs = [
+        npc.core.name
+        for npc in snapshot.npcs
+        if npc.ephemeral and npc.core.name in opponent_names
+    ]
+    if reaped_stubs:
+        snapshot.npcs[:] = [
+            npc
+            for npc in snapshot.npcs
+            if not (npc.ephemeral and npc.core.name in opponent_names)
+        ]
+        for stub_name in reaped_stubs:
+            _watcher_publish(
+                "state_transition",
+                {
+                    "field": "npcs",
+                    "op": "ephemeral_stub_reaped",
+                    "npc_name": stub_name,
+                    "encounter_type": enc.encounter_type,
+                    "turn": str(turn),
+                    "source": "turn_start",
+                },
+                component="encounter",
+            )
+            _log.info(
+                "encounter.ephemeral_stub_reaped npc=%s type=%s turn=%s "
+                "(fabricated combat stub removed with its resolved encounter so it "
+                "cannot persist as canon)",
+                stub_name,
+                enc.encounter_type,
+                turn,
+            )
+
     snapshot.encounter = None
     _watcher_publish(
         "state_transition",
@@ -276,6 +321,16 @@ def _seed_combat_hp_depletion_to_npcs(
             # reach it and hp_depletion can resolve. The flavor fields are
             # placeholders (the narrator owns prose); the mechanical surface
             # (hp pool, AC) is the load-bearing part.
+            #
+            # 108-2 (MINTING-MAJOR): reaching here means the opponent name
+            # resolved to NEITHER a bound roster entry NOR a co-located statted
+            # adversary (the materialized-threat resolution upstream already
+            # tried). This is a genuine fabrication — a router-named free string
+            # with no backing (the "Arena Opponent" / "Hold-Dead" stubs). Mark it
+            # ``ephemeral`` so it is reaped with its resolved encounter and never
+            # persists as durable canon, and fire the loud lie-detector span so
+            # the GM panel sees the fabrication + the content gap (No Silent
+            # Fallbacks).
             core = CreatureCore(
                 name=actor.name,
                 description="Combat opponent",
@@ -284,13 +339,34 @@ def _seed_combat_hp_depletion_to_npcs(
                 hp=hp_pool_from_hp(hp),
                 armor_class=ac,
             )
-            npc = Npc(core=core)
+            npc = Npc(core=core, ephemeral=True)
             snapshot.npcs.append(npc)
+            with encounter_opponent_minted_stub_span(
+                confrontation_type=str(getattr(cdef, "confrontation_type", "") or ""),
+                opponent=actor.name,
+                hp=int(hp),
+                armor_class=int(ac),
+                reason=(
+                    "router-named opponent has no backing roster/bestiary entry "
+                    "and no co-located bound adversary to resolve to — fabricated "
+                    "an ephemeral stub (author the encounter's adversary)"
+                ),
+            ):
+                pass
+        elif npc.creature_id is not None:
+            # 108-2: a BOUND, statted bestiary creature (resolved upstream or
+            # named directly). Its authored HP pool IS the WWN-balanced math the
+            # ruleset binding exists to inherit (SOUL "Bind the Ruleset, Don't
+            # Balance It") — the confrontation's generic ``opponent_default_stats``
+            # must NOT clobber it. Reset only ``current`` to the creature's OWN
+            # max (combat-start full) and keep its own AC.
+            npc.core.hp.current = npc.core.hp.max
         else:
-            # Overwrite branch: reset the existing opponent's pool to FULL at
-            # combat START. This is a start-of-fight assumption — a re-entry
-            # would heal the opponent, but the ADR-116 no-reopen flow (an
-            # encounter resolves and is not re-instantiated) prevents that.
+            # Overwrite branch: a narrator-declared NPC with no real stats. Reset
+            # its pool to FULL from the content default at combat START. This is a
+            # start-of-fight assumption — a re-entry would heal the opponent, but
+            # the ADR-116 no-reopen flow (an encounter resolves and is not
+            # re-instantiated) prevents that.
             npc.core.hp = hp_pool_from_hp(hp)
             npc.core.armor_class = ac
         # Story 72-8: presence stamp — this opponent is on the board this turn.
@@ -675,6 +751,62 @@ def _npc_fallback_at_location(
             )
         )
     return fallback, True
+
+
+def _resolve_opponent_from_roster(
+    snapshot: GameSnapshot,
+    *,
+    threat_name: str,
+    acting_character_name: str | None,
+) -> Npc | None:
+    """108-2: reconcile a router-named free-string opponent to a bound, statted
+    adversary present in the scene BEFORE the seater fabricates a stub.
+
+    The intent router names the adversary as a free string
+    (``confrontation params["opponent"]``); when that string matches no roster
+    ``Npc`` the seater used to fabricate a generic HP-10 placeholder (the
+    "Hold-Dead, Still at the Shift" / "Arena Opponent" stubs) while the
+    narrator's own prose referenced a BOUND bestiary creature ("Molgrath the
+    Eyeless", HP 24) — a player-visible identity split (prose name ≠ combat-panel
+    name) and a discard of the WWN-balanced Monster-Manual stats (107-2 /
+    ADR-059). The narrator knows the roster; the seater didn't consult it.
+
+    Returns the co-located bound creature to seat in the router name's place, or
+    ``None`` to leave the router name as-is — either because it already matches a
+    roster entry (seat it directly; the seater dedups) or because no co-located
+    bound adversary exists (the truly-novel fight: the seater mints a loud,
+    ephemeral stub downstream).
+
+    A candidate is a ``creature_id``-statted, adversarial (``_npc_is_adversary``),
+    non-friendly NPC at the acting PC's resolved location — the same room signal
+    (``last_seen_location`` / ``location``) ``_npc_fallback_at_location`` and the
+    Monster-Manual injector use. Region-wide sourcing is deliberately NOT done:
+    NPCs carry no region key, so a broader scan could conscript a creature from
+    an unrelated room — the exact over-reach ADR-116 guards against.
+    """
+    # An exact roster match means the router named a real NPC — seat it directly
+    # (the seater's dedup reuses it). Resolution is only for unbacked inventions.
+    if any(n.core.name == threat_name for n in snapshot.npcs):
+        return None
+    location = snapshot.party_location(perspective=acting_character_name)
+    if not location:
+        return None
+    candidates = [
+        n
+        for n in snapshot.npcs
+        if n.creature_id is not None
+        and (n.last_seen_location == location or n.location == location)
+        and _npc_is_adversary(n)
+        and n.disposition.attitude() != Attitude.FRIENDLY
+    ]
+    if not candidates:
+        return None
+    # Deterministic pick: most recently in scene, then highest threat, then name.
+    candidates.sort(
+        key=lambda n: (n.last_seen_turn, n.threat_level or 0, n.core.name),
+        reverse=True,
+    )
+    return candidates[0]
 
 
 def _friendly_fallback_at_location(
@@ -1100,8 +1232,40 @@ def instantiate_encounter_from_trigger(
         # ``_seed_combat_hp_depletion_to_npcs`` (Task 9) for the opponent actor
         # lacking an Npc. ``materialized`` distinguishes this seat from a
         # router-named or location-fallback one on the participant.joined span.
+        #
+        # 108-2: the router names the adversary as a FREE STRING. Before seating
+        # (and persisting) an invention, reconcile it to a bound, statted
+        # adversary present in the scene (ADR-059 Monster-Manual / ADR-116 the
+        # Other). The narrator's prose already fights the bound creature; only
+        # the router's separate call invented the placeholder name (the
+        # Molgrath-vs-Hold-Dead split). When it resolves, seat the bound creature
+        # — its WWN-statted HP reaches the fight instead of an HP-10 stub.
+        resolved_opponent = _resolve_opponent_from_roster(
+            snapshot,
+            threat_name=materialized_threat.name,
+            acting_character_name=player_name,
+        )
+        if resolved_opponent is not None:
+            from sidequest.agents.orchestrator import NpcMention as _NpcMention
+
+            with encounter_opponent_resolved_from_roster_span(
+                router_name=materialized_threat.name,
+                bound_name=resolved_opponent.core.name,
+                creature_id=resolved_opponent.creature_id or "",
+                match_scope="room",
+            ):
+                pass
+            materialized_threat = _NpcMention(
+                name=resolved_opponent.core.name,
+                pronouns=resolved_opponent.pronouns or "",
+                role=resolved_opponent.npc_role_id or "hostile",
+                appearance=resolved_opponent.appearance or "",
+                side="opponent",
+            )
+            seating_source = "roster_resolved"
+        else:
+            seating_source = "materialized"
         npcs_present = [materialized_threat]
-        seating_source = "materialized"
     elif not npcs_present and cdef.confrontation_type not in _SHIP_SCALE_CONFRONTATION_TYPES:
         seating_source = "location_fallback"
         npcs_present, location_available = _npc_fallback_at_location(

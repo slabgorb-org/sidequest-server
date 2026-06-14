@@ -239,6 +239,17 @@ class Npc(BaseModel):
     morale: str | None = None
     """B/X morale descriptor. ``None`` for non-creature NPCs."""
 
+    # 108-2 (MINTING-MAJOR persist): ``True`` only for a combat opponent the
+    # seater had to FABRICATE — a router-named free-string adversary with no
+    # backing roster/bestiary entry (the "Arena Opponent" / "Hold-Dead" stubs).
+    # A fabricated stub is a transient combat actor, NOT durable world canon: it
+    # is reaped together with its resolved encounter (``reap_resolved_encounter_husk``)
+    # so the narrator can never re-reference a dead nameless placeholder as a
+    # living NPC on later turns. Bound creatures (``creature_id`` set) and
+    # narrator-declared NPCs leave this ``False`` and persist normally.
+    ephemeral: bool = False
+    """``True`` when this NPC is a fabricated combat stub to be reaped post-encounter."""
+
     def name(self) -> str:
         return self.core.name
 

@@ -167,8 +167,39 @@ async def test_success_restores_one_hp_and_downgrades_to_frail():
     core = store.load().snapshot.find_creature_core("Rux")
     assert core is not None
     assert core.hp.current == 1, "a stabilized PC recovers at exactly 1 HP"
-    assert any("Frail" in s.text for s in core.statuses), "Mortal Injury downgrades to Frail"
+    # Structured assertion (not a `.text` scrape — the whole point of 108-6): the
+    # downgrade is a non-stabilizable Wound-severity status.
+    assert any(s.severity == StatusSeverity.Wound and not s.stabilizable for s in core.statuses), (
+        "Mortal Injury downgrades to a Frail Wound"
+    )
     assert not any(is_dying_window_status(s) for s in core.statuses), "the window must clear"
+
+
+@pytest.mark.asyncio
+async def test_failed_stabilization_leaves_window_and_hp_unchanged():
+    # Derived rounds_elapsed = 5 − 3 = 2 → difficulty = 10. Roll 9 FAILS.
+    from sidequest.game.ruleset.without_number import is_dying_window_status
+
+    store = _store(_snapshot(created_turn=3, current_turn=5))
+    result = await _call({"actor": "Rux", "rounds_elapsed": 2, "roll": 9}, _ctx(store))
+    assert _payload(result)["success"] is False
+
+    core = store.load().snapshot.find_creature_core("Rux")
+    assert core is not None
+    assert core.hp.current == 0, "a failed stabilization must NOT heal"
+    assert any(is_dying_window_status(s) for s in core.statuses), (
+        "a failed stabilization must leave the dying window in place (timer keeps running)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_narrator_overstating_rounds_elapsed_also_fails_loud():
+    # Symmetric to the under-state case: narrator OVER-states elapsed time
+    # (supplies 5 when the engine derives 2). The cross-check must reject both
+    # directions, not just under-statement.
+    ctx = _ctx(_store(_snapshot(created_turn=3, current_turn=5)))
+    with pytest.raises(ValueError, match="rounds_elapsed"):
+        await _call({"actor": "Rux", "rounds_elapsed": 5, "roll": 20}, ctx)
 
 
 @pytest.mark.asyncio

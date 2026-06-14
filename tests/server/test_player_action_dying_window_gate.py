@@ -29,15 +29,16 @@ from sidequest.game.status import Status, StatusSeverity
 from sidequest.game.turn import TurnManager
 from sidequest.protocol.enums import MessageType
 from sidequest.telemetry.spans.encounter import SPAN_PLAYER_ACTION_BLOCKED_INCAPACITATED
+from tests.server.test_dying_window_expiry import _WwnPack
 from tests.server.test_player_action_incapacitated_gate import (
     DEAD_PC,
-    _ReachedNarrationPath,
     _action_msg,
     _playing_session,
+    _ReachedNarrationPath,
 )
 
 
-def _snapshot_with_status(status: Status) -> GameSnapshot:
+def _snapshot_with_status(status: Status, *, interaction: int = 1) -> GameSnapshot:
     core = CreatureCore(
         name=DEAD_PC,
         description="Martian mentalist, bleeding out alone",
@@ -48,7 +49,7 @@ def _snapshot_with_status(status: Status) -> GameSnapshot:
     snap = GameSnapshot(
         genre_slug="heavy_metal",
         world_slug="barsoom",
-        turn_manager=TurnManager(),
+        turn_manager=TurnManager(interaction=interaction),
     )
     snap.characters.append(
         Character(core=core, char_class="Mentalist", race="Martian", backstory="Arena-born.")
@@ -57,10 +58,13 @@ def _snapshot_with_status(status: Status) -> GameSnapshot:
 
 
 def _window_status() -> Status:
+    # created_turn=0 with the snapshot at interaction=1 → demonstrably WITHIN the
+    # deadline (0 + mortal_injury_rounds), so the permit must come from the real
+    # carve (a real WwnConfig deadline computation), not the no-cfg fallback.
     return Status(
         text="Mortal Injury — dies in 6 rounds unless stabilized",
         severity=StatusSeverity.Scar,
-        created_turn=4,
+        created_turn=0,
         created_in_encounter="combat",
         incapacitating=True,
         stabilizable=True,
@@ -84,10 +88,12 @@ async def test_stabilizable_window_permits_action_into_narration(monkeypatch, ot
     post-gate sentinel)."""
     from sidequest.handlers.player_action import HANDLER
 
-    monkeypatch.setattr(
-        "sidequest.handlers.player_action._watcher_publish", lambda *a, **k: None
-    )
-    session = _playing_session(_snapshot_with_status(_window_status()))
+    monkeypatch.setattr("sidequest.handlers.player_action._watcher_publish", lambda *a, **k: None)
+    session = _playing_session(_snapshot_with_status(_window_status(), interaction=1))
+    # Bind a REAL WwnConfig pack so the carve exercises the real deadline
+    # computation (within-deadline → permit), NOT the no-cfg capability-gate
+    # fallback. Without this the test would pass even if the permit logic broke.
+    session._session_data.genre_pack = _WwnPack()
     session._retrieve_lore_for_turn = AsyncMock(side_effect=_ReachedNarrationPath)
 
     with pytest.raises(_ReachedNarrationPath):
@@ -108,9 +114,7 @@ async def test_terminal_status_still_blocks(monkeypatch, otel_capture):
     coherence and the barsoom-3 dead-man-walking fix stay intact)."""
     from sidequest.handlers.player_action import HANDLER
 
-    monkeypatch.setattr(
-        "sidequest.handlers.player_action._watcher_publish", lambda *a, **k: None
-    )
+    monkeypatch.setattr("sidequest.handlers.player_action._watcher_publish", lambda *a, **k: None)
     session = _playing_session(_snapshot_with_status(_terminal_status()))
 
     outbound = await HANDLER.handle(session, _action_msg())

@@ -93,16 +93,13 @@ async def test_downed_soloist_submission_is_not_halted(monkeypatch):
     """The core gap fix: after the window opens, the soloist's free-text action
     reaches the narration path instead of being blocked. Proven by the post-gate
     sentinel firing on the real PlayerActionHandler.handle."""
+    from sidequest.game.ruleset.without_number import is_dying_window_status
     from sidequest.handlers.player_action import HANDLER
     from sidequest.protocol.enums import MessageType
     from sidequest.protocol.messages import PlayerActionMessage, PlayerActionPayload
     from sidequest.protocol.types import NonBlankString
 
-    from sidequest.game.ruleset.without_number import is_dying_window_status
-
-    monkeypatch.setattr(
-        "sidequest.handlers.player_action._watcher_publish", lambda *a, **k: None
-    )
+    monkeypatch.setattr("sidequest.handlers.player_action._watcher_publish", lambda *a, **k: None)
     snap, pack = _open_solo_window()
 
     # The premise the gap is about: the opened window is INCAPACITATING (the PC is

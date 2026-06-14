@@ -7,17 +7,19 @@ character dies at the end of ``mortal_injury_rounds`` unless stabilized).
 
     narrator: stabilize_mortal_injury(actor=Jax, skill=Heal, attribute=Reflex,
                                       rounds_elapsed=1, roll=18)
-                    |
+                    |   (rounds_elapsed is a cross-check — the ENGINE derives it
+                    |    from the window's created_turn; a mismatch fails loud)
                     v
-    Heal check:  roll  vs  difficulty = 8 + rounds_elapsed
+    Heal check:  roll  vs  difficulty = 8 + rounds_elapsed   (engine-derived)
                     |
-       success ->  remove the Mortal Injury Status, append a "Frail" Wound
-       failure ->  leave the Mortal Injury in place (the timer keeps running)
+       success ->  clear the dying window, recover to 1 HP, append a "Frail" Wound
+       failure ->  leave the dying window in place (the timer keeps running)
 
 The WN rule (Without Number family, Sine Nomine, CC0): a Dex/Heal or Int/Heal
 check vs ``8 + rounds_elapsed`` stabilizes a Mortal Injury. On success the
-victim "Recovers at 1 HP + Frail" — the Mortal Injury (a Scar) clears and a
-Frail Wound (clears with rest, per StatusSeverity.Wound) takes its place.
+victim "Recovers at 1 HP + Frail" — the dying window (a Scar, story 108-6
+``stabilizable``) clears, HP is restored to 1, and a Frail Wound (clears with
+rest, per StatusSeverity.Wound) takes its place.
 
 Guards (fail loud — no silent fallbacks per CLAUDE.md):
 - bound module ``not isinstance(module, WithoutNumberRulesetModule)`` → ValueError (the tool
@@ -57,7 +59,6 @@ from sidequest.telemetry.spans.wn import (
     dying_window_tick_span,
 )
 
-_MORTAL_INJURY_MARKER = "Mortal Injury"
 _FRAIL_TEXT = "Frail — recovering at 1 HP"
 
 

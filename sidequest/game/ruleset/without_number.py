@@ -491,17 +491,23 @@ class WithoutNumberRulesetModule(RulesetModule):
         and attaches a second Scar. Emits {slug}.mortal_injury.declared and
         (when rolled) {slug}.major_injury.roll.
 
+        ``dying_window`` (story 108-6) selects which Mortal Injury status to mint
+        when NOT superseded: ``True`` mints the live WWN dying window
+        (``incapacitating`` + ``stabilizable`` — the solo last-stand the gate
+        permits the player to drive), ``False`` mints the ordinary
+        non-incapacitating death clock (a downed opponent, or a PC dropped with a
+        live hostile still present). The seam chooses ``dying_window`` from
+        live-hostile presence; this method just classifies the status.
+
         ``superseded_by_terminal`` (sq-playtest #239 death dual-status): when the
         genre lethality policy has ALREADY ruled this actor terminally dead (an
         ``incapacitating`` "Downed — ... (mortally wounded)" status is present),
-        a coexisting non-incapacitating "dies in N rounds unless stabilized"
-        window is a CONTRADICTORY second status — terminal-dead vs. stabilizable.
-        The real WWN dying window is deferred to story 106-5 (and is unactionable
-        in solo per .pennyfarthing/sidecars/gm-decisions.md). So we SUPERSEDE:
-        the WN lethality span still fires (GM-panel lie-detector — WN lethality
-        IS engaged), carrying ``superseded_by_terminal=True``, but the
-        contradictory window status (and any Major Injury scar) is NOT appended.
-        A terminally-dead PC then shows exactly ONE coherent status.
+        a coexisting "dies in N rounds unless stabilized" window is a
+        CONTRADICTORY second status — terminal-dead vs. stabilizable. So we
+        SUPERSEDE: the WN lethality span still fires (GM-panel lie-detector — WN
+        lethality IS engaged), carrying ``superseded_by_terminal=True``, but no
+        Mortal Injury status (and no Major Injury scar) is appended. A
+        terminally-dead PC then shows exactly ONE coherent status.
         """
         if not isinstance(cfg, (CwnConfig, WwnConfig)):
             raise ValueError(

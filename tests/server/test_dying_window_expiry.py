@@ -101,9 +101,7 @@ def _snapshot_past_deadline() -> GameSnapshot:
 async def test_submitting_past_deadline_is_refused_as_terminal(monkeypatch, otel_capture):
     from sidequest.handlers.player_action import HANDLER
 
-    monkeypatch.setattr(
-        "sidequest.handlers.player_action._watcher_publish", lambda *a, **k: None
-    )
+    monkeypatch.setattr("sidequest.handlers.player_action._watcher_publish", lambda *a, **k: None)
     session = _playing_session(_snapshot_past_deadline())
     session._session_data.genre_pack = _WwnPack()
 
@@ -115,15 +113,28 @@ async def test_submitting_past_deadline_is_refused_as_terminal(monkeypatch, otel
         "a dying-window submission past the deadline must be refused as terminal"
     )
 
+    # AC5 lie-detector: the expiry path must emit the engine-owned clock spans so
+    # the GM panel can prove the death was clock-driven, not narrator-improvised.
+    spans = otel_capture.get_finished_spans()
+    tick = [s for s in spans if s.name == "wwn.dying_window.tick"]
+    assert tick, "expiry must emit wwn.dying_window.tick"
+    assert (tick[0].attributes or {})["action_was_stabilization"] is False, (
+        "the fatal final round is NOT a stabilization"
+    )
+    resolved = [s for s in spans if s.name == "wwn.dying_window.resolved"]
+    assert resolved, "expiry must emit wwn.dying_window.resolved"
+    assert (resolved[0].attributes or {})["outcome"] == "died"
+
 
 @pytest.mark.asyncio
-async def test_expiry_clears_the_window_and_leaves_terminal(monkeypatch, otel_capture):
+async def test_expiry_clears_the_window_and_leaves_terminal(monkeypatch):
+    # Span assertions for the expiry path live in
+    # test_submitting_past_deadline_is_refused_as_terminal; this test owns the
+    # single-status-coherence assertion only.
     from sidequest.game.ruleset.without_number import is_dying_window_status
     from sidequest.handlers.player_action import HANDLER
 
-    monkeypatch.setattr(
-        "sidequest.handlers.player_action._watcher_publish", lambda *a, **k: None
-    )
+    monkeypatch.setattr("sidequest.handlers.player_action._watcher_publish", lambda *a, **k: None)
     snap = _snapshot_past_deadline()
     session = _playing_session(snap)
     session._session_data.genre_pack = _WwnPack()
@@ -135,6 +146,6 @@ async def test_expiry_clears_the_window_and_leaves_terminal(monkeypatch, otel_ca
     assert not any(is_dying_window_status(s) for s in core.statuses), (
         "an expired window must be removed (single coherent status)"
     )
-    assert any(
-        s.incapacitating and not getattr(s, "stabilizable", False) for s in core.statuses
-    ), "an expired window must leave a terminal-dead status"
+    assert any(s.incapacitating and not getattr(s, "stabilizable", False) for s in core.statuses), (
+        "an expired window must leave a terminal-dead status"
+    )

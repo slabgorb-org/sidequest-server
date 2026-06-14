@@ -610,11 +610,24 @@ class PlayerActionHandler:
                 dying_window_tick_span,
             )
 
-            slug = _bound_wn_slug(sd)
             rounds_elapsed = max(
                 0, sd.snapshot.turn_manager.interaction - downed_status.created_turn
             )
             if _dying_window_expired(sd, downed_status):
+                # Resolve the slug honestly: a window only opens under a WN cfg, so
+                # the slug must be readable here. If it isn't (an inconsistent
+                # pack), do NOT mis-namespace under "wwn" — log loud and emit under
+                # an "unknown" sentinel so the GM panel isn't fed a false slug
+                # (slug-honesty / No Silent Fallbacks).
+                slug = _bound_wn_slug(sd)
+                if slug is None:
+                    logger.error(
+                        "dying_window.unknown_slug actor=%s — WN window expired but "
+                        "the bound ruleset slug is unreadable; emitting spans under "
+                        "'unknown' rather than a false 'wwn' namespace",
+                        acting_name,
+                    )
+                    slug = "unknown"
                 downed_core.statuses = [
                     s for s in downed_core.statuses if not is_dying_window_status(s)
                 ]
@@ -627,14 +640,14 @@ class PlayerActionHandler:
                 )
                 downed_core.statuses.append(terminal)
                 dying_window_tick_span(
-                    ruleset=slug or "wwn",
+                    ruleset=slug,
                     actor=acting_name,
                     rounds_elapsed=rounds_elapsed,
                     difficulty=8 + rounds_elapsed,
                     action_was_stabilization=False,
                 )
                 dying_window_resolved_span(
-                    ruleset=slug or "wwn",
+                    ruleset=slug,
                     actor=acting_name,
                     outcome="died",
                     final_rounds_elapsed=rounds_elapsed,

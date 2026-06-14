@@ -31,9 +31,11 @@ from sidequest.game.encounter import (
     StructuredEncounter,
 )
 from sidequest.game.fate_sheet import Aspect, FateSheet, StressTrackName
+from sidequest.game.ruleset.base import RulesetModule
 from sidequest.game.ruleset.fate import FateRulesetModule
 from sidequest.game.ruleset.fate_resolution import Opposition
 from sidequest.game.session import GameSnapshot
+from sidequest.protocol.fate import FateActionPayload
 from sidequest.telemetry.spans import (
     fate_aspect_created_span,
     fate_conceded_span,
@@ -563,9 +565,7 @@ def concede_in_conflict(
         raise FateConflictError(f"{actor!r} has no Fate sheet to concede with")
     actor_obj = encounter.find_actor(actor)
     if actor_obj is None:
-        raise FateConflictError(
-            f"{actor!r} is not seated in this encounter — cannot concede"
-        )
+        raise FateConflictError(f"{actor!r} is not seated in this encounter — cannot concede")
     filled = sum(1 for c in core.fate_sheet.consequences if c.aspect is not None)
     earned = 1 + filled
     for _ in range(earned):
@@ -576,3 +576,120 @@ def concede_in_conflict(
     fate_conceded_span(actor=actor, fate_points_earned=earned, _tracer=_tracer)
     _maybe_resolve_side_cleared(encounter)
     return earned
+
+
+@dataclass(frozen=True)
+class FateDispatchResult:
+    """What one FATE_ACTION dispatch produced. ``commitment_pending`` mirrors the
+    WN ``DiceThrowOutcome.commitment_pending`` idiom: True when the action sealed
+    and the barrier is still open; False when this action fired the exchange (or
+    was a concession). ``exchange`` is the walk's result, or None when pending /
+    conceded."""
+
+    commitment_pending: bool
+    exchange: FateExchangeResult | None
+
+
+def dispatch_fate_action(
+    *,
+    payload: FateActionPayload,
+    actor_name: str,
+    encounter: StructuredEncounter | None,
+    ruleset: RulesetModule,
+    snapshot: GameSnapshot,
+    rng: random.Random,
+    round_number: int = 0,
+    _tracer: trace.Tracer | None = None,
+) -> FateDispatchResult:
+    """Route a player's Fate action to the exchange engine (ADR-144 F1d).
+
+    The routing decision is ``isinstance(ruleset, FateRulesetModule)`` — exactly
+    how ``dispatch_dice_throw`` gates WN combat on ``WithoutNumberRulesetModule``.
+    A FATE_ACTION under a non-Fate ruleset is a config/client bug, rejected loud
+    (No Silent Fallbacks). Concede is pre-roll and routes to
+    ``concede_in_conflict``; the three proactive actions seal via
+    ``seal_fate_commit`` and fire ``run_fate_exchange`` when the barrier closes.
+    """
+    if not isinstance(ruleset, FateRulesetModule):
+        raise FateConflictError(
+            f"FATE_ACTION dispatched under non-Fate ruleset "
+            f"{type(ruleset).__name__!r}; the Fate channel is only valid for a "
+            "pack bound 'ruleset: fate' (No Silent Fallbacks — ADR-144)"
+        )
+    if encounter is None or encounter.resolved:
+        raise FateConflictError("FATE_ACTION requires an active, unresolved encounter")
+    actor_obj = encounter.find_actor(actor_name)
+    if actor_obj is None:
+        raise FateConflictError(f"{actor_name!r} is not seated in this encounter")
+
+    # Bind a local so pyright narrows the action Literal past the concede guard
+    # (member-access narrowing would not survive the resolve_action call).
+    action = payload.action
+
+    # Concession is pre-roll, non-committing.
+    if action == "concede":
+        concede_in_conflict(
+            encounter=encounter,
+            snapshot=snapshot,
+            ruleset=ruleset,
+            actor=actor_name,
+            _tracer=_tracer,
+        )
+        return FateDispatchResult(commitment_pending=False, exchange=None)
+
+    core = snapshot.find_creature_core(actor_name)
+    if core is None or core.fate_sheet is None:
+        raise FateConflictError(f"{actor_name!r} has no Fate sheet to act with")
+
+    # Optional pre-roll invoke (+2; spends a free invoke or a fate point — F1b).
+    invoke_bonus = 0
+    if payload.invoke_aspect:
+        invoke_bonus = ruleset.invoke_aspect(
+            sheet=core.fate_sheet,
+            aspect_text=payload.invoke_aspect,
+            mode="bonus",
+            actor=actor_name,
+            _tracer=_tracer,
+        )
+
+    # All three proactive actions seal the attacker's 4dF roll now (mirrors WN
+    # sealing the to-hit at commit); concede already returned above. Defense is
+    # reactive — the engine rolls it for the target at resolution, never a
+    # committed action (there is no full_defense — not in the Fate SRD).
+    rating = core.fate_sheet.skills.get(payload.skill, 0)
+    outcome = ruleset.resolve_action(
+        skill_rating=rating,
+        opposition=Opposition(
+            value=payload.difficulty,
+            kind="active" if payload.target is not None else "passive",
+        ),
+        rng=rng,
+        invoke_bonus=invoke_bonus,
+        actor=actor_name,
+        _tracer=_tracer,
+    )
+    ladder_total, dice = outcome.ladder_total, outcome.dice
+
+    seal_fate_commit(
+        encounter=encounter,
+        actor=actor_obj,
+        action=action,
+        skill=payload.skill,
+        target=payload.target,
+        difficulty=payload.difficulty,
+        ladder_total=ladder_total,
+        dice=dice,
+        aspect_text=payload.aspect_text,
+    )
+
+    if fate_barrier_closed(encounter=encounter, snapshot=snapshot):
+        result = run_fate_exchange(
+            encounter=encounter,
+            snapshot=snapshot,
+            ruleset=ruleset,
+            rng=rng,
+            round_number=round_number,
+            _tracer=_tracer,
+        )
+        return FateDispatchResult(commitment_pending=False, exchange=result)
+    return FateDispatchResult(commitment_pending=True, exchange=None)

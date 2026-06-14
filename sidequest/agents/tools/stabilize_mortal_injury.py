@@ -47,8 +47,12 @@ from sidequest.agents.tool_registry import (
     tool,
 )
 from sidequest.game.ruleset import get_ruleset_module
-from sidequest.game.ruleset.without_number import WithoutNumberRulesetModule
+from sidequest.game.ruleset.without_number import (
+    WithoutNumberRulesetModule,
+    is_dying_window_status,
+)
 from sidequest.game.status import Status, StatusSeverity
+from sidequest.telemetry.spans.wn import dying_window_resolved_span
 
 _MORTAL_INJURY_MARKER = "Mortal Injury"
 _FRAIL_TEXT = "Frail — recovering at 1 HP"
@@ -72,8 +76,10 @@ class StabilizeMortalInjuryArgs(BaseModel):
         ...,
         ge=0,
         description=(
-            "Rounds elapsed since the Mortal Injury was declared. The Heal check "
-            "difficulty rises with time: difficulty = 8 + rounds_elapsed."
+            "Rounds elapsed since the Mortal Injury was declared. The engine "
+            "DERIVES this from the window's created_turn provenance and validates "
+            "your value against it (a mismatch fails loud — the clock is not "
+            "narrator-supplied). Difficulty = 8 + rounds_elapsed."
         ),
     )
     roll: int = Field(
@@ -127,20 +133,48 @@ async def stabilize_mortal_injury(args: StabilizeMortalInjuryArgs, ctx: ToolCont
     if core is None:
         return ToolResult.not_found(f"unknown actor: {args.actor!r}")
 
-    difficulty = 8 + args.rounds_elapsed
+    # Story 108-6: the clock is engine-owned, not a narrator guess (lie-detector,
+    # No Silent Fallbacks). Find the live dying window and derive rounds_elapsed
+    # from its created_turn provenance.
+    window = next((s for s in core.statuses if is_dying_window_status(s)), None)
+    if window is None:
+        return ToolResult.error(
+            f"{args.actor!r} carries no stabilizable dying window to stabilize",
+            recoverable=False,
+        )
+
+    derived_rounds = max(0, snapshot.turn_manager.interaction - window.created_turn)
+    if args.rounds_elapsed != derived_rounds:
+        raise ValueError(
+            "stabilize_mortal_injury rounds_elapsed mismatch: narrator supplied "
+            f"{args.rounds_elapsed}, engine-derived {derived_rounds} "
+            f"(created_turn={window.created_turn}, "
+            f"current={snapshot.turn_manager.interaction}). "
+            "Refusing to resolve on a fudged clock."
+        )
+    rounds_elapsed = derived_rounds
+    difficulty = 8 + rounds_elapsed
     success = args.roll >= difficulty
 
     if success:
-        # Clear the Mortal Injury Scar and downgrade to a Frail Wound.
-        core.statuses = [s for s in core.statuses if _MORTAL_INJURY_MARKER not in s.text]
+        # Clear the dying window and downgrade to a Frail Wound; recover at 1 HP.
+        core.statuses = [s for s in core.statuses if not is_dying_window_status(s)]
         core.statuses.append(Status(text=_FRAIL_TEXT, severity=StatusSeverity.Wound))
+        core.hp.apply_delta(1 - core.hp.current)
+        dying_window_resolved_span(
+            ruleset=module.slug,
+            actor=args.actor,
+            outcome="stabilized",
+            final_rounds_elapsed=rounds_elapsed,
+            resulting_status="Frail",
+        )
 
     ctx.repository.save(snapshot)
 
     ctx.otel_span.set_attribute("tool.stabilize.actor", args.actor)
     ctx.otel_span.set_attribute("tool.stabilize.skill", args.skill)
     ctx.otel_span.set_attribute("tool.stabilize.attribute", args.attribute)
-    ctx.otel_span.set_attribute("tool.stabilize.rounds_elapsed", args.rounds_elapsed)
+    ctx.otel_span.set_attribute("tool.stabilize.rounds_elapsed", rounds_elapsed)
     ctx.otel_span.set_attribute("tool.stabilize.difficulty", difficulty)
     ctx.otel_span.set_attribute("tool.stabilize.roll", args.roll)
     ctx.otel_span.set_attribute("tool.stabilize.success", success)
@@ -150,7 +184,7 @@ async def stabilize_mortal_injury(args: StabilizeMortalInjuryArgs, ctx: ToolCont
             "actor": args.actor,
             "skill": args.skill,
             "attribute": args.attribute,
-            "rounds_elapsed": args.rounds_elapsed,
+            "rounds_elapsed": rounds_elapsed,
             "difficulty": difficulty,
             "roll": args.roll,
             "success": success,

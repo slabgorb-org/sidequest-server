@@ -828,7 +828,7 @@ def _validate_chargen_crossref(
             )
         # CG3 — skill_grants keys against skills catalog
         if check_skills:
-            for skill_name in (effect.get("skill_grants") or {}):
+            for skill_name in effect.get("skill_grants") or {}:
                 if str(skill_name) not in skill_catalog:
                     errors.append(
                         f"{label}: char_creation.yaml skill_grants references unknown "
@@ -902,7 +902,7 @@ def _validate_foci_skill_refs(
         for lvl_idx, level in enumerate(entry.get("levels") or []):
             if not isinstance(level, dict):
                 continue
-            for skill_name in (level.get("skills") or {}):
+            for skill_name in level.get("skills") or {}:
                 if str(skill_name) not in skill_catalog:
                     errors.append(
                         f"{label}: foci.yaml focus '{focus_id}' level[{lvl_idx}] "
@@ -1151,9 +1151,7 @@ def _validate_world(
     )
 
     # CG3 on world-tier foci.yaml (FocusLevel.skills keys)
-    content_errors.extend(
-        _validate_foci_skill_refs(world_foci_path, genre_skill_catalog, label)
-    )
+    content_errors.extend(_validate_foci_skill_refs(world_foci_path, genre_skill_catalog, label))
 
     if is_draft:
         # Demote structural + content problems to warnings for draft worlds.
@@ -1276,13 +1274,26 @@ def validate_pack_structure(pack_dir: Path, schema_path: Path) -> tuple[list[str
     all_errors.extend(
         _validate_backgrounds_skill_refs(genre_backgrounds_path, genre_skill_catalog, label)
     )
-    all_errors.extend(
-        _validate_foci_skill_refs(genre_foci_path, genre_skill_catalog, label)
-    )
+    all_errors.extend(_validate_foci_skill_refs(genre_foci_path, genre_skill_catalog, label))
 
-    # Resolve extension paths for orphan check
+    # Resolve DECLARED extension paths (threaded to the world validator for
+    # genre-level override recognition).
     genre_ext_files, genre_ext_dirs = _resolve_extension_paths(
         extensions_declared, genre_extensions_schema
+    )
+
+    # Story 113-2: the orphan check uses the FULL schema extension set as the
+    # canonical allowlist — NOT just the pack.yaml-declared extensions. A file
+    # the loader recognizes (any genre_pack.extensions entry) is never an orphan,
+    # even when the pack did not opt into it via pack.yaml (live packs ship
+    # skills.yaml / bestiary.yaml / etc. unconditionally; the loader reads them
+    # regardless of declaration). Only genuinely-unknown YAML — in neither
+    # required_files nor the schema extensions — is flagged, restoring the
+    # validator's ability to surface dead files without false-flagging live
+    # mechanics (No Silent Fallbacks). The schema extension set is kept equal to
+    # the loader's GENRE_PACK_ROOT_EXTENSION_FILES by the 113-2 drift guard.
+    all_genre_ext_files, all_genre_ext_dirs = _resolve_extension_paths(
+        list(genre_extensions_schema.keys()), genre_extensions_schema
     )
 
     # Orphan check at genre level
@@ -1291,8 +1302,8 @@ def validate_pack_structure(pack_dir: Path, schema_path: Path) -> tuple[list[str
             directory=pack_dir,
             required_files=genre_required_files,
             required_dirs=genre_required_dirs,
-            extension_files=genre_ext_files,
-            extension_dirs=genre_ext_dirs,
+            extension_files=all_genre_ext_files,
+            extension_dirs=all_genre_ext_dirs,
             genre_required_files=[],
             genre_extension_files=set(),
             label=label,

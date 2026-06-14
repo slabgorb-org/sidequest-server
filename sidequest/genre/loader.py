@@ -92,6 +92,51 @@ DEFAULT_GENRE_PACK_SEARCH_PATHS: list[Path] = [
 
 
 # ---------------------------------------------------------------------------
+# Genre-pack-root allowlist — the single source of truth for the OPTIONAL
+# (extension-tier) YAML filenames ``load_genre_pack`` reads at the genre pack
+# root. Every name below has a real read-site in this module (see the
+# corresponding load in ``load_genre_pack`` / ``_load_single_world``).
+#
+# This is the loader's half of the schema↔loader allowlist (story 113-2). The
+# content half is ``sidequest-content/pack_schema.yaml`` ``genre_pack.extensions``;
+# the two MUST stay equal as FILE sets, enforced by
+# ``tests/cli/validate/test_pack_schema_loader_drift_113_2.py`` so the validator
+# can flag dead files and recognize live ones (No Silent Fallbacks). When you add
+# or remove a genre-root optional read here, update the schema (and vice versa) —
+# the drift guard fails CI otherwise.
+#
+# Scope: this is the EXTENSION tier only. Genre-tier REQUIRED files
+# (pack.yaml/rules.yaml/theme.yaml/audio.yaml/progression.yaml/axes.yaml/
+# prompts.yaml/visibility_baseline.yaml/lethality_policy.yaml/client_theme.css)
+# are a separate schema list, and the unlisted world-authoritative optional files
+# the loader also reads (archetypes/tropes/cultures/char_creation/inventory/
+# power_tiers/visual_style) are a third category — neither is part of this set.
+GENRE_PACK_ROOT_EXTENSION_FILES: frozenset[str] = frozenset(
+    {
+        "magic.yaml",  # genre_root/magic.yaml — _load_single_world magic_loader
+        "classes.yaml",  # genre-tier class roster
+        "projection.yaml",  # perception/projection rules (load_rules_from_yaml_path)
+        "beat_vocabulary.yaml",  # BeatVocabulary
+        "archetype_constraints.yaml",  # ArchetypeConstraints
+        "achievements.yaml",  # Achievement list
+        "chassis_classes.yaml",  # ChassisClassesConfig
+        "pacing.yaml",  # DramaThresholds
+        "seed_tropes.yaml",  # SeedTrope deck
+        "equipment_tables.yaml",  # EquipmentTables
+        "backstory_tables.yaml",  # BackstoryTables
+        "skills.yaml",  # genre-tier skill catalog (ADR-143)
+        "spells_wwn.yaml",  # WWN spell catalog (_load_wwn_spell_catalog)
+        "foci.yaml",  # genre-tier foci (ADR-143)
+        "bestiary.yaml",  # SRD combat stat blocks (story 90-1)
+        "backgrounds.yaml",  # genre-tier backgrounds (ADR-143)
+        "witnessed_acts.yaml",  # WitnessedActsFile vocabulary
+        "mutations.yaml",  # AWN mutation catalog
+        "disciplines_psionic.yaml",  # PsionicDisciplineCatalog (story 102-6)
+    }
+)
+
+
+# ---------------------------------------------------------------------------
 # Low-level YAML helpers
 # ---------------------------------------------------------------------------
 

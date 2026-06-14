@@ -258,6 +258,79 @@ def test_dispatch_package_rejects_string_encoding_a_non_list():
         )
 
 
+def test_dispatch_package_repairs_stringified_per_player_with_swallowed_confidence_global():
+    """Repair the phantom-wound failure mode (sq-playtest 2026-06-14, heavy_metal/barsoom).
+
+    CRITICAL regression: on the arena-entry turn Haiku returned the
+    ``emit_dispatch_package`` tool input with ``per_player`` as a stringified
+    JSON array that ALSO mashed the required sibling ``confidence_global`` field
+    INTO the same string — so ``per_player`` is a string (not a list) AND
+    ``confidence_global`` never appears as a top-level key. Two validation
+    errors, the whole DispatchPackage dropped, the confrontation dispatch never
+    fired, and the narrator improvised a sword wound with zero mechanical
+    backing (no encounter, no dice, no HP delta).
+
+    The plain ``json.loads`` repair cannot help — the value (array + trailing
+    field) is not valid JSON. The before-validator must parse the leading array
+    via ``raw_decode`` and recover the swallowed ``confidence_global`` so the
+    confrontation dispatch SURVIVES instead of the turn going mechanically dark.
+    """
+    inner = json.dumps(
+        [
+            {
+                "player_id": "Pipster",
+                "raw_action": "I return to the arena for my next fight",
+                "resolved": [],
+                "dispatch": [
+                    {
+                        "subsystem": "confrontation",
+                        "params": {"type": "arena_bout", "opponent": {"name": "Zodangan"}},
+                        "idempotency_key": "k1",
+                        "visibility": {"visible_to": "all"},
+                        "confidence": 0.8,
+                    }
+                ],
+                "lethality": [],
+                "narrator_instructions": [],
+            }
+        ]
+    )
+    # The model stringified the array and swallowed `confidence_global` into it.
+    swallowed = inner + ', "confidence_global": 0.72'
+    pkg = DispatchPackage.model_validate(
+        {
+            "turn_id": "16",
+            "per_player": swallowed,
+            # NOTE: no top-level confidence_global — it was eaten by the string.
+        }
+    )
+    assert len(pkg.per_player) == 1
+    assert pkg.per_player[0].dispatch[0].subsystem == "confrontation"
+    assert pkg.confidence_global == pytest.approx(0.72)
+
+
+def test_dispatch_package_repairs_swallowed_confidence_global_messy_separator():
+    """Same repair tolerates the messy `">` separator seen in the live log
+    (``confidence_global">0.92``) — the recovery scrape must not depend on a
+    clean ``": "`` JSON separator surviving the model's mangling."""
+    inner = json.dumps(
+        [
+            {
+                "player_id": "Pipster",
+                "raw_action": "I attack",
+                "resolved": [],
+                "dispatch": [],
+                "lethality": [],
+                "narrator_instructions": [],
+            }
+        ]
+    )
+    swallowed = inner + '\n"confidence_global">0.92'
+    pkg = DispatchPackage.model_validate({"turn_id": "17", "per_player": swallowed})
+    assert len(pkg.per_player) == 1
+    assert pkg.confidence_global == pytest.approx(0.92)
+
+
 def test_cross_action_normalizes_participants_into_witnesses():
     """Validator NORMALIZES (does not reject) when a participant is missing
     from witnesses — every participant witnesses their own interaction.

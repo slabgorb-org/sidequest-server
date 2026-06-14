@@ -109,6 +109,53 @@ def _validate_side(actor_name: str, declared: str) -> ActorSide:
     raise ValueError(f"actor {actor_name!r} declared_side={declared!r} not in {_VALID_SIDES}")
 
 
+def reap_resolved_encounter_husk(
+    snapshot: GameSnapshot, *, is_dice_replay: bool, turn: int
+) -> bool:
+    """Clear a resolved encounter left lingering in ``snapshot.encounter``.
+
+    A confrontation that resolved on a PRIOR turn persists on the snapshot as a
+    zeroed husk, and the narrator can then layer a fresh fight on the corpse —
+    the phantom-wound CRITICAL (sq-playtest 2026-06-14, heavy_metal/barsoom): a
+    stale resolved arena bout sat in state for turns while a new "fight" was
+    narrated with no live encounter, no dice, no HP delta.
+
+    Reaped ONLY on a genuine new player turn (``is_dice_replay=False``). The
+    dice-resolution replay re-entry (``suppress_intent_router=True``) narrates a
+    JUST-resolved encounter within the SAME logical turn and must keep it — so
+    that path never reaps. A live (unresolved) encounter is never touched: only
+    ``encounter.resolved`` husks are cleared, so a fight in progress is safe.
+
+    Returns ``True`` when a husk was cleared. Emits an ``encounter`` state
+    transition (``op=husk_reaped``) so the GM panel can confirm the cleanup
+    fired (CLAUDE.md OTEL principle).
+    """
+    enc = snapshot.encounter
+    if is_dice_replay or enc is None or not enc.resolved:
+        return False
+    snapshot.encounter = None
+    _watcher_publish(
+        "state_transition",
+        {
+            "field": "encounter",
+            "op": "husk_reaped",
+            "encounter_type": enc.encounter_type,
+            "outcome": enc.outcome or "",
+            "turn": str(turn),
+            "source": "turn_start",
+        },
+        component="encounter",
+    )
+    _log.info(
+        "encounter.husk_reaped type=%s outcome=%s turn=%s "
+        "(resolved encounter cleared at turn start so no fight layers on the corpse)",
+        enc.encounter_type,
+        enc.outcome,
+        turn,
+    )
+    return True
+
+
 def _stamp_encounter_presence(npc, *, turn: int, location: str | None) -> None:
     """Story 72-8: refresh recency on an NPC that is PRESENT in an encounter.
 

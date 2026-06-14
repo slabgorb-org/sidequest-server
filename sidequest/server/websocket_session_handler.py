@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 from sidequest.agents.claude_client import LlmClient
 from sidequest.agents.dispatch_engagement_watcher import (
     run_dispatch_engagement_watcher,
+    run_improvised_combat_watcher,
 )
 from sidequest.agents.intent_router import IntentRouterFailure
 from sidequest.agents.llm_factory import _INTENT_ROUTER_MODEL, build_llm_client
@@ -761,6 +762,21 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
         sets this; a normal player action MUST classify (ADR-113).
         """
         snapshot = sd.snapshot
+        # Reap a resolved encounter husk before anything reads it this turn
+        # (phantom-wound CRITICAL, sq-playtest 2026-06-14): a fight that
+        # resolved on a prior turn lingers as a zeroed husk the narrator can
+        # layer a fresh fight on. Skipped on the dice-replay re-entry, which
+        # narrates a just-resolved encounter and must keep it; never touches a
+        # live (unresolved) encounter.
+        from sidequest.server.dispatch.encounter_lifecycle import (
+            reap_resolved_encounter_husk,
+        )
+
+        reap_resolved_encounter_husk(
+            snapshot,
+            is_dice_replay=suppress_intent_router,
+            turn=snapshot.turn_manager.interaction,
+        )
         snapshot_before_hash = _hash_snapshot(snapshot)
         # Reuse the caller's PhaseTimings when attached so pre-narrator phases
         # land in the same dict the dashboard reads; otherwise construct here.
@@ -1123,6 +1139,19 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     # "convincing prose, zero mechanical backing". No-op while
                     # dispatch_package is None.
                     run_dispatch_engagement_watcher(
+                        package=turn_context.dispatch_package,
+                        snapshot=snapshot,
+                    )
+
+                    # Phantom-wound lie-detector (sq-playtest 2026-06-14): the
+                    # narrator can depict combat damage even when the router
+                    # dispatched NO confrontation (it errored on the schema) —
+                    # the dispatch-engagement watcher is blind to it because no
+                    # dispatch exists to check. This reads the narration text
+                    # against the snapshot and beeps when a wound is narrated
+                    # with no encounter and no confrontation dispatch.
+                    run_improvised_combat_watcher(
+                        narration=getattr(result, "narration", "") or "",
                         package=turn_context.dispatch_package,
                         snapshot=snapshot,
                     )

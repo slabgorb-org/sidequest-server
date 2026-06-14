@@ -64,15 +64,23 @@ def test_barrier_waits_on_pcs_then_closes():
     assert fate_barrier_closed(encounter=enc, snapshot=snap) is False
 
     seal_fate_commit(
-        encounter=enc, actor=enc.find_actor("Vesska"), action="attack", skill="Fight",
-        target="Thug", ladder_total=5,
+        encounter=enc,
+        actor=enc.find_actor("Vesska"),
+        action="attack",
+        skill="Fight",
+        target="Thug",
+        ladder_total=5,
     )
     assert fate_waiting_actors(encounter=enc, snapshot=snap) == ["Brakka"]
     assert fate_barrier_closed(encounter=enc, snapshot=snap) is False
 
     seal_fate_commit(
-        encounter=enc, actor=enc.find_actor("Brakka"), action="overcome", skill="Athletics",
-        difficulty=1, ladder_total=2,
+        encounter=enc,
+        actor=enc.find_actor("Brakka"),
+        action="overcome",
+        skill="Athletics",
+        difficulty=1,
+        ladder_total=2,
     )
     assert fate_barrier_closed(encounter=enc, snapshot=snap) is True
 
@@ -80,9 +88,23 @@ def test_barrier_waits_on_pcs_then_closes():
 def test_double_commit_fails_loud():
     enc = _enc([EncounterActor(name="Vesska", role="lead", side="player")])
     GameSnapshot(genre_slug="fate_test", characters=[_pc("Vesska", {"Fight": 3})], encounter=enc)
-    seal_fate_commit(encounter=enc, actor=enc.find_actor("Vesska"), action="overcome", skill="Athletics", difficulty=2, ladder_total=4)
+    seal_fate_commit(
+        encounter=enc,
+        actor=enc.find_actor("Vesska"),
+        action="overcome",
+        skill="Athletics",
+        difficulty=2,
+        ladder_total=4,
+    )
     with pytest.raises(FateConflictError):
-        seal_fate_commit(encounter=enc, actor=enc.find_actor("Vesska"), action="attack", skill="Fight", target="x", ladder_total=4)
+        seal_fate_commit(
+            encounter=enc,
+            actor=enc.find_actor("Vesska"),
+            action="attack",
+            skill="Fight",
+            target="x",
+            ladder_total=4,
+        )
 
 
 def test_turn_order_uses_notice_for_physical_empathy_for_mental():
@@ -101,7 +123,14 @@ def test_turn_order_uses_notice_for_physical_empathy_for_mental():
     from sidequest.game.session import Npc
 
     snap.npcs.append(
-        Npc(core=CreatureCore(name="Slow", description="d", personality="p", fate_sheet=FateSheet(skills={"Notice": 2, "Empathy": 5})))
+        Npc(
+            core=CreatureCore(
+                name="Slow",
+                description="d",
+                personality="p",
+                fate_sheet=FateSheet(skills={"Notice": 2, "Empathy": 5}),
+            )
+        )
     )
     assert fate_turn_order(encounter=physical, snapshot=snap, mental=False) == ["Quick", "Slow"]
     # Mental conflict flips it: Slow's Empathy 5 beats Quick's Empathy 1.
@@ -164,7 +193,14 @@ def test_absorb_rejects_nonpositive_shifts():
 
     module = get_ruleset_module("fate")
     with pytest.raises(FateConflictError, match="shifts >= 1"):
-        absorb_shifts(module=module, sheet=FateSheet(), track="physical", shifts=0, actor="Hero", source="Thug")
+        absorb_shifts(
+            module=module,
+            sheet=FateSheet(),
+            track="physical",
+            shifts=0,
+            actor="Hero",
+            source="Thug",
+        )
 
 
 def test_absorb_rejects_unknown_track():
@@ -173,7 +209,14 @@ def test_absorb_rejects_unknown_track():
 
     module = get_ruleset_module("fate")
     with pytest.raises(FateConflictError, match="stress track"):
-        absorb_shifts(module=module, sheet=FateSheet(), track="corruption", shifts=1, actor="Hero", source="Thug")  # type: ignore[arg-type]
+        absorb_shifts(
+            module=module,
+            sheet=FateSheet(),
+            track="corruption",
+            shifts=1,
+            actor="Hero",
+            source="Thug",
+        )  # type: ignore[arg-type]
 
 
 def _otel():
@@ -189,8 +232,13 @@ def _seal_attack(enc, snapshot, module, attacker, skill_rating, target, *, skill
         skill_rating=skill_rating, opposition=Opposition(value=0, kind="active"), rng=_FixedRng(0)
     )
     seal_fate_commit(
-        encounter=enc, actor=enc.find_actor(attacker), action="attack", skill=skill,
-        target=target, ladder_total=outcome.ladder_total, dice=outcome.dice,
+        encounter=enc,
+        actor=enc.find_actor(attacker),
+        action="attack",
+        skill=skill,
+        target=target,
+        ladder_total=outcome.ladder_total,
+        dice=outcome.dice,
     )
 
 
@@ -209,12 +257,21 @@ def test_attack_hits_and_target_absorbs_survives():
     hero = _pc("Hero", {"Fight": 4, "Notice": 3})
     snap = GameSnapshot(genre_slug="fate_test", characters=[hero], encounter=enc)
     snap.npcs.append(
-        Npc(core=CreatureCore(name="Thug", description="d", personality="p", fate_sheet=FateSheet(skills={"Athletics": 1, "Notice": 1})))
+        Npc(
+            core=CreatureCore(
+                name="Thug",
+                description="d",
+                personality="p",
+                fate_sheet=FateSheet(skills={"Athletics": 1, "Notice": 1}),
+            )
+        )
     )
     _seal_attack(enc, snap, module, "Hero", 4, "Thug")  # ladder_total 4; defense 1 → shifts 3
 
     exporter, tracer = _otel()
-    result = run_fate_exchange(encounter=enc, snapshot=snap, ruleset=module, rng=_FixedRng(0), _tracer=tracer)
+    result = run_fate_exchange(
+        encounter=enc, snapshot=snap, ruleset=module, rng=_FixedRng(0), _tracer=tracer
+    )
 
     thug = enc.find_actor("Thug")
     assert thug is not None
@@ -244,17 +301,23 @@ def test_attack_takes_out_a_depleted_target_and_resolves():
             EncounterActor(name="Thug", role="foe", side="opponent"),
         ]
     )
-    snap = GameSnapshot(genre_slug="fate_test", characters=[_pc("Hero", {"Fight": 4})], encounter=enc)
+    snap = GameSnapshot(
+        genre_slug="fate_test", characters=[_pc("Hero", {"Fight": 4})], encounter=enc
+    )
     thug_sheet = FateSheet(skills={"Athletics": 1})
     for b in thug_sheet.stress["physical"].boxes:
         b.checked = True
     for c in thug_sheet.consequences:
         c.aspect = Aspect(text="old wound", kind="consequence", free_invokes=0)
-    snap.npcs.append(Npc(core=CreatureCore(name="Thug", description="d", personality="p", fate_sheet=thug_sheet)))
+    snap.npcs.append(
+        Npc(core=CreatureCore(name="Thug", description="d", personality="p", fate_sheet=thug_sheet))
+    )
     _seal_attack(enc, snap, module, "Hero", 4, "Thug")  # shifts 3, target cannot absorb
 
     exporter, tracer = _otel()
-    run_fate_exchange(encounter=enc, snapshot=snap, ruleset=module, rng=_FixedRng(0), _tracer=tracer)
+    run_fate_exchange(
+        encounter=enc, snapshot=snap, ruleset=module, rng=_FixedRng(0), _tracer=tracer
+    )
 
     assert enc.find_actor("Thug").withdrawn is True
     assert enc.resolved is True
@@ -269,15 +332,26 @@ def test_create_advantage_places_a_situation_aspect():
 
     module = get_ruleset_module("fate")
     enc = _enc([EncounterActor(name="Hero", role="lead", side="player")])
-    snap = GameSnapshot(genre_slug="fate_test", characters=[_pc("Hero", {"Notice": 3})], encounter=enc)
-    outcome = module.resolve_action(skill_rating=3, opposition=Opposition(value=0, kind="passive"), rng=_FixedRng(0))
+    snap = GameSnapshot(
+        genre_slug="fate_test", characters=[_pc("Hero", {"Notice": 3})], encounter=enc
+    )
+    outcome = module.resolve_action(
+        skill_rating=3, opposition=Opposition(value=0, kind="passive"), rng=_FixedRng(0)
+    )
     seal_fate_commit(
-        encounter=enc, actor=enc.find_actor("Hero"), action="create_advantage", skill="Notice",
-        difficulty=2, ladder_total=outcome.ladder_total, aspect_text="Pinned Down",
+        encounter=enc,
+        actor=enc.find_actor("Hero"),
+        action="create_advantage",
+        skill="Notice",
+        difficulty=2,
+        ladder_total=outcome.ladder_total,
+        aspect_text="Pinned Down",
     )  # shifts = 3 - 2 = 1 → 1 free invoke
 
     exporter, tracer = _otel()
-    run_fate_exchange(encounter=enc, snapshot=snap, ruleset=module, rng=_FixedRng(0), _tracer=tracer)
+    run_fate_exchange(
+        encounter=enc, snapshot=snap, ruleset=module, rng=_FixedRng(0), _tracer=tracer
+    )
 
     assert [a.text for a in enc.situation_aspects] == ["Pinned Down"]
     assert enc.situation_aspects[0].free_invokes == 1
@@ -297,9 +371,20 @@ def test_attack_that_misses_deals_no_damage():
             EncounterActor(name="Rival", role="foe", side="opponent"),
         ]
     )
-    snap = GameSnapshot(genre_slug="fate_test", characters=[_pc("Hero", {"Fight": 1})], encounter=enc)
+    snap = GameSnapshot(
+        genre_slug="fate_test", characters=[_pc("Hero", {"Fight": 1})], encounter=enc
+    )
     # Rival's Athletics 3 defense beats Hero's Fight 1 attack → shifts -2 (clean miss).
-    snap.npcs.append(Npc(core=CreatureCore(name="Rival", description="d", personality="p", fate_sheet=FateSheet(skills={"Athletics": 3}))))
+    snap.npcs.append(
+        Npc(
+            core=CreatureCore(
+                name="Rival",
+                description="d",
+                personality="p",
+                fate_sheet=FateSheet(skills={"Athletics": 3}),
+            )
+        )
+    )
     _seal_attack(enc, snap, module, "Hero", 1, "Rival")
 
     run_fate_exchange(encounter=enc, snapshot=snap, ruleset=module, rng=_FixedRng(0))
@@ -321,7 +406,9 @@ def test_concede_withdraws_and_earns_fate_points():
     snap = GameSnapshot(genre_slug="fate_test", characters=[hero], encounter=enc)
 
     exporter, tracer = _otel()
-    earned = concede_in_conflict(encounter=enc, snapshot=snap, ruleset=module, actor="Hero", _tracer=tracer)
+    earned = concede_in_conflict(
+        encounter=enc, snapshot=snap, ruleset=module, actor="Hero", _tracer=tracer
+    )
 
     assert earned == 2  # 1 base + 1 consequence taken this conflict
     assert sheet.fate_points == 3
@@ -335,16 +422,31 @@ def test_tie_attack_grants_defender_boost():
     from sidequest.server.dispatch.fate_conflict import run_fate_exchange
 
     module = get_ruleset_module("fate")
-    enc = _enc([
-        EncounterActor(name="Hero", role="lead", side="player"),
-        EncounterActor(name="Rival", role="foe", side="opponent"),
-    ])
-    snap = GameSnapshot(genre_slug="fate_test", characters=[_pc("Hero", {"Fight": 2})], encounter=enc)
-    snap.npcs.append(Npc(core=CreatureCore(name="Rival", description="d", personality="p", fate_sheet=FateSheet(skills={"Athletics": 2}))))
+    enc = _enc(
+        [
+            EncounterActor(name="Hero", role="lead", side="player"),
+            EncounterActor(name="Rival", role="foe", side="opponent"),
+        ]
+    )
+    snap = GameSnapshot(
+        genre_slug="fate_test", characters=[_pc("Hero", {"Fight": 2})], encounter=enc
+    )
+    snap.npcs.append(
+        Npc(
+            core=CreatureCore(
+                name="Rival",
+                description="d",
+                personality="p",
+                fate_sheet=FateSheet(skills={"Athletics": 2}),
+            )
+        )
+    )
     _seal_attack(enc, snap, module, "Hero", 2, "Rival")  # ladder 2 vs defense 2 → shifts 0 (tie)
 
     exporter, tracer = _otel()
-    run_fate_exchange(encounter=enc, snapshot=snap, ruleset=module, rng=_FixedRng(0), _tracer=tracer)
+    run_fate_exchange(
+        encounter=enc, snapshot=snap, ruleset=module, rng=_FixedRng(0), _tracer=tracer
+    )
 
     rival = snap.find_creature_core("Rival")
     assert rival is not None

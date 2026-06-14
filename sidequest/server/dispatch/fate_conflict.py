@@ -115,9 +115,7 @@ def _seated_pc_names(snapshot: GameSnapshot) -> set[str]:
     return {ch.core.name for ch in snapshot.characters}
 
 
-def fate_waiting_actors(
-    *, encounter: StructuredEncounter, snapshot: GameSnapshot
-) -> list[str]:
+def fate_waiting_actors(*, encounter: StructuredEncounter, snapshot: GameSnapshot) -> list[str]:
     """Player-side PCs the barrier is still waiting on. Mirrors
     ``wn_waiting_actors``: skip withdrawn, already-committed, and non-PC (ally)
     actors."""
@@ -151,9 +149,7 @@ def fate_turn_order(
         sheet = core.fate_sheet if core is not None else None
         return sheet.skills.get(skill, 0) if sheet is not None else 0
 
-    seated = [
-        a for a in encounter.actors if not a.withdrawn and a.side in ("player", "opponent")
-    ]
+    seated = [a for a in encounter.actors if not a.withdrawn and a.side in ("player", "opponent")]
     return [a.name for a in sorted(seated, key=lambda a: rating(a.name), reverse=True)]
 
 
@@ -188,8 +184,7 @@ def absorb_shifts(
         )
     if track not in sheet.stress:
         raise FateConflictError(
-            f"absorb_shifts: {actor!r} has no {track!r} stress track "
-            f"(have: {sorted(sheet.stress)})"
+            f"absorb_shifts: {actor!r} has no {track!r} stress track (have: {sorted(sheet.stress)})"
         )
     remaining = shifts
     stress_track = sheet.stress[track]
@@ -213,9 +208,7 @@ def absorb_shifts(
         remaining = max(0, remaining - chosen.value)
 
     # Consequences, smallest-first, until the hit is covered.
-    for slot in sorted(
-        (c for c in sheet.consequences if c.aspect is None), key=lambda c: c.value
-    ):
+    for slot in sorted((c for c in sheet.consequences if c.aspect is None), key=lambda c: c.value):
         if remaining <= 0:
             break
         module.take_consequence(
@@ -336,26 +329,46 @@ def run_fate_exchange(
 
         if commit.action == "attack":
             _resolve_attack(
-                encounter=encounter, snapshot=snapshot, ruleset=ruleset, commit=commit,
-                mental=mental, rng=rng, hints=hints, _tracer=_tracer,
+                encounter=encounter,
+                snapshot=snapshot,
+                ruleset=ruleset,
+                commit=commit,
+                mental=mental,
+                rng=rng,
+                hints=hints,
+                _tracer=_tracer,
             )
         elif commit.action == "create_advantage":
             _resolve_create_advantage(
-                encounter=encounter, snapshot=snapshot, ruleset=ruleset, commit=commit,
-                mental=mental, rng=rng, hints=hints, _tracer=_tracer,
+                encounter=encounter,
+                snapshot=snapshot,
+                ruleset=ruleset,
+                commit=commit,
+                mental=mental,
+                rng=rng,
+                hints=hints,
+                _tracer=_tracer,
             )
         elif commit.action == "overcome":
             _resolve_overcome(
-                encounter=encounter, snapshot=snapshot, ruleset=ruleset, commit=commit,
-                mental=mental, rng=rng, hints=hints, _tracer=_tracer,
+                encounter=encounter,
+                snapshot=snapshot,
+                ruleset=ruleset,
+                commit=commit,
+                mental=mental,
+                rng=rng,
+                hints=hints,
+                _tracer=_tracer,
             )
 
     encounter.fate_commits.clear()
     encounter.narrator_hints.extend(hints)
     resolution_order = ", ".join(walked)
     fate_exchange_resolved_span(
-        resolution_order=resolution_order, resolved=encounter.resolved,
-        round_number=round_number, _tracer=_tracer,
+        resolution_order=resolution_order,
+        resolved=encounter.resolved,
+        round_number=round_number,
+        _tracer=_tracer,
     )
     _watcher_publish(
         "state_transition",
@@ -388,8 +401,12 @@ def _opposition_total(
     defense, or the PASSIVE ``difficulty``."""
     if commit.target is not None:
         return _roll_defense(
-            ruleset=ruleset, snapshot=snapshot, defender=commit.target,
-            mental=mental, rng=rng, _tracer=_tracer,
+            ruleset=ruleset,
+            snapshot=snapshot,
+            defender=commit.target,
+            mental=mental,
+            rng=rng,
+            _tracer=_tracer,
         )
     return commit.difficulty
 
@@ -409,12 +426,14 @@ def _resolve_attack(
         raise FateConflictError("an attack must name a target (No Silent Fallbacks)")
     target_core = snapshot.find_creature_core(commit.target)
     if target_core is None or target_core.fate_sheet is None:
-        raise FateConflictError(
-            f"attack target {commit.target!r} has no Fate sheet to defend with"
-        )
+        raise FateConflictError(f"attack target {commit.target!r} has no Fate sheet to defend with")
     defense_total = _roll_defense(
-        ruleset=ruleset, snapshot=snapshot, defender=commit.target,
-        mental=mental, rng=rng, _tracer=_tracer,
+        ruleset=ruleset,
+        snapshot=snapshot,
+        defender=commit.target,
+        mental=mental,
+        rng=rng,
+        _tracer=_tracer,
     )
     shifts = commit.ladder_total - defense_total
     track = "mental" if mental else "physical"
@@ -430,30 +449,28 @@ def _resolve_attack(
                 f"{commit.target} gains a boost ({boost.text})."
             )
         else:
-            hints.append(
-                f"{commit.actor}'s attack on {commit.target} missed (shifts={shifts})."
-            )
+            hints.append(f"{commit.actor}'s attack on {commit.target} missed (shifts={shifts}).")
         return
     survived = absorb_shifts(
-        module=ruleset, sheet=target_core.fate_sheet, track=track, shifts=shifts,
-        actor=commit.target, source=commit.actor, _tracer=_tracer,
+        module=ruleset,
+        sheet=target_core.fate_sheet,
+        track=track,
+        shifts=shifts,
+        actor=commit.target,
+        source=commit.actor,
+        _tracer=_tracer,
     )
     if survived:
         hints.append(
-            f"{commit.target} absorbs {commit.actor}'s {shifts}-shift hit "
-            "(stress/consequences)."
+            f"{commit.target} absorbs {commit.actor}'s {shifts}-shift hit (stress/consequences)."
         )
         return
     target_actor = encounter.find_actor(commit.target)
     if target_actor is None:
-        raise FateConflictError(
-            f"attack target {commit.target!r} is not seated in this encounter"
-        )
+        raise FateConflictError(f"attack target {commit.target!r} is not seated in this encounter")
     target_actor.withdrawn = True
     fate_taken_out_span(actor=commit.target, by=commit.actor, shifts=shifts, _tracer=_tracer)
-    hints.append(
-        f"{commit.target} is TAKEN OUT by {commit.actor} ({shifts} unabsorbed shifts)."
-    )
+    hints.append(f"{commit.target} is TAKEN OUT by {commit.actor} ({shifts} unabsorbed shifts).")
     _maybe_resolve_side_cleared(encounter)
 
 
@@ -469,8 +486,12 @@ def _resolve_create_advantage(
     _tracer: trace.Tracer | None = None,
 ) -> None:
     opposition = _opposition_total(
-        ruleset=ruleset, snapshot=snapshot, commit=commit,
-        mental=mental, rng=rng, _tracer=_tracer,
+        ruleset=ruleset,
+        snapshot=snapshot,
+        commit=commit,
+        mental=mental,
+        rng=rng,
+        _tracer=_tracer,
     )
     shifts = commit.ladder_total - opposition
     if shifts >= 1:
@@ -510,8 +531,12 @@ def _resolve_overcome(
     _tracer: trace.Tracer | None = None,
 ) -> None:
     opposition = _opposition_total(
-        ruleset=ruleset, snapshot=snapshot, commit=commit,
-        mental=mental, rng=rng, _tracer=_tracer,
+        ruleset=ruleset,
+        snapshot=snapshot,
+        commit=commit,
+        mental=mental,
+        rng=rng,
+        _tracer=_tracer,
     )
     shifts = commit.ladder_total - opposition
     if shifts >= 1:

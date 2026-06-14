@@ -18,6 +18,7 @@ from sidequest.agents.tools import (
     apply_world_patch,  # noqa: F401
     commit_effort,  # noqa: F401
     commit_known_fact,  # noqa: F401
+    fate_tools,  # noqa: F401
     generate_encounter,  # noqa: F401
     generate_loadout,  # noqa: F401
     generate_name,  # noqa: F401

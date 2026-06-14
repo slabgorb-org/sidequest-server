@@ -449,11 +449,12 @@ async def test_narration_emits_ruleset_filter_otel_span(
     assert len(spans) >= 1, "no narrator.tools.ruleset_filter span emitted"
     attrs = dict(spans[0].attributes or {})
     assert attrs["tools.bound_ruleset"] == "native"
-    # Ten gated tools dropped on a native pack: the original six (five CWN/WWN
-    # tools + use_mutation/awn) plus the four WN-family contract tools (102-5:
-    # wn_attack/wn_skill_check/wn_save/wn_adjudicate_dead_premise), all hidden
-    # from a native narrator.
-    assert attrs["tools.excluded_count"] == 10
-    # The advertised count is the full catalog minus the ten gated tools.
-    expected_advertised = len(default_registry.tool_definitions()) - 10
+    # Eleven gated tools dropped on a native pack: the original six (five CWN/WWN
+    # tools + use_mutation/awn), the four WN-family contract tools (102-5:
+    # wn_attack/wn_skill_check/wn_save/wn_adjudicate_dead_premise), and the Fate
+    # propose_fate_compel tool (116-2, ruleset="fate") — all hidden from a native
+    # narrator.
+    assert attrs["tools.excluded_count"] == 11
+    # The advertised count is the full catalog minus the eleven gated tools.
+    expected_advertised = len(default_registry.tool_definitions()) - 11
     assert attrs["tools.advertised_count"] == expected_advertised

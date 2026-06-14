@@ -28,6 +28,7 @@ from sidequest.game.creature_core import CreatureCore
 from sidequest.game.npc_pool import NpcPoolMember
 from sidequest.game.projection.envelope import MessageEnvelope
 from sidequest.game.retrieval_orchestration import RetrievedEntities, render_entity_section
+from sidequest.game.ruleset.fate_projection import build_fate_projection
 from sidequest.game.session import (
     GameSnapshot,
     PartyPeer,
@@ -1252,6 +1253,16 @@ def _build_turn_context(
         # registers nothing in that case (zero token cost).
         mutation_state=snapshot.mutation_state,
         mutation_catalog=(sd.genre_pack.mutations if sd.genre_pack is not None else None),
+        # ADR-144 F2b (Story 116-2): the Fate state projection for the narrator's
+        # ``fate_state`` section. Built from the live snapshot via the SAME projector the
+        # intent router uses (one source of truth — build_fate_projection), gated on the
+        # bound ruleset so non-Fate packs carry None and pay zero tokens. The session
+        # handler owns the snapshot; TurnContext carries the already-built projection.
+        fate_state=(
+            build_fate_projection(snapshot)
+            if getattr(getattr(sd.genre_pack, "rules", None), "ruleset", None) == "fate"
+            else None
+        ),
         # Story 50-4: thread the live snapshot so build_narrator_prompt can
         # render + clear pending_time_skip_summary (one-shot lifecycle).
         snapshot=snapshot,

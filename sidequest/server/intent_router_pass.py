@@ -44,6 +44,7 @@ from sidequest.agents.subsystems import BankResult, get_registered, run_dispatch
 from sidequest.dungeon.region_projection import project_region
 from sidequest.dungeon.seed_bootstrap import ENTRANCE_ID as _DUNGEON_ENTRANCE_ID
 from sidequest.game.npc_scene import is_npc_in_scene
+from sidequest.game.ruleset.fate_projection import build_fate_projection
 from sidequest.game.seams import seam_route_for, surface_owner_for_entrance
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.pack import GenrePack
@@ -226,34 +227,10 @@ def _beat_invocations_outside_confrontation(
     return hits
 
 
-def _build_fate_summary(snapshot: GameSnapshot) -> dict[str, Any]:
-    """Compact Fate vocabulary for the router (ADR-144 F2a).
-
-    Gives the Haiku classifier the per-PC skills it can name, the fate points it
-    can spend, the character aspects + live situation aspects it can invoke, and
-    whether a conflict is active (the in-conflict scope of dispatch_fate_action).
-    Only PCs with a Fate sheet contribute; on a non-Fate pack the caller never
-    invokes this builder.
-    """
-    skills: dict[str, dict[str, int]] = {}
-    fate_points: dict[str, int] = {}
-    character_aspects: dict[str, list[str]] = {}
-    for ch in snapshot.characters:
-        sheet = ch.core.fate_sheet
-        if sheet is None:
-            continue
-        skills[ch.core.name] = dict(sheet.skills)
-        fate_points[ch.core.name] = sheet.fate_points
-        character_aspects[ch.core.name] = [a.text for a in sheet.all_aspects()]
-    enc = snapshot.encounter
-    scene_aspects = [a.text for a in enc.situation_aspects] if enc is not None else []
-    return {
-        "skills": skills,
-        "fate_points": fate_points,
-        "character_aspects": character_aspects,
-        "scene_aspects": scene_aspects,
-        "active_conflict": enc is not None and not enc.resolved,
-    }
+# ADR-144 F2b (Story 116-2): the Fate projection relocated to the game layer so the
+# narrator prompt builder shares ONE projector with this router pass. ``_build_fate_summary``
+# is kept as a thin back-compat alias for the F2a callers/tests that import it directly.
+_build_fate_summary = build_fate_projection
 
 
 def _build_state_summary(

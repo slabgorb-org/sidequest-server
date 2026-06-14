@@ -158,11 +158,18 @@ class FateRulesetModule(RulesetModule):
         return 2 if mode == "bonus" else 0
 
     def offer_compel(
-        self, *, aspect_text: str, actor: str = "", _tracer: trace.Tracer | None = None
+        self,
+        *,
+        aspect_text: str,
+        actor: str = "",
+        reason: str = "",
+        _tracer: trace.Tracer | None = None,
     ) -> None:
         """Surface that the narrator proposed a compel (no economy change). The
-        OTEL span lets the GM panel see the offer even when the player declines."""
-        fate_compel_offered_span(actor=actor, aspect=aspect_text, _tracer=_tracer)
+        OTEL span lets the GM panel see the offer even when the player declines —
+        including ``reason``, the proposed complication, so the lie-detector sees
+        WHAT was offered, not merely THAT something was."""
+        fate_compel_offered_span(actor=actor, aspect=aspect_text, reason=reason, _tracer=_tracer)
 
     def accept_compel(
         self,

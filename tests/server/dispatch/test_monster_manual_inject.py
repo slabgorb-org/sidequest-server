@@ -258,6 +258,58 @@ def test_inject_filters_active_humans_by_location_substring() -> None:
     assert "FloatAvail" in names  # available NPCs always surface (top 3 cap)
 
 
+def test_inject_caps_active_at_location_humans() -> None:
+    """sq-playtest 2026-06-13 (oz entourage): the Active-at-location loop was
+    uncapped and re-surfaced every named NPC every turn. It is now bounded to
+    ``_ACTIVE_NPC_INJECT_LIMIT`` so a scene where the narrator named many NPCs
+    does not dangle the whole roster as "nearby" candidates each turn."""
+    from sidequest.server.dispatch.monster_manual_inject import _ACTIVE_NPC_INJECT_LIMIT
+
+    n_active = _ACTIVE_NPC_INJECT_LIMIT + 3
+    sd = _FakeSessionData()
+    sd.monster_manual = _manual_with(
+        npcs=[
+            _human(f"Active{i}", state=EntryState.ACTIVE, activated_location="The Dome")
+            for i in range(n_active)
+        ],
+    )
+    snap = _snapshot()
+    count = monster_manual_inject.inject(sd, snap, current_location="The Dome", in_combat=False)
+    # Only the cap's worth of Active-at-location humans inject (no Available NPCs
+    # exist in this manual, so the total equals the active cap exactly).
+    assert count == _ACTIVE_NPC_INJECT_LIMIT, (
+        f"active-at-location injection must be capped at {_ACTIVE_NPC_INJECT_LIMIT}; got {count}"
+    )
+    assert len(snap.npcs) == _ACTIVE_NPC_INJECT_LIMIT
+
+
+def test_inject_span_reports_active_capped_count(otel_capture) -> None:
+    """The cap is surfaced in the injection span (No Silent Fallbacks — the GM
+    panel sees the bench was bounded, not silently truncated)."""
+    from sidequest.server.dispatch.monster_manual_inject import _ACTIVE_NPC_INJECT_LIMIT
+    from sidequest.telemetry.spans import SPAN_MONSTER_MANUAL_INJECTED
+
+    dropped = 2
+    n_active = _ACTIVE_NPC_INJECT_LIMIT + dropped
+    sd = _FakeSessionData()
+    sd.monster_manual = _manual_with(
+        npcs=[
+            _human(f"Active{i}", state=EntryState.ACTIVE, activated_location="The Dome")
+            for i in range(n_active)
+        ],
+    )
+    snap = _snapshot()
+    monster_manual_inject.inject(sd, snap, current_location="The Dome", in_combat=False)
+
+    fired = [s for s in otel_capture.get_finished_spans() if s.name == SPAN_MONSTER_MANUAL_INJECTED]
+    assert len(fired) == 1, f"expected one {SPAN_MONSTER_MANUAL_INJECTED!r} span; got {len(fired)}"
+    attrs = dict(fired[0].attributes or {})
+    assert attrs.get("active_npcs_capped") == dropped, (
+        f"span must report {dropped} active humans capped; got {attrs.get('active_npcs_capped')}"
+    )
+    assert attrs.get("npcs_injected") == _ACTIVE_NPC_INJECT_LIMIT
+
+
 def test_inject_skips_dormant_humans() -> None:
     sd = _FakeSessionData()
     sd.monster_manual = _manual_with(

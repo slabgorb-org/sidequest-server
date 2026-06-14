@@ -522,3 +522,172 @@ def test_genuinely_recent_npc_still_full_at_early_turn() -> None:
     assert "Fresh" in _names(ws.brief_entries), (
         "the never-seen NPC must drop to the off-stage (brief, referenced-mode) tier"
     )
+
+
+# ===========================================================================
+# Co-location floor (sq-playtest 2026-06-13 — "everyone is hanging out with me")
+#
+# The recency floor alone kept an NPC cited in region A "scene-present" in
+# region B for the whole window, so the narrator kept it on stage and re-cited
+# it — a self-perpetuating entourage that never shed on movement. The floor now
+# requires *recent AND co-located*: an NPC last seen in a scene that is not the
+# party's current scene is demoted off-stage even within the recency window.
+# ===========================================================================
+
+
+def _located_npc(name: str, last_seen_turn: int, last_seen_location: str | None) -> Npc:
+    """A stateful NPC with both a recency stamp and a last-seen location."""
+    return Npc(
+        core=CreatureCore(
+            name=name,
+            description=f"{name} is a test NPC.",
+            personality="stoic",
+        ),
+        last_seen_turn=last_seen_turn,
+        last_seen_location=last_seen_location,
+    )
+
+
+def _located_snap(
+    *,
+    current_turn: int,
+    npcs: list[Npc],
+    party_location: str,
+) -> GameSnapshot:
+    """A snapshot with a single seated PC at ``party_location`` so
+    ``party_location()`` resolves a consensus (activating the co-location
+    filter)."""
+    return GameSnapshot(
+        genre_slug="wry_whimsy",
+        world_slug="oz",
+        turn_manager=TurnManager(interaction=current_turn),
+        npcs=npcs,
+        npc_pool=[],
+        player_seats={"p1": "Pipster"},
+        character_locations={"Pipster": party_location},
+    )
+
+
+def test_recent_npc_in_another_scene_is_demoted_off_stage() -> None:
+    """The headline entourage fix: an NPC last cited in region A is NOT
+    scene-present once the party is in region B, even inside the recency
+    window. It drops to the off-stage tier; only the co-located NPC is full."""
+    from sidequest.agents.npc_context import build_npc_working_set
+
+    left_behind = _located_npc(
+        "Good Witch", last_seen_turn=5, last_seen_location="Munchkin Country"
+    )
+    here = _located_npc("Toto", last_seen_turn=5, last_seen_location="The Yellow Brick Road")
+    snap = _located_snap(
+        current_turn=6, npcs=[left_behind, here], party_location="The Yellow Brick Road"
+    )
+
+    ws = build_npc_working_set(snap, current_turn=6, player_referenced_npcs=set(), recency_window=2)
+
+    assert _names(ws.full_profiles) == {"Toto"}, (
+        "only the co-located NPC may be scene-present; the region-A NPC must be "
+        f"demoted off-stage; got full={_names(ws.full_profiles)}"
+    )
+    assert "Good Witch" in set(ws.compact_names), (
+        "the left-behind NPC must surface in the off-stage tier (not evicted)"
+    )
+
+
+def test_colocation_filter_inactive_without_party_location() -> None:
+    """No Silent Fallbacks: when no party location resolves (seatless / split
+    snapshot), the co-location filter is INACTIVE and the floor falls back to
+    recency-only — we never prune on an unknown location."""
+    from sidequest.agents.npc_context import build_npc_working_set
+
+    # _snap seats no PC, so party_location() returns None.
+    a = _located_npc("Alfa", last_seen_turn=5, last_seen_location="Somewhere Else")
+    b = _located_npc("Bravo", last_seen_turn=5, last_seen_location="Here")
+    snap = _snap(current_turn=6, npcs=[a, b], pool=[])
+
+    ws = build_npc_working_set(snap, current_turn=6, player_referenced_npcs=set(), recency_window=2)
+
+    assert _names(ws.full_profiles) == {"Alfa", "Bravo"}, (
+        "with no resolvable party location the filter must be inactive (both "
+        f"recent NPCs stay full); got full={_names(ws.full_profiles)}"
+    )
+
+
+def test_colocation_keeps_npc_with_unknown_last_seen_location() -> None:
+    """An NPC that is recent but carries no last_seen_location (legacy / pre-bind)
+    is kept full — we fail toward keeping a possibly-present NPC rather than
+    pruning on missing data."""
+    from sidequest.agents.npc_context import build_npc_working_set
+
+    unknown = _located_npc("Legacy", last_seen_turn=5, last_seen_location=None)
+    snap = _located_snap(current_turn=6, npcs=[unknown], party_location="The Yellow Brick Road")
+
+    ws = build_npc_working_set(snap, current_turn=6, player_referenced_npcs=set(), recency_window=2)
+
+    assert _names(ws.full_profiles) == {"Legacy"}, (
+        "a recent NPC with unknown last_seen_location must stay full (fail-keep); "
+        f"got full={_names(ws.full_profiles)}"
+    )
+
+
+def test_colocation_tolerates_scene_string_phrasing_drift() -> None:
+    """Co-location matches with the Monster Manual's substring tolerance so
+    "the Yellow Brick Road" co-locates with "Yellow Brick Road" — phrasing drift
+    in character_locations must not falsely strand an NPC off-stage."""
+    from sidequest.agents.npc_context import build_npc_working_set
+
+    drifted = _located_npc("Scarecrow", last_seen_turn=5, last_seen_location="Yellow Brick Road")
+    snap = _located_snap(current_turn=6, npcs=[drifted], party_location="the Yellow Brick Road")
+
+    ws = build_npc_working_set(snap, current_turn=6, player_referenced_npcs=set(), recency_window=2)
+
+    assert _names(ws.full_profiles) == {"Scarecrow"}, (
+        f"substring-overlapping scene strings must co-locate; got full={_names(ws.full_profiles)}"
+    )
+
+
+def test_colocation_explicit_param_overrides_snapshot_location() -> None:
+    """The ``current_location`` param wins over ``snapshot.party_location()`` —
+    lets a caller supply a per-perspective location without re-deriving."""
+    from sidequest.agents.npc_context import build_npc_working_set
+
+    here = _located_npc("Tinman", last_seen_turn=5, last_seen_location="Emerald City")
+    snap = _located_snap(current_turn=6, npcs=[here], party_location="The Yellow Brick Road")
+
+    ws = build_npc_working_set(
+        snap,
+        current_turn=6,
+        player_referenced_npcs=set(),
+        recency_window=2,
+        current_location="Emerald City",
+    )
+
+    assert _names(ws.full_profiles) == {"Tinman"}, (
+        "explicit current_location must override the snapshot consensus; "
+        f"got full={_names(ws.full_profiles)}"
+    )
+
+
+def test_colocation_span_reports_pruned_count(otel_capture) -> None:
+    """The GM-panel lie detector: the working-set span records how many
+    recent-but-elsewhere NPCs were pruned by the co-location filter and that the
+    filter was active."""
+    from sidequest.agents.npc_context import build_npc_working_set
+    from sidequest.telemetry.spans import SPAN_NPC_WORKING_SET
+
+    here = _located_npc("Toto", last_seen_turn=5, last_seen_location="The Yellow Brick Road")
+    gone1 = _located_npc("Witch", last_seen_turn=5, last_seen_location="Munchkin Country")
+    gone2 = _located_npc("Marbleby", last_seen_turn=5, last_seen_location="Munchkin Country")
+    snap = _located_snap(
+        current_turn=6, npcs=[here, gone1, gone2], party_location="The Yellow Brick Road"
+    )
+
+    build_npc_working_set(snap, current_turn=6, player_referenced_npcs=set(), recency_window=2)
+
+    fired = [s for s in otel_capture.get_finished_spans() if s.name == SPAN_NPC_WORKING_SET]
+    assert len(fired) == 1, f"expected one {SPAN_NPC_WORKING_SET!r} span; got {len(fired)}"
+    attrs = dict(fired[0].attributes or {})
+    assert attrs.get("location_pruned") == 2, (
+        f"two region-A NPCs must be reported pruned; got {attrs.get('location_pruned')}"
+    )
+    assert attrs.get("location_filter_active") is True
+    assert attrs.get("full_count") == 1, "only the co-located NPC is full"

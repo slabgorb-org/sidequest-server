@@ -915,6 +915,14 @@ class TurnContext:
     # bars before composing narration for any magic working.
     magic_state: Any = None  # runtime type: sidequest.magic.state.MagicState | None
 
+    # Fate state projection (ADR-144 F2b, Story 116-2). When non-None,
+    # build_narrator_prompt injects the ``fate_state`` section so the narrator sees the
+    # PCs' aspects, skills, fate points, and live scene aspects — and the invokable-aspect
+    # directive. Populated by the session handler from
+    # ``game.ruleset.fate_projection.build_fate_projection(snapshot)`` (the one source of
+    # truth it shares with the intent router). None on non-Fate packs — they pay zero tokens.
+    fate_state: dict[str, Any] | None = None
+
     # AWN mutation surface (story 102-7, Plan 2 §5.4). When BOTH are
     # non-None, build_narrator_prompt injects the mutation-context block so
     # the narrator sees owned mutations, costs, and live MP/usage — the same
@@ -1498,6 +1506,53 @@ def _consume_next_turn_directives(snapshot: GameSnapshot) -> str:
     rendered = "\n".join(f"- {d}" for d in snapshot.next_turn_directives)
     snapshot.next_turn_directives.clear()
     return rendered
+
+
+def _build_fate_state_section(projection: dict[str, Any]) -> str:
+    """Render the Fate projection into the narrator's ``fate_state`` prompt section
+    (ADR-144 F2b, Story 116-2).
+
+    Surfaces, per PC, the skills + current fate points + invokable character aspects, plus
+    the live scene aspects, then the invokable-aspect directive. Returns ``""`` when no PC
+    has a Fate sheet (loud-absent — the caller skips the section, never a blank header).
+
+    Agency invariant (SOUL "The Test"): the directive instructs the narrator to PROPOSE
+    invokes/compels and never to spend a player's fate point or invoke an aspect on their
+    behalf — invoking is the player's choice (the engine debits the point on the player's
+    command; the F3 UI surfaces it).
+    """
+    skills: dict[str, dict[str, int]] = projection.get("skills", {})
+    fate_points: dict[str, int] = projection.get("fate_points", {})
+    character_aspects: dict[str, list[str]] = projection.get("character_aspects", {})
+    scene_aspects: list[str] = projection.get("scene_aspects", [])
+
+    pcs = sorted(set(skills) | set(fate_points) | set(character_aspects))
+    if not pcs:
+        return ""
+
+    lines: list[str] = ["<fate-state>"]
+    for pc in pcs:
+        fp = fate_points.get(pc, 0)
+        lines.append(f"{pc} — Fate points: {fp}")
+        pc_skills = skills.get(pc) or {}
+        if pc_skills:
+            rendered = ", ".join(f"{name} {rating:+d}" for name, rating in pc_skills.items())
+            lines.append(f"  Skills: {rendered}")
+        aspects = character_aspects.get(pc) or []
+        if aspects:
+            lines.append("  Invokable aspects:")
+            lines.extend(f"    - {a}" for a in aspects)
+    if scene_aspects:
+        lines.append("Scene aspects (invokable by anyone):")
+        lines.extend(f"  - {a}" for a in scene_aspects)
+    lines.append(
+        "Directive: you MAY remind the player which aspects are invokable and propose a "
+        "compel rooted in one of their aspects. PROPOSE / OFFER only — do NOT spend a "
+        "player's fate point or invoke an aspect on their behalf. Invoking is the player's "
+        "choice."
+    )
+    lines.append("</fate-state>")
+    return "\n".join(lines)
 
 
 def _build_verbosity_section(verbosity: str) -> str:
@@ -2380,6 +2435,25 @@ class Orchestrator:
                     PromptSection.new(
                         "mutation_context",
                         f"<mutation-ledger>\n{mutation_volatile}\n</mutation-ledger>",
+                        AttentionZone.Valley,
+                        SectionCategory.State,
+                    ),
+                )
+
+        # Fate state (ADR-144 F2b, Story 116-2). The narrator sees the SAME projection the
+        # router built (one source of truth — build_fate_projection), rendered with the
+        # invokable-aspect directive. Dynamic per turn (fate points + aspects mutate in play)
+        # → Valley/State zone, NOT cache-promoted (ADR-112: only session-static sections ride
+        # the cache). Presence of the injected projection IS the gate (the session handler only
+        # populates it for Fate packs) — same discipline as magic_state above.
+        if context.fate_state is not None:
+            fate_block = _build_fate_state_section(context.fate_state)
+            if fate_block:
+                registry.register_section(
+                    agent_name,
+                    PromptSection.new(
+                        "fate_state",
+                        fate_block,
                         AttentionZone.Valley,
                         SectionCategory.State,
                     ),

@@ -120,9 +120,14 @@ def test_tool_present_in_unfiltered_catalog() -> None:
 
 def test_tool_is_a_write_tool() -> None:
     """A compel proposal mutates session intent (it fires a span / will store a pending
-    offer) — it must be a WRITE tool, not a READ one (perception-filter + category routing)."""
-    defs = {d.name: d for d in default_registry.tool_definitions()}
-    assert defs[TOOL_NAME].category == ToolCategory.WRITE
+    offer) — it must be a WRITE tool, not a READ one (perception-filter + category routing).
+
+    Category is a SERVER-SIDE concern carried on the registered tool, not on the
+    model-facing ``ToolDefinition`` (which is the JSON-schema descriptor the model sees).
+    Assert it on the registry's registered tool — the surface that drives WRITE-vs-READ
+    perception-filter routing in ``Registry.dispatch``."""
+    registered = default_registry._tools[TOOL_NAME]
+    assert registered.category == ToolCategory.WRITE
 
 
 # ---------------------------------------------------------------------------

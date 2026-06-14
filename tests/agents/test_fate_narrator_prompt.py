@@ -117,7 +117,9 @@ async def test_no_fate_state_section_when_absent() -> None:
         fate_state=None,
     )
     prompt, registry = await _orch().build_narrator_prompt("look around", context)
-    assert _section(registry, "fate_state") is None, "fate_state section leaked onto a non-Fate turn"
+    assert _section(registry, "fate_state") is None, (
+        "fate_state section leaked onto a non-Fate turn"
+    )
     assert "Last Honest Cop in Vega" not in prompt
 
 

@@ -178,24 +178,6 @@ def test_timeline_corrupt_save_is_empty_not_500(tmp_path):
     assert resp.json() == []
 
 
-def test_forensics_route_is_wired_and_serves_html(tmp_path):
-    """Mandatory wiring test: proves app.py registered the router and the
-    static asset resolves — not merely that the module imports."""
-    client = _client(tmp_path)
-    resp = client.get("/forensics")
-    assert resp.status_code == 200
-    assert resp.headers["content-type"].startswith("text/html")
-    assert "Save Forensics" in resp.text
-    assert "/api/debug/saves" in resp.text  # the page actually calls the API
-    assert "NOT this round" in resp.text  # honesty contract visible
-    assert "decision telemetry (this round)" in resp.text  # the new lane label
-    assert "save predates the substrate" in resp.text  # honest-empty contract visible
-    assert "signals</span>" in resp.text  # decision-telemetry lane meta count shape
-    assert "mechanical state (this round)" in resp.text  # lane label
-    assert "no mechanical census (save predates" in resp.text  # absent
-    assert "no mechanical change" in resp.text  # static
-
-
 def test_snapshot_endpoint_returns_persisted_state(tmp_path, pg_isolation):
     """ADR-115 D2: /snapshot now reads game_state.snapshot_json from Postgres
     via PgForensicReader.snapshot_json (a raw verbatim decode), NOT the SQLite

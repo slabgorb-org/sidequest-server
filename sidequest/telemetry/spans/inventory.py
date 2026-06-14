@@ -10,12 +10,8 @@ from typing import Any
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
-from ._core import FLAT_ONLY_SPANS, SPAN_ROUTES, SpanRoute
+from ._core import SPAN_ROUTES, SpanRoute
 from .span import Span
-
-# Port-artifact constant — extractor agent not reimplemented.
-SPAN_INVENTORY_EXTRACTION = "inventory.extraction"
-FLAT_ONLY_SPANS.add(SPAN_INVENTORY_EXTRACTION)
 
 SPAN_INVENTORY_NARRATOR_EXTRACTED = "inventory.narrator_extracted"
 SPAN_ROUTES[SPAN_INVENTORY_NARRATOR_EXTRACTED] = SpanRoute(

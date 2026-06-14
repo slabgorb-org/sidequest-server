@@ -37,6 +37,10 @@ sidequest/
 ├── handlers/         # Per-message-type dispatch handlers
 ├── agents/           # Anthropic SDK narrator (default) + claude -p/Ollama opt-in, auxiliaries
 ├── game/             # State, characters, encounters, tropes, turns, persistence (~70 modules)
+│                     #   game/ruleset/ — pluggable SRD modules: native + Without Number
+│                     #   family (without_number base + swn/wwn/cwn/awn, ADR-117/142/143)
+├── dungeon/          # Runtime procedural Jaquaysed megadungeon (ADR-106)
+├── mutation/         # AWN mutation system — acquire/use ops, stocks (ADR-102)
 ├── genre/            # YAML loader, layered genre/world pack models
 ├── audio/            # Server-side music + SFX coordination
 ├── media/            # Image generation orchestration (daemon client wrapper)
@@ -62,11 +66,15 @@ Entry points under `sidequest/cli/`:
 | `loadoutgen` | Generate loadout tables |
 | `namegen` | Markov-generated names from culture corpora (ADR-091) |
 | `validate` | Validate a genre pack against schema |
+| `weathergen` | Generate weather tables for narrator grounding |
+| `cookbook_ingest` | Ingest SRD/cookbook text into corpora |
 | `corpusmine` | Mine word lists from text |
 | `corpuslabel` | Annotate corpus entries |
 | `corpusdiff` | Diff two corpora |
 
-Run via `uv run python -m sidequest.cli.<name>` or the installed console scripts.
+Run via `uv run python -m sidequest.cli.<name>`. Only `sidequest-server` is
+registered as a console script in `pyproject.toml`; these CLIs are invoked as
+modules, not installed entry points.
 
 ## Endpoints
 
@@ -116,7 +124,9 @@ Gitflow. `develop` is the integration branch. `main` tracks releases. PRs target
 
 ## Related repos
 
-- [sidequest](https://github.com/slabgorb/sidequest) — Orchestrator, ADRs, sprint tracking
-- [sidequest-ui](https://github.com/slabgorb/sidequest-ui) — React client
-- [sidequest-daemon](https://github.com/slabgorb/sidequest-daemon) — Python media services (Z-Image, ACE-Step)
-- [sidequest-content](https://github.com/slabgorb/sidequest-content) — Genre packs (single source of truth)
+- [sidequest](https://github.com/slabgorb-org/sidequest) — Orchestrator, ADRs, sprint tracking
+- [sidequest-ui](https://github.com/slabgorb-org/sidequest-ui) — React client
+- [sidequest-daemon](https://github.com/slabgorb-org/sidequest-daemon) — Python media services (Z-Image, ACE-Step)
+- [sidequest-content](https://github.com/slabgorb-org/sidequest-content) — Genre packs (single source of truth)
+- [sidequest-composer](https://github.com/slabgorb-org/sidequest-composer) — Notation → rights-free audio (offline tool)
+- [sidequest-understudy](https://github.com/slabgorb-org/sidequest-understudy) — Naive simulated-player playtest client

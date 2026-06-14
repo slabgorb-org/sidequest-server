@@ -419,6 +419,12 @@ def party_member_from_character(
         # Story 93-4: player-linked creation-seed lore for the History
         # 'Lore' subsection beneath the origin block.
         lore_fragments=lore_fragments,
+        # ADR-143 Task 11: WN-family skills/foci reach the player-facing
+        # sheet (DD-6 — ride the existing sheet dict, no new top-level key).
+        # Empty dicts/lists for non-WN characters; the UI renders sections
+        # only when non-empty (mechanics-first — Sebastien/Jade legibility).
+        skills=dict(character.skills),
+        foci=list(character.foci),
     )
 
     # Currency noun from inventory.yaml::currency.name (pingpong

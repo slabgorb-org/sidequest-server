@@ -498,6 +498,13 @@ class CharacterSheetDetails(ProtocolBase):
     a 'Lore' subsection beneath the 93-3 origin block. Filtered to THIS
     character's chosen chargen options; another player's picks never leak in.
     Empty when the character has no linked fragments (legacy / no-store)."""
+    skills: dict[str, int] = Field(default_factory=dict)
+    """WN-family skill name → level mapping (ADR-143 Task 11). Empty for
+    non-WN characters and pre-ADR-143 saves. Rendered by the UI as a Skills
+    section only when non-empty (mechanics-first — Sebastien/Jade legibility)."""
+    foci: list[str] = Field(default_factory=list)
+    """WN-family focus ids (ADR-143 Task 11). Empty for non-WN characters.
+    Rendered by the UI as a Foci section only when non-empty."""
 
 
 # ---------------------------------------------------------------------------

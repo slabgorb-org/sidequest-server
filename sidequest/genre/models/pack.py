@@ -281,10 +281,16 @@ class World(BaseModel):
     caverns_and_claudes). Consumers read this world-first via
     ``resolve_inventory``; the genre-tier ``GenrePack.inventory`` is the shared
     default for packs that have not migrated the catalog down to the world tier.
-    A world's inventory REPLACES the genre's wholesale — it is not merged (same
-    world-over-genre rule as classes; see ``resolve_inventory``). Distinct from
-    ``items`` (``WorldItemsCatalog``), which is a separate named-artifact flavor
-    list, not the chargen loadout/catalog surface."""
+    A world's inventory merges over the genre's per the ADR-145 D3 split (see
+    ``resolve_inventory``): the ``item_catalog`` is a **union by item ``id``** —
+    the genre SRD baseline is non-droppable, a world entry sharing a baseline
+    ``id`` overrides presentation (name/description/lore/narrative_weight) only,
+    and the mechanical envelope of a ``mode=verbatim`` baseline item is locked
+    (a world re-stat raises ``VerbatimFieldLockError``). ``starting_equipment``,
+    ``starting_gold``, and ``currency`` still REPLACE wholesale per world (those
+    are world-owned kit choices). Distinct from ``items``
+    (``WorldItemsCatalog``), which is a separate named-artifact flavor list, not
+    the chargen loadout/catalog surface."""
     bestiary: Bestiary | None = None
     """World-tier ``worlds/<slug>/bestiary.yaml`` (genre/world repoint): SRD-
     aligned combat-layer stat blocks specific to this world. When present it

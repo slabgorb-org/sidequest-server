@@ -139,7 +139,10 @@ def _resolve_weapon_damage(
       1. The named weapon CARRIED with an inline ``damage`` dict → that spec.
       2. The named weapon carried but damage lives in the world/genre item
          catalog (real ``GenrePack`` only) → ``CatalogItem.damage`` by the item's
-         id (world replaces genre, per epic 94).
+         id, looked up in the world-resolved catalog (ADR-145 D3 union: the genre
+         SRD baseline is non-droppable, the world catalog merges over it by id, so
+         a baseline weapon survives even when the world ships its own gear; only
+         currency/kit replace wholesale).
       3. The named weapon NOT carried but it is an unarmed strike (``fists`` etc.)
          → the genre unarmed-strike floor (``pack.rules.unarmed_damage``).
       4. Otherwise (weapon not carried and not unarmed, or carried with no

@@ -149,6 +149,12 @@ class WnSealedCommit(BaseModel):
     spell_id: str | None = None
 
 
+FateAction = Literal["overcome", "create_advantage", "attack"]
+"""The three proactive Fate Core actions committable in an exchange (ADR-144 F1c).
+Defend is reactive (engine-rolled), never committed; there is no ``full_defense``
+(not a Fate SRD action)."""
+
+
 class FateSealedCommit(BaseModel):
     """One sealed Fate action in an exchange (ADR-144 F1c).
 
@@ -170,7 +176,7 @@ class FateSealedCommit(BaseModel):
     model_config = {"extra": "forbid"}
 
     actor: str
-    action: Literal["overcome", "create_advantage", "attack"]
+    action: FateAction
     skill: str
     target: str | None = None
     difficulty: int = 0

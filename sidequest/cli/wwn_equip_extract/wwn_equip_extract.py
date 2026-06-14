@@ -62,6 +62,16 @@ def _section_ref(srd: str, section: str) -> str:
 
 _SHOCK_RE = re.compile(r"^(?P<shock>\d+)/AC(?P<ac>\d+)$")
 
+# Sentinel cells the WWN SRD uses for "this column does not apply to this row":
+# a weapon with no Shock rating (e.g. Blackjack, Club, Bow, Throwing Blade) prints
+# "None" in the Shock column, and a ranged weapon with no magazine prints "-".
+# These are VERBATIM "not applicable", not a missing value — the row is complete,
+# the cell is genuinely empty. We map them to an absent mechanical field (shock
+# omitted / magazine None), never to an invented number (that would be the ADR-143
+# re-stat the verbatim binding exists to forbid). Any OTHER non-conforming cell
+# still fails loud via the section parsers (No Silent Fallbacks).
+_NA_CELLS = frozenset({"None", "-", "—", "N/A", "n/a"})
+
 
 def _slugify(name: str, srd: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
@@ -166,9 +176,16 @@ def _parse_melee(rows: list[str], srd: str, license: str) -> list[CatalogItem]:
     for row in rows:
         with _row_context(ref, row):
             name, (dice, shock, enc, cost, _attr) = _split_trailing(row, 5)
-            m = _SHOCK_RE.match(shock)
-            if not m:
-                raise ValueError(f"shock {shock!r} is not 'X/ACY'")
+            # A "None"/"-" Shock cell is a verbatim "no Shock rating" (Blackjack,
+            # Club, Throwing Blade, etc.) — emit the weapon with no shock fields
+            # rather than inventing a number or dropping the row.
+            if shock in _NA_CELLS:
+                damage = DamageSpec(dice=dice)
+            else:
+                m = _SHOCK_RE.match(shock)
+                if not m:
+                    raise ValueError(f"shock {shock!r} is not 'X/ACY' or a no-Shock cell {sorted(_NA_CELLS)}")
+                damage = DamageSpec(dice=dice, shock=int(m["shock"]), shock_ac=int(m["ac"]))
             items.append(
                 CatalogItem(
                     id=_slugify(name, srd),
@@ -177,11 +194,7 @@ def _parse_melee(rows: list[str], srd: str, license: str) -> list[CatalogItem]:
                     category="melee_weapon",
                     value=int(cost),
                     weight=float(enc),
-                    damage=DamageSpec(
-                        dice=dice,
-                        shock=int(m["shock"]),
-                        shock_ac=int(m["ac"]),
-                    ),
+                    damage=damage,
                     provenance=_provenance(srd, license, ref),
                 )
             )
@@ -195,6 +208,10 @@ def _parse_ranged(rows: list[str], srd: str, license: str) -> list[CatalogItem]:
     for row in rows:
         with _row_context(ref, row):
             name, (dice, range_band, mag, enc, cost) = _split_trailing(row, 5)
+            # WWN ranged weapons reload per-shot and have no magazine capacity;
+            # the SRD prints "-" there. A "-"/"None" magazine cell is a verbatim
+            # "no magazine", emitted as an absent field — never an invented count.
+            magazine = None if mag in _NA_CELLS else int(mag)
             items.append(
                 CatalogItem(
                     id=_slugify(name, srd),
@@ -204,7 +221,7 @@ def _parse_ranged(rows: list[str], srd: str, license: str) -> list[CatalogItem]:
                     value=int(cost),
                     weight=float(enc),
                     range_band=range_band,
-                    magazine=int(mag),
+                    magazine=magazine,
                     damage=DamageSpec(dice=dice),
                     provenance=_provenance(srd, license, ref),
                 )

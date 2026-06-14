@@ -290,6 +290,64 @@ def test_srd_ref_prefix_tracks_srd_slug() -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_none_shock_melee_weapon_emits_without_inventing_shock() -> None:
+    """114-4: real WWN melee/thrown weapons (Blackjack, Club, Throwing Blade) print
+    "None" in the Shock column. That is a verbatim "no Shock rating" — the weapon
+    must emit with damage dice but NO shock fields, never a dropped row and never an
+    invented shock number (the ADR-143 re-stat the verbatim binding forbids)."""
+    text = (
+        "§3.0.0 Equipment\n\n"
+        "§3.0.1 Armor\n"
+        "Name                AC    Cost    Enc\n"
+        "Test Padded Vest    13    20      1\n\n"
+        "§3.0.2 Melee Weapons\n"
+        "Name                Damage   Shock      Enc   Cost   Attribute\n"
+        "Test Blackjack      1d4      None       1     1      Str/Dex\n"
+        "Test Iron Cudgel    1d8      2/AC15     1     12     Str\n\n"
+        "§3.0.3 Ranged Weapons\n"
+        "Name                Damage   Range      Mag   Enc   Cost\n"
+        "Test Sling Carbine  1d6      pistol     6     1     40\n\n"
+        "§3.0.4 General Equipment\n"
+        "Name                Cost    Enc\n"
+        "Test Hemp Rope 50ft 4       1\n"
+    )
+    items = _by_id(extract_catalog(text, srd="wwn"))
+    bj = next(it for it in items.values() if "Blackjack" in it.name)
+    assert bj.damage is not None
+    assert bj.damage.dice == "1d4"
+    assert bj.damage.shock == 0  # no Shock rating — not invented
+    assert bj.damage.shock_ac is None
+    # The shock weapon in the same section is unaffected.
+    cudgel = next(it for it in items.values() if "Cudgel" in it.name)
+    assert cudgel.damage is not None and cudgel.damage.shock == 2
+
+
+def test_ranged_weapon_with_no_magazine_emits_none_not_invented() -> None:
+    """114-4: WWN ranged weapons (bows, crossbow, hurlants) reload per-shot and print
+    "-" in the Mag column. That is a verbatim "no magazine" — magazine must be None,
+    not an invented capacity. The verbatim range string is still carried."""
+    text = (
+        "§3.0.0 Equipment\n\n"
+        "§3.0.1 Armor\n"
+        "Name                AC    Cost    Enc\n"
+        "Test Padded Vest    13    20      1\n\n"
+        "§3.0.2 Melee Weapons\n"
+        "Name                Damage   Shock      Enc   Cost   Attribute\n"
+        "Test Iron Cudgel    1d8      2/AC15     1     12     Str\n\n"
+        "§3.0.3 Ranged Weapons\n"
+        "Name                Damage   Range      Mag   Enc   Cost\n"
+        "Test Large Bow      1d8      100/600    -     2     20\n\n"
+        "§3.0.4 General Equipment\n"
+        "Name                Cost    Enc\n"
+        "Test Hemp Rope 50ft 4       1\n"
+    )
+    items = extract_catalog(text, srd="wwn")
+    bow = next(it for it in items if "Large Bow" in it.name)
+    assert bow.magazine is None  # no magazine — not invented
+    assert bow.range_band == "100/600"  # verbatim range carried
+    assert bow.damage is not None and bow.damage.dice == "1d8"
+
+
 def test_refuses_verbatim_under_non_permitting_license() -> None:
     """ADR-145 D4: the tool must refuse to emit a verbatim item under a license
     that does not permit verbatim reuse (e.g. Fate's ccby / a 'none' basis).

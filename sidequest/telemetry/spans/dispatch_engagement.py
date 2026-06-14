@@ -48,6 +48,16 @@ SPAN_DISPATCH_ENGAGEMENT_MOVEMENT_MISMATCH = "dispatch_engagement.movement.misma
 # a dead socket.
 SPAN_DISPATCH_ENGAGEMENT_WATCHER_CRASHED = "dispatch_engagement.watcher.crashed"
 
+# Narration-vs-state lie-detector (sq-playtest 2026-06-14, heavy_metal/barsoom
+# phantom-wound CRITICAL): the narrator described a PC taking a sword wound, but
+# no encounter was active and the router dispatched NO confrontation (it errored
+# on the schema). The dispatch-engagement watcher above cannot catch this — it
+# only checks dispatches that EXIST, and here none did. This span fires when
+# combat-injury prose appears with no mechanical backing (no live encounter, no
+# confrontation dispatch): the canonical "convincing prose, zero mechanical
+# backing" the OTEL panel exists to catch, in its narrator-improvised form.
+SPAN_NARRATION_IMPROVISED_COMBAT = "narration.improvised_combat.suspected"
+
 
 def _extract(span: Any) -> dict[str, Any]:
     attrs = span.attributes or {}
@@ -102,6 +112,24 @@ SPAN_ROUTES[SPAN_DISPATCH_ENGAGEMENT_WATCHER_CRASHED] = SpanRoute(
     event_type="state_transition",
     component="intent_router",
     extract=_extract_crashed,
+)
+
+
+def _extract_improvised_combat(span: Any) -> dict[str, Any]:
+    attrs = span.attributes or {}
+    return {
+        "field": "narration.improvised_combat",
+        "evidence": attrs.get("evidence", ""),
+    }
+
+
+# Routed to component="narrator": here the SUSPECT under investigation is the
+# narrator (it wrote a wound), not the router — the inverse attribution of the
+# dispatch-engagement spans above.
+SPAN_ROUTES[SPAN_NARRATION_IMPROVISED_COMBAT] = SpanRoute(
+    event_type="state_transition",
+    component="narrator",
+    extract=_extract_improvised_combat,
 )
 
 
@@ -167,6 +195,26 @@ def dispatch_engagement_watcher_crashed_span(
         yield span
 
 
+@contextmanager
+def narration_improvised_combat_span(
+    *,
+    evidence: str,
+    _tracer: trace.Tracer | None = None,
+) -> Iterator[trace.Span]:
+    """Emit a ``narration.improvised_combat.suspected`` span.
+
+    Fired by ``run_improvised_combat_watcher`` when narration depicts combat
+    injury with no active encounter and no confrontation dispatch — the
+    narrator-improvised form of the Illusionism failure mode.
+    """
+    with Span.open(
+        SPAN_NARRATION_IMPROVISED_COMBAT,
+        {"evidence": evidence},
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
 __all__ = [
     "SPAN_DISPATCH_ENGAGEMENT_CONFRONTATION_MISMATCH",
     "SPAN_DISPATCH_ENGAGEMENT_MAGIC_WORKING_MISMATCH",
@@ -177,7 +225,9 @@ __all__ = [
     "SPAN_DISPATCH_ENGAGEMENT_WITNESSED_ACT_MISMATCH",
     "SPAN_DISPATCH_ENGAGEMENT_MOVEMENT_MISMATCH",
     "SPAN_DISPATCH_ENGAGEMENT_WATCHER_CRASHED",
+    "SPAN_NARRATION_IMPROVISED_COMBAT",
     "dispatch_engagement_mismatch_span",
     "dispatch_engagement_watcher_crashed_span",
+    "narration_improvised_combat_span",
     "span_name_for_subsystem",
 ]

@@ -928,3 +928,98 @@ def test_watcher_crash_is_caught_logged_and_surfaced_as_crashed_span(
     attrs = dict(crashed[0].attributes or {})
     assert attrs.get("error_type") == "RuntimeError"
     assert "synthetic witness explosion" in str(attrs.get("error", ""))
+
+
+# ---------------------------------------------------------------------------
+# Improvised-combat detector (phantom-wound CRITICAL, sq-playtest 2026-06-14).
+#
+# The narrator depicted a PC taking a sword wound, but the router errored on
+# the DispatchPackage schema → no confrontation dispatched → no encounter, no
+# dice, no HP delta. The dispatch-engagement watcher is structurally blind
+# (no dispatch to check), so this sibling reads narration-vs-state.
+# ---------------------------------------------------------------------------
+
+_WOUND_PROSE = (
+    "The Zodangan drives the blade in a short, brutal arc across Pipster's ribs. "
+    "One hip is wet with blood, and he is already resetting his guard."
+)
+
+
+def test_improvised_combat_detected_when_no_encounter_and_no_confrontation() -> None:
+    """The phantom-wound signature: wound prose + no encounter + no
+    confrontation dispatch → evidence + one span."""
+    from sidequest.agents.dispatch_engagement_watcher import (
+        detect_improvised_combat,
+        run_improvised_combat_watcher,
+    )
+
+    snap = _snapshot(encounter=None)
+    evidence = detect_improvised_combat(
+        narration=_WOUND_PROSE, package=_empty_package(), snapshot=snap
+    )
+    assert evidence is not None
+    assert "wet with blood" in evidence or "drives the blade" in evidence
+
+    tracer, exporter = _fresh_tracer_and_exporter()
+    run_improvised_combat_watcher(
+        narration=_WOUND_PROSE, package=_empty_package(), snapshot=snap, tracer=tracer
+    )
+    spans = exporter.get_finished_spans()
+    suspected = [s for s in spans if s.name == "narration.improvised_combat.suspected"]
+    assert len(suspected) == 1, f"expected one improvised-combat span; got {[s.name for s in spans]}"
+
+
+def test_improvised_combat_fires_on_none_package() -> None:
+    """A None package (the router produced nothing at all — the literal
+    phantom-wound case) still triggers the detector."""
+    from sidequest.agents.dispatch_engagement_watcher import detect_improvised_combat
+
+    snap = _snapshot(encounter=None)
+    assert detect_improvised_combat(narration=_WOUND_PROSE, package=None, snapshot=snap) is not None
+
+
+def test_improvised_combat_quiet_when_live_encounter_backs_it() -> None:
+    """A live (unresolved) encounter mechanically backs the violence — no beep."""
+    from sidequest.agents.dispatch_engagement_watcher import detect_improvised_combat
+
+    snap = _snapshot(encounter=_make_encounter("arena_bout"))  # resolved defaults False
+    assert detect_improvised_combat(narration=_WOUND_PROSE, package=None, snapshot=snap) is None
+
+
+def test_improvised_combat_quiet_when_confrontation_dispatched() -> None:
+    """If the router DID dispatch a confrontation, the dispatch-engagement
+    confrontation witness owns the mismatch — this detector stands down."""
+    from sidequest.agents.dispatch_engagement_watcher import detect_improvised_combat
+
+    snap = _snapshot(encounter=None)
+    package = _package_with(
+        _make_dispatch(subsystem="confrontation", params={"type": "arena_bout"})
+    )
+    assert detect_improvised_combat(narration=_WOUND_PROSE, package=package, snapshot=snap) is None
+
+
+def test_improvised_combat_quiet_on_non_combat_narration() -> None:
+    """A peaceful scene with no injury markers does not beep (no false positive)."""
+    from sidequest.agents.dispatch_engagement_watcher import detect_improvised_combat
+
+    calm = "Pipster walks the dim arcade of the pot-house, the incubator egg cracking faintly."
+    snap = _snapshot(encounter=None)
+    assert detect_improvised_combat(narration=calm, package=_empty_package(), snapshot=snap) is None
+
+
+def test_improvised_combat_watcher_wired_into_session_handler() -> None:
+    """Wiring tripwire (reflection, not source-grep): the handler module's
+    runtime namespace must reference ``run_improvised_combat_watcher`` — else
+    the phantom-wound detector never fires in production."""
+    import sys
+
+    import sidequest.server.session_handler  # noqa: F401 — load order fix
+
+    handler_mod = sys.modules["sidequest.server.websocket_session_handler"]
+    has_function = "run_improvised_combat_watcher" in handler_mod.__dict__
+    has_module = "dispatch_engagement_watcher" in handler_mod.__dict__
+    assert has_function or has_module, (
+        "websocket_session_handler must import run_improvised_combat_watcher "
+        "(or the dispatch_engagement_watcher module) — the phantom-wound "
+        "lie-detector call site is missing."
+    )

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, Literal
 
 from pydantic import Field, model_validator
@@ -31,6 +32,35 @@ from pydantic import Field, model_validator
 from sidequest.protocol.base import ProtocolBase
 
 logger = logging.getLogger(__name__)
+
+# Recovery scrape for a ``confidence_global`` value swallowed into a stringified
+# per_player/cross_player blob (see DispatchPackage._coerce_stringified_lists).
+# Tolerant of the messy separators Haiku produces — clean ``": 0.72"`` and the
+# mangled ``">0.92"`` both seen live (sq-playtest 2026-06-14). Anchored on the
+# unique ``confidence_global`` token so it never matches a per-dispatch
+# ``confidence`` field. The value is a 0.0–1.0 confidence (leading digit 0 or 1).
+_CONFIDENCE_GLOBAL_RE = re.compile(r'confidence_global["\s:>=]*([01](?:\.[0-9]+)?)')
+
+
+def _recover_leading_json_array(value: str) -> list | None:
+    """Parse a leading JSON array out of a string that carries trailing junk.
+
+    The model sometimes stringifies ``per_player``/``cross_player`` AND mashes a
+    sibling field (the required ``confidence_global``) into the same string, so
+    the whole value is not valid JSON (``json.loads`` fails) but the leading
+    array is well-formed. ``raw_decode`` parses the first well-formed value and
+    ignores the trailing remainder; return the list when that value is a list,
+    else ``None`` (caller leaves the string for pydantic to reject loudly — No
+    Silent Fallbacks).
+    """
+    s = value.lstrip()
+    if not s.startswith("["):
+        return None
+    try:
+        obj, _end = json.JSONDecoder().raw_decode(s)
+    except ValueError:
+        return None
+    return obj if isinstance(obj, list) else None
 
 # ---------------------------------------------------------------------------
 # Visibility
@@ -245,9 +275,20 @@ class DispatchPackage(ProtocolBase):
         wrong — so rejecting it costs a retry (and on a double miss, the
         whole turn's mechanical spine). Parse the string; if it yields a
         list, take it (same normalize-don't-reject doctrine as
-        ``CrossAction._witnesses_include_participants``). Anything else —
-        unparseable, or parses to a non-list — is left as-is for pydantic to
-        reject loudly.
+        ``CrossAction._witnesses_include_participants``).
+
+        Swallowed-sibling variant (sq-playtest 2026-06-14, heavy_metal/barsoom
+        phantom-wound CRITICAL): the model stringifies the array AND mashes the
+        required sibling ``confidence_global`` field into the SAME string, so
+        the value is the array plus trailing junk and plain ``json.loads``
+        fails. Left unrepaired this dropped the whole DispatchPackage on the
+        arena-entry turn — the confrontation never dispatched and the narrator
+        improvised a sword wound with no encounter, dice, or HP delta. Parse the
+        leading array via ``raw_decode`` and recover the swallowed
+        ``confidence_global`` so the dispatch survives.
+
+        Anything else — unparseable, or parses to a non-list — is left as-is
+        for pydantic to reject loudly (No Silent Fallbacks).
         """
         if not isinstance(data, dict):
             return data
@@ -258,7 +299,7 @@ class DispatchPackage(ProtocolBase):
             try:
                 parsed = json.loads(value)
             except ValueError:
-                continue  # let pydantic reject the string loudly
+                parsed = None
             if isinstance(parsed, list):
                 logger.info(
                     "dispatch_package.coerced_stringified_list field=%s items=%d",
@@ -266,6 +307,28 @@ class DispatchPackage(ProtocolBase):
                     len(parsed),
                 )
                 data[field] = parsed
+                continue
+            if parsed is not None:
+                # Parsed cleanly but to a non-list (dict/scalar) — not our
+                # failure mode; leave it for pydantic to reject loudly.
+                continue
+            # json.loads failed: try the swallowed-sibling repair.
+            items = _recover_leading_json_array(value)
+            if items is None:
+                continue  # genuinely unparseable — pydantic rejects loudly
+            data[field] = items
+            recovered: list[str] = []
+            if "confidence_global" not in data:
+                match = _CONFIDENCE_GLOBAL_RE.search(value)
+                if match:
+                    data["confidence_global"] = float(match.group(1))
+                    recovered.append("confidence_global")
+            logger.info(
+                "dispatch_package.repaired_stringified_list field=%s items=%d recovered=%s",
+                field,
+                len(items),
+                ",".join(recovered) or "(none)",
+            )
         return data
 
     @model_validator(mode="after")

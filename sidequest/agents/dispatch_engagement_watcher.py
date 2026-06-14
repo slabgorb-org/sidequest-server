@@ -57,9 +57,37 @@ from sidequest.protocol.dispatch import DispatchPackage, SubsystemDispatch
 from sidequest.telemetry.spans.dispatch_engagement import (
     dispatch_engagement_mismatch_span,
     dispatch_engagement_watcher_crashed_span,
+    narration_improvised_combat_span,
 )
 
 logger = logging.getLogger(__name__)
+
+# Curated combat-injury markers — phrases that almost exclusively appear when
+# violence is actively LANDING on a body. Kept deliberately tight: the
+# improvised-combat detector fires a GM-panel beep (observability), never a
+# control-flow block, so a missed synonym is far cheaper than a flood of
+# flavor-blood false alarms. The two state gates (no live encounter, no
+# confrontation dispatched) do most of the discriminating; these markers only
+# confirm the prose actually depicts a wound being dealt. Tunable as findings
+# accrue. Matched case-insensitively as substrings.
+_IMPROVISED_COMBAT_MARKERS: tuple[str, ...] = (
+    "wet with blood",
+    "slick with blood",
+    "drives the blade",
+    "drives the sword",
+    "drives the spear",
+    "sinks the blade",
+    "buries the blade",
+    "buries the sword",
+    "runs you through",
+    "runs him through",
+    "runs her through",
+    "opens a gash",
+    "the blade bites",
+    "blade across",
+    "blood wells",
+    "spurts blood",
+)
 
 
 @dataclass(frozen=True)
@@ -431,8 +459,115 @@ def run_dispatch_engagement_watcher(
             pass
 
 
+# ---------------------------------------------------------------------------
+# Narration-vs-state lie-detector — the improvised-combat detector.
+#
+# The dispatch-engagement watcher above catches "router dispatched X, engine
+# didn't engage X". This sibling catches the INVERSE failure the phantom-wound
+# CRITICAL exposed (sq-playtest 2026-06-14, heavy_metal/barsoom): the router
+# dispatched NOTHING (it errored on the schema), yet the narrator wrote a full
+# sword wound — no encounter, no dice, no HP delta. There is no dispatch to
+# check, so the engagement watcher is structurally blind to it. This detector
+# reads the narration text against the snapshot instead.
+# ---------------------------------------------------------------------------
+
+
+def _package_dispatched_confrontation(package: DispatchPackage | None) -> bool:
+    """True when the router emitted any ``confrontation`` dispatch this turn.
+
+    A ``None`` package (the router failed/produced nothing — the phantom-wound
+    case) means no confrontation was dispatched. When a confrontation WAS
+    dispatched, ownership belongs to the dispatch-engagement confrontation
+    witness, not this detector — so it stands down to avoid double-flagging.
+    """
+    if package is None:
+        return False
+    return any(d.subsystem == "confrontation" for _player_id, d in _iter_all_dispatches(package))
+
+
+def detect_improvised_combat(
+    *,
+    narration: str,
+    package: DispatchPackage | None,
+    snapshot: GameSnapshot,
+) -> str | None:
+    """Detect narrated combat injury with zero mechanical backing.
+
+    Returns a short evidence string when ALL hold, else ``None``:
+
+    1. No live encounter — ``snapshot.encounter`` is None or already resolved.
+       A live encounter mechanically backs the violence; not improvised.
+    2. The router dispatched no ``confrontation`` this turn — so the
+       dispatch-engagement confrontation witness is not already covering it
+       (and the phantom-wound case, where the router produced nothing at all,
+       is included).
+    3. The narration contains a curated combat-injury marker — the prose
+       actually depicts a wound being dealt, not merely a tense standoff.
+
+    This is the narrator-improvised form of the Illusionism failure mode the
+    OTEL panel exists to catch (SOUL: Genre Truth / mechanical scaffold).
+    Pure — no I/O, no tracer touch — so callers can introspect without an
+    exporter; the wrapper emits the span.
+    """
+    if not narration:
+        return None
+    encounter = snapshot.encounter
+    if encounter is not None and not encounter.resolved:
+        return None
+    if _package_dispatched_confrontation(package):
+        return None
+    lowered = narration.lower()
+    hits = [marker for marker in _IMPROVISED_COMBAT_MARKERS if marker in lowered]
+    if not hits:
+        return None
+    return (
+        f"narration depicts combat injury ({', '.join(hits[:3])}) but no encounter is "
+        "active and the router dispatched no confrontation — no dice, no HP delta backs it"
+    )
+
+
+def run_improvised_combat_watcher(
+    *,
+    narration: str,
+    package: DispatchPackage | None,
+    snapshot: GameSnapshot,
+    tracer: trace.Tracer | None = None,
+) -> None:
+    """Run the improvised-combat detector and emit one span on a hit.
+
+    **Non-fatal by contract** — identical discipline to
+    :func:`run_dispatch_engagement_watcher`: this is a pure-observability pass
+    running POST-narration in the WS turn pipeline, so any exception is caught,
+    logged, and surfaced as the watcher-crashed span rather than tearing down
+    turn delivery.
+    """
+    try:
+        evidence = detect_improvised_combat(
+            narration=narration, package=package, snapshot=snapshot
+        )
+        if evidence is not None:
+            with narration_improvised_combat_span(evidence=evidence, _tracer=tracer):
+                pass
+    except Exception as exc:  # noqa: BLE001 — observability must never abort the turn
+        logger.error(
+            "improvised_combat.watcher_crashed error_type=%s error=%s "
+            "(turn pipeline continues; improvised-combat coverage lost this turn)",
+            type(exc).__name__,
+            exc,
+            exc_info=True,
+        )
+        with dispatch_engagement_watcher_crashed_span(
+            error_type=type(exc).__name__,
+            error=str(exc),
+            _tracer=tracer,
+        ):
+            pass
+
+
 __all__ = [
     "DispatchMismatch",
     "detect_dispatch_engagement_mismatch",
+    "detect_improvised_combat",
     "run_dispatch_engagement_watcher",
+    "run_improvised_combat_watcher",
 ]

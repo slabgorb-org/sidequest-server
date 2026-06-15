@@ -999,6 +999,52 @@ class WwnConfig(SwnConfig):
     magic: MagicConfig = Field(default_factory=MagicConfig)
 
 
+class FateStuntDef(BaseModel):
+    """One entry in a Fate genre's stunt catalog (ADR-144). Genre-tier so it
+    carries NO dependency on ``sidequest.game`` (the layering rule: game depends
+    on genre, never the reverse — so this cannot reuse ``game.fate_sheet.Stunt``).
+    The mechanical effect is authored prose for the narrator; the engine spine
+    only carries name/description."""
+
+    model_config = {"extra": "forbid"}
+
+    name: str
+    description: str = ""
+
+
+class FateConfig(BaseModel):
+    """Fate Core per-genre content schema (ADR-144 F4a). The genre authors the
+    mechanical identity — the skill list and its starting ratings, the refresh,
+    aspect templates, and the stunt catalog; the world layers flavor (Crunch in
+    the Genre, Flavor in the World). Present only when ``ruleset == "fate"``.
+
+    Used by ``FateRulesetModule.seed_chargen_resources`` to seed a valid, populated
+    ``FateSheet`` at chargen, and (story 121-7 / F4a2) to drive the interactive Fate
+    chargen flow.
+
+    - ``skills``: the per-genre skill list as ``name -> default starting ladder
+      rating`` (e.g. noir: Investigate 3, Contacts 2). Copied verbatim onto the
+      seeded sheet's ``skills``.
+    - ``refresh``: SRD starting refresh; a new sheet starts with ``fate_points ==
+      refresh``.
+    - ``default_high_concept`` / ``default_trouble``: aspect templates seeded onto
+      a new sheet. A player refines them in play (and, in 121-7, authors their own
+      at chargen).
+    - ``stunts``: the available stunt catalog. Loaded-but-unconsumed by F4a's
+      default seed (a default PC takes no stunts); the interactive chargen flow
+      (121-7) consumes it when the player picks stunts. This typed-but-unconsumed
+      forward contract mirrors the ``standoff_rules`` precedent above.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    skills: dict[str, int] = Field(default_factory=dict)
+    refresh: int = 3
+    default_high_concept: str = ""
+    default_trouble: str = ""
+    stunts: list[FateStuntDef] = Field(default_factory=list)
+
+
 class RulesConfig(BaseModel):
     """Game rules configuration."""
 
@@ -1098,6 +1144,8 @@ class RulesConfig(BaseModel):
     wwn: WwnConfig | None = None
     # Present only when ruleset == "awn"; None for all other rulesets.
     awn: AwnConfig | None = None
+    # Present only when ruleset == "fate"; None for all other rulesets (ADR-144 F4a).
+    fate: FateConfig | None = None
     # ADR-113 confidence gate (Story 71-16): per-subsystem engagement
     # thresholds. Keys are dispatch subsystem names (``confrontation``,
     # ``magic_working``, ``scenario_clue``, ``npc_agency``, ``movement``,
@@ -1219,6 +1267,22 @@ class RulesConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_fate(self) -> RulesConfig:
+        """Enforce that a ``ruleset: fate`` pack authors its ``fate`` block (ADR-144
+        F4a). Fate has no d20 attribute_map; its required content is the FateConfig
+        itself (the skill list / refresh / aspect templates the seed reads). A fate
+        pack with no fate block fails loud — No Silent Fallbacks — mirroring the
+        swn/cwn/wwn "attribute_map required" validators."""
+        if self.ruleset != "fate":
+            return self
+        if self.fate is None:
+            raise ValueError(
+                "ruleset 'fate' requires rules.fate (FateConfig: skill list, refresh, "
+                "aspect templates); none authored — no silent default"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_wwn(self) -> RulesConfig:
         """Enforce a complete attribute_map when ruleset == 'wwn'; raises ValueError if omitted."""
         if self.ruleset != "wwn":
@@ -1305,11 +1369,12 @@ class RulesConfig(BaseModel):
             )
         return self
 
-    def ruleset_config(self) -> SwnConfig | None:
+    def ruleset_config(self) -> SwnConfig | FateConfig | None:
         """The config block for the bound ruleset, or None for engines that carry none.
 
         Dispatch resolves the cfg this way instead of hardcoding `.swn`, so a
         `cwn` pack receives its own block. `native` carries no config (None).
+        `fate` returns its FateConfig (not a SwnConfig subclass — the union widens).
         """
         if self.ruleset == "swn":
             return self.swn
@@ -1319,6 +1384,8 @@ class RulesConfig(BaseModel):
             return self.wwn
         if self.ruleset == "awn":
             return self.awn
+        if self.ruleset == "fate":
+            return self.fate
         return None
 
     @property

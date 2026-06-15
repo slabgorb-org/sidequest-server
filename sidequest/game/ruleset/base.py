@@ -299,6 +299,13 @@ class RulesetModule(ABC):
         logic is reusable across the base and any override that wants to call super()
         value-gen then do its own assignment.
         """
+        # A ruleset with no ability scores (e.g. Fate — ADR-144: 4dF + skill
+        # ladder, no d20 attributes) generates no attribute values. There is
+        # nothing to roll or allocate, so return an empty pool rather than
+        # dispatching on a stat-gen method a stat-less pack never authored.
+        if not ability_names:
+            return []
+
         if method == "roll_3d6_strict":
             if rolled_stats is not None:
                 # Return values in ability_names order (paired with names).

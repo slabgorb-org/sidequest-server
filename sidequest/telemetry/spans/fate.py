@@ -367,6 +367,23 @@ SPAN_ROUTES["fate.narration.mismatch"] = SpanRoute(
         "reason": (span.attributes or {}).get("reason", ""),
     },
 )
+# --- F4a: chargen-seeding span (GM panel = lie detector) ---------------------
+# The engine seeded a Fate sheet at character creation (skills + aspects +
+# refresh from the pack's FateConfig). The GM-panel evidence that a fate-bound
+# PC actually has mechanical backing rather than an empty sheet the narrator
+# improvises over. Literal key (no SPAN_* constant) — the routing-completeness
+# lint only inspects SPAN_* module constants (the F2a/F2d/F2c precedent).
+SPAN_ROUTES["fate.chargen.seeded"] = SpanRoute(
+    event_type="state_transition",
+    component="fate",
+    extract=lambda span: {
+        "field": "chargen_seeded",
+        "actor": (span.attributes or {}).get("actor", ""),
+        "skill_count": (span.attributes or {}).get("skill_count", 0),
+        "aspect_count": (span.attributes or {}).get("aspect_count", 0),
+        "refresh": (span.attributes or {}).get("refresh", 0),
+    },
+)
 
 
 def fate_exchange_committed_span(
@@ -534,10 +551,35 @@ def fate_narration_mismatch_span(
         pass
 
 
+def fate_chargen_seeded_span(
+    *,
+    skill_count: int,
+    aspect_count: int,
+    refresh: int,
+    actor: str = "",
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``fate.chargen.seeded`` — a Fate sheet was seeded at chargen (F4a). The
+    GM-panel evidence that a fate-bound PC has mechanical backing (skills, aspects,
+    refresh) from the pack's FateConfig, not an empty sheet."""
+    attributes: dict[str, Any] = {
+        "field": "chargen_seeded",
+        "actor": actor,
+        "skill_count": skill_count,
+        "aspect_count": aspect_count,
+        "refresh": refresh,
+        **attrs,
+    }
+    with Span.open("fate.chargen.seeded", attributes, tracer_override=_tracer):
+        pass
+
+
 __all__ = [
     "SPAN_FATE_PROJECTION_EMITTED",
     "fate_action_classified_span",
     "fate_action_resolved_span",
+    "fate_chargen_seeded_span",
     "fate_aspect_created_span",
     "fate_aspect_invoked_span",
     "fate_compel_accepted_span",

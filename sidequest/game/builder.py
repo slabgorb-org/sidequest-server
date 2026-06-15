@@ -2868,6 +2868,9 @@ class CharacterBuilder:
         )
         system_strain = _res.system_strain
         wwn_effort, wwn_spellcasting = _res.effort, _res.spellcasting
+        # ADR-144 F4a: a ruleset: fate pack seeds a FateSheet here; every WN/native
+        # module returns fate_sheet=None.
+        fate_sheet = _res.fate_sheet
 
         # Chargen contribution application (ADR-143 Task 10): background skills
         # + foci skill/ability grants, delegated to the bound RulesetModule.
@@ -2996,6 +2999,7 @@ class CharacterBuilder:
                 system_strain=system_strain,
                 effort=wwn_effort,
                 spellcasting=wwn_spellcasting,
+                fate_sheet=fate_sheet,
                 acquired_advancements=[],
             ),
             backstory=backstory_text,

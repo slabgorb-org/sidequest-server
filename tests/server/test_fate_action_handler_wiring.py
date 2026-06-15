@@ -20,7 +20,7 @@ from sidequest.game.fate_sheet import Aspect, FateSheet
 from sidequest.game.session import GameSnapshot, Npc
 from sidequest.handlers.fate_action import HANDLER as FATE_HANDLER
 from sidequest.protocol.fate import FateActionPayload
-from sidequest.protocol.messages import FateActionMessage
+from sidequest.protocol.messages import FateActionMessage, FateRollMessage
 from sidequest.server.session_handler import _State
 from sidequest.server.websocket_session_handler import WebSocketSessionHandler
 
@@ -81,6 +81,47 @@ def test_handler_drives_dispatch_end_to_end():
 
     out = asyncio.run(FATE_HANDLER.handle(session, msg))
 
-    assert out == []  # broadcast/narration is F2/F3; the handler routes + mutates state
+    # F3c (ADR-144 / Story 118-3): the handler now BROADCASTS the acting PC's 4dF
+    # roll (was [] in F1d). The roll surface is the story's whole point.
+    assert len(out) == 1
+    assert isinstance(out[0], FateRollMessage)
+    roll = out[0].payload
+    assert len(roll.dice) == 4 and all(d in (-1, 0, 1) for d in roll.dice)
+    assert roll.ladder_name  # the player reads the adjective, not just the number
+    assert roll.tier in ("Fail", "Tie", "Succeed", "SucceedWithStyle")
     assert enc.find_actor("Thug").withdrawn is True  # dispatch → exchange ran end-to-end
     assert enc.resolved is True
+
+
+def test_handler_concede_emits_no_roll():
+    """Concession is pre-roll (non-committing) — there is no 4dF roll to surface,
+    so the handler broadcasts nothing (action_roll is None)."""
+    enc = StructuredEncounter(
+        encounter_type="duel",
+        category="combat",
+        player_metric=EncounterMetric(name="p", threshold=10),
+        opponent_metric=EncounterMetric(name="o", threshold=10),
+        actors=[
+            EncounterActor(name="Hero", role="lead", side="player"),
+            EncounterActor(name="Thug", role="foe", side="opponent"),
+        ],
+    )
+    snap = GameSnapshot(
+        genre_slug="fate_test", characters=[_pc("Hero", {"Fight": 4})], encounter=enc
+    )
+    snap.npcs.append(_depleted_thug())
+    sd = SimpleNamespace(
+        snapshot=snap,
+        genre_pack=SimpleNamespace(rules=SimpleNamespace(ruleset="fate")),
+        genre_slug="fate_test",
+        world_slug="test_world",
+        player_id="p1",
+    )
+    session = SimpleNamespace(_state=_State.Playing, _session_data=sd)
+    msg = FateActionMessage(
+        payload=FateActionPayload(request_id="r1", action="concede", skill="Fight"),
+        player_id="p1",
+    )
+
+    out = asyncio.run(FATE_HANDLER.handle(session, msg))
+    assert out == []  # no roll surfaced on a concession

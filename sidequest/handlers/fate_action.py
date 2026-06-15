@@ -76,7 +76,7 @@ class FateActionHandler:
 
         ruleset = get_ruleset_module(sd.genre_pack.rules.ruleset)
         try:
-            dispatch_fate_action(
+            result = dispatch_fate_action(
                 payload=payload,
                 actor_name=character.core.name,
                 encounter=encounter,
@@ -88,6 +88,27 @@ class FateActionHandler:
         except FateConflictError as exc:
             logger.warning("fate.dispatch_error error=%s", exc)
             return [_error_msg(f"FATE_ACTION rejected: {exc}", code="fate_dispatch_error")]
+
+        # F3c (ADR-144 / Story 118-3): surface the acting PC's own 4dF roll to the
+        # player. The roll's dice/tier/shifts are already on the
+        # ``fate.action_resolved`` span (the GM-panel polygraph); this broadcasts
+        # the same result to the table so the player SEES the faces + ladder +
+        # shift + tier. A concession is pre-roll (action_roll is None) → nothing
+        # to show.
+        if result.action_roll is not None:
+            from sidequest.game.ruleset.fate_projection import build_fate_roll_payload
+            from sidequest.protocol.messages import FateRollMessage
+
+            payload_out = build_fate_roll_payload(result.action_roll)
+            logger.info(
+                "fate.roll.emitted actor=%s dice=%s ladder=%d shifts=%d tier=%s",
+                character.core.name,
+                payload_out.dice,
+                payload_out.ladder_total,
+                payload_out.shifts,
+                payload_out.tier,
+            )
+            return [FateRollMessage(payload=payload_out)]
         return []
 
 

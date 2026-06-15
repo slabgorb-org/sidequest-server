@@ -143,6 +143,11 @@ class MessageType(StrEnum):
     # (on-change, NOT per-turn), ruleset=='fate'-gated, transient broadcast
     # (never event-sourced), consumed by the UI Fate panel (Story 118-2).
     FATE_STATE = "FATE_STATE"
+    # The 4dF roll, surfaced to the player (ADR-144 F3c, Story 118-3). An EVENT
+    # (like DICE_RESULT), not change-gated state: the four Fudge faces, the
+    # ladder rating, the shift total, the outcome tier, and the succeed-with-
+    # style flag. The dice tuple previously lived only on the OTEL span.
+    FATE_ROLL = "FATE_ROLL"
     # sq-playtest 2026-06-07 (heavy_metal/barsoom-3, blocking): a PC the genre
     # lethality policy ruled dead kept full agency for four rounds with no
     # death surface. Emitted at the moment a PC is taken OUT of play (LETHAL

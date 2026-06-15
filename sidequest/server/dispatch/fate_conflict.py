@@ -34,7 +34,7 @@ from sidequest.game.fate_opponent import decide_opponent_action
 from sidequest.game.fate_sheet import Aspect, FateSheet, StressTrackName
 from sidequest.game.ruleset.base import RulesetModule
 from sidequest.game.ruleset.fate import FateRulesetModule
-from sidequest.game.ruleset.fate_resolution import Opposition
+from sidequest.game.ruleset.fate_resolution import FateOutcome, Opposition
 from sidequest.game.session import GameSnapshot
 from sidequest.protocol.fate import FateActionPayload
 from sidequest.protocol.sanitize import sanitize_player_text
@@ -678,6 +678,10 @@ class FateDispatchResult:
 
     commitment_pending: bool
     exchange: FateExchangeResult | None
+    #: The acting PC's own 4dF roll (ADR-144 F3c / Story 118-3) — surfaced to the
+    #: player as a FATE_ROLL the moment they act, whether or not the exchange
+    #: fired. None on a concession (pre-roll, non-committing).
+    action_roll: FateOutcome | None = None
 
 
 def dispatch_fate_action(
@@ -781,5 +785,5 @@ def dispatch_fate_action(
             round_number=round_number,
             _tracer=_tracer,
         )
-        return FateDispatchResult(commitment_pending=False, exchange=result)
-    return FateDispatchResult(commitment_pending=True, exchange=None)
+        return FateDispatchResult(commitment_pending=False, exchange=result, action_roll=outcome)
+    return FateDispatchResult(commitment_pending=True, exchange=None, action_roll=outcome)

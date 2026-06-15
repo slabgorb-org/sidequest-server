@@ -35,6 +35,7 @@ from sidequest.protocol.models import (
     ClassRequirement,
     CompanionMember,
     CreationChoice,
+    FateRollPayload,
     FateStatePayload,
     Footnote,
     InitialState,
@@ -1459,6 +1460,21 @@ class FateStateMessage(ProtocolBase):
     player_id: str = ""
 
 
+class FateRollMessage(ProtocolBase):
+    """GameMessage::FateRoll — one resolved 4dF roll, surfaced to the player
+    (ADR-144 F3c / Story 118-3).
+
+    The legibility EVENT for a Fate action (the four Fudge faces, ladder rating,
+    shifts, tier, succeed-with-style) — a momentary roll like ``DICE_RESULT``,
+    distinct from the change-gated ``FATE_STATE`` snapshot. Global broadcast;
+    transient (never event-sourced).
+    """
+
+    type: Literal[MessageType.FATE_ROLL] = MessageType.FATE_ROLL
+    payload: FateRollPayload
+    player_id: str = ""
+
+
 # ---------------------------------------------------------------------------
 # CHARACTER_INCAPACITATED — a PC taken out of play (sq-playtest barsoom-3).
 # ---------------------------------------------------------------------------
@@ -1704,6 +1720,7 @@ _Phase1Variant = Annotated[
     | RelationshipsMessage
     | QuestsMessage
     | FateStateMessage
+    | FateRollMessage
     | CharacterIncapacitatedMessage
     | DungeonMapMessage
     | JournalRequestMessage

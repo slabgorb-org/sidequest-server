@@ -17,13 +17,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from sidequest.game.ruleset.fate_resolution import ladder_name
+from sidequest.game.ruleset.fate_resolution import FateOutcome, FateTier, ladder_name
 from sidequest.protocol.models import (
     FateAspectEntry,
     FateCharacterEntry,
     FateConflictEntry,
     FateConflictParticipant,
     FateConsequenceEntry,
+    FateRollPayload,
     FateSkillEntry,
     FateStatePayload,
     FateStressBox,
@@ -149,3 +150,23 @@ def build_fate_state_payload(snapshot: GameSnapshot) -> FateStatePayload:
         else None
     )
     return FateStatePayload(characters=characters, scene_aspects=scene_aspects, conflict=conflict)
+
+
+def build_fate_roll_payload(outcome: FateOutcome) -> FateRollPayload:
+    """Project a resolved 4dF roll onto the wire (ADR-144 F3c / Story 118-3).
+
+    Faithful, lossless map of the engine's ``FateOutcome`` to the player-facing
+    ``FATE_ROLL`` payload, adding the two derived legibility fields: the ladder
+    ADJECTIVE (the player reads "Great", not "+4") and the succeed-with-style
+    flag. The raw dice tuple previously reached only the OTEL span.
+    """
+    return FateRollPayload(
+        dice=outcome.dice,
+        roll_total=outcome.roll_total,
+        ladder_total=outcome.ladder_total,
+        ladder_name=ladder_name(outcome.ladder_total),
+        opposition=outcome.opposition,
+        shifts=outcome.shifts,
+        tier=str(outcome.tier),
+        succeeded_with_style=outcome.tier == FateTier.SucceedWithStyle,
+    )

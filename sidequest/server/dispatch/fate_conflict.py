@@ -578,6 +578,11 @@ def _resolve_create_advantage(
         fate_aspect_created_span(
             actor=commit.actor, aspect=aspect.text, free_invokes=free, _tracer=_tracer
         )
+        # F2c (116-4): the engine silently placed a situation aspect on success but
+        # told the narrator nothing (only the failure branch below appended a hint),
+        # so the advantage never reached the prose. Surface it — mirrors the
+        # failure-hint style — so encounter_render.py:44-45 carries it to the prompt.
+        hints.append(f"{commit.actor} created an advantage: {aspect.text} ({free} free invoke(s)).")
     elif shifts == 0:
         boost = Aspect(
             text=commit.aspect_text or f"Fleeting Opening by {commit.actor}",
@@ -588,6 +593,8 @@ def _resolve_create_advantage(
         fate_aspect_created_span(
             actor=commit.actor, aspect=boost.text, free_invokes=1, _tracer=_tracer
         )
+        # F2c (116-4): a tie still places a boost (1 free invoke) — surface it too.
+        hints.append(f"{commit.actor} created an advantage: {boost.text} (1 free invoke(s)).")
     else:
         hints.append(f"{commit.actor}'s create-advantage failed (shifts={shifts}).")
 

@@ -882,12 +882,34 @@ class RelationshipsPayload(BaseModel):
     entries: list[RelationshipEntry] = Field(default_factory=list)
 
 
+class QuestLoreEntry(BaseModel):
+    """One discovered lore fragment cohered under its quest (Story 117-5).
+
+    The player-facing "what I've learned about this job" surface. Projected by
+    the structural anchor→clue→fact join (ADR-053 + ADR-100 + ADR-146): a
+    ScenarioClue-sourced ``KnownFact`` whose ``fact_id`` (== originating clue id
+    per 50-14) belongs to a clue node touching this quest's ``anchor_id`` (via
+    ``ClueNode.locations``/``implicates``). ``fact_id`` is carried for UI dedup
+    against the broader KnownFacts surface; ``content`` is the readable fragment.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    fact_id: str
+    content: str
+
+
 class QuestLogEntry(BaseModel):
     """One quest's player-visible state (ADR-137 / Story 77-8).
 
     The wire projection of a stored ``QuestEntry`` (game/session.py), keyed by
     its quest id. ``anchor_id`` links to the body/location anchor where the
     objective resolves (orbital course planner consumes anchors per ADR-130).
+
+    ``related_lore`` (Story 117-5) coheres the discovered ScenarioClue facts the
+    party has learned about this quest's anchor — the "knowledge pulled into a
+    coherent picture" the playgroup was missing. Empty when nothing is learned;
+    never None.
     """
 
     model_config = {"extra": "forbid"}
@@ -897,6 +919,7 @@ class QuestLogEntry(BaseModel):
     objective: str = ""
     status: str = "active"
     anchor_id: str | None = None
+    related_lore: list[QuestLoreEntry] = Field(default_factory=list)
 
 
 class QuestAnchorEntry(BaseModel):

@@ -8,7 +8,7 @@ check — no allow-list, no warning-and-continue (No Silent Fallbacks, claude.md
 Scope of THIS validator (narrowed per Keith 2026-06-15): it rejects only *declared*
 bespoke (``mode == "bespoke"``). It does NOT require provenance *presence* and does
 NOT require *verbatim-only* — that stricter rule (which would also reject
-unprovenanced genre items in caverns_and_claudes / road_warrior) is **epic 119**.
+unprovenanced genre items in caverns_and_claudes / road_warrior) is **epic 120**.
 
 Gate: the rule applies to the Without Number family (``awn``/``cwn``/``wwn``/
 ``swn``). NATIVE-ruleset packs are EXEMPT — their genre inventory is authored

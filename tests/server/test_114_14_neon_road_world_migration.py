@@ -7,7 +7,7 @@ the declared-bespoke items down creates a NEW world inventory.yaml → triggers 
 world-replaces-genre starting_equipment/gold/currency trap, which these guards catch.
 
 road_warrior: only the 5 DECLARED-bespoke move here; its 25 unprovenanced items stay
-at the genre tier (epic 119, verbatim-only sweep) and are not this story's concern.
+at the genre tier (epic 120, verbatim-only sweep) and are not this story's concern.
 
 Driven against the REAL packs through ``resolve_inventory``.
 """

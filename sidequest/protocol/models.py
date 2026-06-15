@@ -1074,6 +1074,32 @@ class FateStatePayload(BaseModel):
     conflict: FateConflictEntry | None = None
 
 
+class FateRollPayload(BaseModel):
+    """One resolved 4dF roll, surfaced to the player (ADR-144 F3c / Story 118-3).
+
+    The legibility surface for a Fate action: the four Fudge faces, the ladder
+    rating (value + adjective), the shift total, the outcome tier, and a
+    succeed-with-style flag. Built from the engine's ``FateOutcome`` (whose dice
+    tuple previously reached only the OTEL span) by ``build_fate_roll_payload``.
+    A roll is an EVENT, so this rides a dedicated ``FATE_ROLL`` message rather
+    than the change-gated ``FATE_STATE`` snapshot.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    #: The raw four Fudge faces, each -1 / 0 / +1.
+    dice: tuple[int, int, int, int]
+    roll_total: int
+    ladder_total: int
+    #: The Fate ladder adjective for ``ladder_total`` (e.g. "Great").
+    ladder_name: str
+    opposition: int
+    shifts: int
+    #: One of Fail / Tie / Succeed / SucceedWithStyle.
+    tier: str
+    succeeded_with_style: bool
+
+
 class LocationEntityResolution(BaseModel):
     """Result of resolve_location_entity. ADR-109 §5.3.
 

@@ -19,6 +19,15 @@ SPAN_MONSTER_MANUAL_HP_PRESERVED = "monster_manual.hp_preserved"
 # improvising a label ("the creature of animal musk").
 SPAN_MONSTER_MANUAL_ROOM_BOUND = "monster_manual.room_bound"
 
+# wry_whimsy/oz fix (H1, 2026-06-14): emitted when ``ensure_loaded`` backfills a
+# world's authored ``npcs.yaml`` cast into an ALREADY-seeded Manual (one that no
+# longer ``needs_seeding()``, so ``seed_manual`` never re-runs). The GM-panel
+# lie-detector that the canonical companions entered the pool on an existing
+# save — the original bug was that they never did, so the road surfaced only
+# random-minted walk-ons.
+SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL = "monster_manual.authored_backfill"
+
 FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_INJECTED)
 FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_HP_PRESERVED)
 FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_ROOM_BOUND)
+FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL)

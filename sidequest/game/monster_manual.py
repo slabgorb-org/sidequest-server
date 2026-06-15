@@ -23,6 +23,24 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 
+def _tags_match_location(location_tags: list[str], loc_lower: str) -> bool:
+    """Whether any placement tag overlaps the (already lowercased) location.
+
+    A tag matches when it is a substring of the location OR the location is a
+    substring of the tag — the same bidirectional, case-insensitive anchor
+    match used for ``activated_location`` in :meth:`MonsterManual.format_nearby_npcs`.
+    Tags are expected lowercase (authored that way) but are lowercased defensively.
+    Blank tags never match.
+    """
+    for tag in location_tags:
+        tag_lower = tag.lower().strip()
+        if not tag_lower:
+            continue
+        if tag_lower in loc_lower or loc_lower in tag_lower:
+            return True
+    return False
+
+
 class EntryState(StrEnum):
     """Lifecycle state for a Manual entry."""
 
@@ -52,7 +70,18 @@ class ManualNpc(BaseModel):
     """Culture/faction (e.g., "Scrapborn", "Vaultborn")."""
 
     location_tags: list[str] = Field(default_factory=list)
-    """Biome/terrain/location tags for future filtering."""
+    """Lowercase biome/terrain/location substrings anchoring pre-authored placement.
+
+    Consumed by :meth:`MonsterManual.format_nearby_npcs` (and the injection-seam
+    mirror in ``monster_manual_inject``): an AVAILABLE NPC that carries tags is
+    *placed* — it may only surface as "nearby (not yet met)" where one of its
+    tags matches the current location (substring, case-insensitive, either
+    direction — mirroring the ``activated_location`` anchor match). An NPC with
+    no tags is *unplaced* and keeps the legacy behavior of being eligible
+    everywhere (generated walk-ons). This is the fix for the wry_whimsy/oz bug
+    where authored companions never appeared at the right spot because placement
+    was ignored until an NPC had already been narrated.
+    """
 
     state: EntryState = EntryState.AVAILABLE
     """Lifecycle state."""
@@ -186,6 +215,21 @@ class MonsterManual(BaseModel):
                 return npc
         return None
 
+    def find_npc_by_exact_name(self, name: str) -> ManualNpc | None:
+        """Find an NPC by exact (case-insensitive) full-name match.
+
+        Unlike :meth:`find_npc_by_name`, this does NOT substring-match — so a
+        canonical authored "Lion" is never confused with a walk-on "Cowardly
+        Lion". Used by the authored-cast seeding path (:func:`~sidequest.server.
+        dispatch.pregen._seed_authored_npcs`) where a substring collision must
+        not shadow an authored NPC nor mutate the wrong entry's placement tags.
+        """
+        name_lower = name.lower()
+        for npc in self.npcs:
+            if npc.name.lower() == name_lower:
+                return npc
+        return None
+
     def find_enemy_by_name(self, name: str) -> tuple[dict, int] | None:
         """Find a pre-generated enemy across all encounters by name.
 
@@ -248,6 +292,36 @@ class MonsterManual(BaseModel):
         """Whether the Manual needs more Available entries."""
         return len(self.available_npcs()) < 4 or not self.available_encounters()
 
+    # ── Placement ───────────────────────────────────────────────
+
+    def available_at_location(self, current_location: str) -> list[ManualNpc]:
+        """AVAILABLE NPCs eligible to surface as "nearby (not yet met)" here.
+
+        Selection precedence (the fix for the wry_whimsy/oz placement bug):
+
+        - A *placed* NPC (non-empty ``location_tags``) surfaces ONLY when one of
+          its tags matches ``current_location`` — substring, case-insensitive,
+          either direction, mirroring the ``activated_location`` anchor match in
+          :meth:`format_nearby_npcs`. Placed-but-non-matching NPCs are excluded.
+        - An *unplaced* NPC (no ``location_tags``) keeps the legacy behavior of
+          being eligible everywhere (generated walk-ons).
+
+        Placed-and-matching NPCs are ordered ahead of unplaced ones so authored
+        roster NPCs win the surfacing race against generic generated walk-ons.
+        """
+        loc_lower = (current_location or "").lower()
+        placed: list[ManualNpc] = []
+        unplaced: list[ManualNpc] = []
+        for npc in self.npcs:
+            if npc.state != EntryState.AVAILABLE:
+                continue
+            if not npc.location_tags:
+                unplaced.append(npc)
+                continue
+            if loc_lower and _tags_match_location(npc.location_tags, loc_lower):
+                placed.append(npc)
+        return placed + unplaced
+
     # ── Formatting for game_state injection ────────────────────
 
     def format_nearby_npcs(self, current_location: str) -> str:
@@ -260,8 +334,13 @@ class MonsterManual(BaseModel):
 
         Dormant NPCs at other locations are omitted entirely — the narrator
         doesn't need the full world roster to narrate the current scene.
+
+        A ``None``/blank ``current_location`` (pre-bind / pre-chargen turn) is
+        tolerated: there is no location to match, so placed NPCs are gated out
+        and only Active-anchorless + unplaced NPCs surface (No crash on
+        ``None.lower()`` — M6, wry_whimsy/oz follow-up).
         """
-        loc_lower = current_location.lower()
+        loc_lower = (current_location or "").lower()
 
         at_location: list[ManualNpc] = []
         for npc in self.npcs:
@@ -274,7 +353,7 @@ class MonsterManual(BaseModel):
             if anchor_lower in loc_lower or loc_lower in anchor_lower:
                 at_location.append(npc)
 
-        available = [n for n in self.npcs if n.state == EntryState.AVAILABLE][:3]
+        available = self.available_at_location(current_location)[:3]
 
         if not at_location and not available:
             return ""
@@ -341,13 +420,24 @@ class MonsterManual(BaseModel):
 
     # ── Insertion ───────────────────────────────────────────────
 
-    def add_npc(self, data: dict[str, Any], location_tags: list[str]) -> None:
-        """Add a pre-generated NPC from namegen JSON output."""
+    def add_npc(
+        self, data: dict[str, Any], location_tags: list[str], *, exact: bool = False
+    ) -> None:
+        """Add a pre-generated NPC from namegen JSON output.
+
+        Dedup defaults to the fuzzy :meth:`find_npc_by_name` (substring) — the
+        legacy behavior for generated walk-ons. Pass ``exact=True`` to dedup on
+        full name only (:meth:`find_npc_by_exact_name`); the authored-cast path
+        uses this so a canonical NPC whose name is a substring of an existing
+        entry (e.g. "Lion" vs "Cowardly Lion") is still inserted instead of being
+        silently swallowed by the fuzzy guard.
+        """
         name = str(data.get("name") or "")
         role = str(data.get("role") or "")
         culture = str(data.get("culture") or "")
 
-        if self.find_npc_by_name(name) is not None:
+        match = self.find_npc_by_exact_name(name) if exact else self.find_npc_by_name(name)
+        if match is not None:
             return
 
         self.npcs.append(

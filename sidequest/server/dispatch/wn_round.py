@@ -29,10 +29,11 @@ import logging
 import random
 from dataclasses import dataclass
 
-from sidequest.game.beat_filter import is_item_use_beat
+from sidequest.game.beat_filter import is_item_use_beat, is_wn_action_beat, wn_action_beat
 from sidequest.game.beat_kinds import _opposite_side_first_actor
 from sidequest.game.encounter import EncounterActor, StructuredEncounter, WnSealedCommit
 from sidequest.game.ruleset.base import RulesetModule
+from sidequest.game.ruleset.without_number import WithoutNumberRulesetModule
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.pack import GenrePack
 from sidequest.genre.models.rules import BeatDef, ConfrontationDef
@@ -371,13 +372,20 @@ def run_wn_round(
             )
             continue
 
-        beat = next((b for b in cdef.beats if b.id == commit.beat_id), None)
-        if beat is None:
-            raise DiceDispatchError(
-                f"sealed commit names unknown beat_id {commit.beat_id!r} for "
-                f"encounter {encounter.encounter_type!r} — content changed "
-                "mid-round (No Silent Fallbacks)"
-            )
+        # Story 108-8 (ADR-143): the sealed-round twin of dice.py's intercept —
+        # under a WN binding a core WN action (attack) is synthesized, not looked up
+        # in cdef.beats (108-3 strips WWN combat beats to []). Without this the
+        # barrier-closing walk re-raises after dice.py resolved the commit.
+        if isinstance(ruleset, WithoutNumberRulesetModule) and is_wn_action_beat(commit.beat_id):
+            beat = wn_action_beat(commit.beat_id)
+        else:
+            beat = next((b for b in cdef.beats if b.id == commit.beat_id), None)
+            if beat is None:
+                raise DiceDispatchError(
+                    f"sealed commit names unknown beat_id {commit.beat_id!r} for "
+                    f"encounter {encounter.encounter_type!r} — content changed "
+                    "mid-round (No Silent Fallbacks)"
+                )
         application = _apply_committed_player_beat(
             beat_id=commit.beat_id,
             spell_id=commit.spell_id,

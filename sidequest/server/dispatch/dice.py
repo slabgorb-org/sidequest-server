@@ -32,7 +32,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from sidequest.game.beat_filter import is_item_use_beat
+from sidequest.game.beat_filter import is_item_use_beat, is_wn_action_beat, wn_action_beat
 from sidequest.game.beat_kinds import (
     ApplyResult,
     BeatKind,
@@ -404,13 +404,23 @@ def dispatch_dice_throw(
             emit_confrontation=emit_confrontation,
         )
 
-    beat = next((b for b in cdef.beats if b.id == payload.beat_id), None)
-    if beat is None:
-        available = ",".join(b.id for b in cdef.beats)
-        raise DiceDispatchError(
-            f"unknown beat_id {payload.beat_id!r} for encounter "
-            f"{encounter.encounter_type!r} — available: [{available}]"
-        )
+    # Story 108-8 (ADR-143): under a Without-Number binding the WN engine OWNS the
+    # action set — synthesize a transient beat for a core WN action (attack) instead
+    # of looking it up in cdef.beats, which 108-3 strips to [] on WWN combat defs.
+    # Mirrors the item-use transient-beat intercept above, BEFORE the cdef lookup
+    # that would otherwise reject the id (the total-combat-outage this story fixes).
+    # Gated to the WN binding so native packs — which may author their own "attack"
+    # beat — keep the authored-beat lookup unchanged.
+    if isinstance(ruleset, WithoutNumberRulesetModule) and is_wn_action_beat(payload.beat_id):
+        beat = wn_action_beat(payload.beat_id)
+    else:
+        beat = next((b for b in cdef.beats if b.id == payload.beat_id), None)
+        if beat is None:
+            available = ",".join(b.id for b in cdef.beats)
+            raise DiceDispatchError(
+                f"unknown beat_id {payload.beat_id!r} for encounter "
+                f"{encounter.encounter_type!r} — available: [{available}]"
+            )
 
     # WN cast routing (story 102-2): a wwn cast_spell commit names WHICH
     # prepared spell via ``payload.spell_id`` so the dice path can reach the

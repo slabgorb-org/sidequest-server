@@ -26,7 +26,7 @@ from sidequest.game.beat_kinds import BeatKind
 from sidequest.game.wwn_magic import SpellcastingState
 from sidequest.genre.error import PackError
 from sidequest.genre.models.character import ClassDef
-from sidequest.genre.models.rules import BeatDef, ConfrontationDef
+from sidequest.genre.models.rules import BeatDef, ConfrontationDef, DamageChannel
 
 # Story 106-4 Part C — transient inventory item-use beats. The confrontation
 # beat menu scans the actor's carried inventory and offers a "Drink <potion>"
@@ -104,6 +104,56 @@ def item_use_beats(inventory_items: list[dict[str, Any]] | None) -> list[BeatDef
             )
         )
     return beats
+
+
+# Story 108-8 (epic 108, ADR-143) — the Without-Number action set. Under a WN
+# binding the WN engine OWNS the round (SOUL "Bind the Ruleset, Don't Balance It"):
+# 108-3 strips the native combat beats off every WWN ``hp_depletion`` def, leaving
+# ``cdef.beats == []``, so the runtime must SYNTHESIZE a transient beat for each
+# core WN action — independent of cdef.beats — exactly as ``item_use_beats`` above
+# synthesizes the "Drink <potion>" beat that is not authored on the cdef. The
+# dispatch intercepts these ids BEFORE the cdef beat lookup, gated on
+# ``isinstance(ruleset, WithoutNumberRulesetModule)`` (dice.py + wn_round.py).
+#
+# item-use (``use_item:<slug>``) and cast (``cast_spell``) already have their own
+# dispatch routes and are NOT in this set. ``move`` is the WN disengage action and
+# is deferred (no resolution semantics on the dice path yet — story follow-up).
+#
+# Gate caveat: a NATIVE pack may itself author a beat literally named ``attack``
+# (tests/fixtures/packs/test_genre). The isinstance gate at the call site leaves
+# native ids on the authored-beat lookup, so this only fires under a WN binding.
+WN_ATTACK_BEAT_ID = "attack"
+_WN_ACTION_BEAT_IDS = frozenset({WN_ATTACK_BEAT_ID})
+
+
+def is_wn_action_beat(beat_id: str) -> bool:
+    """True iff ``beat_id`` is a synthesized Without-Number action beat (story 108-8).
+
+    A pure id check — the WN binding gate lives at the dispatch call site, mirroring
+    ``is_item_use_beat``. Native packs route the same id through the cdef lookup."""
+    return beat_id in _WN_ACTION_BEAT_IDS
+
+
+def wn_action_beat(beat_id: str) -> BeatDef:
+    """The transient strike ``BeatDef`` for a WN action id (story 108-8).
+
+    A plain STR strike carrying no authored damage: the weapon dice resolve from the
+    actor's inventory (``damage_roll`` priority 2/3) or the genre unarmed floor —
+    the same source the now-stripped native combat beat drew from. ``damage_channel``
+    is ``strike`` so ``dice._resolve_wn_committed_action`` lands the weapon dice on
+    the target's ablative HP (ADR-114) with the native scaffolding cut (ADR-143).
+    ``attack_bonus``/``combat_skill`` default to 0 — a synthesized action carries no
+    class to-hit progression, matching the ``wn_attack`` narrator tool."""
+    if beat_id not in _WN_ACTION_BEAT_IDS:
+        raise PackError(f"{beat_id!r} is not a synthesizable WN action beat")
+    return BeatDef(
+        id=beat_id,
+        label="Attack",
+        kind=BeatKind.strike,
+        base=0,
+        stat_check="STR",
+        damage_channel=DamageChannel.strike,
+    )
 
 
 def _has_any_prepared(prepared_spells: dict[int, list[str]] | None) -> bool:

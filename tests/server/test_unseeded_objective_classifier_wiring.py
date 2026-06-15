@@ -177,7 +177,9 @@ async def test_watcher_skips_llm_when_quest_already_minted() -> None:
 
     tracer, exporter = _fresh_tracer_and_exporter()
     llm = _objective_given_llm()
-    minted = {"q": QuestEntry(title="The Floor-Boss's Missing Person", objective="o", status="active")}
+    minted = {
+        "q": QuestEntry(title="The Floor-Boss's Missing Person", objective="o", status="active")
+    }
     await run_unseeded_objective_classifier_watcher(
         narration=_OPEN_ENDED_HOOK,
         snapshot=_snapshot(quest_log=minted),
@@ -241,12 +243,14 @@ async def test_watcher_skips_llm_on_empty_narration() -> None:
 
 async def test_watcher_swallows_classifier_failure() -> None:
     """Identical discipline to run_unminted_objective_watcher: a classifier
-    exception is caught (the turn keeps delivering), never re-raised."""
+    exception is caught (the turn keeps delivering), never re-raised — AND the crash
+    is SURFACED as the watcher-crashed span, not silently dropped (OTEL Observability
+    Principle: a swallowed error with no telemetry blinds the GM panel)."""
     from sidequest.agents.post_narration_classifier import (
         run_unseeded_objective_classifier_watcher,
     )
 
-    tracer, _ = _fresh_tracer_and_exporter()
+    tracer, exporter = _fresh_tracer_and_exporter()
     llm = AsyncMock()
     llm.emit_tool = AsyncMock(side_effect=RuntimeError("haiku 500"))
 
@@ -258,6 +262,20 @@ async def test_watcher_swallows_classifier_failure() -> None:
         package=None,
         tracer=tracer,
     )
+
+    crashed = [
+        s for s in exporter.get_finished_spans() if s.name == "dispatch_engagement.watcher.crashed"
+    ]
+    assert crashed, (
+        "a swallowed classifier exception must emit the watcher-crashed span so the "
+        "GM panel shows the lie-detector broke this turn — not a silent drop"
+    )
+    attrs = dict(crashed[0].attributes or {})
+    assert attrs.get("error_type") == "RuntimeError", (
+        f"the crashed span must carry the error_type; got {attrs}"
+    )
+    # And NO false objective span on the failure path.
+    assert not [s for s in exporter.get_finished_spans() if s.name == _SPAN]
 
 
 # ---------------------------------------------------------------------------

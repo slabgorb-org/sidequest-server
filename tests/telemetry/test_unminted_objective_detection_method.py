@@ -28,6 +28,82 @@ def _fresh_tracer_and_exporter() -> tuple[trace.Tracer, InMemorySpanExporter]:
     return provider.get_tracer("test"), exporter
 
 
+# A curated phrase that IS in _UNMINTED_OBJECTIVE_MARKERS, so the keyword backstop
+# fires on it with no router package.
+_CURATED_HOOK = "Your task is to find the missing courier before the Conglomerate does."
+
+_SPAN_NAME = "narration.unminted_objective.suspected"
+
+
+def _watcher_span_attrs(narration, *, package):
+    """Drive the sync run_unminted_objective_watcher (the 117-4 path) and return the
+    attributes of the emitted unminted-objective span (or None if it stayed silent)."""
+    from sidequest.agents.dispatch_engagement_watcher import run_unminted_objective_watcher
+    from sidequest.game.session import GameSnapshot
+
+    tracer, exporter = _fresh_tracer_and_exporter()
+    run_unminted_objective_watcher(
+        narration=narration,
+        snapshot=GameSnapshot(genre_slug="space_opera", world_slug="perseus_cloud"),
+        package=package,
+        tracer=tracer,
+    )
+    spans = [s for s in exporter.get_finished_spans() if s.name == _SPAN_NAME]
+    return dict(spans[0].attributes or {}) if spans else None
+
+
+def test_sync_watcher_tags_keyword_path_keyword() -> None:
+    """The legacy curated-substring backstop (no router package) tags
+    detection_method='keyword' — honest GM-panel attribution (Story 117-6)."""
+    attrs = _watcher_span_attrs(_CURATED_HOOK, package=None)
+    assert attrs is not None, "curated hook + empty quest_log must fire the keyword backstop"
+    assert attrs.get("detection_method") == "keyword", (
+        f"the keyword backstop must tag detection_method='keyword'; got {attrs}"
+    )
+
+
+def test_sync_watcher_tags_router_path_router() -> None:
+    """The 117-4 router-backed path (a quest_offer accept that never minted) must NOT
+    be mislabeled 'keyword' — it rides the router's structural classification, so it
+    tags detection_method='router' (Story 117-6 honesty fix)."""
+    from sidequest.protocol.dispatch import (
+        DispatchPackage,
+        PlayerDispatch,
+        SubsystemDispatch,
+        VisibilityTag,
+    )
+
+    package = DispatchPackage(
+        turn_id="turn-1",
+        per_player=[
+            PlayerDispatch(
+                player_id="player:Alice",
+                raw_action="yeah, I'll look into it",
+                dispatch=[
+                    SubsystemDispatch(
+                        subsystem="quest_offer",
+                        params={"quest_id": "floor_boss_missing_person", "decision": "accept"},
+                        idempotency_key="qo-1",
+                        confidence=0.9,
+                        visibility=VisibilityTag(visible_to="all"),
+                    )
+                ],
+            )
+        ],
+        confidence_global=0.9,
+    )
+    # An open-ended hook that trips ZERO curated markers — only the router signal fires.
+    open_ended = (
+        'The floor-boss leans in. "I have a... situation. Someone of mine stopped '
+        'checking in down in the under-levels. Discreet work."'
+    )
+    attrs = _watcher_span_attrs(open_ended, package=package)
+    assert attrs is not None, "router quest_offer accept + empty quest_log must fire the span"
+    assert attrs.get("detection_method") == "router", (
+        f"the router-backed path must tag detection_method='router', not 'keyword'; got {attrs}"
+    )
+
+
 def test_span_accepts_and_records_classifier_detection_method() -> None:
     """The classifier path tags the span detection_method='classifier'."""
     from sidequest.telemetry.spans.dispatch_engagement import (

@@ -1194,9 +1194,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         narration=getattr(result, "narration", "") or "",
                         snapshot=snapshot,
                         package=turn_context.dispatch_package,
-                        llm=build_unseeded_objective_classifier_llm(
-                            session_id=seed_session_id
-                        ),
+                        llm=build_unseeded_objective_classifier_llm(session_id=seed_session_id),
                     )
 
                     # Fate honesty lie-detector (ADR-144 F2c / Story 116-4): beep

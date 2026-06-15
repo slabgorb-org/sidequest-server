@@ -260,11 +260,17 @@ def narration_unminted_objective_span(
     empty — the narrator promoted a hook in prose but never minted it via
     ``record_quest`` (QUEST-MAJOR).
 
-    ``detection_method`` (Story 117-6) records WHICH path flagged it: ``"classifier"``
-    for the un-seeded post-narration Haiku pass
-    (``run_unseeded_objective_classifier_watcher``), or ``"keyword"`` for the legacy
-    ``_UNMINTED_OBJECTIVE_MARKERS`` substring backstop (the default). The GM panel
-    uses it to distinguish a real classification from a lucky keyword hit.
+    ``detection_method`` (Story 117-6) records WHICH path flagged it, so the GM panel
+    can distinguish a real classification from a structural router hit or a lucky
+    keyword match:
+    - ``"classifier"`` — the un-seeded post-narration Haiku pass
+      (``run_unseeded_objective_classifier_watcher``);
+    - ``"router"`` — the 117-4 seeded path (``run_unminted_objective_watcher`` when the
+      router dispatched a ``quest_offer`` accept that never minted);
+    - ``"keyword"`` — the legacy ``_UNMINTED_OBJECTIVE_MARKERS`` substring backstop.
+
+    The default is ``"keyword"`` (the backstop is the only caller that does not pass an
+    explicit method).
     """
     with Span.open(
         SPAN_NARRATION_UNMINTED_OBJECTIVE,

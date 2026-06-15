@@ -43,6 +43,13 @@ from sidequest.telemetry.spans.dispatch_engagement import (
 
 logger = logging.getLogger(__name__)
 
+# Cost guard (SOUL: Cost Scales with Drama): bound the narration before the SDK call
+# so a runaway-long narration (context overflow, a verbose genre) cannot grind
+# unbounded input-token cost on the classification. The objective signal is in the
+# opening prose, not the ten-thousandth char. Mirrors infer_archetype_from_freeform's
+# 4,000-char fodder cap. Truncation is logged LOUD, never silent (No Silent Fallbacks).
+_MAX_NARRATION_CHARS = 4_000
+
 _TOOL_NAME = "report_unseeded_objective"
 _TOOL_DESCRIPTION = (
     "Report whether the narration just GAVE the player an open-ended objective — a "
@@ -121,6 +128,13 @@ async def classify_unseeded_objective(
         return UnseededObjectiveClassification(
             is_objective_given=False, confidence=1.0, reasoning="empty narration"
         )
+    if len(narration) > _MAX_NARRATION_CHARS:
+        logger.warning(
+            "unseeded_objective_classifier narration truncated from %d to %d chars",
+            len(narration),
+            _MAX_NARRATION_CHARS,
+        )
+        narration = narration[:_MAX_NARRATION_CHARS]
     # ADR-047 defense-in-depth: the narration rides inside a structural delimiter so
     # instruction-shaped prose reads as quoted material. The forced tool_choice is
     # the actual boundary; this just hardens the prompt shape.

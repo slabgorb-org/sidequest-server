@@ -41,6 +41,7 @@ from sidequest.telemetry.spans.llm_request import llm_request_span
 if TYPE_CHECKING:
     from anthropic import AsyncAnthropic
 
+    from sidequest.agents.post_narration_classifier import ObjectiveClassifierLLM
     from sidequest.genre.models.archetype_axes import BaseArchetypes
     from sidequest.genre.models.archetype_constraints import ArchetypeConstraints
 
@@ -748,10 +749,11 @@ class _UnseededObjectiveClassifierLlm:
         )
 
 
-def build_unseeded_objective_classifier_llm(
-    *, session_id: str | None
-) -> _UnseededObjectiveClassifierLlm:
+def build_unseeded_objective_classifier_llm(*, session_id: str | None) -> ObjectiveClassifierLLM:
     """Build the Haiku adapter for the un-seeded objective classifier (Story 117-6).
+
+    Returns the public ``ObjectiveClassifierLLM`` Protocol the classifier consumes —
+    callers depend on the contract, not the private adapter class.
 
     ``session_id`` is required keyword-only (supply the room slug or opt out with
     ``None``) so the post-narration classification spend runs the ADR-134 detector

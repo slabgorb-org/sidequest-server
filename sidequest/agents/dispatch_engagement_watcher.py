@@ -745,7 +745,15 @@ def run_unminted_objective_watcher(
             narration=narration, snapshot=snapshot, package=package
         )
         if evidence is not None:
-            with narration_unminted_objective_span(evidence=evidence, _tracer=tracer):
+            # Story 117-6: tag the span so the GM panel sees WHICH path flagged.
+            # This sync watcher fires on two paths: the 117-4 router-backed
+            # quest_offer-accept classification ("router") and the legacy curated
+            # substring backstop ("keyword"). The post-narration Haiku classifier
+            # ("classifier") emits from run_unseeded_objective_classifier_watcher.
+            detection_method = "router" if _package_accepted_quest_offer(package) else "keyword"
+            with narration_unminted_objective_span(
+                evidence=evidence, detection_method=detection_method, _tracer=tracer
+            ):
                 pass
     except Exception as exc:  # noqa: BLE001 — observability must never abort the turn
         logger.error(

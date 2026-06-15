@@ -37,8 +37,8 @@ model + the snapshot field + the engine module. That is the intended RED.
 from __future__ import annotations
 
 import pytest
-from sidequest.game.quest_offer import mint_quest_offer, stash_quest_offers
 
+from sidequest.game.quest_offer import mint_quest_offer, stash_quest_offers
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.narrative import (
     Opening,
@@ -239,6 +239,11 @@ def test_mint_is_idempotent(otel_capture) -> None:
     assert len(_spans_named(otel_capture, SPAN_NAME)) == 1, (
         "idempotent re-accept must not emit a second quest.seeded span"
     )
+    # Review #2 (offer leak): the re-stashed offer must be consumed by the
+    # idempotent accept — a taken job never leaks back into pending_quest_offers.
+    assert "floor_boss_missing_person" not in snap.pending_quest_offers, (
+        "idempotent re-accept must consume the re-stashed offer, not leak it"
+    )
 
 
 def test_mint_idempotent_when_narrator_front_ran_record_quest() -> None:
@@ -257,6 +262,35 @@ def test_mint_idempotent_when_narrator_front_ran_record_quest() -> None:
 
     assert snap.quest_log["floor_boss_missing_person"].title == "Narrator's version", (
         "authored-seed mint must not clobber a narrator-minted quest of the same id"
+    )
+
+
+def test_idempotent_accept_consumes_offer_when_narrator_front_ran(otel_capture) -> None:
+    """Review #2 (offer leak): when the narrator front-ran the quest via
+    record_quest, accepting the authored offer no-ops the mint AND consumes the
+    pending offer — so the already-minted job never leaks back into the router's
+    <game_state> offer surface every turn, re-prompting acceptance of a quest
+    that is already in the log."""
+    from sidequest.game.session import QuestEntry
+
+    snap = GameSnapshot()
+    snap.quest_log["floor_boss_missing_person"] = QuestEntry(
+        title="Narrator's version", objective="narrator wrote this", status="active"
+    )
+    stash_quest_offers(snap, _opening_with_seed(_seed()))
+    assert "floor_boss_missing_person" in snap.pending_quest_offers
+
+    result = mint_quest_offer(snap, "floor_boss_missing_person", confidence=0.9)
+
+    assert result is None, "idempotent accept returns None (no new mint)"
+    # The offer is consumed even though the mint no-op'd.
+    assert "floor_boss_missing_person" not in snap.pending_quest_offers, (
+        "idempotent accept must consume the offer (no leak back into the router)"
+    )
+    # No second quest, no span — the narrator's entry is untouched.
+    assert len(snap.quest_log) == 1
+    assert len(_spans_named(otel_capture, SPAN_NAME)) == 0, (
+        "an idempotent (no-mint) accept must not fire quest.seeded"
     )
 
 

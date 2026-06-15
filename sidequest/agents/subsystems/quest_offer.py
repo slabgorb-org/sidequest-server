@@ -16,6 +16,10 @@ engine:
 - an UNKNOWN ``quest_id`` (router named an offer with no matching pending seed)
   → emit a ``quest_offer.mismatch`` watcher event and return; never fabricate a
   phantom quest from nothing (ADR-146 §2 handler pseudocode).
+- an EMPTY or UNKNOWN ``decision`` (a router defect) → emit a
+  ``quest_offer.mismatch`` (reason ``unknown_decision``) and return; it must
+  FAIL LOUD and mint nothing, never fall through to accept and silently mint a
+  quest the player never accepted (No Silent Fallbacks).
 
 The below-threshold (low-confidence) case never reaches this handler — the bank
 degrades it to a narrator hint and leaves the offer live (``run_dispatch_bank``
@@ -52,7 +56,8 @@ async def run_quest_offer_dispatch(
 
     if not quest_id:
         # Malformed dispatch — the router omitted the offer id. Surface loud,
-        # mint nothing (the engagement witness flags accept-with-empty-log).
+        # mint nothing (the engagement witness flags quest_id absent from
+        # quest_log after accept).
         _watcher_publish(
             "quest_offer.mismatch",
             {"reason": "missing_quest_id", "decision": decision},
@@ -60,6 +65,20 @@ async def run_quest_offer_dispatch(
             severity="warning",
         )
         return SubsystemOutput(data={"error": "missing_quest_id"})
+
+    # The decision MUST be one of the two contract values. An empty or unknown
+    # decision (a router defect) must FAIL LOUD and mint NOTHING — never fall
+    # through to the accept path and silently mint a quest the player never
+    # accepted (No Silent Fallbacks, the exact doctrine this epic exists to
+    # enforce). Surface it as a mismatch and return without touching state.
+    if decision not in ("accept", "decline"):
+        _watcher_publish(
+            "quest_offer.mismatch",
+            {"reason": "unknown_decision", "quest_id": quest_id, "decision": decision},
+            component="quest_log",
+            severity="warning",
+        )
+        return SubsystemOutput(data={"error": "unknown_decision", "quest_id": quest_id})
 
     if decision == "decline":
         # Consume the offer (declined) — not left dangling for a re-prompt.
@@ -72,7 +91,7 @@ async def run_quest_offer_dispatch(
         )
         return SubsystemOutput(data={"quest_id": quest_id, "decision": "declined"})
 
-    # decision == "accept" (or any non-decline): mint if the offer is real.
+    # decision == "accept": mint if the offer is real.
     if quest_id not in snapshot.pending_quest_offers and quest_id not in snapshot.quest_log:
         # The router named an offer that was never pending — emit the mismatch
         # and return. Never fabricate a quest from nothing (ADR-146 §2).

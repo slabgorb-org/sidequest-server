@@ -38,8 +38,8 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
-from sidequest.game.quest_offer import stash_quest_offers
 
+from sidequest.game.quest_offer import stash_quest_offers
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.narrative import (
     Opening,
@@ -273,6 +273,124 @@ async def test_accept_unknown_offer_does_not_mint() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Review #1 — empty / unknown decision must FAIL LOUD, never silently mint
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_decision", ["", "maybe", "ACCEPT", "yes", "accpet"])
+async def test_unknown_decision_does_not_mint_and_fires_mismatch(
+    bad_decision: str, monkeypatch
+) -> None:
+    """No Silent Fallbacks: a dispatch whose ``decision`` is empty or not one of
+    accept|decline (a router defect) must NOT fall through to the accept path and
+    silently mint. The handler emits a quest_offer.mismatch (reason
+    unknown_decision) and mints nothing — the offer stays untouched."""
+    import sidequest.agents.subsystems.quest_offer as quest_offer_handler
+    from sidequest.agents.subsystems import run_dispatch_bank
+
+    captured: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        quest_offer_handler,
+        "_watcher_publish",
+        lambda event, payload, **kw: captured.append((event, payload)),
+    )
+
+    snap = _snap_with_offer()  # floor_boss_missing_person is pending
+    package = _package_with(_quest_offer_dispatch(decision=bad_decision, confidence=0.9))
+
+    await run_dispatch_bank(
+        package,
+        context={"snapshot": snap, "pack": MagicMock(), "player_name": "Rux"},
+    )
+
+    # No silent mint — quest_log untouched, no quest.seeded span.
+    assert snap.quest_log == {}, f"decision={bad_decision!r} must NOT mint a quest"
+    # The offer is NOT consumed by the loud-fail path (it stays pending for a
+    # well-formed re-classification).
+    assert "floor_boss_missing_person" in snap.pending_quest_offers
+    # The mismatch witness fired with reason=unknown_decision.
+    mismatch = [p for e, p in captured if e == "quest_offer.mismatch"]
+    assert mismatch and mismatch[0].get("reason") == "unknown_decision", (
+        f"expected a quest_offer.mismatch(reason=unknown_decision); got {captured}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_missing_decision_key_does_not_mint(monkeypatch) -> None:
+    """An accept-shaped dispatch with the ``decision`` key entirely ABSENT (not
+    just empty) is the same router defect — it must fail loud, not mint."""
+    import sidequest.agents.subsystems.quest_offer as quest_offer_handler
+    from sidequest.agents.subsystems import run_dispatch_bank
+    from sidequest.protocol.dispatch import SubsystemDispatch
+
+    captured: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        quest_offer_handler,
+        "_watcher_publish",
+        lambda event, payload, **kw: captured.append((event, payload)),
+    )
+
+    snap = _snap_with_offer()
+    # No 'decision' key at all in params.
+    dispatch = SubsystemDispatch(
+        subsystem="quest_offer",
+        params={"quest_id": "floor_boss_missing_person"},
+        idempotency_key="k-no-decision",
+        confidence=0.9,
+        visibility=_open_viz(),
+    )
+    package = _package_with(dispatch)
+
+    await run_dispatch_bank(
+        package,
+        context={"snapshot": snap, "pack": MagicMock(), "player_name": "Rux"},
+    )
+
+    assert snap.quest_log == {}, "a missing decision must NOT mint"
+    assert "floor_boss_missing_person" in snap.pending_quest_offers
+    assert any(
+        e == "quest_offer.mismatch" and p.get("reason") == "unknown_decision"
+        for e, p in captured
+    ), f"expected quest_offer.mismatch(reason=unknown_decision); got {captured}"
+
+
+# ---------------------------------------------------------------------------
+# Review #2 — idempotent accept through the bank consumes the offer
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_idempotent_accept_through_bank_consumes_offer() -> None:
+    """Review #2 (offer leak): an accept naming a quest_id ALREADY in quest_log
+    (narrator front-ran via record_quest) no-ops the mint but STILL consumes the
+    pending offer — so it never leaks back into the router <game_state> every
+    turn. Driven through the real bank."""
+    from sidequest.agents.subsystems import run_dispatch_bank
+    from sidequest.game.session import QuestEntry
+
+    snap = _snap_with_offer()  # floor_boss_missing_person pending
+    # The narrator front-ran the quest via record_quest before the player's accept.
+    snap.quest_log["floor_boss_missing_person"] = QuestEntry(
+        title="Narrator's version", objective="narrator wrote this", status="active"
+    )
+    package = _package_with(_quest_offer_dispatch(decision="accept", confidence=0.9))
+
+    await run_dispatch_bank(
+        package,
+        context={"snapshot": snap, "pack": MagicMock(), "player_name": "Rux"},
+    )
+
+    # The narrator's entry is untouched (no double-mint, no clobber).
+    assert snap.quest_log["floor_boss_missing_person"].title == "Narrator's version"
+    assert len(snap.quest_log) == 1
+    # The offer is consumed — no leak back into the router's offer surface.
+    assert "floor_boss_missing_person" not in snap.pending_quest_offers, (
+        "an idempotent accept must consume the offer (no per-turn re-prompt leak)"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Engagement watcher — quest_offer witness (ADR-146 §4)
 # ---------------------------------------------------------------------------
 
@@ -316,11 +434,10 @@ def test_watcher_flags_accept_with_empty_quest_log() -> None:
 def test_watcher_silent_when_accept_minted(otel_capture) -> None:
     """The inverse: when the accept actually minted the quest, the witness sees
     the QuestEntry and reports NO mismatch (honest engagement)."""
-    from sidequest.game.quest_offer import mint_quest_offer
-
     from sidequest.agents.dispatch_engagement_watcher import (
         detect_dispatch_engagement_mismatch,
     )
+    from sidequest.game.quest_offer import mint_quest_offer
 
     snap = _snap_with_offer()
     mint_quest_offer(snap, "floor_boss_missing_person", confidence=0.9)

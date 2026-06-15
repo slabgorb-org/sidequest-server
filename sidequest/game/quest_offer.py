@@ -57,8 +57,10 @@ def mint_quest_offer(
 
     Idempotent (ADR-146 §3 "Authored seed is fill, not clobber"): if
     ``quest_id`` is already in ``quest_log`` — the narrator front-ran it via
-    ``record_quest``, or the player re-accepts — this no-ops (first writer wins;
-    no double-mint, no overwrite, no second span) and returns ``None``.
+    ``record_quest``, or the player re-accepts — this no-ops the MINT (first
+    writer wins; no double-mint, no overwrite, no second span) and returns
+    ``None``, but STILL consumes the pending offer so a taken job never leaks
+    back into the router's offer surface every turn.
 
     Unknown ``quest_id`` (no matching pending offer) no-ops and returns ``None``;
     the handler (not this function) surfaces the mismatch.
@@ -67,8 +69,15 @@ def mint_quest_offer(
     :data:`QUEST_LOG_CARDINALITY_CAP` raises loudly (No Silent Fallbacks) BEFORE
     consuming the offer — the offer is never silently dropped by a failed mint.
     """
-    # Idempotent no-op: first writer wins (narrator front-ran, or re-accept).
+    # Idempotent no-op: first writer wins (narrator front-ran via record_quest,
+    # or the player re-accepts). The quest already exists — do NOT double-mint
+    # and do NOT re-fire the span. But STILL consume the pending offer: the job
+    # has been taken (by whichever path minted it first), so the offer must
+    # leave the pending pool. Leaving it live would leak the offer back into the
+    # router's <game_state> every turn, re-prompting acceptance of a quest that
+    # is already in the log.
     if quest_id in snapshot.quest_log:
+        snapshot.pending_quest_offers.pop(quest_id, None)
         return None
 
     seed = snapshot.pending_quest_offers.get(quest_id)

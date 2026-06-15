@@ -1652,6 +1652,16 @@ def _load_single_world(
             class_kit_count=len(world_inventory.starting_equipment),
         )
 
+    # === World-tier equipment_tables.yaml — OPTIONAL (story 120-4) ===
+    # The genre tier is the SRD chargen-kit rulebook; a world's dungeon/flavor kit
+    # additions are CAST/CATALOG (ADR-140). Absent file → None (the genre-tier
+    # ``GenrePack.equipment_tables`` then serves unchanged — additive, no behavior
+    # change for unmigrated worlds). Consumers resolve world-first via
+    # ``server.dispatch.equipment_tables_resolve.resolve_equipment_tables``.
+    world_equipment_tables: EquipmentTables | None = _load_yaml_optional(
+        world_path / "equipment_tables.yaml", EquipmentTables
+    )
+
     # === World-tier Saint canon (worlds/<slug>/saints.yaml, story 103-1) ===
     # Curated presets over the genre mutation catalog. Absence = the world
     # ships no Saints (valid authored choice). Presence REQUIRES the genre
@@ -1779,6 +1789,7 @@ def _load_single_world(
         magic_register=magic_register,
         items=items,
         inventory=world_inventory,
+        equipment_tables=world_equipment_tables,
         bestiary=world_bestiary,
         saints=world_saints,
         stocks=world_stocks,

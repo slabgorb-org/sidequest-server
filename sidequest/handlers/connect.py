@@ -50,6 +50,7 @@ from sidequest.server.dispatch.char_creation_resolve import resolve_char_creatio
 from sidequest.server.dispatch.chargen_defs_resolve import resolve_backgrounds, resolve_foci
 from sidequest.server.dispatch.class_resolve import resolve_classes
 from sidequest.server.dispatch.culture_context import resolve_culture_reference
+from sidequest.server.dispatch.equipment_tables_resolve import resolve_equipment_tables
 from sidequest.server.image_pacing import ImagePacingThrottle
 from sidequest.server.magic_init import init_magic_state_for_session
 from sidequest.server.session_handler import (
@@ -927,8 +928,13 @@ class ConnectHandler:
                     backstory_tables=genre_pack.backstory_tables,
                 ).with_lobby_name(display_name)
                 builder = builder.with_pack_id(row.genre_slug)
-                if genre_pack.equipment_tables is not None:
-                    builder = builder.with_equipment_tables(genre_pack.equipment_tables)
+                # Story 120-4: resolve chargen kits world-first (parallel to
+                # resolve_classes below) so a world's equipment_tables.yaml merges its
+                # dungeon/flavor gear over the genre SRD kits. None when neither tier
+                # ships kits — a no-op for unmigrated packs.
+                resolved_equipment_tables = resolve_equipment_tables(genre_pack, row.world_slug)
+                if resolved_equipment_tables is not None:
+                    builder = builder.with_equipment_tables(resolved_equipment_tables)
                 # Epic 94 (genre/world boundary): classes/callings are a
                 # world-tier CAST surface. Resolve the roster world-first so a
                 # migrated pack (tea_and_murder → blackthorn_moor/glenross

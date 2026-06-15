@@ -619,18 +619,32 @@ def run_improvised_combat_watcher(
             pass
 
 
-def _package_dispatched_quest_offer(package: DispatchPackage | None) -> bool:
-    """True when the router emitted any ``quest_offer`` dispatch this turn.
+def _package_accepted_quest_offer(package: DispatchPackage | None) -> bool:
+    """True when the router dispatched a quest_offer ACCEPT this turn.
 
     This is the structural, OTEL-backed objective signal (Story 117-4): when the
-    Intent Router (ADR-113) classified the player's turn as engaging an
-    offered objective, it emits a ``quest_offer`` ``SubsystemDispatch`` (Story
-    117-3). A ``None`` package (the router failed/produced nothing) means no
-    objective was classified — the keyword backstop covers that un-seeded case.
+    Intent Router (ADR-113) classified the player's turn as *accepting* an
+    offered objective, it emits a ``quest_offer`` ``SubsystemDispatch`` with
+    ``params["decision"] == "accept"`` (Story 117-3). Only an accept is an
+    unminted-objective candidate, matching the engine's mint contract:
+
+    - ``decline`` is an honest non-mint — the engine correctly mints nothing and
+      emits ``quest.offer_declined`` — so it is NEVER a lie to catch (this mirrors
+      the 117-3 witness ``_check_quest_offer_engaged``, which also returns ``None``
+      on a decline). Firing here would flood the GM panel on every normal
+      early-game "no thanks".
+    - ``unknown_decision`` is already surfaced by ``quest_offer.py`` as its own
+      ``quest_offer.mismatch`` — not this detector's concern.
+
+    A ``None`` package (the router failed/produced nothing) means no objective was
+    classified — the keyword backstop covers that un-seeded case.
     """
     if package is None:
         return False
-    return any(d.subsystem == "quest_offer" for _player_id, d in _iter_all_dispatches(package))
+    return any(
+        d.subsystem == "quest_offer" and d.params.get("decision") == "accept"
+        for _player_id, d in _iter_all_dispatches(package)
+    )
 
 
 def detect_unminted_objective(
@@ -646,11 +660,14 @@ def detect_unminted_objective(
     land in ``quest_log``, so its emptiness is the single mint-vs-not gate):
 
     1. **Router-backed (Story 117-4, the seeded path).** When the Intent Router
-       classified this turn as objective-giving — a ``quest_offer`` dispatch is
-       present in ``package`` — but ``quest_log`` stayed empty, the engine never
-       minted. This rides the router's structural classification (ADR-113), not a
-       keyword guess, so an open-ended hook that trips ZERO curated markers (the
-       perseus_cloud noir "discreet job" repro, session 594dcc7e) still beeps.
+       classified this turn as *accepting* an offered objective — a ``quest_offer``
+       dispatch with ``decision == "accept"`` is present in ``package`` — but
+       ``quest_log`` stayed empty, the engine never minted. This rides the
+       router's structural classification (ADR-113), not a keyword guess, so an
+       open-ended hook that trips ZERO curated markers (the perseus_cloud noir
+       "discreet job" repro, session 594dcc7e) still beeps. A ``decline`` is an
+       honest non-mint and is excluded (it never trips this path) — only an
+       accept-without-mint is an unminted objective.
     2. **Keyword backstop (provisional, pending Story 117-6).** When the router
        emitted no ``quest_offer`` signal (``package=None`` or no objective
        dispatch — the un-seeded, narrator-improvised case), the curated
@@ -671,13 +688,14 @@ def detect_unminted_objective(
     if quest_log:
         return None
 
-    # Router-backed seeded path: the router classified an objective this turn but
-    # quest_log stayed empty — structural, keyword-free.
-    if _package_dispatched_quest_offer(package):
+    # Router-backed seeded path: the router dispatched a quest_offer ACCEPT this
+    # turn but quest_log stayed empty — structural, keyword-free. Declines and
+    # unknown-decisions are excluded (honest non-mint / already-flagged).
+    if _package_accepted_quest_offer(package):
         return (
-            "router classified this turn as objective-giving (quest_offer dispatch) "
-            "but quest_log is empty — the offer was engaged in prose, never minted "
-            "into a tracked quest"
+            "router dispatched a quest_offer accept this turn but quest_log is "
+            "empty — the offer was accepted in prose, never minted into a tracked "
+            "quest"
         )
 
     # Keyword backstop (un-seeded / router-silent): curated objective-giving prose

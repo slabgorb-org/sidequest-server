@@ -71,16 +71,14 @@ from sidequest.protocol.dispatch import (
 # the debt", "has not returned", …). If the keyword path alone were enough, this
 # string would not flag — and that is precisely the bug.
 _OPEN_ENDED_HOOK = (
-    "The floor-boss leans in, voice low. \"I have a... situation. Someone of "
+    'The floor-boss leans in, voice low. "I have a... situation. Someone of '
     "mine stopped checking in down in the under-levels. Discreet work. You look "
-    "like the type who can handle that kind of thing.\""
+    'like the type who can handle that kind of thing."'
 )
 
 # Sanity anchor for test (c): a phrase that IS in the curated marker list, so the
 # keyword backstop must still fire on it with no router package at all.
-_CURATED_HOOK = (
-    "Your task is to find the missing courier before the Conglomerate does."
-)
+_CURATED_HOOK = "Your task is to find the missing courier before the Conglomerate does."
 
 
 def _fresh_tracer_and_exporter() -> tuple[trace.Tracer, InMemorySpanExporter]:
@@ -136,6 +134,38 @@ def _quest_offer_package(
 def _empty_package(turn_id: str = "turn-1") -> DispatchPackage:
     """A quiet turn — the router classified no objective engagement."""
     return DispatchPackage(turn_id=turn_id, confidence_global=1.0)
+
+
+def _quest_decline_package(
+    *,
+    quest_id: str = "floor_boss_missing_person",
+    turn_id: str = "turn-1",
+) -> DispatchPackage:
+    """A DispatchPackage carrying a quest_offer DECLINE.
+
+    The player turned the job down — the engine correctly mints nothing and emits
+    ``quest.offer_declined``. An empty quest_log is the HONEST, expected outcome
+    here, NOT an unminted-objective lie. The detector must stay silent (mirrors the
+    117-3 witness ``_check_quest_offer_engaged``, which returns None on decline).
+    """
+    dispatch = SubsystemDispatch(
+        subsystem="quest_offer",
+        params={"quest_id": quest_id, "decision": "decline"},
+        idempotency_key="qo-decline-1",
+        confidence=0.9,
+        visibility=_open_viz(),
+    )
+    return DispatchPackage(
+        turn_id=turn_id,
+        per_player=[
+            PlayerDispatch(
+                player_id="player:Alice",
+                raw_action="nah, not interested, I've got my own problems",
+                dispatch=[dispatch],
+            )
+        ],
+        confidence_global=0.9,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +304,49 @@ def test_no_fire_on_quiet_router_turn() -> None:
         package=_empty_package(),
     )
     assert evidence is None
+
+
+def test_no_fire_on_declined_quest_offer() -> None:
+    """The router dispatched a quest_offer DECLINE on an empty-quest_log turn — a
+    normal early-game "no thanks". The engine correctly mints nothing and emits
+    quest.offer_declined; an empty quest_log is the HONEST outcome, not a lie. The
+    detector must NOT fire — a decline is never an unminted objective.
+
+    This is the false-positive the router-backed path must exclude: an
+    accept-aware gate, matching the 117-3 witness (_check_quest_offer_engaged,
+    which returns None on decline) and the engine's mint contract. Firing here
+    would flood the GM panel on every declined job."""
+    from sidequest.agents.dispatch_engagement_watcher import detect_unminted_objective
+
+    evidence = detect_unminted_objective(
+        narration=_OPEN_ENDED_HOOK,
+        snapshot=_snapshot(quest_log={}),
+        package=_quest_decline_package(),
+    )
+    assert evidence is None, (
+        "a DECLINED quest offer is an honest non-mint — the detector must stay "
+        "silent; only an accept-without-mint is an unminted objective"
+    )
+
+
+def test_watcher_silent_on_declined_quest_offer() -> None:
+    """OTEL-level inverse of the above: no suspected span on a declined offer."""
+    from sidequest.agents.dispatch_engagement_watcher import (
+        run_unminted_objective_watcher,
+    )
+
+    tracer, exporter = _fresh_tracer_and_exporter()
+    run_unminted_objective_watcher(
+        narration=_OPEN_ENDED_HOOK,
+        snapshot=_snapshot(quest_log={}),
+        package=_quest_decline_package(),
+        tracer=tracer,
+    )
+
+    names = [s.name for s in exporter.get_finished_spans()]
+    assert "narration.unminted_objective.suspected" not in names, (
+        f"declined offer must not beep; got spans {names}"
+    )
 
 
 # ---------------------------------------------------------------------------

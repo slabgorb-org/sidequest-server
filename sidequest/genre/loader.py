@@ -730,7 +730,7 @@ def _validate_genre_baseline_no_bespoke(ruleset: str, inventory: InventoryConfig
     content with no SRD to be verbatim from, so genre-tier bespoke there is
     legitimate homebrew. Fails loud, naming every offending id (No Silent
     Fallbacks). The stricter verbatim-only rule (which also rejects unprovenanced
-    genre items in caverns_and_claudes / road_warrior) is deferred to epic 119.
+    genre items in caverns_and_claudes / road_warrior) is deferred to epic 120.
     """
     if inventory is None or not _is_without_number(ruleset):
         return

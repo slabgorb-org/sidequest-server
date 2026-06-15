@@ -6,7 +6,7 @@ from the three offending packs' genre baselines:
   * mutant_wasteland — 12 (6 pre-war relics -> both worlds; 6 survival -> AWN-verbatim)
   * neon_dystopia    — 6  (-> franchise_nations world)
   * road_warrior     — 5  declared-bespoke (-> the_circuit world); its 25
-                          UNPROVENANCED items stay (epic 119, verbatim-only sweep)
+                          UNPROVENANCED items stay (epic 120, verbatim-only sweep)
 
 elemental_harmony + heavy_metal are already 100% verbatim (the target pattern) and
 are asserted here as guards. Driven against the REAL packs so green proves the

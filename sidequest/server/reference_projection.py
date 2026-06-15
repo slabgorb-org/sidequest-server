@@ -15,9 +15,10 @@ from pathlib import Path
 
 import yaml
 
+from sidequest.foundation.asset_urls import resolve_asset_url
+from sidequest.foundation.reference_slug import slugify
 from sidequest.genre.models.legends import Legend
 from sidequest.genre.models.world import CartographyConfig
-from sidequest.server.asset_urls import resolve_asset_url
 from sidequest.server.reference_map import _edges_and_dangling, _npc_pins, load_cartography_config
 from sidequest.server.reference_presenters import (
     cast_portrait_slug,
@@ -37,7 +38,6 @@ from sidequest.server.reference_renderer import (
     load_poi_slug_map,
     load_points_of_interest,
 )
-from sidequest.server.reference_slug import slugify
 from sidequest.server.reference_theme import (
     PACK_BLURBS,
     PACK_LABELS,

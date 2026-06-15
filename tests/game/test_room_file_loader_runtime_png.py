@@ -5,7 +5,7 @@ Closes the runtime path: 52-2 produces ``RegionMask`` at materialize time,
 ``dungeon_map.mask``, and this story converts that persisted mask BLOB
 back into the ADR-096 ``<room>.cavern.png`` sidecar the renderer
 consumer already knows how to read. ``resolve_asset_url`` (already in
-``sidequest.server.asset_urls``) turns the sidecar's relative content
+``sidequest.foundation.asset_urls``) turns the sidecar's relative content
 path into the URL the UI fetches.
 
 ACs (per ``.session/52-4-session.md``):
@@ -361,7 +361,7 @@ class TestRuntimeCavernPngAssetUrl:
     understands) must round-trip to a fetchable URL — and the URL must
     point at the ``.cavern.png`` suffix the static ADR-096 path uses.
     AC2 tests live separately from AC1 because the URL contract is a
-    decoupled responsibility of ``sidequest.server.asset_urls``.
+    decoupled responsibility of ``sidequest.foundation.asset_urls``.
     """
 
     def test_runtime_cavern_png_relative_path_resolves_to_url(
@@ -373,7 +373,7 @@ class TestRuntimeCavernPngAssetUrl:
         the full CDN-prefixed concatenation. Asserts the EXACT value
         (not just prefix/suffix) so a partial drop of the relative
         path segment cannot pass undetected."""
-        from sidequest.server.asset_urls import resolve_asset_url
+        from sidequest.foundation.asset_urls import resolve_asset_url
 
         monkeypatch.setenv("SIDEQUEST_ASSET_BASE_URL", "https://cdn.example/")
         relative = "artifacts/dungeon/save01/regions/exp001r0.cavern.png"
@@ -392,7 +392,7 @@ class TestRuntimeCavernPngAssetUrl:
         (per ``asset_urls._LOCAL_PREFIX_MAP``). The runtime PNG must
         land under the existing artifacts prefix so local-serve dev
         keeps working."""
-        from sidequest.server.asset_urls import resolve_asset_url
+        from sidequest.foundation.asset_urls import resolve_asset_url
 
         monkeypatch.setenv("SIDEQUEST_ASSET_BASE_URL", "local")
         relative = "artifacts/dungeon/save01/regions/exp001r0.cavern.png"

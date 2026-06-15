@@ -68,9 +68,7 @@ def resolve_asset_url(relative_path: str, *, scope: Literal["pack", "shared"] = 
         url = f"{base.rstrip('/')}/{rel}"
         mode = "cdn"
 
-    with asset_url_resolved_span(
-        relative_path=rel, base_url=base or "", mode=mode, scope=scope
-    ):
+    with asset_url_resolved_span(relative_path=rel, base_url=base or "", mode=mode, scope=scope):
         pass
     return url
 

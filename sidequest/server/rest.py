@@ -22,13 +22,13 @@ import yaml
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from sidequest.foundation.asset_urls import resolve_asset_url, resolve_player_portrait_url
 from sidequest.game.game_slug import generate_slug
 from sidequest.game.persistence import (
     GameMode,
 )
 from sidequest.genre.loader import DEFAULT_GENRE_PACK_SEARCH_PATHS, load_genre_pack_cached
 from sidequest.genre.models.pack import picker_portrait_slug
-from sidequest.server.asset_urls import resolve_asset_url, resolve_player_portrait_url
 
 logger = logging.getLogger(__name__)
 

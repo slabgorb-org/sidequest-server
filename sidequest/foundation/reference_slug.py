@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 
-from sidequest.server.slug_fold import fold_to_ascii
+from sidequest.foundation.slug_fold import fold_to_ascii
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 

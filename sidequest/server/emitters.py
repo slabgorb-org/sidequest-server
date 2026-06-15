@@ -799,7 +799,7 @@ def _resolve_npc_portrait_url(
     ``manifest_slugs`` may be precomputed by the caller to avoid rebuilding
     the set per NPC in a multi-NPC turn; when omitted it is derived here.
     """
-    from sidequest.server.asset_urls import resolve_asset_url
+    from sidequest.foundation.asset_urls import resolve_asset_url
     from sidequest.server.utils import slugify_player_name
     from sidequest.telemetry.spans.scrapbook import (
         scrapbook_npc_portrait_not_found_span,

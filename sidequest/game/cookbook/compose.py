@@ -28,6 +28,9 @@ from __future__ import annotations
 import random
 import re
 
+# Imports for reference URL attachment — loaded at call time to keep import
+# surface minimal. Declared here for pyright to resolve them.
+from sidequest.foundation.reference_anchors import build_lore_url
 from sidequest.game.cookbook.models import (
     GeneratedRoomDescription,
     LookDef,
@@ -37,10 +40,6 @@ from sidequest.protocol.models import (
     LocationEntity,
     LocationEntityBinding,
 )
-
-# Imports for reference URL attachment — loaded at call time to keep import
-# surface minimal. Declared here for pyright to resolve them.
-from sidequest.server.reference_anchors import build_lore_url
 from sidequest.telemetry.spans.reference import (
     reference_url_attached_span,
     reference_url_skipped_span,

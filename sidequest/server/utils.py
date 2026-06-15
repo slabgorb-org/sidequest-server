@@ -1,6 +1,6 @@
 import re
 
-from sidequest.server.slug_fold import fold_to_ascii
+from sidequest.foundation.slug_fold import fold_to_ascii
 
 
 def slugify_player_name(name: str) -> str:

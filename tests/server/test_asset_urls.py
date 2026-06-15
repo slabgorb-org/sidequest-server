@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from sidequest.server import asset_urls
+from sidequest.foundation import asset_urls
 
 
 def test_default_emits_cdn(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -65,10 +65,7 @@ CSS_FONT_FACE = (
 def test_rewrite_genre_mount_url_to_cdn(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SIDEQUEST_ASSET_BASE_URL", raising=False)
     out = asset_urls.rewrite_theme_css_asset_urls(CSS_FONT_FACE)
-    assert (
-        "url('https://cdn.slabgorb.com/genre_packs/assets/fonts/Orbitron-Regular.woff2')"
-        in out
-    )
+    assert "url('https://cdn.slabgorb.com/genre_packs/assets/fonts/Orbitron-Regular.woff2')" in out
     assert "/genre/assets/fonts" not in out
     # Surrounding CSS is preserved untouched.
     assert out.startswith("@font-face{font-family:'Orbitron';")
@@ -79,16 +76,11 @@ def test_rewrite_content_relative_url_to_cdn(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.delenv("SIDEQUEST_ASSET_BASE_URL", raising=False)
     css = "src:url('genre_packs/assets/fonts/Cinzel-Regular.woff2') format('woff2');"
     out = asset_urls.rewrite_theme_css_asset_urls(css)
-    assert (
-        "url('https://cdn.slabgorb.com/genre_packs/assets/fonts/Cinzel-Regular.woff2')"
-        in out
-    )
+    assert "url('https://cdn.slabgorb.com/genre_packs/assets/fonts/Cinzel-Regular.woff2')" in out
 
 
 @pytest.mark.parametrize("value", ["", "local"])
-def test_rewrite_local_mode_keeps_genre_mount(
-    monkeypatch: pytest.MonkeyPatch, value: str
-) -> None:
+def test_rewrite_local_mode_keeps_genre_mount(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
     monkeypatch.setenv("SIDEQUEST_ASSET_BASE_URL", value)
     out = asset_urls.rewrite_theme_css_asset_urls(CSS_FONT_FACE)
     assert "url('/genre/assets/fonts/Orbitron-Regular.woff2')" in out
@@ -117,10 +109,7 @@ def test_rewrite_leaves_foreign_urls_untouched(monkeypatch: pytest.MonkeyPatch) 
 
 def test_rewrite_handles_quote_styles(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SIDEQUEST_ASSET_BASE_URL", raising=False)
-    css = (
-        'a{src:url("/genre/assets/fonts/A.woff2")}'
-        "b{src:url(/genre/assets/fonts/B.woff2)}"
-    )
+    css = 'a{src:url("/genre/assets/fonts/A.woff2")}b{src:url(/genre/assets/fonts/B.woff2)}'
     out = asset_urls.rewrite_theme_css_asset_urls(css)
     assert 'url("https://cdn.slabgorb.com/genre_packs/assets/fonts/A.woff2")' in out
     assert "url(https://cdn.slabgorb.com/genre_packs/assets/fonts/B.woff2)" in out
@@ -151,8 +140,7 @@ def test_resolve_asset_url_accepts_shared_scope(
         scope="shared",
     )
     assert url == (
-        "https://cdn.slabgorb.com/genre_packs/assets/audio/classical_pd/"
-        "Satie - Gymnopedie No.1.ogg"
+        "https://cdn.slabgorb.com/genre_packs/assets/audio/classical_pd/Satie - Gymnopedie No.1.ogg"
     )
     attrs = span_attrs_by_name(otel_capture, "server.asset_url.resolved")
     assert len(attrs) == 1

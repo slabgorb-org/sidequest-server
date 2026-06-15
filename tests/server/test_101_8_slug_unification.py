@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import pytest
 
-from sidequest.server.reference_slug import slugify
+from sidequest.foundation.reference_slug import slugify
 from sidequest.server.utils import slugify_player_name
 
 # The canonical diacritic golden case — identical input across all three repos.

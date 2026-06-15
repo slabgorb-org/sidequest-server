@@ -15,7 +15,7 @@ the caller-supplied registry.
 
 from __future__ import annotations
 
-from sidequest.server.reference_slug import slugify
+from sidequest.foundation.reference_slug import slugify
 
 
 def build_rules_url(pack: str, kind: str, *keys: str) -> str:

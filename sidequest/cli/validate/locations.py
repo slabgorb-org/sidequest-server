@@ -174,9 +174,7 @@ def _load_npc_tokens(
     return tokens
 
 
-def _load_clue_ids(
-    world_dir: Path, result: ValidationResult, *, pack: str, world: str
-) -> set[str]:
+def _load_clue_ids(world_dir: Path, result: ValidationResult, *, pack: str, world: str) -> set[str]:
     """Return clue ids declared by any ``scenarios/*.yaml`` clue list."""
     ids: set[str] = set()
     scen_dir = world_dir / "scenarios"
@@ -444,7 +442,7 @@ def _location_card_slugs(
 ) -> set[str]:
     """Slugs of the location cards the lore page actually renders from
     ``locations.yaml`` — normalised exactly as the reference renderer does."""
-    from sidequest.server.reference_slug import slugify
+    from sidequest.foundation.reference_slug import slugify
 
     path = world_dir / "locations.yaml"
     if not path.is_file():
@@ -468,7 +466,7 @@ def _history_poi_slugs(
 ) -> set[str]:
     """Story 63-8: POI landscape-image manifest slugs from ``history.yaml``
     (``chapters[].points_of_interest[]`` and/or top-level), slugify-normalised."""
-    from sidequest.server.reference_slug import slugify
+    from sidequest.foundation.reference_slug import slugify
 
     path = world_dir / "history.yaml"
     if not path.is_file():
@@ -587,9 +585,7 @@ def _validate_one_world(
     rooms_dir = world_dir / "rooms"
     if rooms_dir.is_dir():
         for room_path in sorted(rooms_dir.glob("*.yaml")):
-            room_data = (
-                _safe_load_yaml(room_path, result, pack=pack_slug, world=world_slug) or {}
-            )
+            room_data = _safe_load_yaml(room_path, result, pack=pack_slug, world=world_slug) or {}
             _check_region(
                 room_path.stem,
                 room_data.get("entities") or [],
@@ -626,9 +622,7 @@ def validate_locations_in_world(world_dir: Path) -> ValidationResult:
         return result
     pack_dir = world_dir.parent.parent
     pack_slug = pack_dir.name if pack_dir.exists() else ""
-    allowlist = (
-        _load_allowlist(pack_dir, result, pack=pack_slug) if pack_dir.exists() else set()
-    )
+    allowlist = _load_allowlist(pack_dir, result, pack=pack_slug) if pack_dir.exists() else set()
     _validate_one_world(
         result,
         pack_dir=pack_dir,

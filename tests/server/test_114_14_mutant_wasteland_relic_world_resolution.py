@@ -82,7 +82,9 @@ def _make_character(items: list[dict], *, char_class: str = "Scavenger"):
         personality="curious",
         inventory=Inventory(items=list(items)),
     )
-    return Character(core=core, char_class=char_class, race="Human", backstory="Born in the wastes.")
+    return Character(
+        core=core, char_class=char_class, race="Human", backstory="Born in the wastes."
+    )
 
 
 @pytest.mark.parametrize("world", _WORLDS)

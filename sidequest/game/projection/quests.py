@@ -48,8 +48,14 @@ def _related_lore_for_anchor(
     facts whose ``fact_id`` is that clue id. Returns a clean empty list when the
     quest has no anchor, no clue touches the anchor, or nothing is learned yet
     (No Silent Fallbacks — empty, never None, never a crash).
+
+    A falsy anchor (``None`` *or* ``""``) coheres NOTHING. An empty-string
+    anchor is reachable — ``quest_offer.mint`` stores ``anchor_id=seed.anchor``
+    even when the seed anchor is "", and a narrator ``record_quest`` can emit an
+    empty anchor — and must never act as a wildcard that pulls every clue keyed
+    under "" under the wrong quest.
     """
-    if anchor_id is None:
+    if not anchor_id:
         return []
     out: list[QuestLoreEntry] = []
     for clue_id in clue_ids_by_anchor.get(anchor_id, ()):  # type: ignore[arg-type]
@@ -82,6 +88,10 @@ def build_quests_payload(snapshot: Any) -> QuestsPayload:
         nodes = getattr(clue_graph, "nodes", []) if clue_graph is not None else []
         for node in nodes:
             for body_id in (*node.locations, *node.implicates):
+                if not body_id:
+                    # An empty body id is not a real anchor — never index it,
+                    # or a "" anchor would cohere this clue as a wildcard.
+                    continue
                 clue_ids_by_anchor.setdefault(body_id, set()).add(node.id)
 
     facts_by_clue_id: dict[str, QuestLoreEntry] = {}
@@ -112,9 +122,11 @@ def build_quests_payload(snapshot: Any) -> QuestsPayload:
     ]
 
     # Reverse map: anchor body id -> owning quest id (first quest that claims it).
+    # A falsy anchor ("" or None) is not a real anchor — never let it claim an
+    # anchor entry, mirroring the empty-anchor-coheres-nothing rule above.
     anchor_owner: dict[str, str] = {}
     for quest_id, entry in quest_log.items():
-        if entry.anchor_id is not None and entry.anchor_id not in anchor_owner:
+        if entry.anchor_id and entry.anchor_id not in anchor_owner:
             anchor_owner[entry.anchor_id] = quest_id
 
     anchor_entries = [

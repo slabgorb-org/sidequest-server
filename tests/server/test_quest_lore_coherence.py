@@ -36,6 +36,12 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+import sidequest.telemetry.spans as _spans_module
 from sidequest.game.character import Character, KnownFact
 from sidequest.game.creature_core import CreatureCore, Inventory
 from sidequest.game.projection.quests import build_quests_payload
@@ -193,8 +199,7 @@ def test_related_lore_surfaces_under_its_quest() -> None:
     payload = build_quests_payload(snap)
     lore = _lore_under(payload, "missing_person")
     assert "A scratched keycard was dropped in the under-levels." in _lore_text(lore), (
-        "a ScenarioClue fact whose clue touches the quest's anchor must surface "
-        "under that quest"
+        "a ScenarioClue fact whose clue touches the quest's anchor must surface under that quest"
     )
 
 
@@ -299,9 +304,7 @@ def test_multiple_quests_partition_their_lore() -> None:
         ],
         known_facts=[
             _scenario_clue_fact(content="A keycard, scratched.", clue_id="keycard"),
-            _scenario_clue_fact(
-                content="A promissory note, forged.", clue_id="promissory_note"
-            ),
+            _scenario_clue_fact(content="A promissory note, forged.", clue_id="promissory_note"),
         ],
     )
 
@@ -418,4 +421,139 @@ def test_quests_emitter_broadcasts_lore_end_to_end() -> None:
         "the QUESTS payload on the wire must carry the related lore under its "
         "quest — proving the enrichment lives in build_quests_payload, the real "
         "projection the UI consumes, not in an unwired helper"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Regression guards (Hermes REJECT round) — empty-anchor wildcard + source
+# filter + OTEL lore_count parity.
+# ---------------------------------------------------------------------------
+
+
+def test_empty_anchor_coheres_nothing_not_a_wildcard() -> None:
+    """REGRESSION (blocking fix): a quest whose ``anchor_id`` is the empty string
+    must cohere NOTHING — an empty anchor is reachable (``quest_offer.mint``
+    stores ``anchor_id=seed.anchor`` even when the seed anchor is "", and a
+    narrator ``record_quest`` can emit one). It must NEVER act as a wildcard that
+    pulls clues keyed under "" (``locations=[""]``) under the wrong quest."""
+    snap = _snapshot(
+        quests={
+            "anchorless": QuestEntry(
+                title="An Anchorless Job",
+                objective="No body pinned yet.",
+                status="active",
+                anchor_id="",  # empty — must match nothing
+            )
+        },
+        anchors=[""],
+        clue_nodes=[_clue_node("orphan_clue", locations=[""])],
+        known_facts=[
+            _scenario_clue_fact(
+                content="A clue with an empty location key.",
+                clue_id="orphan_clue",
+            )
+        ],
+    )
+
+    payload = build_quests_payload(snap)
+    assert _lore_under(payload, "anchorless") == [], (
+        "an empty-string anchor must cohere nothing — it must not act as a "
+        "wildcard pulling clues keyed under the empty string"
+    )
+
+
+def test_non_scenario_fact_with_colliding_id_does_not_surface() -> None:
+    """REGRESSION (source-filter discriminator): a generic ``GameEvent`` fact
+    whose ``fact_id`` happens to collide with a real clue id must NOT surface
+    under the quest. Only ``source=='ScenarioClue'`` facts cohere; the
+    ``fact_id == clue_id`` recovery is gated on source, not on id alone."""
+    snap = _snapshot(
+        quests={
+            "missing_person": QuestEntry(
+                title="The Floor-Boss's Missing Person",
+                objective="Find who the floor-boss lost.",
+                status="active",
+                anchor_id="under_levels",
+            )
+        },
+        anchors=["under_levels"],
+        clue_nodes=[_clue_node("keycard", locations=["under_levels"])],
+        known_facts=[
+            # source=='GameEvent', but fact_id collides with the clue id.
+            KnownFact(
+                content="A narrator aside that merely shares the clue's id.",
+                confidence="Certain",
+                source="GameEvent",
+                fact_id="keycard",
+            )
+        ],
+    )
+
+    payload = build_quests_payload(snap)
+    lore = _lore_text(_lore_under(payload, "missing_person"))
+    assert "A narrator aside that merely shares the clue's id." not in lore, (
+        "a non-ScenarioClue fact must not cohere even when its fact_id collides "
+        "with a clue id — the join is source-gated, not id-only"
+    )
+
+
+class _SpanCapture:
+    def __init__(self, exporter: InMemorySpanExporter) -> None:
+        self._exporter = exporter
+
+    @property
+    def spans(self) -> list[Any]:
+        return list(self._exporter.get_finished_spans())
+
+
+@pytest.fixture
+def capture_spans(monkeypatch: Any) -> _SpanCapture:
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    local = provider.get_tracer("test-quest-lore")
+    monkeypatch.setattr(_spans_module, "tracer", lambda: local)
+    return _SpanCapture(exporter)
+
+
+def test_quests_emitted_span_carries_lore_count(capture_spans: _SpanCapture) -> None:
+    """REGRESSION (OTEL parity): the ``quests.emitted`` span must carry a
+    ``lore_count`` attribute so the GM-panel lie-detector can verify the
+    coherence projection engaged. Without this, a lore_count regression would
+    pass silently (CLAUDE.md OTEL discipline)."""
+
+    class _Handler:
+        pass
+
+    snap = _snapshot(
+        quests={
+            "missing_person": QuestEntry(
+                title="The Floor-Boss's Missing Person",
+                objective="Find who the floor-boss lost.",
+                status="active",
+                anchor_id="under_levels",
+            )
+        },
+        anchors=["under_levels"],
+        clue_nodes=[_clue_node("keycard", locations=["under_levels"])],
+        known_facts=[
+            _scenario_clue_fact(
+                content="A scratched keycard, dropped in the under-levels.",
+                clue_id="keycard",
+            )
+        ],
+        stakes="A corporate favour owed.",
+    )
+
+    _maybe_emit_quests(_Handler(), snapshot=snap, emit_fn=lambda m, k: None)
+
+    emitted = [s for s in capture_spans.spans if s.name == "quests.emitted"]
+    assert emitted, "expected a 'quests.emitted' span to fire on projection emit"
+    attrs = dict(emitted[0].attributes or {})
+    assert "lore_count" in attrs, (
+        "the quests.emitted span must carry a 'lore_count' attribute for the "
+        "GM panel to verify the coherence projection engaged"
+    )
+    assert attrs["lore_count"] == 1, (
+        f"lore_count should count the one cohered fragment, got {attrs['lore_count']}"
     )

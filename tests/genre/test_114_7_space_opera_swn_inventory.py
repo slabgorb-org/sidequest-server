@@ -269,3 +269,60 @@ def test_resolve_inventory_merges_swn_baseline_into_each_world():
             f"world {slug!r} resolved catalog must include the non-droppable SWN baseline "
             f"(genre baseline ∪ world override); missing baseline ids: {sorted(missing)}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Regression (114-7 review) — a confrontation-def weapon id must survive the
+# de-triplication. The original `multifocal_laser` is the dogfight SHIP weapon
+# (rules.yaml player_weapon/opponent_weapon), NOT a personal sidearm; the first
+# GREEN attempt re-pointed the id to an AP-0 Mag Pistol, silently breaking the
+# Fighter Duel (dogfight_shot.py resolves the id and consumes its armor_piercing).
+# ---------------------------------------------------------------------------
+
+
+def _confrontation_weapon_ids(pack) -> set[str]:
+    """Every weapon id named by a rules.yaml confrontation def (dogfight, etc.)."""
+    ids: set[str] = set()
+    for cdef in pack.rules.confrontations:
+        for wid in (cdef.opponent_weapon, cdef.player_weapon):
+            if wid:
+                ids.add(wid)
+    return ids
+
+
+def test_confrontation_weapon_ids_resolve_in_every_world():
+    """REGRESSION: every weapon id a rules.yaml confrontation references must resolve in
+    EACH world's merged catalog — the dogfight (`dogfight_shot.py`) looks the id up in
+    ``resolve_inventory(pack, world).item_catalog``. De-triplication must not drop a wired
+    confrontation weapon from any world."""
+    pack = _load_pack()
+    weapon_ids = _confrontation_weapon_ids(pack)
+    assert weapon_ids, "precondition: space_opera rules.yaml must name >=1 confrontation weapon"
+    for slug in _WORLDS:
+        resolved = resolve_inventory(pack, slug)
+        assert resolved is not None, f"resolve_inventory must return a catalog for {slug!r}"
+        resolved_ids = {i.id for i in resolved.item_catalog}
+        missing = weapon_ids - resolved_ids
+        assert not missing, (
+            f"world {slug!r}: confrontation weapon id(s) {sorted(missing)} do not resolve in the "
+            "merged catalog — the dogfight weapon_lookup would fail to find them"
+        )
+
+
+def test_multifocal_laser_stays_a_ship_weapon_with_armor_piercing():
+    """REGRESSION (the rejected bug): `multifocal_laser` is the dogfight SHIP weapon. The
+    dogfight applies ``effective_armor_after_ap(armor, armor_piercing)`` against an opponent
+    seeded with ``armor: 5`` — the weapon's armor_piercing is load-bearing. Resolving the id
+    must yield a weapon WITH ``armor_piercing > 0``; re-pointing it to an AP-0 personal sidearm
+    silently corrupts the Fighter Duel's damage model."""
+    pack = _load_pack()
+    for slug in _WORLDS:
+        resolved = resolve_inventory(pack, slug)
+        item = next((i for i in resolved.item_catalog if i.id == "multifocal_laser"), None)
+        assert item is not None, f"world {slug!r}: multifocal_laser must resolve (it is the dogfight weapon)"
+        assert item.damage is not None, f"{slug}: multifocal_laser must carry a damage spec"
+        assert item.damage.armor_piercing > 0, (
+            f"{slug}: multifocal_laser is the dogfight SHIP weapon and must keep its armor_piercing "
+            f"(got {item.damage.armor_piercing}); AP 0 means the id was re-pointed to a personal "
+            "sidearm — the 114-7 review regression"
+        )

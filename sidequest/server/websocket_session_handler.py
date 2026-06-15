@@ -32,6 +32,7 @@ from sidequest.agents.dispatch_engagement_watcher import (
     run_improvised_combat_watcher,
     run_unminted_objective_watcher,
 )
+from sidequest.agents.fate_engagement_watcher import run_fate_engagement_watcher
 from sidequest.agents.intent_router import IntentRouterFailure
 from sidequest.agents.llm_factory import _INTENT_ROUTER_MODEL, build_llm_client
 from sidequest.agents.orchestrator import TurnContext
@@ -1168,6 +1169,17 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         narration=getattr(result, "narration", "") or "",
                         snapshot=snapshot,
                         package=turn_context.dispatch_package,
+                    )
+
+                    # Fate honesty lie-detector (ADR-144 F2c / Story 116-4): beep
+                    # when the prose claims a Fate outcome — an advantage created,
+                    # a foe taken out — that the engine state doesn't show
+                    # (empty situation_aspects / no withdrawn actor). The Fate
+                    # analogue of the improvised-combat detector above.
+                    run_fate_engagement_watcher(
+                        narration=getattr(result, "narration", "") or "",
+                        package=turn_context.dispatch_package,
+                        snapshot=snapshot,
                     )
 
                     encounter_resolved_this_turn = encounter_unresolved_before and (

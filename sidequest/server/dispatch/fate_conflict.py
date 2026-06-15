@@ -37,6 +37,7 @@ from sidequest.game.ruleset.fate import FateRulesetModule
 from sidequest.game.ruleset.fate_resolution import Opposition
 from sidequest.game.session import GameSnapshot
 from sidequest.protocol.fate import FateActionPayload
+from sidequest.protocol.sanitize import sanitize_player_text
 from sidequest.telemetry.spans import (
     fate_aspect_created_span,
     fate_conceded_span,
@@ -578,6 +579,18 @@ def _resolve_create_advantage(
         fate_aspect_created_span(
             actor=commit.actor, aspect=aspect.text, free_invokes=free, _tracer=_tracer
         )
+        # F2c (116-4): the engine silently placed a situation aspect on success but
+        # told the narrator nothing (only the failure branch below appended a hint),
+        # so the advantage never reached the prose. Surface it — mirrors the
+        # failure-hint style — so encounter_render.py:44-45 carries it to the prompt.
+        # aspect.text is client-supplied (payload.aspect_text), and narrator_hints
+        # reach the narrator prompt UNSANITIZED via render_encounter_summary — apply
+        # the ADR-047 boundary here, exactly as build_fate_projection does for the
+        # parallel scene_aspects path (116-4 review [HIGH][SEC]).
+        hints.append(
+            f"{commit.actor} created an advantage: "
+            f"{sanitize_player_text(aspect.text)} ({free} free invoke(s))."
+        )
     elif shifts == 0:
         boost = Aspect(
             text=commit.aspect_text or f"Fleeting Opening by {commit.actor}",
@@ -587,6 +600,12 @@ def _resolve_create_advantage(
         encounter.situation_aspects.append(boost)
         fate_aspect_created_span(
             actor=commit.actor, aspect=boost.text, free_invokes=1, _tracer=_tracer
+        )
+        # F2c (116-4): a tie still places a boost (1 free invoke) — surface it too.
+        # Same ADR-047 sanitization as the success branch (116-4 review [HIGH][SEC]).
+        hints.append(
+            f"{commit.actor} created an advantage: "
+            f"{sanitize_player_text(boost.text)} (1 free invoke(s))."
         )
     else:
         hints.append(f"{commit.actor}'s create-advantage failed (shifts={shifts}).")

@@ -328,6 +328,23 @@ SPAN_ROUTES["fate.opponent.decided"] = SpanRoute(
         "ladder_total": (span.attributes or {}).get("ladder_total", 0),
     },
 )
+# --- F2c: narration-vs-state honesty span (GM panel = lie detector) -----------
+# The narrator claimed a Fate outcome (an advantage created, a foe taken out) the
+# engine state does not show. The F2 analogue of the dispatch-engagement /
+# improvised-combat watchers: convincing prose with zero mechanical backing. One
+# span per detected mismatch; ``subsystem`` ∈ {create_advantage, taken_out}.
+# Literal key (no SPAN_* constant) — the routing-completeness lint only inspects
+# SPAN_* module constants (the F2a/F2d precedent).
+SPAN_ROUTES["fate.narration.mismatch"] = SpanRoute(
+    event_type="state_transition",
+    component="fate",
+    extract=lambda span: {
+        "field": "narration_mismatch",
+        "subsystem": (span.attributes or {}).get("subsystem", ""),
+        "claim": (span.attributes or {}).get("claim", ""),
+        "reason": (span.attributes or {}).get("reason", ""),
+    },
+)
 
 
 def fate_exchange_committed_span(
@@ -472,6 +489,29 @@ def fate_opponent_decided_span(
         pass
 
 
+def fate_narration_mismatch_span(
+    *,
+    subsystem: str,
+    claim: str,
+    reason: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``fate.narration.mismatch`` — the narrator claimed a Fate outcome the
+    engine state does not show (F2c). ``subsystem`` is the claimed outcome kind
+    (``create_advantage`` | ``taken_out``), ``claim`` the prose evidence, and
+    ``reason`` why state contradicts it. The GM-panel polygraph for Fate prose."""
+    attributes: dict[str, Any] = {
+        "field": "narration_mismatch",
+        "subsystem": subsystem,
+        "claim": claim,
+        "reason": reason,
+        **attrs,
+    }
+    with Span.open("fate.narration.mismatch", attributes, tracer_override=_tracer):
+        pass
+
+
 __all__ = [
     "fate_action_classified_span",
     "fate_action_resolved_span",
@@ -484,6 +524,7 @@ __all__ = [
     "fate_exchange_committed_span",
     "fate_exchange_order_span",
     "fate_exchange_resolved_span",
+    "fate_narration_mismatch_span",
     "fate_opponent_decided_span",
     "fate_point_delta_span",
     "fate_stress_applied_span",

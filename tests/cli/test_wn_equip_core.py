@@ -182,7 +182,9 @@ def test_ranged_section_parity_across_both_clis() -> None:
 def test_cwn_armor_populates_both_armor_class_and_mitigation() -> None:
     """CWN armor is dual-stat: the row's AC populates armor_class AND its Soak column
     populates mitigation, both verbatim. (Currently mitigation is never set → RED.)"""
-    items = _by_name(cwn_extract(_cwn_text(armor="Heavy Plate Rig     17    5    4000    2"), srd="cwn"))
+    items = _by_name(
+        cwn_extract(_cwn_text(armor="Heavy Plate Rig     17    5    4000    2"), srd="cwn")
+    )
     plate = items["Heavy Plate Rig"]
     assert plate.category == "armor"
     assert plate.armor_class == 17  # ascending AC verbatim
@@ -194,7 +196,9 @@ def test_cwn_armor_populates_both_armor_class_and_mitigation() -> None:
 def test_cwn_armor_na_soak_cell_leaves_mitigation_none() -> None:
     """A '-' Soak cell is a verbatim 'no soak' — mitigation must be None, never an
     invented 0 and never a dropped row (mirrors the _NA_CELLS Shock/magazine rule)."""
-    items = _by_name(cwn_extract(_cwn_text(armor="Light Mesh Vest     13    -    150     1"), srd="cwn"))
+    items = _by_name(
+        cwn_extract(_cwn_text(armor="Light Mesh Vest     13    -    150     1"), srd="cwn")
+    )
     vest = items["Light Mesh Vest"]
     assert vest.armor_class == 13
     assert vest.mitigation is None
@@ -254,7 +258,11 @@ def test_cwn_melee_na_trauma_emits_no_trauma_fields() -> None:
 def test_wwn_melee_has_no_trauma_fields() -> None:
     """Regression guard: WWN melee has no Trauma column; its items must leave the
     trauma fields at defaults (the CWN Trauma change must not bleed into WWN)."""
-    items = _by_name(wwn_extract(_wwn_text(melee="Test Iron Cudgel    1d8      2/AC15     1     12     Str"), srd="wwn"))
+    items = _by_name(
+        wwn_extract(
+            _wwn_text(melee="Test Iron Cudgel    1d8      2/AC15     1     12     Str"), srd="wwn"
+        )
+    )
     cudgel = items["Test Iron Cudgel"]
     assert cudgel.damage is not None
     assert cudgel.damage.trauma_die is None
@@ -286,9 +294,11 @@ def test_ranged_plus_n_splits_into_dice_and_bonus(extract, text_builder, srd) ->
 
 def test_ranged_plain_damage_has_zero_bonus() -> None:
     """A plain 'NdM' ranged Damage (no +N) yields bonus == 0 — not None, not dropped."""
-    item = _by_name(cwn_extract(_cwn_text(ranged="Hold Out Pistol     1d4      pistol     6     1     80"), srd="cwn"))[
-        "Hold Out Pistol"
-    ]
+    item = _by_name(
+        cwn_extract(
+            _cwn_text(ranged="Hold Out Pistol     1d4      pistol     6     1     80"), srd="cwn"
+        )
+    )["Hold Out Pistol"]
     assert item.damage is not None
     assert item.damage.dice == "1d4"
     assert item.damage.bonus == 0
@@ -348,7 +358,15 @@ def test_cli_stdout_json_roundtrip_preserves_new_fields(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     result = subprocess.run(
-        [sys.executable, "-m", "sidequest.cli.cwn_equip_extract", "--srd-path", str(fixture), "--srd", "cwn"],
+        [
+            sys.executable,
+            "-m",
+            "sidequest.cli.cwn_equip_extract",
+            "--srd-path",
+            str(fixture),
+            "--srd",
+            "cwn",
+        ],
         capture_output=True,
         text=True,
         timeout=60,
@@ -388,18 +406,24 @@ def test_unknown_license_value_is_rejected_by_choices(build_parser) -> None:  # 
     over the model's verbatim-license invariant)."""
     parser = build_parser()
     with pytest.raises(SystemExit):
-        parser.parse_args(["--srd-path", "/tmp/x.txt", "--srd", "cwn", "--license", "made-up-license"])
+        parser.parse_args(
+            ["--srd-path", "/tmp/x.txt", "--srd", "cwn", "--license", "made-up-license"]
+        )
 
 
 def test_canonical_srd_and_license_values_are_accepted() -> None:
     """Positive guard: the tool's own canonical --srd / --license values still parse —
     the choices constraint must not reject the happy path."""
-    args = cwn_build_parser().parse_args(["--srd-path", "/tmp/x.txt", "--srd", "cwn", "--license", "wn-free"])
+    args = cwn_build_parser().parse_args(
+        ["--srd-path", "/tmp/x.txt", "--srd", "cwn", "--license", "wn-free"]
+    )
     assert args.srd == "cwn"
     assert args.license == "wn-free"
 
 
-def test_missing_relative_path_error_names_the_resolved_absolute_path(capsys: pytest.CaptureFixture[str]) -> None:
+def test_missing_relative_path_error_names_the_resolved_absolute_path(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     """main() resolves --srd-path via Path.resolve() so the fail-loud 'does not exist'
     message names the absolute path the operator actually pointed at — not the bare
     relative string (CWE-59 path hardening, lang-review #5)."""

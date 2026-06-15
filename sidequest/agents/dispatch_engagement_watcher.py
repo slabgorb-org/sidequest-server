@@ -599,9 +599,7 @@ def run_improvised_combat_watcher(
     turn delivery.
     """
     try:
-        evidence = detect_improvised_combat(
-            narration=narration, package=package, snapshot=snapshot
-        )
+        evidence = detect_improvised_combat(narration=narration, package=package, snapshot=snapshot)
         if evidence is not None:
             with narration_improvised_combat_span(evidence=evidence, _tracer=tracer):
                 pass
@@ -621,36 +619,87 @@ def run_improvised_combat_watcher(
             pass
 
 
+def _package_accepted_quest_offer(package: DispatchPackage | None) -> bool:
+    """True when the router dispatched a quest_offer ACCEPT this turn.
+
+    This is the structural, OTEL-backed objective signal (Story 117-4): when the
+    Intent Router (ADR-113) classified the player's turn as *accepting* an
+    offered objective, it emits a ``quest_offer`` ``SubsystemDispatch`` with
+    ``params["decision"] == "accept"`` (Story 117-3). Only an accept is an
+    unminted-objective candidate, matching the engine's mint contract:
+
+    - ``decline`` is an honest non-mint — the engine correctly mints nothing and
+      emits ``quest.offer_declined`` — so it is NEVER a lie to catch (this mirrors
+      the 117-3 witness ``_check_quest_offer_engaged``, which also returns ``None``
+      on a decline). Firing here would flood the GM panel on every normal
+      early-game "no thanks".
+    - ``unknown_decision`` is already surfaced by ``quest_offer.py`` as its own
+      ``quest_offer.mismatch`` — not this detector's concern.
+
+    A ``None`` package (the router failed/produced nothing) means no objective was
+    classified — the keyword backstop covers that un-seeded case.
+    """
+    if package is None:
+        return False
+    return any(
+        d.subsystem == "quest_offer" and d.params.get("decision") == "accept"
+        for _player_id, d in _iter_all_dispatches(package)
+    )
+
+
 def detect_unminted_objective(
     *,
     narration: str,
     snapshot: GameSnapshot,
+    package: DispatchPackage | None = None,
 ) -> str | None:
     """Detect a concrete objective authored in prose with no minted quest.
 
-    Returns a short evidence string when BOTH hold, else ``None``:
+    Two complementary paths, both gated on an EMPTY ``quest_log`` (nothing
+    minted — a ``quest_offer`` accept, ``record_quest``, or ``seed_drive`` all
+    land in ``quest_log``, so its emptiness is the single mint-vs-not gate):
 
-    1. ``snapshot.quest_log`` is empty — no quest is tracked. A correct
-       ``record_quest`` call mutates ``quest_log`` DURING narration (before this
-       post-narration pass runs), so a minted quest fills the log and stands the
-       detector down; only a TRULY un-minted objective trips it. (A quest minted
-       on a prior turn also fills the log — v1 deliberately scopes to the
-       zero-quest case, the QUEST-MAJOR barsoom repro: ``quest_log={}`` after 16
-       turns despite an authored "find the keeper, settle the debt" objective.)
-    2. The narration contains a curated objective-GIVING marker — the prose
-       actually establishes a quest (a giver + a task), not merely a mood.
+    1. **Router-backed (Story 117-4, the seeded path).** When the Intent Router
+       classified this turn as *accepting* an offered objective — a ``quest_offer``
+       dispatch with ``decision == "accept"`` is present in ``package`` — but
+       ``quest_log`` stayed empty, the engine never minted. This rides the
+       router's structural classification (ADR-113), not a keyword guess, so an
+       open-ended hook that trips ZERO curated markers (the perseus_cloud noir
+       "discreet job" repro, session 594dcc7e) still beeps. A ``decline`` is an
+       honest non-mint and is excluded (it never trips this path) — only an
+       accept-without-mint is an unminted objective.
+    2. **Keyword backstop (provisional, pending Story 117-6).** When the router
+       emitted no ``quest_offer`` signal (``package=None`` or no objective
+       dispatch — the un-seeded, narrator-improvised case), the curated
+       ``_UNMINTED_OBJECTIVE_MARKERS`` substring path still fires on
+       objective-giving prose. This keyword matcher is the Zork verb-set
+       anti-pattern and is RETAINED only as a backstop until 117-6 builds the
+       un-seeded narrator-objective classifier; do not extend it.
 
-    The quest analogue of :func:`detect_improvised_combat`: a promotion that
-    happened in narration but not in state (SOUL: Diamonds & Coal — taken bait
-    must earn promotion into persistent state, not live only in prose). Pure — no
-    I/O, no tracer touch — so callers can introspect without an exporter; the
-    wrapper emits the span.
+    Returns a short evidence string on a hit, else ``None``. The quest analogue
+    of :func:`detect_improvised_combat`: a promotion that happened in narration
+    but not in state (SOUL: Diamonds & Coal — taken bait must earn promotion into
+    persistent state, not live only in prose). Pure — no I/O, no tracer touch —
+    so callers can introspect without an exporter; the wrapper emits the span.
     """
     if not narration:
         return None
     quest_log = getattr(snapshot, "quest_log", None) or {}
     if quest_log:
         return None
+
+    # Router-backed seeded path: the router dispatched a quest_offer ACCEPT this
+    # turn but quest_log stayed empty — structural, keyword-free. Declines and
+    # unknown-decisions are excluded (honest non-mint / already-flagged).
+    if _package_accepted_quest_offer(package):
+        return (
+            "router dispatched a quest_offer accept this turn but quest_log is "
+            "empty — the offer was accepted in prose, never minted into a tracked "
+            "quest"
+        )
+
+    # Keyword backstop (un-seeded / router-silent): curated objective-giving prose
+    # with no router signal. Provisional pending 117-6's un-seeded classifier.
     lowered = narration.lower()
     hits = [marker for marker in _UNMINTED_OBJECTIVE_MARKERS if marker in lowered]
     if not hits:
@@ -666,9 +715,15 @@ def run_unminted_objective_watcher(
     *,
     narration: str,
     snapshot: GameSnapshot,
+    package: DispatchPackage | None = None,
     tracer: trace.Tracer | None = None,
 ) -> None:
     """Run the unminted-objective detector and emit one span on a hit.
+
+    Threads the turn's router ``package`` (Story 117-4) into the detector so the
+    seeded, OTEL-backed path can fire on the router's ``quest_offer``
+    classification even when no curated keyword matches. ``package=None`` falls
+    back to the keyword backstop (the un-seeded case, pending 117-6).
 
     **Non-fatal by contract** — identical discipline to
     :func:`run_improvised_combat_watcher`: a pure-observability post-narration
@@ -676,7 +731,9 @@ def run_unminted_objective_watcher(
     span rather than tearing down turn delivery.
     """
     try:
-        evidence = detect_unminted_objective(narration=narration, snapshot=snapshot)
+        evidence = detect_unminted_objective(
+            narration=narration, snapshot=snapshot, package=package
+        )
         if evidence is not None:
             with narration_unminted_objective_span(evidence=evidence, _tracer=tracer):
                 pass

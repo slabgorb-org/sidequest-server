@@ -160,20 +160,25 @@ def _has_real_content() -> bool:
 
 
 def _road_warrior_vessel_items() -> list[dict]:
-    """Load the real road_warrior pack and return its raw vessel item dicts.
+    """Load the real road_warrior rig vessels and return their raw item dicts.
 
     Reads the YAML directly (not through the typed model) because the parser
     contract is dict-in — this is exactly the shape the chargen loadout flow
     hands to ``parse_vessel_tags``.
+
+    Epic 120 (story 120-2): the bespoke rig vessels have no CWN SRD analog and were
+    relocated off the now-100%-CWN-verbatim genre baseline to the_circuit's world
+    inventory (ADR-145 D3). That world file is where they ship and where chargen
+    resolves them (world-replaces-genre, ADR-140), so read it here.
     """
     import yaml
 
     if not _has_real_content():
         pytest.skip("sidequest-content not on disk")
-    inv_path = find_pack_path("road_warrior") / "inventory.yaml"
+    inv_path = find_pack_path("road_warrior") / "worlds" / "the_circuit" / "inventory.yaml"
     catalog = yaml.safe_load(inv_path.read_text())["item_catalog"]
     vessels = [it for it in catalog if "vessel" in (it.get("tags") or [])]
-    assert vessels, "road_warrior must ship at least one vessel item"
+    assert vessels, "road_warrior/the_circuit must ship at least one vessel item"
     return vessels
 
 

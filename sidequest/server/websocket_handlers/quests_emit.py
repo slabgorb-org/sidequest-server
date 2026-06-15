@@ -71,20 +71,28 @@ def _maybe_emit_quests(
 
     from sidequest.telemetry.spans import SPAN_QUESTS_EMITTED, Span
 
+    # Lore coherence telemetry (Story 117-5): total discovered-lore fragments
+    # cohered under quests this frame, so the GM panel can verify the anchor→
+    # clue→fact projection actually engaged rather than the narrator improvising
+    # a "what I've learned" surface (CLAUDE.md OTEL Observability Principle).
+    lore_count = sum(len(q.related_lore) for q in payload.quest_log)
+
     with Span.open(
         SPAN_QUESTS_EMITTED,
         {
             "quest_count": len(payload.quest_log),
             "anchor_count": len(payload.quest_anchors),
             "has_stakes": bool(payload.active_stakes),
+            "lore_count": lore_count,
             "changed": True,
         },
     ):
         pass
     logger.info(
-        "quests.emitted quests=%d anchors=%d",
+        "quests.emitted quests=%d anchors=%d lore=%d",
         len(payload.quest_log),
         len(payload.quest_anchors),
+        lore_count,
     )
 
     # Commit the signature only after the broadcast succeeds. If emit_fn raises,

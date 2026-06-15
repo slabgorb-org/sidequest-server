@@ -24,6 +24,11 @@ SPAN_ROUTES[SPAN_QUESTS_EMITTED] = SpanRoute(
         "quest_count": (span.attributes or {}).get("quest_count", 0),
         "anchor_count": (span.attributes or {}).get("anchor_count", 0),
         "has_stakes": bool((span.attributes or {}).get("has_stakes", False)),
+        # lore_count (Story 117-5): how many discovered-lore fragments cohered
+        # under quests this frame — must reach the typed GM-panel event so the
+        # lie-detector can verify the coherence projection engaged, not just the
+        # raw span (CLAUDE.md OTEL discipline).
+        "lore_count": (span.attributes or {}).get("lore_count", 0),
         "changed": bool((span.attributes or {}).get("changed", False)),
     },
 )

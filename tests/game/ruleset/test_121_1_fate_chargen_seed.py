@@ -17,9 +17,8 @@ Patterns mirrored:
 - ``test_builder_seeds_strain.py``   — synthetic builder + real-pack-shaped core attach
 - ``test_fate_spans.py``             — InMemorySpanExporter + injected ``_tracer``
 """
-from __future__ import annotations
 
-import random
+from __future__ import annotations
 
 import pytest
 from opentelemetry.sdk.trace import TracerProvider
@@ -32,16 +31,15 @@ from sidequest.game.chargen_contribution import ChargenResources
 from sidequest.game.fate_sheet import FateSheet
 from sidequest.game.ruleset import get_ruleset_module
 from sidequest.game.ruleset.fate import FateRulesetModule
-
-# FateConfig is NEW in F4a. The import failing in RED is the first signal Dev must
-# satisfy (add the model); once present, the behavioral assertions below take over.
-from sidequest.genre.models.rules import FateConfig, RulesConfig
 from sidequest.genre.models.character import (
     CharCreationChoice,
     CharCreationScene,
     MechanicalEffects,
 )
 
+# FateConfig is NEW in F4a. The import failing in RED is the first signal Dev must
+# satisfy (add the model); once present, the behavioral assertions below take over.
+from sidequest.genre.models.rules import FateConfig, RulesConfig
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
@@ -94,7 +92,9 @@ def make_choice(label: str, description: str = "desc", **fx: object) -> CharCrea
     )
 
 
-def make_scene(scene_id: str, *, choices: list[CharCreationChoice] | None = None) -> CharCreationScene:
+def make_scene(
+    scene_id: str, *, choices: list[CharCreationChoice] | None = None
+) -> CharCreationScene:
     return CharCreationScene(
         id=scene_id, title="T", narration="N", choices=choices or [], mechanical_effects=None
     )
@@ -213,8 +213,12 @@ class TestAC3SeedBuildsPopulatedSheet:
                 "ability_score_names": ["STR", "DEX", "CON", "INT", "WIS", "CHA"],
                 "wwn": {
                     "attribute_map": {
-                        "STRENGTH": "STR", "DEXTERITY": "DEX", "CONSTITUTION": "CON",
-                        "INTELLIGENCE": "INT", "WISDOM": "WIS", "CHARISMA": "CHA",
+                        "STRENGTH": "STR",
+                        "DEXTERITY": "DEX",
+                        "CONSTITUTION": "CON",
+                        "INTELLIGENCE": "INT",
+                        "WISDOM": "WIS",
+                        "CHARISMA": "CHA",
                     }
                 },
             }
@@ -252,9 +256,7 @@ class TestAC5ChargenSeededSpan:
         get_ruleset_module("fate").seed_chargen_resources(
             rules=fate_rules(), stats={}, class_def=None, _tracer=tracer
         )
-        span = next(
-            s for s in exporter.get_finished_spans() if s.name == "fate.chargen.seeded"
-        )
+        span = next(s for s in exporter.get_finished_spans() if s.name == "fate.chargen.seeded")
         # 5 skills seeded, 2 aspects (high concept + trouble), refresh 3.
         assert span.attributes["skill_count"] == len(NOIR_SKILLS)
         assert span.attributes["aspect_count"] == 2
@@ -275,7 +277,9 @@ class TestAC5ChargenSeededSpan:
 
 
 def _build_fate_character(*, with_d20_stats: bool = True) -> object:
-    scenes = [make_scene("origins", choices=[make_choice("The City", description="Neon and rain.")])]
+    scenes = [
+        make_scene("origins", choices=[make_choice("The City", description="Neon and rain.")])
+    ]
     builder = CharacterBuilder(scenes=scenes, rules=fate_rules(with_d20_stats=with_d20_stats))
     builder.apply_choice(0)
     return builder.build("Sam Quaid")

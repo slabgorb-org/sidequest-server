@@ -20,6 +20,7 @@ from sidequest.game.ruleset.fate_resolution import FateOutcome, Opposition, reso
 from sidequest.telemetry.spans.fate import (
     fate_action_resolved_span,
     fate_aspect_invoked_span,
+    fate_chargen_seeded_span,
     fate_compel_accepted_span,
     fate_compel_offered_span,
     fate_consequence_taken_span,
@@ -46,6 +47,56 @@ class FateRulesetModule(RulesetModule):
     def awards_native_turn_xp(self) -> bool:
         # Fate advances by milestones, not the ADR-021 native XP tick.
         return False
+
+    # --- Chargen seeding (ADR-144 F4a) ----------------------------------------
+
+    def seed_chargen_resources(self, *, rules, stats, class_def, _tracer=None):
+        """Seed a populated FateSheet from the pack's FateConfig (ADR-144 F4a).
+
+        The Fate analogue of the WN family's ``seed_chargen_resources``: it returns
+        a ``ChargenResources`` carrying a ``fate_sheet`` (not effort/spellcasting/
+        system_strain). It reads ONLY the FateConfig — Fate has no d20 ability
+        scores and no class, so ``stats`` and ``class_def`` are intentionally
+        unused (the de-d20 invariant). Emits ``fate.chargen.seeded`` so the GM panel
+        can confirm the sheet was engine-seeded, not narrator-improvised.
+
+        The interactive chargen flow (player-authored aspects / skill-pyramid
+        allocation / stunt picks) is story 121-7 (F4a2); this is the default seed.
+        """
+        del stats, class_def  # Fate seeds from FateConfig alone (no d20/class).
+        from sidequest.game.chargen_contribution import ChargenResources
+        from sidequest.genre.models.rules import FateConfig
+
+        cfg = rules.ruleset_config()
+        if not isinstance(cfg, FateConfig):
+            # A fate-bound pack must author rules.fate; the RulesConfig validator
+            # already enforces this, so reaching here means a misconfigured module
+            # binding — fail loud (No Silent Fallbacks).
+            raise FateEconomyError(
+                "FateRulesetModule.seed_chargen_resources requires a FateConfig "
+                f"(rules.ruleset_config() returned {type(cfg).__name__}); a 'fate' "
+                "pack must author rules.fate (ADR-144)"
+            )
+
+        aspects: list[Aspect] = []
+        if cfg.default_high_concept:
+            aspects.append(Aspect(text=cfg.default_high_concept, kind="high_concept"))
+        if cfg.default_trouble:
+            aspects.append(Aspect(text=cfg.default_trouble, kind="trouble"))
+
+        sheet = FateSheet(
+            skills=dict(cfg.skills),
+            aspects=aspects,
+            refresh=cfg.refresh,
+            fate_points=cfg.refresh,  # SRD: start a session with fate points == refresh.
+        )
+        fate_chargen_seeded_span(
+            skill_count=len(sheet.skills),
+            aspect_count=len(sheet.aspects),
+            refresh=sheet.refresh,
+            _tracer=_tracer,
+        )
+        return ChargenResources(fate_sheet=sheet)
 
     def resolve_action(
         self,

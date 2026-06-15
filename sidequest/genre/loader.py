@@ -720,6 +720,34 @@ def _validate_confrontation_beats(rules: RulesConfig) -> None:
         _emit_wn_beat_optional(rules.ruleset, cd.confrontation_type)
 
 
+def _validate_genre_baseline_no_bespoke(ruleset: str, inventory: InventoryConfig | None) -> None:
+    """ADR-145 D3 (story 114-14) — a Without Number pack's genre-tier item catalog
+    must carry NO ``provenance.mode == "bespoke"`` item.
+
+    The genre tier IS the SRD rulebook for a pack that binds an SRD ruleset, so its
+    baseline gear must come from that SRD; bespoke (invented) gear is a WORLD-tier
+    privilege. Native-ruleset packs are EXEMPT — their genre inventory is authored
+    content with no SRD to be verbatim from, so genre-tier bespoke there is
+    legitimate homebrew. Fails loud, naming every offending id (No Silent
+    Fallbacks). The stricter verbatim-only rule (which also rejects unprovenanced
+    genre items in caverns_and_claudes / road_warrior) is deferred to epic 119.
+    """
+    if inventory is None or not _is_without_number(ruleset):
+        return
+    offenders = sorted(
+        item.id
+        for item in inventory.item_catalog
+        if item.provenance is not None and item.provenance.mode == "bespoke"
+    )
+    if offenders:
+        raise PackError(
+            f"genre-tier baseline carries bespoke item(s) {offenders}: a {ruleset!r} "
+            "pack's genre catalog is the SRD rulebook — bespoke gear is a world-tier "
+            "privilege (ADR-145 D3). Move each to the world tier (worlds/<world>/"
+            "inventory.yaml) or SRD-source it verbatim at the genre tier."
+        )
+
+
 def _validate_class_filter_refs(rules: RulesConfig, classes: list[ClassDef]) -> None:
     """Loud-fail if any beat.class_filter references a class not in classes.yaml,
     if any class.encounter_beat_choices references a missing beat ID,
@@ -2019,6 +2047,11 @@ def load_genre_pack(path: Path | str) -> GenrePack:
     # def whose action set the WN engine owns. Runs before the class-filter check
     # so a beatless native def fails loud here regardless of classes.yaml.
     _validate_confrontation_beats(rules)
+
+    # ADR-145 D3 (story 114-14): a Without Number pack's genre baseline is the SRD
+    # rulebook — a genre-tier item_catalog entry with provenance.mode == "bespoke"
+    # is a hard error. Native packs are exempt. Fail loud (No Silent Fallbacks).
+    _validate_genre_baseline_no_bespoke(rules.ruleset, inventory)
 
     # Cross-reference validation: class_filter / encounter_beat_choices consistency.
     # Only enforced when a classes.yaml is present (classes_list is non-empty).

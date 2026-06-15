@@ -41,7 +41,10 @@ from sidequest.game.ruleset.cwn import CwnRulesetModule
 from sidequest.game.ruleset.registry import get_ruleset_module
 from sidequest.genre.loader import load_genre_pack
 from sidequest.genre.models.pack import GenrePack
+from sidequest.server.dispatch.inventory_resolve import resolve_inventory
 from tests._helpers.genre_paths import GENRE_PACKS_DIR, PackNotFound, find_pack_path
+
+_WORLD = "the_circuit"  # the live road_warrior world (personal weapons live here, 114-14)
 
 _OPPONENT_AC = 8  # low so face=20 beats it under either native or cwn attack math
 
@@ -318,11 +321,16 @@ def test_road_warrior_personal_weapons_carry_damage_specs() -> None:
     green again.
     """
     pack = _load_road_warrior()
-    catalog = pack.inventory.item_catalog
+    # Personal weapons moved to the world tier (ADR-145 D3 / 114-14) — bespoke gear
+    # is world-tier. They resolve for the live world via the non-droppable merge;
+    # check the RESOLVED catalog, the tier the player actually plays in.
+    resolved = resolve_inventory(pack, _WORLD)
+    assert resolved is not None
+    catalog = resolved.item_catalog
     personal_weapons = [
         item for item in catalog if item.category == "weapon" and "mounted" not in item.tags
     ]
-    assert personal_weapons, "road_warrior must declare personal weapons in its catalog"
+    assert personal_weapons, "road_warrior must declare personal weapons in its resolved catalog"
 
     missing = [item.id for item in personal_weapons if item.damage is None]
     assert not missing, (
@@ -340,8 +348,12 @@ def test_road_warrior_combat_classes_start_with_a_personal_weapon() -> None:
     shoot/pistol_whip beats but no gun).
     """
     pack = _load_road_warrior()
-    catalog_by_id = {item.id: item for item in pack.inventory.item_catalog}
-    starting = pack.inventory.starting_equipment
+    # Personal weapons + kits resolve at the world tier (ADR-145 D3 / 114-14): the
+    # bespoke weapons live in worlds/the_circuit and the kits are world-replaces.
+    resolved = resolve_inventory(pack, _WORLD)
+    assert resolved is not None
+    catalog_by_id = {item.id: item for item in resolved.item_catalog}
+    starting = resolved.starting_equipment
 
     strike_beats = {"shoot", "pistol_whip"}
     classes_needing_a_weapon = [

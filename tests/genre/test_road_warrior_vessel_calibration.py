@@ -45,15 +45,23 @@ def _has_real_content() -> bool:
     return GENRE_PACKS_DIR.is_dir()
 
 
-def _raw_inventory() -> dict:
+def _circuit_inventory() -> dict:
+    """Raw the_circuit WORLD inventory dict (item_catalog + starting_equipment).
+
+    Epic 120 (story 120-2): road_warrior's bespoke rig vessels and mount weapons
+    have no CWN SRD analog, so they were relocated OFF the genre-tier baseline
+    (which is now 100% CWN-verbatim) to ``worlds/the_circuit/inventory.yaml`` as
+    mode=bespoke (ADR-145 D3). the_circuit is road_warrior's play world, so its
+    world inventory is where the vessels/mount weapons now ship and where the
+    chargen kits resolve them (world-replaces-genre, ADR-140)."""
     if not _has_real_content():
         pytest.skip("sidequest-content not on disk")
-    inv_path = find_pack_path("road_warrior") / "inventory.yaml"
+    inv_path = find_pack_path("road_warrior") / "worlds" / "the_circuit" / "inventory.yaml"
     return yaml.safe_load(inv_path.read_text())
 
 
 def _vessel_dicts() -> list[dict]:
-    catalog = _raw_inventory()["item_catalog"]
+    catalog = _circuit_inventory()["item_catalog"]
     return [it for it in catalog if "vessel" in (it.get("tags") or [])]
 
 
@@ -152,9 +160,15 @@ def test_vessel_composure_and_mount_slots_match_spec_table() -> None:
 
 
 def _mounted_rig_weapons_typed(pack) -> list:
-    assert pack.inventory is not None, "road_warrior must ship an inventory catalog"
+    # Epic 120: mount weapons are bespoke (no CWN analog) and now ship at the world
+    # tier (worlds/the_circuit/inventory.yaml), not the genre baseline. Read the
+    # typed the_circuit world catalog — the tier they live at post-sweep.
+    world = pack.worlds.get("the_circuit")
+    assert world is not None and world.inventory is not None, (
+        "road_warrior/the_circuit must ship a world inventory catalog"
+    )
     out = []
-    for it in pack.inventory.item_catalog:
+    for it in world.inventory.item_catalog:
         tags = set(it.tags or [])
         if it.category == "weapon" and {"mounted", "rig"} <= tags:
             out.append(it)
@@ -199,7 +213,7 @@ def test_starting_mounted_weapons_fit_in_starting_rig_slots() -> None:
     A loadout that over-fills the mount slots is an un-equippable content bug.
     Cross-references starting_equipment against the parsed mount_slots of the
     granted rig — RED until mount_slots parses."""
-    inv = _raw_inventory()
+    inv = _circuit_inventory()
     catalog = {it["id"]: it for it in inv["item_catalog"]}
     starting = inv.get("starting_equipment", {})
     assert starting, "road_warrior must define starting_equipment"

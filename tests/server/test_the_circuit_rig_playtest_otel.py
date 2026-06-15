@@ -48,17 +48,23 @@ def _load_road_warrior():
 
 
 def _real_rig_item_dict(item_id: str = "rig_tier_1_prospect") -> dict:
-    """The real rig item, as the raw dict the chargen loadout flow binds from."""
+    """The real rig item, as the raw dict the chargen loadout flow binds from.
+
+    Epic 120 (story 120-2): the bespoke rig vessels have no CWN SRD analog and were
+    relocated off the now-100%-CWN-verbatim genre baseline to the_circuit's world
+    inventory (ADR-145 D3). At runtime the chargen kit grants the rig from the
+    world-replaces-genre merged catalog (ADR-140); read the world file here, which
+    is the tier the rig vessel now ships at."""
     import yaml
 
     if not _has_real_content():
         pytest.skip("sidequest-content not on disk")
-    inv_path = find_pack_path("road_warrior") / "inventory.yaml"
+    inv_path = find_pack_path("road_warrior") / "worlds" / "the_circuit" / "inventory.yaml"
     catalog = yaml.safe_load(inv_path.read_text())["item_catalog"]
     for it in catalog:
         if it.get("id") == item_id:
             return it
-    raise AssertionError(f"road_warrior inventory is missing {item_id!r}")
+    raise AssertionError(f"road_warrior/the_circuit inventory is missing {item_id!r}")
 
 
 def _rig_character(item_id: str = "rig_tier_1_prospect"):

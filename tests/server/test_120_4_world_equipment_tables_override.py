@@ -31,8 +31,6 @@ from __future__ import annotations
 
 import random
 
-import pytest
-
 from sidequest.genre.models.character import (
     CharCreationChoice,
     CharCreationScene,
@@ -167,7 +165,8 @@ def test_resolve_equipment_tables_emits_otel_on_world_merge(monkeypatch) -> None
     pack = load_fixture_pack(WWN)
     resolve_equipment_tables(pack, TEST_WORLD)
     merged_events = [
-        f for (_t, f) in captured
+        f
+        for (_t, f) in captured
         if f.get("field") == "resolved_equipment_tables" and f.get("op") == "merged"
     ]
     assert merged_events, (
@@ -180,7 +179,8 @@ def test_resolve_equipment_tables_emits_otel_on_world_merge(monkeypatch) -> None
     captured.clear()
     resolve_equipment_tables(pack, None)
     assert not [
-        f for (_t, f) in captured
+        f
+        for (_t, f) in captured
         if f.get("field") == "resolved_equipment_tables" and f.get("op") == "merged"
     ], "the pure-genre path must not emit a 'merged' event"
 

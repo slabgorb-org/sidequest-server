@@ -291,6 +291,17 @@ class World(BaseModel):
     are world-owned kit choices). Distinct from ``items``
     (``WorldItemsCatalog``), which is a separate named-artifact flavor list, not
     the chargen loadout/catalog surface."""
+    equipment_tables: EquipmentTables | None = None
+    """World-tier chargen kit override (``worlds/<slug>/equipment_tables.yaml``),
+    story 120-4. The genre tier is the SRD rulebook; a world's dungeon/flavor kit
+    additions are CAST/CATALOG (ADR-140). ``None`` when the world authors none —
+    the genre-tier ``GenrePack.equipment_tables`` then serves unchanged (additive:
+    no behavior change for unmigrated worlds). When present, consumers resolve
+    world-first via ``server.dispatch.equipment_tables_resolve.resolve_equipment_tables``,
+    which MERGES the world over the genre: ``class_tables`` append per-slot within
+    each kit (genre items first), ``guaranteed_grants`` append by kit id, and
+    ``rolls_per_slot`` overrides per key. This re-adds the no-SRD-analog gear that a
+    verbatim genre baseline can't carry (the caverns_and_claudes case, story 120-1)."""
     bestiary: Bestiary | None = None
     """World-tier ``worlds/<slug>/bestiary.yaml`` (genre/world repoint): SRD-
     aligned combat-layer stat blocks specific to this world. When present it

@@ -768,7 +768,12 @@ def dispatch_fate_action(
         encounter=encounter,
         actor=actor_obj,
         action=action,
-        skill=payload.skill,
+        # Story 118-8 / ADR-047: ``payload.skill`` is client-authored free text;
+        # the rating lookup above keyed on the raw value (dict-key match), but the
+        # value STORED on the commit is sanitized at the seal site to match the
+        # ``aspect_text``/boost defensive posture before any future narrator hint
+        # interpolates ``commit.skill``.
+        skill=sanitize_player_text(payload.skill),
         target=payload.target,
         difficulty=payload.difficulty,
         ladder_total=ladder_total,

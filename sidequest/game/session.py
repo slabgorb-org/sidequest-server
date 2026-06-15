@@ -50,6 +50,7 @@ from sidequest.game.scenario_state import ScenarioState
 from sidequest.game.trope_time_skip import TimeSkipBeatEvent
 from sidequest.game.turn import TurnManager
 from sidequest.game.wwn_magic import WwnCastLogEntry
+from sidequest.genre.models.narrative import QuestSeed
 from sidequest.genre.models.rules import ResourceDeclaration
 from sidequest.magic.state import MagicState
 from sidequest.mutation.state import MutationState, MutationUseLogEntry
@@ -459,6 +460,15 @@ class DiscoveredFact(BaseModel):
 _ACTIVE_STAKES_GUARDRAIL = 1024
 
 
+# Max number of quests in quest_log. A campaign spine plus sub-quests stays
+# well under this; the cap exists purely to bound the Postgres state-bloat
+# vector (32 small entries ~= 16 KB). Story 77-2. Story 117-3 (ADR-146 §3)
+# promoted it from a private literal in ``record_quest.py`` to this shared
+# constant so BOTH mint paths (``record_quest`` and the authored-seed
+# ``quest_offer``) honour the same cap and cannot drift.
+QUEST_LOG_CARDINALITY_CAP = 32
+
+
 class QuestEntry(BaseModel):
     """A structured campaign-spine quest (ADR-137 / Story 77-2).
 
@@ -825,6 +835,15 @@ class GameSnapshot(BaseModel):
     @classmethod
     def _migrate_quest_log(cls, v: object) -> object:
         return _coerce_quest_log(v)
+
+    # Story 117-3 (ADR-146): authored quest offers stashed at chargen-complete
+    # from the resolved Opening's ``tone.quest_seed``, keyed on ``quest_id``.
+    # Bait, not yet a quest — minting waits for the router to classify
+    # acceptance (``quest_offer`` subsystem). Persisted snapshot state (not the
+    # ephemeral _SessionData directive) so a pending offer survives resume; the
+    # offer is consumed (popped) on accept/decline. ``extra: ignore`` →
+    # pre-117-3 saves load with this empty.
+    pending_quest_offers: dict[str, QuestSeed] = Field(default_factory=dict)
 
     notes: list[str] = Field(default_factory=list)
     narrative_log: list[NarrativeEntry] = Field(default_factory=list)

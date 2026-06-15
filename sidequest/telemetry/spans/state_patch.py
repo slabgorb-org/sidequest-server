@@ -81,6 +81,29 @@ SPAN_ROUTES[SPAN_QUEST_CREATED] = SpanRoute(
         "anchor_count": (span.attributes or {}).get("anchor_count", 0),
     },
 )
+# Story 117-3 (ADR-146 §4) — the authored-hook mint span. Distinct from the
+# narrator mint (quest.created) and the creation spine (quest.seeded_at_creation):
+# fired when the ``quest_offer`` subsystem mints a QuestEntry from a stashed
+# authored ``QuestSeed`` the instant the router classifies acceptance.
+# ``source="authored_seed"`` lets the GM panel attribute WHO minted (engine from
+# authored intent, vs narrator improvising, vs the turn-0 drive spine);
+# ``confidence`` records the router score that crossed the gate so a marginal
+# mint is visible. Routes through the same state_transition / component=quest_log
+# shape as quest.created, so the lie-detector surfaces it with zero new plumbing.
+SPAN_QUEST_SEEDED = "quest.seeded"
+SPAN_ROUTES[SPAN_QUEST_SEEDED] = SpanRoute(
+    event_type="state_transition",
+    component="quest_log",
+    extract=lambda span: {
+        "field": "quest_log",
+        "op": "seeded",
+        "quest_id": (span.attributes or {}).get("quest_id", ""),
+        "title": (span.attributes or {}).get("title", ""),
+        "source": (span.attributes or {}).get("source", "authored_seed"),
+        "anchor_count": (span.attributes or {}).get("anchor_count", 0),
+        "confidence": (span.attributes or {}).get("confidence", 0.0),
+    },
+)
 SPAN_QUEST_UPDATED = "quest.updated"
 SPAN_ROUTES[SPAN_QUEST_UPDATED] = SpanRoute(
     event_type="state_transition",
@@ -235,6 +258,36 @@ def quest_created_span(
         **attrs,
     }
     with Span.open(SPAN_QUEST_CREATED, attributes, tracer_override=_tracer):
+        pass
+
+
+def quest_seeded_span(
+    *,
+    quest_id: str,
+    title: str,
+    source: str = "authored_seed",
+    anchor_count: int,
+    confidence: float,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit the Story 117-3 ``quest.seeded`` span (point event, opens+closes).
+
+    Fired when the ``quest_offer`` subsystem mints a QuestEntry from an authored
+    ``QuestSeed`` on acceptance (ADR-146 §4). ``source`` is ``authored_seed``
+    (vs ``narrator`` for record_quest, ``drive`` for the creation spine);
+    ``anchor_count`` is the number of anchors written by this mint (0 or 1 in
+    v1); ``confidence`` is the router score that crossed the engagement gate.
+    """
+    attributes: dict[str, Any] = {
+        "quest_id": quest_id,
+        "title": title,
+        "source": source,
+        "anchor_count": anchor_count,
+        "confidence": confidence,
+        **attrs,
+    }
+    with Span.open(SPAN_QUEST_SEEDED, attributes, tracer_override=_tracer):
         pass
 
 

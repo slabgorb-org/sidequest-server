@@ -37,13 +37,13 @@ from sidequest.agents.tool_registry import (
     ToolResult,
     tool,
 )
-from sidequest.game.session import QuestEntry
+from sidequest.game.session import QUEST_LOG_CARDINALITY_CAP, QuestEntry
 from sidequest.telemetry.spans import quest_created_span, quest_updated_span
 
-# Max number of quests in quest_log. A campaign spine plus sub-quests stays
-# well under this; the cap exists purely to bound the Postgres state-bloat
-# vector (32 small entries ~= 16 KB). Story 77-2.
-_QUEST_LOG_CARDINALITY_CAP = 32
+# Story 117-3 (ADR-146 §3): the cap is now a shared constant on session.py so
+# the authored-seed ``quest_offer`` mint path honours the SAME cap and the two
+# paths cannot drift. Aliased locally to preserve this module's references.
+_QUEST_LOG_CARDINALITY_CAP = QUEST_LOG_CARDINALITY_CAP
 
 
 class RecordQuestArgs(BaseModel):

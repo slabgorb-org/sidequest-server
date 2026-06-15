@@ -337,6 +337,35 @@ def _check_movement_engaged(
     )
 
 
+def _check_quest_offer_engaged(
+    dispatch: SubsystemDispatch, snapshot: GameSnapshot, player_id: str | None
+) -> str | None:
+    """quest_offer witness — "accept-minted-a-quest" (Story 117-3, ADR-146 §4).
+
+    The structurally-sound replacement for the keyword ``detect_unminted_objective``:
+    it fires on *router-claimed-but-engine-idle* (objective reality), not on
+    *prose-matched-a-phrase* (string guess). When the router dispatched
+    ``quest_offer accept`` for a named ``quest_id`` but that quest_id is absent
+    from ``quest_log`` after the turn, the engine never minted — a real mismatch.
+
+    A ``decline`` correctly leaves ``quest_log`` untouched, so it is never a
+    mismatch (the engine honestly did not mint). A malformed dispatch (no
+    ``quest_id``) surfaces loud evidence.
+    """
+    decision = dispatch.params.get("decision")
+    if decision == "decline":
+        return None  # honest non-mint — declining is engagement, not a miss.
+    quest_id = _required_str_param(dispatch, "quest_id")
+    if quest_id is None:
+        return _MALFORMED_EVIDENCE.format(subsystem="quest_offer", key="quest_id")
+    if quest_id not in snapshot.quest_log:
+        return (
+            f"quest_id={quest_id!r} not in quest_log after accept "
+            f"(router dispatched quest_offer accept; engine minted nothing)"
+        )
+    return None
+
+
 _DISPATCHED_TYPE_KEY: dict[str, str] = {
     "confrontation": "type",
     "magic_working": "actor",
@@ -346,6 +375,7 @@ _DISPATCHED_TYPE_KEY: dict[str, str] = {
     "reflect_absence": "addressee_hint",
     "witnessed_act": "act_id",
     "movement": "direction",
+    "quest_offer": "quest_id",
 }
 
 
@@ -358,6 +388,7 @@ _WITNESSES = {
     "reflect_absence": _check_reflect_absence_engaged,
     "witnessed_act": _check_witnessed_act_engaged,
     "movement": _check_movement_engaged,
+    "quest_offer": _check_quest_offer_engaged,
 }
 
 
@@ -404,12 +435,14 @@ def detect_dispatch_engagement_mismatch(
     (``package=None`` or empty package) return ``[]``.
 
     Subsystems whose names are not in :data:`_WITNESSES` are *ignored* —
-    not every router subsystem is the watcher's concern. As of story 59-30,
-    eight live-path subsystems have witnesses: ``confrontation``,
+    not every router subsystem is the watcher's concern. As of story 117-3,
+    nine live-path subsystems have witnesses: ``confrontation``,
     ``magic_working``, ``scenario_clue``, ``npc_agency``,
     ``distinctive_detail_hint``, ``reflect_absence``, ``witnessed_act``
-    (turn-scoped political-ledger read), and ``movement`` (per-PC
-    relocation-occurred read).
+    (turn-scoped political-ledger read), ``movement`` (per-PC
+    relocation-occurred read), and ``quest_offer`` (accept-minted-a-quest read,
+    ADR-146 §4 — the structurally-sound replacement for the keyword
+    unminted-objective detector).
     """
     if package is None:
         return []

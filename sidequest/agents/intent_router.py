@@ -266,6 +266,23 @@ For each player action:
          automatically by the engine, not by you). A relight is a deliberate
          intent: score its confidence on how clearly the player chose to light a
          torch — do not force it.
+       - quest_offer: the player ACCEPTS or DECLINES a job/offer that the world
+         has put on the table. params={
+           "quest_id": "<one of game_state.pending_quest_offers[].quest_id>",
+           "decision": "<one of: accept | decline>"
+         }.
+         Emit quest_offer ONLY when game_state.pending_quest_offers is present
+         and non-empty — it lists the named offers currently on the table, each
+         with its quest_id, title, and the giver who made it. Read the player's
+         words against the SPECIFIC offer they answer: "yeah, alright, I'll look
+         into it" / "I take the job" / "where do I start" / "I'm in" all ACCEPT;
+         "not interested" / "I'll pass" DECLINE. Name the quest_id of the offer
+         the answer addresses — do NOT invent a quest_id that is not in
+         pending_quest_offers. This is intent classification, not a keyword
+         match: a clear yes scores HIGH and mints the quest; an ambiguous turn
+         scores LOW and degrades to a narrator hint, leaving the offer live for a
+         clearer re-accept. When several offers are pending, use the title/giver
+         context to pick which one the player's "yes" answers.
      Every dispatch carries a per-dispatch confidence (0.0-1.0): how certain you
      are that THIS specific mechanical engagement is what the player intended.
      Score the confidence for each dispatch honestly — a high score fires the

@@ -1167,6 +1167,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     run_unminted_objective_watcher(
                         narration=getattr(result, "narration", "") or "",
                         snapshot=snapshot,
+                        package=turn_context.dispatch_package,
                     )
 
                     encounter_resolved_this_turn = encounter_unresolved_before and (

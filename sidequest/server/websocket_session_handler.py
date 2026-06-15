@@ -34,8 +34,15 @@ from sidequest.agents.dispatch_engagement_watcher import (
 )
 from sidequest.agents.fate_engagement_watcher import run_fate_engagement_watcher
 from sidequest.agents.intent_router import IntentRouterFailure
-from sidequest.agents.llm_factory import _INTENT_ROUTER_MODEL, build_llm_client
+from sidequest.agents.llm_factory import (
+    _INTENT_ROUTER_MODEL,
+    build_llm_client,
+    build_unseeded_objective_classifier_llm,
+)
 from sidequest.agents.orchestrator import TurnContext
+from sidequest.agents.post_narration_classifier import (
+    run_unseeded_objective_classifier_watcher,
+)
 from sidequest.daemon_client import (
     DaemonClient,
     DaemonRequestError,
@@ -1172,6 +1179,24 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         narration=getattr(result, "narration", "") or "",
                         snapshot=snapshot,
                         package=turn_context.dispatch_package,
+                    )
+
+                    # Un-seeded objective classifier (Story 117-6, ADR-146): the
+                    # narrator can IMPROVISE an open-ended objective hook mid-scene
+                    # with no router quest_offer behind it — the un-seeded case the
+                    # pre-narration router cannot see and the keyword backstop above
+                    # misses (Zork Problem). A gated post-narration Haiku pass reads
+                    # the prose and beeps keyword-free, tagging the span
+                    # detection_method="classifier". Cost-gated inside the watcher:
+                    # fires only on non-empty narration with an empty quest_log and
+                    # no router quest_offer (the seeded path already owns that).
+                    await run_unseeded_objective_classifier_watcher(
+                        narration=getattr(result, "narration", "") or "",
+                        snapshot=snapshot,
+                        package=turn_context.dispatch_package,
+                        llm=build_unseeded_objective_classifier_llm(
+                            session_id=seed_session_id
+                        ),
                     )
 
                     # Fate honesty lie-detector (ADR-144 F2c / Story 116-4): beep

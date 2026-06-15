@@ -667,6 +667,100 @@ def build_intent_router_llm(*, session_id: str | None) -> _IntentRouterLlm | _Ol
 
 
 # ---------------------------------------------------------------------------
+# Un-seeded objective classifier (Story 117-6)
+# ---------------------------------------------------------------------------
+
+_UNSEEDED_OBJECTIVE_CLASSIFIER_MODEL = _INTENT_ROUTER_MODEL  # Haiku 4.5
+
+
+class _UnseededObjectiveClassifierLlm:
+    """Single-shot Haiku adapter for the un-seeded objective classifier (117-6).
+
+    Satisfies ``post_narration_classifier.ObjectiveClassifierLLM`` — the same
+    ``emit_tool`` contract as :class:`_IntentRouterLlm`, but sends a BARE-STRING
+    ``system`` (no ``cache_control``): the classifier's prompt is far below Haiku's
+    cacheable floor, where a cache marker is accepted by the API and silently never
+    caches (the epic-91 dark-spend trap). It fires at most once per turn and only on
+    objective-bearing narration (the watcher gates it), so per-turn cache reuse is
+    not the win — not re-billing a phantom cache is. Cost is recorded under caller
+    ``unseeded_objective_classifier`` so the [COST-1] forensics attribute it
+    distinctly from the every-turn router spend.
+    """
+
+    def __init__(self, *, session_id: str | None) -> None:
+        self._sdk = build_async_anthropic()
+        self._session_id = session_id
+        self._session_cost_ceiling_usd = cost_safety.parse_session_cost_ceiling_usd()
+
+    async def emit_tool(
+        self,
+        *,
+        system: str,
+        user: str,
+        tool_name: str,
+        tool_description: str,
+        tool_schema: dict[str, Any],
+    ) -> dict[str, Any]:
+        # Pre-flight ceiling refusal (ADR-134): a session killed by ANY call site
+        # must not bill another classification token.
+        if self._session_id is not None:
+            cost_safety.ledger().check_ceiling(
+                self._session_id, ceiling_usd=self._session_cost_ceiling_usd
+            )
+        with llm_request_span(model=_UNSEEDED_OBJECTIVE_CLASSIFIER_MODEL) as span:
+            resp = await self._sdk.messages.create(
+                model=_UNSEEDED_OBJECTIVE_CLASSIFIER_MODEL,
+                system=system,
+                messages=[{"role": "user", "content": user}],
+                tools=[
+                    {
+                        "name": tool_name,
+                        "description": tool_description,
+                        "input_schema": tool_schema,
+                    }
+                ],
+                tool_choice={"type": "tool", "name": tool_name},
+                max_tokens=256,
+            )
+            usage = _record_usage_telemetry(
+                span,
+                resp,
+                caller="unseeded_objective_classifier",
+                request_model=_UNSEEDED_OBJECTIVE_CLASSIFIER_MODEL,
+            )
+        if self._session_id is not None:
+            cost_safety.ledger().record_call(
+                session_id=self._session_id,
+                caller="unseeded_objective_classifier",
+                model=usage.model,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                cost_usd=usage.cost_usd,
+                ceiling_usd=self._session_cost_ceiling_usd,
+            )
+        for block in resp.content:
+            if getattr(block, "type", None) == "tool_use" and block.name == tool_name:
+                return dict(block.input)
+        block_types = [getattr(b, "type", "?") for b in resp.content]
+        raise LlmClientError(
+            f"unseeded objective classifier returned no tool_use block "
+            f"(stop_reason={getattr(resp, 'stop_reason', None)!r}, blocks={block_types})"
+        )
+
+
+def build_unseeded_objective_classifier_llm(
+    *, session_id: str | None
+) -> _UnseededObjectiveClassifierLlm:
+    """Build the Haiku adapter for the un-seeded objective classifier (Story 117-6).
+
+    ``session_id`` is required keyword-only (supply the room slug or opt out with
+    ``None``) so the post-narration classification spend runs the ADR-134 detector
+    and feeds the per-session ceiling, same discipline as the Intent Router.
+    """
+    return _UnseededObjectiveClassifierLlm(session_id=session_id)
+
+
+# ---------------------------------------------------------------------------
 # Chargen archetype inference (Story 93-1)
 # ---------------------------------------------------------------------------
 

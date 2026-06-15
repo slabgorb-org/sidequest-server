@@ -14,6 +14,7 @@ import uuid
 from typing import TYPE_CHECKING
 
 from sidequest.agents.orchestrator import Orchestrator
+from sidequest.foundation.asset_urls import rewrite_theme_css_asset_urls
 from sidequest.game.builder import CharacterBuilder
 from sidequest.game.event_log import EventLog
 from sidequest.game.lore_seeding import seed_world_lore
@@ -45,7 +46,6 @@ from sidequest.protocol.messages import (
 )
 from sidequest.protocol.types import NonBlankString
 from sidequest.server import views
-from sidequest.server.asset_urls import rewrite_theme_css_asset_urls
 from sidequest.server.dispatch.char_creation_resolve import resolve_char_creation_scenes
 from sidequest.server.dispatch.chargen_defs_resolve import resolve_backgrounds, resolve_foci
 from sidequest.server.dispatch.class_resolve import resolve_classes

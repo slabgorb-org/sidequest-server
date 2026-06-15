@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from sidequest.server.reference_slug import slugify
+from sidequest.foundation.reference_slug import slugify
 
 
 @pytest.mark.parametrize(

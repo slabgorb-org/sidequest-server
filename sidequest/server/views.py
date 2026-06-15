@@ -334,6 +334,7 @@ def party_member_from_character(
     same construction can run for the requesting socket's PC and for
     peer PCs that landed in the snapshot via multiplayer chargen.
     """
+    from sidequest.foundation.asset_urls import resolve_player_portrait_url
     from sidequest.protocol.models import (
         CharacterSheetDetails,
         InventoryItem,
@@ -341,7 +342,6 @@ def party_member_from_character(
         PartyMember,
     )
     from sidequest.protocol.types import NonBlankString
-    from sidequest.server.asset_urls import resolve_player_portrait_url
     from sidequest.server.session_helpers import _resolve_location_display
 
     # Inventory is stored as list[dict] in Phase 1 (creature_core.py:158).
@@ -505,7 +505,7 @@ def party_member_from_character(
     # Reference URL for the class rules page. class_def being non-None means
     # this class is in classes.yaml — use it as the registry check directly
     # (the lookup was already done above for class_moves). No second lookup needed.
-    from sidequest.server.reference_anchors import reference_url_for_class
+    from sidequest.foundation.reference_anchors import reference_url_for_class
     from sidequest.telemetry.spans.reference import (
         reference_url_attached_span,
         reference_url_skipped_span,

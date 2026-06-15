@@ -84,9 +84,9 @@ def _maybe_build_runtime_cavern_payload(
     import base64 as _base64
     import os as _os
 
+    from sidequest.foundation.asset_urls import resolve_asset_url
     from sidequest.game.room_file_loader import emit_runtime_cavern_png
     from sidequest.protocol.models import DerivedRoomData
-    from sidequest.server.asset_urls import resolve_asset_url
 
     # The Decision-N gate shape (``<var> = getattr(sd, "dungeon_store", None)``
     # followed by ``if <var> is not None:``) is grep-asserted by
@@ -507,7 +507,7 @@ def _maybe_emit_location_description(
     # regions that have a lore-page anchor (Story 63-8). Resolve to None when
     # the region has no anchor — no guessed/broken URL. Every decision emits a
     # reference-URL span so the GM panel sees location anchors fire (AC5 / OTEL).
-    from sidequest.server.reference_anchors import reference_url_for_region
+    from sidequest.foundation.reference_anchors import reference_url_for_region
     from sidequest.server.reference_renderer import load_poi_image_slugs
     from sidequest.telemetry.spans.reference import (
         reference_url_attached_span,
@@ -580,7 +580,7 @@ def _maybe_emit_location_description(
     # slugify (which would hyphenate to munchkin-country.png and miss the
     # underscore R2 key). The UI hides the image on a load error, so a region
     # with no rendered landscape degrades to text-only.
-    from sidequest.server.asset_urls import resolve_asset_url
+    from sidequest.foundation.asset_urls import resolve_asset_url
 
     poi_image_url = resolve_asset_url(
         f"genre_packs/{sd.genre_slug}/worlds/{sd.world_slug}/assets/poi/{room_id}.png"

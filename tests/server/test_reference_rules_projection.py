@@ -86,13 +86,13 @@ import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from sidequest.foundation.reference_slug import slugify
 from sidequest.server.reference_projection import (
     build_generic_yaml_section,
     # RED: this import fails until Dev adds the Rules-page projection builder.
     build_rules_projection,
 )
 from sidequest.server.reference_routes import create_reference_router
-from sidequest.server.reference_slug import slugify
 
 # ---------------------------------------------------------------------------
 # Keeper strings — lifted verbatim from space_opera so the synthetic fixtures

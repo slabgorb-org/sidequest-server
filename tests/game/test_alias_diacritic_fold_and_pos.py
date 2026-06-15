@@ -7,7 +7,7 @@ PRIMARY (load-bearing AC) — the diacritic split-brain fix. ``resolve_mention``
 seam ``player_referenced_npcs_from_action`` (:mod:`sidequest.agents.npc_context`)
 must normalize BOTH the candidate name/alias AND the action text through the SAME
 NFKD fold the slug surfaces adopted in Story 101-8
-(:func:`sidequest.server.slug_fold.fold_to_ascii`). A diacritic-named entity
+(:func:`sidequest.foundation.slug_fold.fold_to_ascii`). A diacritic-named entity
 ("Évropi") must resolve a reference written without the accent ("evropi"), and a
 plain-ASCII entity must resolve an accented reference — so the fold has to apply to
 BOTH sides, not one.

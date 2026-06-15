@@ -331,7 +331,7 @@ def resolve_artifact_url(relative_artifact_path: str | None) -> str | None:
     """
     if not relative_artifact_path:
         return None
-    from sidequest.server.asset_urls import resolve_asset_url
+    from sidequest.foundation.asset_urls import resolve_asset_url
 
     return resolve_asset_url(relative_artifact_path)
 

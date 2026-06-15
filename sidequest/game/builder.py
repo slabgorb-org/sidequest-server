@@ -14,6 +14,7 @@ from enum import StrEnum
 
 from opentelemetry import trace
 
+from sidequest.foundation.reference_anchors import reference_url_for_ability
 from sidequest.game.ability import AbilitySource
 from sidequest.game.character import AbilityDefinition, Character, CreationAnswer
 from sidequest.game.creature_core import (
@@ -46,7 +47,6 @@ from sidequest.protocol.messages import (
 )
 from sidequest.protocol.models import ClassRequirement, CreationChoice, RolledStat
 from sidequest.protocol.types import NonBlankString
-from sidequest.server.reference_anchors import reference_url_for_ability
 from sidequest.telemetry.spans.reference import (
     reference_url_attached_span,
     reference_url_skipped_span,
@@ -2883,7 +2883,9 @@ class CharacterBuilder:
         #
         # Foci: look up each accumulated focus ID; unmatched IDs are silently
         # skipped here (the content validator catches them at pack-validate time).
-        _background_def = self._backgrounds.get(acc.background) if acc.background is not None else None
+        _background_def = (
+            self._backgrounds.get(acc.background) if acc.background is not None else None
+        )
         _focus_defs = [self._foci[fid] for fid in acc.foci if fid in self._foci]
 
         _bg_skills = self._ruleset.contribute_background_skills(
@@ -3078,11 +3080,7 @@ class CharacterBuilder:
         standard array (default [15,14,13,12,10,8] when unset) instead of 3d6
         rolls. The existing arrange picker/handlers/FSM are reused unchanged.
         """
-        base = (
-            self._standard_array
-            if self._standard_array is not None
-            else _DEFAULT_STANDARD_ARRAY
-        )
+        base = self._standard_array if self._standard_array is not None else _DEFAULT_STANDARD_ARRAY
         self._arrangement_pool = list(base)
         self._arrangement_assignment = {name: None for name in self._ability_score_names}
 

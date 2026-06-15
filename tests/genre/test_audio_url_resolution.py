@@ -1,6 +1,6 @@
 """Verify that audio paths are URL-resolved at GenrePack load time.
 
-Wires :func:`sidequest.server.asset_urls.resolve_asset_url` into the audio
+Wires :func:`sidequest.foundation.asset_urls.resolve_asset_url` into the audio
 loader so the UI receives full URLs (not bare relative paths) for every
 path-bearing field on ``AudioConfig``:
 
@@ -149,7 +149,6 @@ def test_shared_assets_track_resolves_without_slug(monkeypatch: pytest.MonkeyPat
     _resolve_audio_urls(cfg, genre_slug="wry_whimsy")
     shared, local = cfg.mood_tracks["exploration"]
     assert shared.path == (
-        "https://cdn.slabgorb.com/genre_packs/assets/audio/classical_pd/"
-        "Satie - Gymnopedie No.1.ogg"
+        "https://cdn.slabgorb.com/genre_packs/assets/audio/classical_pd/Satie - Gymnopedie No.1.ogg"
     )
     assert local.path == "https://cdn.slabgorb.com/genre_packs/wry_whimsy/audio/music/local.ogg"

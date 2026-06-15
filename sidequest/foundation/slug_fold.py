@@ -3,7 +3,7 @@
 The single source of truth for how SideQuest folds non-ASCII characters when
 building slugs. Every slug surface — the portrait/player rule
 (:func:`sidequest.server.utils.slugify_player_name`), the reference/POI rule
-(:func:`sidequest.server.reference_slug.slugify`), the daemon's render-side file
+(:func:`sidequest.foundation.reference_slug.slugify`), the daemon's render-side file
 namer (``sidequest_daemon.media.catalogs._slugify_name``), and the render script
 (``scripts.render_common.slugify``) — applies THIS fold as its first step, then
 layers its own separator policy on top. The separator policies differ by surface

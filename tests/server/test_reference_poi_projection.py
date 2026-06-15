@@ -72,13 +72,14 @@ from __future__ import annotations
 import json as _json
 from pathlib import Path
 
+from sidequest.foundation.reference_slug import slugify
+
 # RED: this import fails until Dev adds the POI-section projection builder.
 from sidequest.server.reference_projection import (
     build_generic_yaml_section,
     build_lore_projection,
     build_poi_section,
 )
-from sidequest.server.reference_slug import slugify
 from sidequest.telemetry.spans.reference import (
     SPAN_REFERENCE_POI_IMAGE_NOT_FOUND,
     SPAN_REFERENCE_POI_IMAGE_RESOLVED,

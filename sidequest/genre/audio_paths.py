@@ -13,7 +13,7 @@ the one media path bypassing the asset_urls seam).
 
 from __future__ import annotations
 
-from sidequest.server.asset_urls import resolve_asset_url
+from sidequest.foundation.asset_urls import resolve_asset_url
 
 SHARED_PREFIX = "assets/"
 

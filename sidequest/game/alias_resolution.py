@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import re
 
-from sidequest.server.slug_fold import fold_to_ascii
+from sidequest.foundation.slug_fold import fold_to_ascii
 
 
 def _phrase_matches(phrase: str, action_text: str) -> bool:
@@ -37,7 +37,7 @@ def _phrase_matches(phrase: str, action_text: str) -> bool:
     phrase never matches (it would otherwise match everywhere).
 
     Both sides are first folded through the SHARED 101-8 NFKD helper
-    (:func:`sidequest.server.slug_fold.fold_to_ascii`) so a diacritic-named entity
+    (:func:`sidequest.foundation.slug_fold.fold_to_ascii`) so a diacritic-named entity
     resolves a reference written without the accent — and vice-versa — closing the
     §A4 diacritic split-brain (Story 84-7). The fold decomposes precomposed letters
     and drops combining marks (``é`` → ``e``), folding BOTH the candidate phrase and

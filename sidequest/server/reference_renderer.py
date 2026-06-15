@@ -24,13 +24,13 @@ from pathlib import Path
 
 import yaml
 
+from sidequest.foundation.reference_slug import slugify
 from sidequest.game import npc_pool
 from sidequest.game.npc_pool import NpcPoolMember
 from sidequest.server.reference_presenters import (
     poi_image_key,
     portrait_image_key,
 )
-from sidequest.server.reference_slug import slugify
 from sidequest.telemetry.spans.reference import (
     reference_manifest_loaded_span,
 )

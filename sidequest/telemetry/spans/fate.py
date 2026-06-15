@@ -41,6 +41,28 @@ def fate_action_resolved_span(
         pass
 
 
+# --- F3a: Fate spine projection span (GM panel = lie detector) ---------------
+# ``fate.projection.emitted`` confirms a FATE_STATE message was broadcast to the
+# client — the GM-panel evidence that the engine projected the Fate sheet to the
+# player rather than the narrator improvising the mechanics (CLAUDE.md OTEL
+# principle). SPAN_* module constant, so it needs a SPAN_ROUTES entry (the
+# routing-completeness lint). The RELATIONSHIPS/QUESTS siblings are
+# ``relationships.emitted`` / ``quests.emitted``.
+SPAN_FATE_PROJECTION_EMITTED = "fate.projection.emitted"
+
+SPAN_ROUTES[SPAN_FATE_PROJECTION_EMITTED] = SpanRoute(
+    event_type="state_transition",
+    component="fate",
+    extract=lambda span: {
+        "field": "projection_emitted",
+        "character_count": (span.attributes or {}).get("character_count", 0),
+        "scene_aspect_count": (span.attributes or {}).get("scene_aspect_count", 0),
+        "in_conflict": bool((span.attributes or {}).get("in_conflict", False)),
+        "changed": bool((span.attributes or {}).get("changed", False)),
+    },
+)
+
+
 # --- F1b: fate-point economy + facet spans (GM panel = lie detector) ---------
 # Registered as typed state_transition routes so the GM panel surfaces each
 # economy delta and each stress/consequence mark in a typed tab (not just the
@@ -513,6 +535,7 @@ def fate_narration_mismatch_span(
 
 
 __all__ = [
+    "SPAN_FATE_PROJECTION_EMITTED",
     "fate_action_classified_span",
     "fate_action_resolved_span",
     "fate_aspect_created_span",

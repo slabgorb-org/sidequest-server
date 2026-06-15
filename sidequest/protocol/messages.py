@@ -35,6 +35,7 @@ from sidequest.protocol.models import (
     ClassRequirement,
     CompanionMember,
     CreationChoice,
+    FateStatePayload,
     Footnote,
     InitialState,
     JournalEntry,
@@ -1442,6 +1443,22 @@ class QuestsMessage(ProtocolBase):
     player_id: str = ""
 
 
+class FateStateMessage(ProtocolBase):
+    """GameMessage::FateState — player-facing Fate spine (ADR-144 F3a / Story 118-1).
+
+    The RELATIONSHIPS/QUESTS-snapshot analog for Fate Core. Emitted reactively
+    when the Fate state changes (a fate-point spend, an aspect created, stress/
+    consequence taken, a conflict starting/ending) — not every turn (Cost Scales
+    with Drama) — and only on a ``ruleset=='fate'`` pack. Global payload,
+    broadcast to all seated PCs. Transient (never event-sourced), like its
+    LOCATION_DESCRIPTION / RELATIONSHIPS / QUESTS siblings.
+    """
+
+    type: Literal[MessageType.FATE_STATE] = MessageType.FATE_STATE
+    payload: FateStatePayload
+    player_id: str = ""
+
+
 # ---------------------------------------------------------------------------
 # CHARACTER_INCAPACITATED — a PC taken out of play (sq-playtest barsoom-3).
 # ---------------------------------------------------------------------------
@@ -1686,6 +1703,7 @@ _Phase1Variant = Annotated[
     | LocationOverlayChangedMessage
     | RelationshipsMessage
     | QuestsMessage
+    | FateStateMessage
     | CharacterIncapacitatedMessage
     | DungeonMapMessage
     | JournalRequestMessage

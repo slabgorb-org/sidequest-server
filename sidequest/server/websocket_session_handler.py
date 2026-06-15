@@ -219,6 +219,9 @@ from sidequest.server.websocket_handlers.audio_mixin import (  # noqa: E402
 from sidequest.server.websocket_handlers.chargen_mixin import (  # noqa: E402
     CharGenMixin,
 )
+from sidequest.server.websocket_handlers.fate_state_emit import (  # noqa: E402
+    _maybe_emit_fate_state,
+)
 from sidequest.server.websocket_handlers.map_emit import (  # noqa: E402
     _maybe_emit_cartography_map,
     _maybe_emit_dungeon_map,
@@ -2374,6 +2377,19 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     # quest/objective panel (Story 77-5) consumes it.
                     _maybe_emit_quests(
                         self,
+                        snapshot=snapshot,
+                        emit_fn=_emit_shared_world_frame,
+                    )
+                    # ADR-144 F3a / Story 118-1: player-facing Fate spine rides the
+                    # same per-turn / resume cadence as the relationships + quests
+                    # rosters above. Internally ruleset=='fate'-gated (no-op off a
+                    # Fate pack, so it never co-renders with the WN/native overlay)
+                    # AND change-gated on the Fate-state signature (so an unchanged
+                    # sheet is a no-op). Transient broadcast (_emit_shared_world_frame),
+                    # never event-sourced — the UI Fate panel (Story 118-2) consumes it.
+                    _maybe_emit_fate_state(
+                        self,
+                        sd=sd,
                         snapshot=snapshot,
                         emit_fn=_emit_shared_world_frame,
                     )

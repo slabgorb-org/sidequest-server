@@ -17,6 +17,17 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from sidequest.game.ruleset.fate_resolution import ladder_name
+from sidequest.protocol.models import (
+    FateAspectEntry,
+    FateCharacterEntry,
+    FateConflictEntry,
+    FateConflictParticipant,
+    FateConsequenceEntry,
+    FateSkillEntry,
+    FateStatePayload,
+    FateStressBox,
+)
 from sidequest.protocol.sanitize import sanitize_player_text
 
 if TYPE_CHECKING:
@@ -61,3 +72,80 @@ def build_fate_projection(snapshot: GameSnapshot) -> dict[str, Any]:
         "scene_aspects": scene_aspects,
         "active_conflict": enc is not None and not enc.resolved,
     }
+
+
+def build_fate_state_payload(snapshot: GameSnapshot) -> FateStatePayload:
+    """The full client Fate projection (ADR-144 F3a / Story 118-1).
+
+    The rich, structured sibling of :func:`build_fate_projection`: where the
+    compact projection feeds the router/narrator a flat vocabulary, this builds
+    the player-facing wire payload (``FATE_STATE``) — per-PC fate points/refresh,
+    skills on the ladder, named aspects with kind + free-invoke counts, the two
+    stress tracks, the four consequence slots (open vs filled), the scene's
+    situation aspects + boosts, and the active conflict's participants by side.
+
+    Reads the SAME snapshot state as the compact projection (one source of
+    truth) — only PCs with a Fate sheet contribute; on a non-Fate pack the
+    emitter never invokes this builder. Display text is presented raw: it feeds
+    the UI (which escapes it), not the narrator prompt (the compact projection
+    is the prompt path that sanitizes per ADR-047).
+    """
+    characters: list[FateCharacterEntry] = []
+    for ch in snapshot.characters:
+        sheet = ch.core.fate_sheet
+        if sheet is None:
+            continue
+        characters.append(
+            FateCharacterEntry(
+                name=ch.core.name,
+                fate_points=sheet.fate_points,
+                refresh=sheet.refresh,
+                skills=[
+                    FateSkillEntry(name=name, rating=rating, ladder=ladder_name(rating))
+                    for name, rating in sheet.skills.items()
+                ],
+                # Named aspects only — a FILLED consequence is invokable but
+                # surfaces in ``consequences`` below, never duplicated here.
+                aspects=[
+                    FateAspectEntry(text=a.text, kind=a.kind, free_invokes=a.free_invokes)
+                    for a in sheet.aspects
+                ],
+                stress={
+                    track_name: [
+                        FateStressBox(value=b.value, checked=b.checked) for b in track.boxes
+                    ]
+                    for track_name, track in sheet.stress.items()
+                },
+                consequences=[
+                    FateConsequenceEntry(
+                        level=c.level,
+                        value=c.value,
+                        filled=c.aspect is not None,
+                        text=c.aspect.text if c.aspect is not None else "",
+                    )
+                    for c in sheet.consequences
+                ],
+            )
+        )
+
+    enc = snapshot.encounter
+    # A resolved encounter's situation aspects are stale fiction and the
+    # conflict is over — gate both on `not enc.resolved` (same condition the
+    # compact projection's `active_conflict` reads). The guard is inlined per
+    # branch so the type checker narrows `enc` to non-None.
+    scene_aspects = (
+        [FateAspectEntry(text=a.text, kind=a.kind, free_invokes=a.free_invokes) for a in enc.situation_aspects]
+        if enc is not None and not enc.resolved
+        else []
+    )
+    conflict = (
+        FateConflictEntry(
+            active=True,
+            # Seating order is the engine's tiebreak order
+            # (fate_opponent._live_player_actors); preserve encounter.actors order.
+            participants=[FateConflictParticipant(name=a.name, side=a.side) for a in enc.actors],
+        )
+        if enc is not None and not enc.resolved
+        else None
+    )
+    return FateStatePayload(characters=characters, scene_aspects=scene_aspects, conflict=conflict)

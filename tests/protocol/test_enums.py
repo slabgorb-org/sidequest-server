@@ -213,7 +213,7 @@ def test_message_type_character_incapacitated_wire_string() -> None:
 
 
 def test_message_type_complete_count() -> None:
-    """All 46 GameMessage variants must be represented.
+    """All 56 GameMessage variants must be represented.
 
     Group G Task 6 added SECRET_NOTE (structural hiding); bumped 37 → 38.
     Group D Task 7 reserved DISPATCH_PACKAGE, NARRATOR_DIRECTIVE_USED,
@@ -273,10 +273,14 @@ def test_message_type_complete_count() -> None:
     the three proactive Fate actions or a concession). Routed to
     FateActionHandler → fate_conflict, gated by isinstance(ruleset,
     FateRulesetModule). Intentional addition; bumped 54 → 55.
+    ADR-144 F3a (story 118-1) added FATE_STATE — the player-facing Fate-spine
+    snapshot (per-PC sheets + scene situation aspects + active conflict). Emitted
+    reactively when the Fate state changes, ruleset=='fate'-gated; transient
+    broadcast, never event-sourced. Intentional addition; bumped 55 → 56.
     When new variants land, update this count and the individual wire-string
     test above so the contract test keeps catching silent drift.
     """
-    assert len(MessageType) == 55
+    assert len(MessageType) == 56
 
 
 # ===========================================================================

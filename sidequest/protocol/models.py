@@ -955,6 +955,125 @@ class QuestsPayload(BaseModel):
     active_stakes: str = ""
 
 
+class FateSkillEntry(BaseModel):
+    """One skill on the Fate ladder (ADR-144 F3a / Story 118-1).
+
+    Carries both the numeric ``rating`` and its ladder ``ladder`` adjective
+    (``fate_resolution.ladder_name``) so the player UI shows the math AND the
+    name (Sebastien/Jade legibility). Negative rungs are valid (Terrible -2 ..).
+    """
+
+    model_config = {"extra": "forbid"}
+
+    name: str
+    rating: int
+    ladder: str
+
+
+class FateAspectEntry(BaseModel):
+    """One Fate aspect for the wire (ADR-144 F3a / Story 118-1).
+
+    ``kind`` is the aspect taxonomy (high_concept / trouble / character /
+    situation / consequence / boost); ``free_invokes`` is the count of unused
+    free invocations the invoke control (Story 118-4) reads.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    text: str
+    kind: str
+    free_invokes: int = 0
+
+
+class FateStressBox(BaseModel):
+    """One checkable stress box of a fixed ``value`` (ADR-144 F3a)."""
+
+    model_config = {"extra": "forbid"}
+
+    value: int
+    checked: bool = False
+
+
+class FateConsequenceEntry(BaseModel):
+    """One consequence slot (ADR-144 F3a / Story 118-1).
+
+    ``filled`` is True when the slot has been taken (it then carries the
+    consequence's ``text`` as an invokable aspect, SRD); an open slot reads
+    ``filled=False`` with an empty ``text``. ``value`` is the SRD absorption
+    value for the slot's ``level`` (mild 2 / moderate 4 / severe 6 / extreme 8).
+    """
+
+    model_config = {"extra": "forbid"}
+
+    level: str
+    value: int
+    filled: bool = False
+    text: str = ""
+
+
+class FateCharacterEntry(BaseModel):
+    """One PC's full Fate sheet for the wire (ADR-144 F3a / Story 118-1).
+
+    ``aspects`` is the named character aspects only (high_concept / trouble /
+    character) — a FILLED consequence is invokable but surfaces in
+    ``consequences``, not duplicated here. ``stress`` maps each track name
+    (``physical`` / ``mental``) to its ordered boxes.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    name: str
+    fate_points: int
+    refresh: int
+    skills: list[FateSkillEntry] = Field(default_factory=list)
+    aspects: list[FateAspectEntry] = Field(default_factory=list)
+    stress: dict[str, list[FateStressBox]] = Field(default_factory=dict)
+    consequences: list[FateConsequenceEntry] = Field(default_factory=list)
+
+
+class FateConflictParticipant(BaseModel):
+    """One participant in an active Fate conflict (ADR-144 F3a / Story 118-1).
+
+    ``side`` is the encounter actor's side (``player`` / ``opponent`` /
+    ``neutral``).
+    """
+
+    model_config = {"extra": "forbid"}
+
+    name: str
+    side: str
+
+
+class FateConflictEntry(BaseModel):
+    """The active Fate conflict's participants by side (ADR-144 F3a).
+
+    ``participants`` is in seating order — the engine's deterministic tiebreak
+    order (``fate_opponent._live_player_actors``). Live per-exchange initiative
+    (Notice/Empathy) is computed at resolution and surfaces in the F3f overlay,
+    not here.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    active: bool = True
+    participants: list[FateConflictParticipant] = Field(default_factory=list)
+
+
+class FateStatePayload(BaseModel):
+    """Full Fate-spine snapshot (ADR-144 F3a / Story 118-1).
+
+    The RELATIONSHIPS/QUESTS-snapshot analog for Fate: per-PC sheets + scene
+    situation aspects (incl. boosts) + the active conflict travel together. An
+    unpopulated payload is a clean empty-but-valid snapshot — never None.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    characters: list[FateCharacterEntry] = Field(default_factory=list)
+    scene_aspects: list[FateAspectEntry] = Field(default_factory=list)
+    conflict: FateConflictEntry | None = None
+
+
 class LocationEntityResolution(BaseModel):
     """Result of resolve_location_entity. ADR-109 §5.3.
 

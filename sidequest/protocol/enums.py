@@ -136,6 +136,13 @@ class MessageType(StrEnum):
     # set_stakes. Transient broadcast (never event-sourced), consumed by the
     # UI quest/objective panel (Story 77-5).
     QUESTS = "QUESTS"
+    # ADR-144 F3a / Story 118-1: player-facing Fate Core spine projection. The
+    # RELATIONSHIPS/QUESTS-snapshot analog for Fate — per-PC fate points/refresh,
+    # skills->ladder, aspects, stress boxes, consequence slots, scene situation
+    # aspects+boosts, and the active conflict's participants by side. Reactive
+    # (on-change, NOT per-turn), ruleset=='fate'-gated, transient broadcast
+    # (never event-sourced), consumed by the UI Fate panel (Story 118-2).
+    FATE_STATE = "FATE_STATE"
     # sq-playtest 2026-06-07 (heavy_metal/barsoom-3, blocking): a PC the genre
     # lethality policy ruled dead kept full agency for four rounds with no
     # death surface. Emitted at the moment a PC is taken OUT of play (LETHAL

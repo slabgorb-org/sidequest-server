@@ -230,6 +230,10 @@ def _extract_unminted_objective(span: Any) -> dict[str, Any]:
     return {
         "field": "narration.unminted_objective",
         "evidence": attrs.get("evidence", ""),
+        # Story 117-6: surface WHICH path flagged — "classifier" (the un-seeded
+        # post-narration Haiku pass) vs. "keyword" (the legacy substring backstop)
+        # — so the GM panel can tell a real classification from a lucky match.
+        "detection_method": attrs.get("detection_method", "keyword"),
     }
 
 
@@ -247,17 +251,30 @@ SPAN_ROUTES[SPAN_NARRATION_UNMINTED_OBJECTIVE] = SpanRoute(
 def narration_unminted_objective_span(
     *,
     evidence: str,
+    detection_method: str = "keyword",
     _tracer: trace.Tracer | None = None,
 ) -> Iterator[trace.Span]:
     """Emit a ``narration.unminted_objective.suspected`` span.
 
-    Fired by ``run_unminted_objective_watcher`` when narration establishes a
-    concrete objective while ``quest_log`` is empty — the narrator promoted a
-    hook in prose but never minted it via ``record_quest`` (QUEST-MAJOR).
+    Fired when narration establishes a concrete objective while ``quest_log`` is
+    empty — the narrator promoted a hook in prose but never minted it via
+    ``record_quest`` (QUEST-MAJOR).
+
+    ``detection_method`` (Story 117-6) records WHICH path flagged it, so the GM panel
+    can distinguish a real classification from a structural router hit or a lucky
+    keyword match:
+    - ``"classifier"`` — the un-seeded post-narration Haiku pass
+      (``run_unseeded_objective_classifier_watcher``);
+    - ``"router"`` — the 117-4 seeded path (``run_unminted_objective_watcher`` when the
+      router dispatched a ``quest_offer`` accept that never minted);
+    - ``"keyword"`` — the legacy ``_UNMINTED_OBJECTIVE_MARKERS`` substring backstop.
+
+    The default is ``"keyword"`` (the backstop is the only caller that does not pass an
+    explicit method).
     """
     with Span.open(
         SPAN_NARRATION_UNMINTED_OBJECTIVE,
-        {"evidence": evidence},
+        {"evidence": evidence, "detection_method": detection_method},
         tracer_override=_tracer,
     ) as span:
         yield span

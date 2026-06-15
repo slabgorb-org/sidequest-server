@@ -96,7 +96,17 @@ _IMPROVISED_COMBAT_MARKERS: tuple[str, ...] = (
 # fires a GM-panel beep (observability), never a control-flow block, and the
 # empty-quest_log gate does the heavy discriminating, so a missed phrasing is far
 # cheaper than crying wolf on every early-game scene that merely mentions a goal.
-# Matched case-insensitively as substrings. Tunable as findings accrue.
+# Matched case-insensitively as substrings.
+#
+# DEPRECATED (ADR-146, Story 117-6): this keyword matcher is the Zork verb-set
+# anti-pattern (SOUL: The Zork Problem) and is SUPERSEDED by the un-seeded
+# post-narration classifier in
+# ``sidequest.agents.post_narration_classifier.run_unseeded_objective_classifier_watcher``
+# (real Haiku classification, keyword-free, emits detection_method="classifier").
+# RETAINED as a non-primary emergency backstop for the router-silent /
+# classifier-unavailable edge case — do NOT extend this list; add coverage by
+# improving the classifier instead. Full removal deferred until the classifier has
+# soaked in playtest.
 _UNMINTED_OBJECTIVE_MARKERS: tuple[str, ...] = (
     "if you can find",
     "find the missing",
@@ -735,7 +745,15 @@ def run_unminted_objective_watcher(
             narration=narration, snapshot=snapshot, package=package
         )
         if evidence is not None:
-            with narration_unminted_objective_span(evidence=evidence, _tracer=tracer):
+            # Story 117-6: tag the span so the GM panel sees WHICH path flagged.
+            # This sync watcher fires on two paths: the 117-4 router-backed
+            # quest_offer-accept classification ("router") and the legacy curated
+            # substring backstop ("keyword"). The post-narration Haiku classifier
+            # ("classifier") emits from run_unseeded_objective_classifier_watcher.
+            detection_method = "router" if _package_accepted_quest_offer(package) else "keyword"
+            with narration_unminted_objective_span(
+                evidence=evidence, detection_method=detection_method, _tracer=tracer
+            ):
                 pass
     except Exception as exc:  # noqa: BLE001 — observability must never abort the turn
         logger.error(

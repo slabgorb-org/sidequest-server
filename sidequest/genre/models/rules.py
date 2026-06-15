@@ -585,10 +585,12 @@ class ConfrontationDef(BaseModel):
                 f"invalid confrontation category '{self.category}': "
                 f"must be one of {valid_categories}"
             )
-        if not self.beats:
-            raise ValueError(
-                f"confrontation '{self.confrontation_type}' must have at least one beat"
-            )
+        # The "at least one beat" invariant is NOT enforced here: a combat /
+        # hp_depletion def under a bound Without Number ruleset authors ZERO
+        # native beats (the WN initiative engine owns the action set — story
+        # 108-7, ADR-143), and this model validator can't see the pack ruleset.
+        # The gate moved to genre/loader.py::_validate_confrontation_beats,
+        # where rules.ruleset is known. Native packs still fail loud there.
         seen: set[str] = set()
         for beat in self.beats:
             if beat.id in seen:

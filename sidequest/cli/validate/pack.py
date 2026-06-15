@@ -967,6 +967,62 @@ def _validate_world_lore_seedable(world_dir: Path, label: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# ADR-146 (story 117-3) — the perseus_cloud floor-boss quest_seed invariant
+#
+# The first authored quest-seed exemplar: perseus_cloud's
+# ``solo_new_kowloon_arrival`` opening must carry a ``tone.quest_seed`` so that
+# taking the floor-boss detective job mints a tracked QuestEntry deterministically
+# (the repro the ADR fixes: a 15-turn session with quest_log {} the whole time).
+# This is a CONTENT existence invariant — it lives in the pack validator, never a
+# pytest (per the No-content-in-unit-tests rule): a unit test would couple engine
+# CI to the content repo and break the moment the opening is renamed. The
+# validator reads the world's own openings.yaml and asserts the exemplar carries
+# its seed.
+# ---------------------------------------------------------------------------
+
+
+def _validate_perseus_cloud_quest_seed(world_dir: Path, label: str) -> list[str]:
+    """ADR-146: the perseus_cloud floor-boss exemplar opening must carry a
+    ``tone.quest_seed``.
+
+    Scoped to ``space_opera/worlds/perseus_cloud`` only — every other world's
+    openings are free to omit a seed (authoring a seed is optional, ADR-146
+    "Neutral"). This is the single authored exemplar story 117-3 commits, so the
+    invariant guards exactly it: the ``solo_new_kowloon_arrival`` opening in
+    ``openings.yaml`` must declare a ``tone.quest_seed`` with a ``quest_id``.
+    No-op for any other world.
+    """
+    if world_dir.name != "perseus_cloud" or world_dir.parent.parent.name != "space_opera":
+        return []
+    openings_path = world_dir / "openings.yaml"
+    if not openings_path.is_file():
+        return [f"{label}: openings.yaml is missing (ADR-146 exemplar required)"]
+    data, read_err = _read_yaml(openings_path, label)
+    if read_err is not None:
+        return [read_err]
+    openings = data.get("openings") if isinstance(data, dict) else None
+    if not isinstance(openings, list):
+        return [f"{label}: openings.yaml has no 'openings' list"]
+    exemplar = next(
+        (o for o in openings if isinstance(o, dict) and o.get("id") == "solo_new_kowloon_arrival"),
+        None,
+    )
+    if exemplar is None:
+        return [
+            f"{label}: openings.yaml is missing the ADR-146 exemplar opening "
+            "'solo_new_kowloon_arrival'"
+        ]
+    seed = (exemplar.get("tone") or {}).get("quest_seed") if isinstance(exemplar, dict) else None
+    if not isinstance(seed, dict) or not seed.get("quest_id"):
+        return [
+            f"{label}: opening 'solo_new_kowloon_arrival' must carry a "
+            "tone.quest_seed with a quest_id (ADR-146 floor-boss detective hook). "
+            "Taking an authored job must mint a tracked quest deterministically."
+        ]
+    return []
+
+
+# ---------------------------------------------------------------------------
 # World-level validation
 # ---------------------------------------------------------------------------
 
@@ -1105,6 +1161,9 @@ def _validate_world(
 
     # Epic 74 (story 74-3) — world lore must seed a non-empty LoreStore.
     content_errors.extend(_validate_world_lore_seedable(world_dir, label))
+
+    # ADR-146 (story 117-3) — the perseus_cloud floor-boss quest_seed exemplar.
+    content_errors.extend(_validate_perseus_cloud_quest_seed(world_dir, label))
 
     # Cross-reference content lint (story 64-5) — world tier.
     resolved_trope_ids = genre_trope_ids | _collect_trope_ids(world_dir / "tropes.yaml")

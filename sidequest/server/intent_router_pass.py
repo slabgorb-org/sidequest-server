@@ -387,6 +387,21 @@ def _build_state_summary(
         ):
             pass
 
+    # Story 117-3 (ADR-146 §2): the live authored quest offers on the table.
+    # Surfacing them here is the "no Zork verb-set" mechanism — the router reads
+    # the player's open-ended words against NAMED, structured offers and classifies
+    # accept|decline, rather than matching a fixed phrase list. Gated on
+    # non-empty pending_quest_offers so a turn with no offer live carries no
+    # quest_offer vocabulary (bounded prompt cost). Projects {quest_id, title,
+    # giver} — the acceptance context the prompt block references — never the
+    # full seed (objective/stakes are the engine's to mint from, not the
+    # classifier's to read).
+    if snapshot.pending_quest_offers:
+        summary["pending_quest_offers"] = [
+            {"quest_id": seed.quest_id, "title": seed.title, "giver": seed.giver}
+            for seed in snapshot.pending_quest_offers.values()
+        ]
+
     # Story 105-2 (Piece 2): the PC's current cartography region's actual
     # exits — adjacency neighbors + seam routes. The 2026-06-12 dive's
     # turn-3 miss happened because the router was asked to recognize a

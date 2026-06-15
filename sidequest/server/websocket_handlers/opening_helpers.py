@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 from opentelemetry import trace
 
+from sidequest.game.quest_offer import stash_quest_offers
 from sidequest.game.region_init import RegionInitError
 from sidequest.server.dispatch.opening import (
     OpeningResolutionError,
@@ -203,6 +204,13 @@ def _populate_opening_directive_on_chargen_complete(
     session_data.opening_seed = opening.first_turn_invitation
     session_data.opening_directive = directive
     session_data._resolved_opening_id = opening.id
+
+    # Story 117-3 (ADR-146): stash the resolved opening's authored quest_seed
+    # (if any) as a pending offer on the snapshot, next to the drive-spine seed.
+    # Bait, not a mint — minting waits for the router to classify acceptance
+    # (``quest_offer`` subsystem). Resume-safe: ``pending_quest_offers`` is
+    # persisted snapshot state, not the ephemeral _SessionData directive.
+    stash_quest_offers(snapshot, opening)
 
     # sq-playtest 2026-05-09 [OBS] projection.party_zone_absent_with_characters:
     # ``party_location()`` returned None at game start because no seated PC

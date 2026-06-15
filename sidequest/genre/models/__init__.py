@@ -104,6 +104,7 @@ from sidequest.genre.models.narrative import (
     PerPcBeat,
     PowerTier,
     Prompts,
+    QuestSeed,
     SoftHook,
 )
 from sidequest.genre.models.npc_traits import NpcTrait, NpcTraitsDatabase
@@ -324,6 +325,7 @@ __all__ = [
     "PerPcBeat",
     "PowerTier",
     "Prompts",
+    "QuestSeed",
     "SoftHook",
     # npc_traits
     "NpcTrait",

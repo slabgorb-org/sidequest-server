@@ -185,6 +185,7 @@ def _register_defaults() -> None:
     from sidequest.agents.subsystems.magic_working import run_magic_working_dispatch
     from sidequest.agents.subsystems.movement import run_movement_dispatch
     from sidequest.agents.subsystems.npc_agency import run_npc_agency
+    from sidequest.agents.subsystems.quest_offer import run_quest_offer_dispatch
     from sidequest.agents.subsystems.reflect_absence import run_reflect_absence
     from sidequest.agents.subsystems.scenario_clue import run_scenario_clue_dispatch
     from sidequest.agents.subsystems.witnessed_act import run_witnessed_act_dispatch
@@ -202,6 +203,7 @@ def _register_defaults() -> None:
         ("equip", run_equip_dispatch),
         ("environment_clock", run_environment_clock_dispatch),
         ("fate_action", run_fate_action_dispatch),
+        ("quest_offer", run_quest_offer_dispatch),
     ):
         _REGISTRY.pop(name, None)
         _REGISTRY[name] = fn

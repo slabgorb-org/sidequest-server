@@ -578,23 +578,25 @@ def test_both_subsystems_registered_in_dispatched_type_key() -> None:
     assert _DISPATCHED_TYPE_KEY.get("movement") == "direction"
 
 
-def test_witnesses_count_is_eight_and_docstring_not_stale() -> None:
-    """AC: the stale "all six live-path subsystems" docstring is corrected to the
-    actual registered count. Asserted via ``__doc__`` reflection (runtime object,
-    NOT source-text grep). After this story there are 8 registered witnesses."""
+def test_witnesses_count_is_nine_and_docstring_not_stale() -> None:
+    """AC: the witness-count docstring is corrected to the actual registered
+    count. Asserted via ``__doc__`` reflection (runtime object, NOT source-text
+    grep). Story 59-30 added witnessed_act + movement (→8); story 117-3 (ADR-146
+    §4) added quest_offer (→9), the structurally-sound replacement for the
+    keyword unminted-objective detector."""
     from sidequest.agents.dispatch_engagement_watcher import (
         _WITNESSES,
         detect_dispatch_engagement_mismatch,
     )
 
-    assert len(_WITNESSES) == 8, (
-        f"expected 8 registered witnesses (6 original + witnessed_act + movement); "
-        f"got {len(_WITNESSES)}: {sorted(_WITNESSES)}"
+    assert len(_WITNESSES) == 9, (
+        f"expected 9 registered witnesses (6 original + witnessed_act + movement "
+        f"+ quest_offer); got {len(_WITNESSES)}: {sorted(_WITNESSES)}"
     )
     doc = (detect_dispatch_engagement_mismatch.__doc__ or "").lower()
     assert "six" not in doc, "stale 'all six live-path subsystems' docstring not corrected"
     assert "witnessed_act" in doc and "movement" in doc, (
-        "corrected docstring should mention the two newly-registered subsystems"
+        "corrected docstring should mention the newly-registered subsystems"
     )
 
 

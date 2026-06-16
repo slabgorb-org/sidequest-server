@@ -17,6 +17,11 @@ from typing import TYPE_CHECKING, Any
 
 from sidequest.game.creature_core import CreatureCore
 from sidequest.game.encounter import EncounterActor, StructuredEncounter
+
+# ADR-147 / story 122-2: find_confrontation_def is pure combat-rules logic that
+# moved down to the game tier. Re-exported here so existing server-tier callers
+# keep importing it from this path (server -> game is the legal direction).
+from sidequest.game.ruleset.combat_rules import find_confrontation_def  # noqa: F401
 from sidequest.game.session import GameSnapshot
 from sidequest.game.table.types import TableState
 from sidequest.game.wwn_magic import SpellcastingState
@@ -89,22 +94,6 @@ def resolve_recipient_pc(
         # memorized must still be rejected from cast_spell.
         prepared = magic_state.prepared_spells.get(pc_name, {})
     return ((class_def, total_slots, prepared), pc_name)
-
-
-def find_confrontation_def(
-    defs: list[ConfrontationDef],
-    encounter_type: str,
-) -> ConfrontationDef | None:
-    """Return the ConfrontationDef whose ``confrontation_type`` equals ``encounter_type``.
-
-    Exact string match — mirrors Rust's ``iter().find(|d| d.type == ty)``.
-    Returns ``None`` when no def matches; callers MUST handle the miss
-    (CLAUDE.md: no silent fallback — caller decides whether to error).
-    """
-    for d in defs:
-        if d.confrontation_type == encounter_type:
-            return d
-    return None
 
 
 def build_confrontation_payload(

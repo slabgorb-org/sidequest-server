@@ -31,6 +31,10 @@ from opentelemetry import trace
 from sidequest.game.creature_core import CreatureCore
 from sidequest.game.lethality import DownedResult, LethalityResult, major_injury_entry
 from sidequest.game.ruleset.base import RulesetModule
+from sidequest.game.ruleset.combat_rules import (
+    find_confrontation_def,
+    resolve_damage_spec_from_beat_and_actor,
+)
 from sidequest.game.ruleset.resolution import (
     AttackRollParams,
     CheckRollParams,
@@ -138,8 +142,6 @@ class WithoutNumberRulesetModule(RulesetModule):
     }
 
     def find_confrontation(self, confrontations, encounter_type):
-        from sidequest.server.dispatch.confrontation import find_confrontation_def
-
         return find_confrontation_def(confrontations, encounter_type)
 
     def stat_modifier(self, stats: dict[str, int], stat_check: str) -> int:
@@ -272,8 +274,6 @@ class WithoutNumberRulesetModule(RulesetModule):
         )
 
     def resolve_damage(self, *, beat, actor_core, pack, world_slug=None):
-        from sidequest.server.dispatch.damage_roll import resolve_damage_spec_from_beat_and_actor
-
         return resolve_damage_spec_from_beat_and_actor(
             beat=beat, actor_core=actor_core, pack=pack, world_slug=world_slug
         )

@@ -189,6 +189,7 @@ def build_agent_sdk_options(
     allowed_tools: list[str] | None = None,
     mcp_servers: dict[str, Any] | None = None,
     output_format: dict[str, Any] | None = None,
+    thinking: dict[str, Any] | None = None,
 ) -> ClaudeAgentOptions:
     """Build the frozen ``ClaudeAgentOptions`` for one subscription call.
 
@@ -201,8 +202,28 @@ def build_agent_sdk_options(
     ``max_turns`` is floored at 2: the SDK spends an internal finalize turn, so
     a literal ``max_turns=1`` fails closed with ``subtype='error_max_turns'``
     (the +1 is MANDATORY — spec §3.6 / OQ-16).
+
+    Extended thinking is **disabled by default for any ``output_format`` call**
+    (the Path-A structured-extraction sites: intent router, unseeded-objective
+    classifier, archetype inference). The agent SDK implements ``output_format``
+    as a synthetic ``StructuredOutput`` tool round-trip, which already costs both
+    of the ``max_turns=2`` turns (assistant tool-call → tool-result → finalize).
+    The ``claude`` CLI defaults thinking ON ("adaptive"), so the model spends a
+    ~1k-token thinking pass *before* the tool call; when that pass runs long the
+    finalize cannot land inside 2 turns and the whole call fails
+    ``error_max_turns`` — intermittently, scaling with how much the prompt gives
+    it to think about (this is what took the intent-router spine dark on the
+    119-3 subscription port: a structured classifier cannot afford a thinking
+    turn at the mandatory mt=2 floor). Disabling thinking makes these calls
+    deterministic at mt=2, ~3x faster, and ~6x cheaper in output tokens — and a
+    mechanical classifier reasons through its (heavily prescriptive) prompt, not
+    a scratchpad. Callers that need thinking with structured output can still
+    pass ``thinking`` explicitly to override. Non-structured callers (narrator
+    tool-loop, aside) are untouched — ``thinking`` stays ``None`` for them.
     """
     assert_subscription_auth()
+    if output_format is not None and thinking is None:
+        thinking = {"type": "disabled"}
     return ClaudeAgentOptions(
         model=model,
         system_prompt=system_prompt,
@@ -210,6 +231,7 @@ def build_agent_sdk_options(
         allowed_tools=list(allowed_tools) if allowed_tools else [],
         mcp_servers=dict(mcp_servers) if mcp_servers else {},
         output_format=output_format,
+        thinking=thinking,
         setting_sources=[],
         add_dirs=[],
         cwd=_neutral_cwd(),
@@ -375,9 +397,7 @@ class AnthropicSdkClient:
         )
 
         all_tool_uses: list[ToolUseBlock] = []
-        mcp_servers, allowed_tools = self._build_narration_mcp(
-            tools, tool_dispatch, all_tool_uses
-        )
+        mcp_servers, allowed_tools = self._build_narration_mcp(tools, tool_dispatch, all_tool_uses)
         options = build_agent_sdk_options(
             model=model,
             system_prompt=system_prompt,
@@ -399,9 +419,7 @@ class AnthropicSdkClient:
                     last_model = model_id
                 content = getattr(message, "content", None)
                 if isinstance(content, list):
-                    text_chunks = [
-                        b.text for b in content if getattr(b, "type", None) == "text"
-                    ]
+                    text_chunks = [b.text for b in content if getattr(b, "type", None) == "text"]
                     # Playtest 2026-06-07 (five_points doubled-narration): keep
                     # only the LAST text block of an assistant message; earlier
                     # blocks are drafts. Emit a WARNING span so the drop is
@@ -590,7 +608,6 @@ class AnthropicSdkClient:
             allowed.append(f"mcp__{_NARRATION_SERVER_NAME}__{t.name}")
         server = create_sdk_mcp_server(name=_NARRATION_SERVER_NAME, tools=sdk_tools)
         return {_NARRATION_SERVER_NAME: server}, allowed
-
 
     # ------------------------------------------------------------------
     # cost-runaway fingerprint alarm (Story 61-4)

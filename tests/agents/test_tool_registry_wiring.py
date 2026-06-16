@@ -1,15 +1,30 @@
-"""Phase B wiring test — registry + SDK client + dispatch round-trip."""
+"""Phase B wiring test — registry + SDK-client tool bridge + dispatch round-trip.
+
+Story 119-3: the narrator transport is ``claude-agent-sdk``. The model's tool
+calls reach the registry through the in-process SDK-MCP ``@tool`` bridge built by
+``AnthropicSdkClient._build_narration_mcp`` — each tool gets a
+``_build_narration_tool_handler`` whose body re-enters the orchestrator's
+``tool_dispatch`` closure (which calls ``Registry.dispatch``) and returns the
+result in the SDK ``{"content":[...],"is_error":...}`` shape.
+
+The hermetic fake ``query`` does NOT invoke ``@tool`` handlers (the real SDK
+owns the loop), so a converged stream yields ``ToolingResult.tool_calls == []``
+and cannot exercise the registry round-trip end-to-end. This file's load-bearing
+seam — that a model tool call flows through the SDK client into the REAL
+``Registry.dispatch`` and the result flows back — is therefore pinned on the
+production bridge handler driven against the real registry, which is exactly the
+callable the SDK loop invokes. (The convergence-side of the loop is covered by
+``test_119_3_narrator_port.py``.)
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 from pydantic import BaseModel, Field
 
-from sidequest.agents.anthropic_sdk_client import AnthropicSdkClient
+from sidequest.agents.anthropic_sdk_client import _build_narration_tool_handler
 from sidequest.agents.perception_filter import NoopPerceptionFilter
 from sidequest.agents.tool_registry import (
     Registry,
@@ -18,57 +33,7 @@ from sidequest.agents.tool_registry import (
     ToolResult,
     tool,
 )
-from sidequest.agents.tooling_protocol import (
-    CacheableBlock,
-    Message,
-    ToolResultBlock,
-    ToolUseBlock,
-)
-
-
-@dataclass
-class _Usage:
-    input_tokens: int
-    output_tokens: int
-    cache_read_input_tokens: int = 0
-    cache_creation_input_tokens: int = 0
-
-
-@dataclass
-class _Text:
-    type: str
-    text: str
-
-
-@dataclass
-class _ToolUse:
-    type: str
-    id: str
-    name: str
-    input: dict[str, Any]
-
-
-@dataclass
-class _Resp:
-    content: list[Any]
-    stop_reason: str
-    usage: _Usage
-    model: str
-
-
-class _Msgs:
-    def __init__(self, responses: list[_Resp]) -> None:
-        self._r = responses
-        self.calls: list[dict[str, Any]] = []
-
-    async def create(self, **kwargs: Any) -> _Resp:
-        self.calls.append(kwargs)
-        return self._r.pop(0)
-
-
-class _Sdk:
-    def __init__(self, responses: list[_Resp]) -> None:
-        self.messages = _Msgs(responses)
+from sidequest.agents.tooling_protocol import ToolResultBlock, ToolUseBlock
 
 
 class _DiceArgs(BaseModel):
@@ -78,7 +43,17 @@ class _DiceArgs(BaseModel):
 async def test_registry_round_trip_via_sdk_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """A model tool call routes through the SDK client's ``@tool`` bridge into
+    the REAL ``Registry.dispatch`` and the dispatch result flows back to the SDK.
+
+    Driven on the production bridge (``_build_narration_tool_handler``) against
+    the real registry rather than a converged fake ``query`` — the hermetic fake
+    never fires ``@tool`` handlers (spec §tool-dispatch limitation), so the
+    end-to-end round-trip can only be exercised at the bridge boundary the SDK
+    loop calls.
+    """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
     reg = Registry()
 
     @tool(
@@ -90,30 +65,6 @@ async def test_registry_round_trip_via_sdk_client(
     async def roll(args: _DiceArgs, ctx: ToolContext) -> ToolResult:
         return ToolResult.ok({"value": args.sides})
 
-    sdk = _Sdk(
-        responses=[
-            _Resp(
-                content=[
-                    _ToolUse(
-                        type="tool_use",
-                        id="t1",
-                        name="roll_dice",
-                        input={"sides": 20},
-                    )
-                ],
-                stop_reason="tool_use",
-                usage=_Usage(input_tokens=200, output_tokens=15),
-                model="claude-sonnet-4-6",
-            ),
-            _Resp(
-                content=[_Text(type="text", text="A natural 20.")],
-                stop_reason="end_turn",
-                usage=_Usage(input_tokens=220, output_tokens=10),
-                model="claude-sonnet-4-6",
-            ),
-        ]
-    )
-    client = AnthropicSdkClient(sdk=sdk)
     ctx = ToolContext(
         world_id="w",
         session_id="s",
@@ -127,16 +78,28 @@ async def test_registry_round_trip_via_sdk_client(
     async def dispatch(block: ToolUseBlock) -> ToolResultBlock:
         return await reg.dispatch(block, ctx)
 
-    result = await client.complete_with_tools(
-        system_blocks=[CacheableBlock(text="rules", cache=True)],
-        messages=[Message(role="user", content="roll d20")],
-        tools=reg.tool_definitions(),
+    # The exact bridge AnthropicSdkClient._build_narration_mcp builds per tool:
+    # the SDK loop calls this handler with the model's args.
+    accumulator: list[ToolUseBlock] = []
+    handler = _build_narration_tool_handler(
+        bare_name="roll_dice",
         tool_dispatch=dispatch,
-        model="claude-sonnet-4-6",
+        accumulator=accumulator,
     )
-    assert result.text == "A natural 20."
-    assert len(result.tool_calls) == 1
-    assert result.tool_calls[0].name == "roll_dice"
+
+    sdk_result = await handler({"sides": 20})
+
+    # The model's call reached the real registry under its bare name and was
+    # accumulated onto the tool-call ledger (ToolingResult.tool_calls source).
+    assert [b.name for b in accumulator] == ["roll_dice"]
+    assert accumulator[0].arguments == {"sides": 20}
+
+    # The dispatch result flowed back in the SDK content shape, not an error.
+    assert sdk_result.get("is_error") is False
+    content = sdk_result.get("content")
+    assert isinstance(content, list) and content
+    assert content[0].get("type") == "text"
+    assert '"value": 20' in content[0].get("text", "")
 
 
 class _MarkerArgs(BaseModel):

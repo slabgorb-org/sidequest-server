@@ -27,8 +27,9 @@ Contract pinned by these tests (TEA-defined ACs — the sprint YAML carries none
   production adapter). Tests inject transport via
   ``sidequest.agents.ollama_client.urlopen``.
 * **AC5 — Fail loud if unreachable, NO silent Haiku fallback.** Transport
-  errors raise ``OllamaClientError``; the Anthropic construction site
-  (``build_async_anthropic``) is provably never touched on the local path.
+  errors raise ``OllamaClientError``; the Anthropic agent-SDK transport seam
+  (``llm_factory.query``, the Story 119-3 successor to ``build_async_anthropic``)
+  is provably never reached on the local path.
 * **AC6 — Unknown config value fails loud** at both the ladder and the
   factory (a typo silently meaning "haiku" would recreate dark spend).
 * **AC7 — The 91-3 Haiku cache-floor guard does not apply to the local path**
@@ -130,25 +131,29 @@ def _fake_urlopen_unreachable(req: Request, timeout: float | None = None) -> _Fa
 
 
 def _install_anthropic_sentinel(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """Replace the single Anthropic construction site with a tripwire.
+    """Replace the agent-SDK call seam with a tripwire.
 
-    ``build_async_anthropic`` is the SOLE ``AsyncAnthropic`` construction
-    site (story 91-1) and consumers must look it up late-bound, so patching
-    the module attribute intercepts every possible Haiku construction. The
-    returned list records any call — it must stay empty on the local path.
+    Story 119-3 deleted ``build_async_anthropic``; the SOLE remaining path to
+    Anthropic on a Haiku site is the module-level ``query`` symbol (the
+    agent-SDK transport seam, the direct successor to ``build_async_anthropic``)
+    consumed late-bound through ``llm_factory``'s globals. Patching it
+    intercepts every possible Haiku call. The returned list records any
+    invocation — it must stay empty on the local path, proving the Ollama rung
+    never reaches the Anthropic transport (the silent Haiku fallback story 92-2
+    forbids).
     """
     calls: list[str] = []
 
-    def sentinel() -> Any:
-        calls.append("build_async_anthropic")
+    def sentinel(*_args: Any, **_kwargs: Any) -> Any:
+        calls.append("query")
         raise AssertionError(
-            "Anthropic SDK constructed on the LOCAL classification path — "
-            "this is the silent Haiku fallback story 92-2 forbids."
+            "Anthropic agent-SDK query() invoked on the LOCAL classification "
+            "path — this is the silent Haiku fallback story 92-2 forbids."
         )
 
     import sidequest.agents.llm_factory as llm_factory
 
-    monkeypatch.setattr(llm_factory, "build_async_anthropic", sentinel)
+    monkeypatch.setattr(llm_factory, "query", sentinel, raising=False)
     return calls
 
 
@@ -320,8 +325,9 @@ def test_factory_ollama_builds_local_adapter_without_api_key(
 def test_factory_ollama_never_touches_anthropic_construction_site(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Story 91-1 made ``build_async_anthropic`` the single construction
-    site. On the local path it must never be called — at build time."""
+    """Story 119-3 made the module-level ``query`` seam the sole path to
+    Anthropic on a Haiku site. On the local path it must never be reached — at
+    build time (the cache-floor guard and adapter construction stay Ollama-only)."""
     calls = _install_anthropic_sentinel(monkeypatch)
     _enable_local_rung(monkeypatch)
     from sidequest.agents.llm_factory import build_intent_router_llm
@@ -465,8 +471,8 @@ async def test_unreachable_ollama_never_falls_back_to_haiku(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """THE story invariant. With Ollama down, the failure must propagate —
-    the Anthropic construction site must remain untouched through build AND
-    the failing call. A silent fallback to Haiku would recreate the exact
+    the Anthropic agent-SDK ``query`` seam must remain untouched through build
+    AND the failing call. A silent fallback to Haiku would recreate the exact
     dark spend this epic eliminates, by design."""
     import sidequest.agents.ollama_client as ollama_client
     from sidequest.agents.llm_factory import build_intent_router_llm

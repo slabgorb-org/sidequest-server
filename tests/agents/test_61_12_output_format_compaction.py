@@ -59,7 +59,6 @@ rewording. Never xfail, never skip.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
 import pytest
@@ -78,43 +77,24 @@ from sidequest.agents.prompt_framework.core import PromptRegistry
 from sidequest.agents.tooling_protocol import ToolingLlmClient
 
 
-# ---------------------------------------------------------------------------
-# Minimal fake SDK shaped like AsyncAnthropic — copied from
-# test_57_4_recency_guardrails_migration.py. The prompt-build path never
-# fires the SDK; the responses list stays empty.
-# ---------------------------------------------------------------------------
-@dataclass
-class _Usage:
-    input_tokens: int = 0
-    output_tokens: int = 0
-    cache_read_input_tokens: int = 0
-    cache_creation_input_tokens: int = 0
-
-
-@dataclass
-class _Resp:
-    content: list[Any]
-    stop_reason: str
-    usage: _Usage
-    model: str
-
-
-class _Msgs:
-    def __init__(self, responses: list[_Resp]) -> None:
-        self._responses = responses
-
-    async def create(self, **kwargs: Any) -> _Resp:
-        return self._responses.pop(0)
-
-
-class _Sdk:
-    def __init__(self, responses: list[_Resp] | None = None) -> None:
-        self.messages = _Msgs(responses or [])
+@pytest.fixture(autouse=True)
+def _subscription_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Story 119-3: claude-agent-sdk over the Max subscription — both PAYG
+    credentials must be UNSET (a SET key re-routes to PAYG and raises at call
+    time). The prompt-build path these tests drive never fires the transport,
+    but pin the absence so a polluted environment cannot leak in."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
 
 
 def _make_sdk_orchestrator() -> Orchestrator:
-    """SDK-path orchestrator — the only viable narrator backend post-61-9."""
-    client = AnthropicSdkClient(sdk=_Sdk())
+    """SDK-path orchestrator — the only viable narrator backend post-61-9.
+
+    Story 119-3: ``AnthropicSdkClient()`` takes no args (the legacy ``sdk=``
+    injection is gone; the transport is the late-bound module-level ``query``
+    seam). These tests drive only ``build_narrator_prompt``, which never fires
+    ``query``, so no fake stream is installed."""
+    client = AnthropicSdkClient()
     assert isinstance(client, ToolingLlmClient), (
         "AnthropicSdkClient must satisfy ToolingLlmClient — the backend gate "
         "discriminator misroutes otherwise."

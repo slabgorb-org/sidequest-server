@@ -31,7 +31,6 @@ fake-SDK shape (``_Sdk`` / ``_Resp`` / ``_Usage`` / ``_ToolUseSdkBlock`` /
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from typing import Any
 
 import pytest
@@ -39,7 +38,6 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 # Importing the tools package wires the 26 adapters onto default_registry.
 import sidequest.agents.tools  # noqa: F401
-from sidequest.agents.anthropic_sdk_client import AnthropicSdkClient
 from sidequest.agents.claude_client import ClaudeResponse
 from sidequest.agents.orchestrator import (
     _SDK_TOOL_OWNED_FIELDS,
@@ -49,56 +47,40 @@ from sidequest.agents.orchestrator import (
 )
 from sidequest.agents.tool_registry import ToolContext, default_registry
 from sidequest.agents.tooling_protocol import ToolResultBlock, ToolUseBlock
+from tests.agents.fakes.fake_anthropic_sdk_client import (
+    FakeAnthropicSdkClient,
+    ScriptedResponse,
+)
 
 # ---------------------------------------------------------------------------
-# In-memory fake SDK shaped like the AsyncAnthropic surface we touch.
-# Mirrors test_narrator_uses_sdk_client.py exactly.
+# Story 119-3: this file tests the ORCHESTRATOR's SDK-path result assembler
+# (``_assemble_turn_result_sdk`` — the hybrid split), NOT the transport. The
+# right seam is therefore the whole-client ``ToolingLlmClient`` double
+# (``FakeAnthropicSdkClient``), which returns a scripted ``ToolingResult`` with
+# ``tool_calls`` accumulated from scripted ``tool_use`` responses — exactly what
+# the assembler reads. The post-119-3 transport (``claude-agent-sdk`` ``query``)
+# sits BELOW this seam and is covered by ``test_119_3_narrator_port.py``.
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class _Usage:
-    input_tokens: int
-    output_tokens: int
-    cache_read_input_tokens: int = 0
-    cache_creation_input_tokens: int = 0
-
-
-@dataclass
-class _TextBlock:
-    type: str
-    text: str
-
-
-@dataclass
-class _ToolUseSdkBlock:
-    type: str
-    id: str
-    name: str
-    input: dict[str, Any]
-
-
-@dataclass
-class _Resp:
-    content: list[Any]
-    stop_reason: str
-    usage: _Usage
-    model: str
-
-
-class _Msgs:
-    def __init__(self, responses: list[_Resp]) -> None:
-        self._responses = responses
-        self.calls: list[dict[str, Any]] = []
-
-    async def create(self, **kwargs: Any) -> _Resp:
-        self.calls.append(kwargs)
-        return self._responses.pop(0)
-
-
-class _Sdk:
-    def __init__(self, responses: list[_Resp]) -> None:
-        self.messages = _Msgs(responses)
+def _model_response(
+    *,
+    text: str,
+    stop_reason: str,
+    input_tokens: int,
+    output_tokens: int,
+    tool_uses: list[ToolUseBlock] | None = None,
+) -> ScriptedResponse:
+    return ScriptedResponse(
+        text=text,
+        stop_reason=stop_reason,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cached_input_read_tokens=0,
+        cached_input_write_tokens=0,
+        model="claude-sonnet-4-6",
+        tool_uses=tool_uses or [],
+    )
 
 
 class _FakeRegistry:
@@ -166,32 +148,33 @@ def _sidecar_text(prose: str) -> str:
     return f"{prose}\n\n```game_patch\n{json.dumps(_SIDECAR)}\n```\n"
 
 
-def _make_sdk(prose: str) -> _Sdk:
-    """Two-turn fake SDK: a tool_use round, then the final sidecar prose."""
-    return _Sdk(
+def _make_client(prose: str) -> FakeAnthropicSdkClient:
+    """Two-turn scripted ToolingLlmClient: a tool_use round (apply_status),
+    then the final sidecar prose — the shape the SDK assembler consumes."""
+    return FakeAnthropicSdkClient(
         responses=[
-            _Resp(
-                content=[
-                    _ToolUseSdkBlock(
-                        type="tool_use",
+            _model_response(
+                text="",
+                stop_reason="tool_use",
+                input_tokens=200,
+                output_tokens=24,
+                tool_uses=[
+                    ToolUseBlock(
                         id="toolu_status_1",
                         name="apply_status",
-                        input={
+                        arguments={
                             "actor": "Kael",
                             "text": "Bleeding gash",
                             "severity": "Wound",
                         },
                     )
                 ],
-                stop_reason="tool_use",
-                usage=_Usage(input_tokens=200, output_tokens=24),
-                model="claude-sonnet-4-6",
             ),
-            _Resp(
-                content=[_TextBlock(type="text", text=_sidecar_text(prose))],
+            _model_response(
+                text=_sidecar_text(prose),
                 stop_reason="end_turn",
-                usage=_Usage(input_tokens=250, output_tokens=48),
-                model="claude-sonnet-4-6",
+                input_tokens=250,
+                output_tokens=48,
             ),
         ]
     )
@@ -206,8 +189,7 @@ async def _run_sdk_turn(
     """Drive ``run_narration_turn`` through the SDK path with the fixture."""
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
-    sdk = _make_sdk(prose)
-    client = AnthropicSdkClient(sdk=sdk)
+    client = _make_client(prose)
     orch = Orchestrator(client=client)
 
     async def _spy_dispatch(block: ToolUseBlock, ctx: ToolContext) -> ToolResultBlock:
@@ -378,17 +360,16 @@ async def test_sdk_tool_calls_ledger_json_is_empty_list_when_no_tools(
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
-    sdk = _Sdk(
+    client = FakeAnthropicSdkClient(
         responses=[
-            _Resp(
-                content=[_TextBlock(type="text", text=_sidecar_text("Silence."))],
+            _model_response(
+                text=_sidecar_text("Silence."),
                 stop_reason="end_turn",
-                usage=_Usage(input_tokens=120, output_tokens=20),
-                model="claude-sonnet-4-6",
+                input_tokens=120,
+                output_tokens=20,
             ),
         ]
     )
-    client = AnthropicSdkClient(sdk=sdk)
     orch = Orchestrator(client=client)
 
     async def _fake_build_prompt(

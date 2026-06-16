@@ -20,9 +20,11 @@ constrained to the pack's valid axis ids. Contract pinned here:
   Haiku produced an out-of-enum value or there was nothing to infer from.
   (Param shape mirrors ``resolve_archetype(base=, constraints=)`` — the
   valid axis ids live on ``BaseArchetypes``, not on the constraints model.)
-- The SDK client comes from ``llm_factory.build_async_anthropic`` (the
-  single construction site, story 91-1) — these tests fake THAT seam, the
-  same monkeypatch doctrine the cache-floor / cache-control tests use.
+- The transport is the module-level ``llm_factory.query`` agent-SDK seam
+  (Story 119-3, the successor to ``build_async_anthropic``) — these tests
+  fake THAT seam with ``FakeQuery(structured_output_stream({...}))`` and
+  read ``ResultMessage.structured_output``, the same monkeypatch doctrine
+  the other 119-3 Haiku-site tests use.
 - Fill strategy: only missing axes are filled; a preset-set hint is NEVER
   overridden, even if Haiku returns a value for it.
 - Fail-safe (No Silent Fallbacks): out-of-enum → loud chargen error, no
@@ -52,9 +54,7 @@ helper bolted on the side.
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
 
 import pytest
 from opentelemetry import trace as otel_trace
@@ -73,6 +73,7 @@ from sidequest.protocol.messages import (
     SessionEventPayload,
 )
 from sidequest.server.session_handler import WebSocketSessionHandler, _State
+from tests.agents.fakes.fake_agent_sdk import FakeQuery, structured_output_stream
 from tests.server.conftest import (
     mock_claude_client_factory as _mock_claude_client_factory,
 )
@@ -116,6 +117,17 @@ _FREEFORM_NAME = "Dejah Voss"
 # ---------------------------------------------------------------------------
 # Fixtures (mirror tests/server/test_45_6_chargen_archetype_gate.py)
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _subscription_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Story 119-3: the archetype-inference Haiku call drives the agent-SDK
+    ``query`` seam through ``build_agent_sdk_options``, which asserts the Max
+    subscription invariant — both PAYG credentials UNSET (a set key re-routes
+    to PAYG and raises ``AgentSdkAuthUnavailable``). Pin the subscription world
+    so the fake transport is reachable regardless of the ambient environment."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -206,45 +218,39 @@ def fresh_ledger():
 
 
 # ---------------------------------------------------------------------------
-# Fake Haiku SDK (patched at the single construction site, story 91-1)
+# Fake Haiku transport (patched at the agent-SDK ``query`` seam, story 119-3)
 # ---------------------------------------------------------------------------
-
-
-def _tool_response(kwargs: dict[str, Any], tool_input: dict[str, Any]) -> SimpleNamespace:
-    """A synthetic Anthropic message answering whatever forced tool the
-    adapter requested — echoes the tool name from the request so the test
-    doesn't pin the implementation's tool-name choice."""
-    tools = kwargs.get("tools") or [{"name": "infer_archetype"}]
-    block = SimpleNamespace(
-        type="tool_use",
-        name=tools[0]["name"],
-        input=dict(tool_input),
-    )
-    usage = SimpleNamespace(
-        input_tokens=420,
-        output_tokens=17,
-        cache_read_input_tokens=0,
-        cache_creation_input_tokens=0,
-    )
-    return SimpleNamespace(content=[block], usage=usage, stop_reason="tool_use")
 
 
 def _fake_inference_sdk(
     monkeypatch: pytest.MonkeyPatch, *, tool_input: dict[str, Any]
-) -> AsyncMock:
-    """Patch ``llm_factory.build_async_anthropic`` (the mandated single SDK
-    construction site) with a fake whose ``messages.create`` returns one
-    forced ``tool_use`` block carrying ``tool_input``. Returns the AsyncMock
-    so tests can assert on call_count / call payloads."""
+) -> FakeQuery:
+    """Patch ``llm_factory.query`` (the agent-SDK transport seam, Story 119-3)
+    with a :class:`FakeQuery` that yields a terminal ``ResultMessage`` whose
+    ``structured_output`` carries ``tool_input`` — the forced-extraction
+    Path A surface that replaced the raw ``tool_use``-block read.
+
+    Returns the ``FakeQuery`` so tests can assert on ``.calls`` (call count)
+    and ``.calls[-1].prompt`` (the user message that reached the transport).
+    The default ``fake_usage()`` rides the stream so cost accounting bills a
+    non-zero Haiku call (the ADR-134 ledger assertions depend on it).
+    """
     from sidequest.agents import llm_factory
 
-    async def _create(**kwargs: Any) -> SimpleNamespace:
-        return _tool_response(kwargs, tool_input)
+    fake = FakeQuery(structured_output_stream(dict(tool_input)))
+    monkeypatch.setattr(llm_factory, "query", fake, raising=False)
+    return fake
 
-    create = AsyncMock(side_effect=_create)
-    fake_sdk = SimpleNamespace(messages=SimpleNamespace(create=create))
-    monkeypatch.setattr(llm_factory, "build_async_anthropic", lambda: fake_sdk)
-    return create
+
+# The archetype-inference user message always opens with this header
+# (``infer_archetype_from_freeform`` builds it). Story 119-3 routes ALL Haiku
+# single-shots through the shared ``llm_factory.query`` seam, so a single
+# ``FakeQuery`` also records the post-narration objective classifier that fires
+# during the opening turn. Count ONLY the archetype-inference calls so the
+# assertion's original intent ("one inference per confirm") survives the
+# now-shared seam.
+def _inference_calls(fake: FakeQuery) -> list:
+    return [c for c in fake.calls if str(c.prompt).startswith("Missing axes to infer:")]
 
 
 # ---------------------------------------------------------------------------
@@ -403,7 +409,7 @@ class TestAllFreeformInferenceUnblocks:
         otel_capture: InMemorySpanExporter,
         fresh_ledger,
     ) -> None:
-        create = _fake_inference_sdk(
+        fake_query = _fake_inference_sdk(
             monkeypatch,
             tool_input={
                 "jungian_hint": _VALID_JUNGIAN,
@@ -424,15 +430,17 @@ class TestAllFreeformInferenceUnblocks:
             )
 
         # The inference is REACHABLE from the production confirm seam — the
-        # wiring assertion. A stubbed/mocked gate never touches the SDK
-        # construction site.
-        assert create.call_count >= 1, (
+        # wiring assertion. A stubbed/mocked gate never touches the agent-SDK
+        # query seam.
+        inference_calls = _inference_calls(fake_query)
+        assert len(inference_calls) >= 1, (
             "the Haiku inference call must be reachable from the production "
-            "chargen-confirm flow (build_async_anthropic was never used)"
+            "chargen-confirm flow (the agent-SDK query seam was never reached)"
         )
         # Single per-chargen call — cost scales with drama, not with retries.
-        assert create.call_count == 1, (
-            f"expected exactly one inference call per chargen confirm, got {create.call_count}"
+        assert len(inference_calls) == 1, (
+            f"expected exactly one inference call per chargen confirm, "
+            f"got {len(inference_calls)}"
         )
 
         sd = handler._session_data  # type: ignore[attr-defined]
@@ -659,7 +667,7 @@ class TestNoFreeformStillFailsLoud:
         """Preset-only chargen (zero freeform answers on barsoom) that
         still lacks axes must keep the existing loud block, and the Haiku
         SDK must never be touched (no spend on nothing to infer from)."""
-        create = _fake_inference_sdk(
+        fake_query = _fake_inference_sdk(
             monkeypatch,
             tool_input={
                 "jungian_hint": _VALID_JUNGIAN,
@@ -680,7 +688,7 @@ class TestNoFreeformStillFailsLoud:
             f"path; got: {errors[0].payload.message!r}"
         )
 
-        assert create.call_count == 0, (
+        assert len(_inference_calls(fake_query)) == 0, (
             "with no freeform answers to infer from, the Haiku inference "
             "must not be called at all (name-scene text is not fodder)"
         )
@@ -777,7 +785,7 @@ class TestInferenceFunctionContract:
         from sidequest.agents.llm_factory import infer_archetype_from_freeform
 
         base, constraints = _load_heavy_metal_axes()
-        create = _fake_inference_sdk(
+        fake_query = _fake_inference_sdk(
             monkeypatch,
             tool_input={"jungian_hint": _VALID_JUNGIAN, "rpg_role_hint": _VALID_RPG_ROLE},
         )
@@ -792,7 +800,7 @@ class TestInferenceFunctionContract:
             assert result is None, (
                 f"freeform_text={empty!r} has nothing to infer from; got {result!r}"
             )
-        assert create.call_count == 0, (
+        assert len(fake_query.calls) == 0, (
             "empty freeform must short-circuit BEFORE the SDK — no spend "
             "on an inference that cannot succeed"
         )
@@ -805,7 +813,7 @@ class TestInferenceFunctionContract:
         from sidequest.agents.llm_factory import infer_archetype_from_freeform
 
         base, constraints = _load_heavy_metal_axes()
-        create = _fake_inference_sdk(
+        fake_query = _fake_inference_sdk(
             monkeypatch,
             tool_input={"jungian_hint": _VALID_JUNGIAN, "rpg_role_hint": _VALID_RPG_ROLE},
         )
@@ -820,7 +828,7 @@ class TestInferenceFunctionContract:
             session_id="93-1-unit",
         )
         assert result == {}, f"nothing missing → empty no-op result; got {result!r}"
-        assert create.call_count == 0
+        assert len(fake_query.calls) == 0
 
     async def test_null_axes_from_haiku_yield_empty_not_invented_values(
         self, monkeypatch: pytest.MonkeyPatch
@@ -896,7 +904,7 @@ class TestInferenceCostAccounting:
         from sidequest.agents.llm_factory import infer_archetype_from_freeform
 
         base, constraints = _load_heavy_metal_axes()
-        create = _fake_inference_sdk(
+        fake_query = _fake_inference_sdk(
             monkeypatch,
             tool_input={"jungian_hint": _VALID_JUNGIAN, "rpg_role_hint": _VALID_RPG_ROLE},
         )
@@ -925,7 +933,7 @@ class TestInferenceCostAccounting:
                 existing_hints={"jungian_hint": None, "rpg_role_hint": None},
                 session_id=session_id,
             )
-        assert create.call_count == 0, (
+        assert len(fake_query.calls) == 0, (
             "the ceiling check is a PRE-flight refusal — the SDK must not "
             "be called for a killed session"
         )
@@ -952,17 +960,21 @@ class TestSdkFailureDegradesLoudly:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         from sidequest.agents import llm_factory
+        from tests.agents.fakes.fake_agent_sdk import RaisingFakeQuery
 
         class _FakeTransportError(Exception):
-            """Stands in for anthropic.APIConnectionError — deliberately
-            outside the LlmClientError family."""
+            """Stands in for claude_agent_sdk transport errors — deliberately
+            outside the LlmClientError family (the agent SDK raises its own
+            ``CLINotFoundError`` / ``ProcessError`` / ``CLIJSONDecodeError``
+            family, none of which subclass our ``LlmClientError``)."""
 
-        async def _explode(**_kwargs: Any) -> SimpleNamespace:
-            raise _FakeTransportError("simulated API connection failure")
-
-        create = AsyncMock(side_effect=_explode)
-        fake_sdk = SimpleNamespace(messages=SimpleNamespace(create=create))
-        monkeypatch.setattr(llm_factory, "build_async_anthropic", lambda: fake_sdk)
+        # Story 119-3: the transport seam is the module-level ``query``; a
+        # RaisingFakeQuery makes consuming its stream raise — the agent-SDK
+        # analog of ``messages.create`` blowing up mid-call.
+        fake_query = RaisingFakeQuery(
+            _FakeTransportError("simulated agent-SDK transport failure")
+        )
+        monkeypatch.setattr(llm_factory, "query", fake_query, raising=False)
         _disable_default_hint_stamping(monkeypatch)
 
         handler = handler_factory()
@@ -1021,7 +1033,7 @@ class TestOversizedFodderBounded:
         )
 
         base, constraints = _load_heavy_metal_axes()
-        create = _fake_inference_sdk(
+        fake_query = _fake_inference_sdk(
             monkeypatch,
             tool_input={"jungian_hint": _VALID_JUNGIAN, "rpg_role_hint": _VALID_RPG_ROLE},
         )
@@ -1044,15 +1056,16 @@ class TestOversizedFodderBounded:
             "jungian_hint": _VALID_JUNGIAN,
             "rpg_role_hint": _VALID_RPG_ROLE,
         }, "truncation must not break a legitimate (if verbose) inference"
-        assert create.call_count == 1
+        assert len(fake_query.calls) == 1
 
-        # The payload the SDK actually received must be bounded: the user
-        # message carries headers + fodder + pairing hints, so allow a
-        # small fixed overhead beyond the fodder bound.
-        sent = create.call_args.kwargs["messages"][0]["content"]
+        # The payload the transport actually received must be bounded: the
+        # agent-SDK ``query`` carries the user message as its ``prompt`` (the
+        # headers + fodder + pairing hints), so allow a small fixed overhead
+        # beyond the fodder bound.
+        sent = fake_query.calls[-1].prompt
         assert isinstance(sent, str)
         assert len(sent) <= _ARCHETYPE_INFERENCE_MAX_FODDER_CHARS + 2_000, (
-            f"user message is {len(sent)} chars — the joined fodder must be "
+            f"prompt is {len(sent)} chars — the joined fodder must be "
             f"truncated to ~{_ARCHETYPE_INFERENCE_MAX_FODDER_CHARS} before the call"
         )
         assert any("truncat" in rec.getMessage().lower() for rec in caplog.records), (
@@ -1143,9 +1156,9 @@ class TestCreationAnswersInferenceMarking:
         otel_capture: InMemorySpanExporter,
     ) -> None:
         """Preset accumulation never marks: the badge means 'the engine read
-        your words', and on a preset walk it never did. The fake SDK is
+        your words', and on a preset walk it never did. The fake transport is
         installed purely to prove no inference call sneaks in."""
-        create = _fake_inference_sdk(
+        fake_query = _fake_inference_sdk(
             monkeypatch,
             tool_input={
                 "jungian_hint": _VALID_JUNGIAN,
@@ -1159,8 +1172,8 @@ class TestCreationAnswersInferenceMarking:
         for msg in out:
             assert not isinstance(msg, ErrorMessage), msg.payload.message
 
-        assert create.call_count == 0, (
-            "preset walk with stamped hints must not reach the inference SDK"
+        assert len(_inference_calls(fake_query)) == 0, (
+            "preset walk with stamped hints must not reach the inference transport"
         )
         sd = handler._session_data  # type: ignore[attr-defined]
         character = sd.snapshot.characters[0]

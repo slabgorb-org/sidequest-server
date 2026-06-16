@@ -1,13 +1,34 @@
-"""AnthropicSdkClient — Phase A foundation."""
+"""AnthropicSdkClient — narrator transport on ``claude-agent-sdk`` (ADR-101
+amendment, Story 119-3).
+
+The narrator inference path runs through the ``claude-agent-sdk`` ``query()``
+loop over the Max **subscription** pool (the bundled CLI's OAuth login), NOT the
+raw ``anthropic`` Messages SDK over the metered PAYG ledger. ``ANTHROPIC_API_KEY``
+/ ``ANTHROPIC_AUTH_TOKEN`` must be **unset** (a set key re-routes to PAYG — the
+119-1 NO-GO); :func:`assert_subscription_auth` enforces that loudly at call time
+(No Silent Fallbacks). Context isolation (AC1) is pinned in
+:func:`build_agent_sdk_options`.
+"""
 
 from __future__ import annotations
 
 import inspect
 import logging
 import os
+import tempfile
+import uuid
 from collections import deque
 from collections.abc import Awaitable, Callable
-from typing import Any, Literal
+from typing import Any
+
+from claude_agent_sdk import (
+    ClaudeAgentOptions,
+    create_sdk_mcp_server,
+    query,
+)
+from claude_agent_sdk import (
+    tool as _sdk_tool,
+)
 
 from sidequest.agents import cost_safety
 from sidequest.agents.anthropic_cost import compute_cost_usd
@@ -77,6 +98,18 @@ class AnthropicSdkConfigError(AnthropicSdkClientError):
     """Construction-time configuration problem (missing key, bad TTL)."""
 
 
+class AgentSdkAuthUnavailable(AnthropicSdkClientError):
+    """Story 119-3 (AC2): the claude-agent-sdk subscription path is not usable.
+
+    Raised when a PAYG credential (``ANTHROPIC_API_KEY`` /
+    ``ANTHROPIC_AUTH_TOKEN``) is SET on the SDK path — a set key silently
+    re-routes to the metered API-platform ledger (the 119-1 NO-GO) — OR when a
+    query fails because the subscription login is absent. There is NO PAYG
+    fallback on this transport: the failure surfaces as a loud raise, never a
+    degraded-but-successful result (No Silent Fallbacks).
+    """
+
+
 class AnthropicSdkLoopExceeded(AnthropicSdkClientError):
     """The tool-use loop did not converge within max_iterations."""
 
@@ -106,94 +139,143 @@ class AnthropicSdkCostCeilingExceeded(AnthropicSdkClientError):
         self.ceiling_usd = ceiling_usd
 
 
-CacheTtl = Literal["5m", "1h"]
-_VALID_TTLS: frozenset[str] = frozenset({"5m", "1h"})
+# Story 119-3 — the in-process SDK-MCP server name the narration tools are
+# collected under. The model addresses each tool by ``mcp__<server>__<tool>``;
+# the ``@tool`` handler bridge maps it back to the bare name for the registry
+# (spec §5.2/§5.3).
+_NARRATION_SERVER_NAME = "narration"
 
 
-# Story 61-19 — the cache tier for VOLATILE (changes-every-turn) content.
-# The per-turn message tail (player action + tool_result deltas, and the
-# valley/recency system content that rides between the stable-prefix
-# breakpoint and the message breakpoint) is rewritten every turn and read
-# back at most once — within the same turn's tool loop, seconds later. The
-# 1h tier's 2x write premium only pays off when content persists and is
-# re-read across turns; volatile content has zero cross-turn value, so it
-# rides the 5m tier (1.25x), which still covers the within-turn read while
-# never paying the 1h premium. The STABLE system prefix + tools keep
-# ``self.cache_ttl`` (1h by default) — they amortize across turns. See
-# session 894 forensics in ``sprint/context/context-story-61-19.md``.
-_VOLATILE_CACHE_TTL: CacheTtl = "5m"
+# Story 119-3 — process-stable neutral working dir for the agent SDK. The SDK
+# treats ``cwd`` as the project root and would absorb the repo ``CLAUDE.md`` /
+# ``.claude`` from the launch dir (the spike answered in an SM persona — AC1).
+# An empty temp dir holds none of that.
+_AGENT_SDK_CWD: str | None = None
 
 
-# 1h ephemeral cache is a beta: without this header on the request the
-# API rejects ``ttl: "1h"`` and every narration turn 400s. Sent only on
-# the 1h path — see ``complete_with_tools``.
-_EXTENDED_CACHE_TTL_BETA = "extended-cache-ttl-2025-04-11"
+def _neutral_cwd() -> str:
+    """Return a process-stable empty dir with no ``CLAUDE.md`` / ``.claude``."""
+    global _AGENT_SDK_CWD
+    if _AGENT_SDK_CWD is None:
+        _AGENT_SDK_CWD = tempfile.mkdtemp(prefix="sidequest-agentsdk-cwd-")
+    return _AGENT_SDK_CWD
+
+
+def assert_subscription_auth() -> None:
+    """Raise :class:`AgentSdkAuthUnavailable` if a PAYG credential is set
+    (Story 119-3 AC2 — the INVERSE of the old "key required" check).
+
+    The claude-agent-sdk transport draws the Max subscription pool only with
+    ``ANTHROPIC_API_KEY`` AND ``ANTHROPIC_AUTH_TOKEN`` both unset; a set key
+    silently re-routes to the metered PAYG ledger (the 119-1 NO-GO). There is
+    no PAYG fallback — fail loud (No Silent Fallbacks).
+    """
+    for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+        if os.environ.get(var):
+            raise AgentSdkAuthUnavailable(
+                f"{var} is set — the claude-agent-sdk transport must run with "
+                "ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN both UNSET so auth "
+                "resolves to the Max subscription login. A set credential "
+                "re-routes to the metered PAYG ledger (the 119-1 NO-GO). Unset "
+                "it; there is no PAYG fallback (No Silent Fallbacks)."
+            )
+
+
+def build_agent_sdk_options(
+    *,
+    model: str,
+    system_prompt: str,
+    max_turns: int,
+    allowed_tools: list[str] | None = None,
+    mcp_servers: dict[str, Any] | None = None,
+    output_format: dict[str, Any] | None = None,
+) -> ClaudeAgentOptions:
+    """Build the frozen ``ClaudeAgentOptions`` for one subscription call.
+
+    Asserts the no-PAYG-cred invariant (AC2) and pins context isolation (AC1):
+    a **plain-string** ``system_prompt`` (never the ``claude_code`` preset), a
+    neutral ``cwd`` with no ``CLAUDE.md``, and ``setting_sources=[]`` +
+    ``add_dirs=[]`` so no on-disk config tier (user/project/local) or repo
+    ``CLAUDE.md`` is absorbed.
+
+    ``max_turns`` is floored at 2: the SDK spends an internal finalize turn, so
+    a literal ``max_turns=1`` fails closed with ``subtype='error_max_turns'``
+    (the +1 is MANDATORY — spec §3.6 / OQ-16).
+    """
+    assert_subscription_auth()
+    return ClaudeAgentOptions(
+        model=model,
+        system_prompt=system_prompt,
+        max_turns=max(2, int(max_turns)),
+        allowed_tools=list(allowed_tools) if allowed_tools else [],
+        mcp_servers=dict(mcp_servers) if mcp_servers else {},
+        output_format=output_format,
+        setting_sources=[],
+        add_dirs=[],
+        cwd=_neutral_cwd(),
+    )
+
+
+def _usage_int(usage: Any, key: str) -> int:
+    """Read a token count from ``ResultMessage.usage`` (``dict | None`` — spec
+    §3.2) or a usage object, defaulting to 0 when absent."""
+    if usage is None:
+        return 0
+    if isinstance(usage, dict):
+        return int(usage.get(key, 0) or 0)
+    return int(getattr(usage, key, 0) or 0)
+
+
+def _is_agent_result_message(msg: Any) -> bool:
+    """Duck-typed terminal ``ResultMessage`` detector (fakes file §): the
+    terminal message carries ``is_error`` + ``num_turns``; the streaming
+    ``AssistantMessage`` carries ``content`` and neither."""
+    return hasattr(msg, "is_error") and hasattr(msg, "num_turns")
+
+
+def _build_narration_tool_handler(
+    *,
+    bare_name: str,
+    tool_dispatch: Callable[[ToolUseBlock], Awaitable[ToolResultBlock] | ToolResultBlock],
+    accumulator: list[ToolUseBlock],
+) -> Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]:
+    """The SDK-MCP → ``default_registry.dispatch`` bridge for one tool (spec §5.3).
+
+    The agent SDK owns the loop and invokes this handler when the model calls
+    the tool. The handler re-enters the orchestrator's ``dispatch`` closure with
+    a ``ToolUseBlock`` carrying the **bare** tool name (the registry only knows
+    bare names — ``Registry.dispatch`` looks up ``block.name``), appends it to
+    the per-turn ledger (the fabricated-roll detector + GM-panel ledger depend
+    on a complete ``tool_calls`` list), and returns the dispatch result in the
+    SDK's ``{"content":[...],"is_error":...}`` shape so the SDK feeds it back to
+    the model.
+    """
+
+    async def handler(args: dict[str, Any]) -> dict[str, Any]:
+        block = ToolUseBlock(id=f"toolu_{uuid.uuid4().hex}", name=bare_name, arguments=args)
+        accumulator.append(block)
+        maybe = tool_dispatch(block)
+        result = await maybe if inspect.isawaitable(maybe) else maybe
+        return {
+            "content": [{"type": "text", "text": result.content}],
+            "is_error": result.is_error,
+        }
+
+    return handler
 
 
 class AnthropicSdkClient:
     """Anthropic SDK client implementing ToolingLlmClient."""
 
-    def __init__(
-        self,
-        *,
-        sdk: Any | None = None,
-        cache_ttl: CacheTtl | None = None,
-    ) -> None:
-        self._api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if sdk is None and not self._api_key:
-            raise AnthropicSdkConfigError(
-                "ANTHROPIC_API_KEY not set — required to construct "
-                "AnthropicSdkClient without an explicit sdk= injection."
-            )
-
-        # Operative default is 1h: submit-and-wait MP cadence routinely
-        # exceeds the 5m window, so a 5m write is re-paid almost every
-        # turn. A 1h write is 2x base and is INTENDED to amortize across
-        # an ~85-turn session. Operators can still opt back to 5m via the
-        # env var.
-        #
-        # Story 60-4 (2026-05-23): ``complete_with_tools`` adds a moving
-        # cache_control breakpoint on the last content block of the newest
-        # continuation message, so the appended tool_use/tool_result blocks
-        # stop forcing a 5m re-mint of the ~11.7k prefix on every iter 2+.
-        # The marker's PRESENCE is what prevents the re-mint (60-3 diagnosis);
-        # 60-4 originally set its TTL to ``self.cache_ttl`` (1h).
-        #
-        # Story 61-19 (2026-05-30): that message-level marker (iter=1 tail AND
-        # continuation) moved to ``_VOLATILE_CACHE_TTL`` (5m) — the tail is
-        # volatile, so 1h's 2x premium was wasted on it (~9.7k tok/turn, ~73%
-        # of session cost, session 894). Only the marker's TTL changed; its
-        # presence still prevents the prefix re-mint. The STABLE system prefix
-        # (``system_blocks[0]``) + tools keep ``self.cache_ttl`` (1h) and still
-        # amortize across turns — an empirical probe confirmed warm turns read
-        # the prefix at 1h (write=0) while only the tail writes at 5m. The
-        # original 60-4 "~70% savings" figure was measured under the pre-61-19
-        # 1h-everywhere layout. See ``sprint/archive/60-3-session.md`` +
-        # ``sprint/archive/60-4-session.md`` and
-        # ``sprint/context/context-story-61-19.md``.
-        resolved_ttl = (
-            cache_ttl
-            if cache_ttl is not None
-            else os.environ.get("SIDEQUEST_ANTHROPIC_CACHE_TTL", "1h")
-        )
-        if resolved_ttl not in _VALID_TTLS:
-            raise AnthropicSdkConfigError(
-                f"SIDEQUEST_ANTHROPIC_CACHE_TTL={resolved_ttl!r} invalid; "
-                f"must be one of {sorted(_VALID_TTLS)}"
-            )
-        self.cache_ttl: CacheTtl = resolved_ttl  # type: ignore[assignment]
-
-        if sdk is None:
-            # Story 91-1: route through the single SDK construction seam.
-            # Function-level import dodges the llm_factory → this-module
-            # circular import; attribute access (not ``from … import``) keeps
-            # the lookup late-bound so the wiring test's monkeypatched fake
-            # is what this client receives. An explicit ``sdk=`` injection
-            # (the fake-SDK test fleet) never consults the seam.
-            from sidequest.agents import llm_factory
-
-            sdk = llm_factory.build_async_anthropic()
-        self._sdk = sdk
+    def __init__(self) -> None:
+        # Story 119-3: the narrator transport is claude-agent-sdk over the Max
+        # subscription pool. No ``ANTHROPIC_API_KEY`` is read or required —
+        # construction never touches the network. The auth invariant is the
+        # INVERSE of the old "key required" check (a SET key re-routes to PAYG —
+        # the 119-1 NO-GO) and is asserted loudly at call time in
+        # :func:`build_agent_sdk_options` (AC2, No Silent Fallbacks). The
+        # late-bound module-level ``query`` symbol is the fake-injection seam
+        # (OQ-9), monkeypatched by the test fleet — no ``sdk=`` injection.
 
         # Story 61-followup-A — per-session_id rolling baselines for the
         # cost-runaway fingerprint detector. Two parallel windows
@@ -237,10 +319,6 @@ class AnthropicSdkClient:
         self._session_cumulative_cost_usd: dict[str, float] = _ledger.cumulative_cost_usd
         self._session_ceiling_announced: set[str] = _ledger.ceiling_announced
 
-    @property
-    def api_key_present(self) -> bool:
-        return bool(self._api_key)
-
     # ------------------------------------------------------------------
     # complete_with_tools
     # ------------------------------------------------------------------
@@ -261,448 +339,258 @@ class AnthropicSdkClient:
         caller: str = "narrator",
         tool_choice: dict[str, Any] | None = None,
     ) -> ToolingResult:
-        # Story 61-followup-D §C.2 — pre-flight ceiling check. A session
-        # whose cumulative has already crossed the ceiling on a prior call
-        # MUST raise immediately without touching the SDK. This is the
-        # "no further billing" half of the terminal-refusal contract.
+        """Drive one narration turn through the claude-agent-sdk ``query()`` loop.
+
+        Story 119-3: the manual ``messages.create`` + ``stop_reason=='tool_use'``
+        re-call loop is replaced by the SDK's own loop. The system blocks are
+        concatenated into a plain-string ``system_prompt`` (AC1 isolation); the
+        narration tools become in-process SDK-MCP ``@tool`` handlers that bridge
+        back into ``tool_dispatch`` (spec §5.3); the SDK runs the loop and emits a
+        terminal ``ResultMessage`` carrying the converged prose, ``num_turns``,
+        and ``usage``. The ``ToolingResult`` shape and every OTEL signal are
+        preserved (spec §4/§7.4).
+
+        ``max_tokens`` and ``tool_choice`` are accepted for ToolingLlmClient
+        signature compatibility but not forwarded: the CLI owns output length and
+        the Agent SDK exposes no ``tool_choice`` (spec §3.6). A read-only caller
+        (the aside, ``tool_choice={"type":"none"}``) passes no ``tool_dispatch``,
+        so no tools are advertised — the agent SDK's analog of "present no tools".
+        """
+        del max_tokens, tool_choice  # signature-compat only (see docstring)
+
+        # Story 61-followup-D §C.2 — pre-flight ceiling check. A session whose
+        # cumulative already crossed the ceiling MUST raise before any spend.
         if session_id is not None:
             self._check_cost_ceiling(session_id)
 
-        sdk_system = self._build_system_array(system_blocks)
-        sdk_tools = self._build_tools_array(tools)
-
-        running_messages: list[dict[str, Any]] = [
-            {"role": m.role, "content": m.content} for m in messages
-        ]
-        all_tool_uses: list[ToolUseBlock] = []
-        last_text = ""
-        cumulative_in = 0
-        cumulative_out = 0
-        cumulative_cache_read = 0
-        cumulative_cache_write = 0
-        cumulative_cache_write_5m = 0
-        cumulative_cache_write_1h = 0
-        cumulative_cost_usd = 0.0
-        last_model = model
-
-        # ttl:"1h" on the cache_control markers is rejected unless the
-        # extended-cache-ttl beta is opted in via this header. The 5m path
-        # sends no extra header (request stays identical to the prior
-        # behavior). No silent fallback: if the API still rejects 1h the
-        # error surfaces, it is not downgraded to 5m.
-        extra_headers = (
-            {"anthropic-beta": _EXTENDED_CACHE_TTL_BETA} if self.cache_ttl == "1h" else None
+        # AC1: the assembled narrator system text is a PLAIN STRING (never the
+        # claude_code preset). The three-zone cacheable layout collapses to one
+        # string — the CLI owns caching now, so the per-block cache markers are
+        # gone (spec §6.4.3 / OQ-6).
+        system_prompt = "\n\n".join(b.text for b in system_blocks if b.text)
+        # The SDK owns the tool round-trip, so only the initial user turn(s) are
+        # sent as the prompt; tool_result continuations are no longer hand-built.
+        prompt = "\n\n".join(
+            m.content for m in messages if isinstance(m.content, str) and m.content
         )
 
-        initial_message_count = len(running_messages)
+        all_tool_uses: list[ToolUseBlock] = []
+        mcp_servers, allowed_tools = self._build_narration_mcp(
+            tools, tool_dispatch, all_tool_uses
+        )
+        options = build_agent_sdk_options(
+            model=model,
+            system_prompt=system_prompt,
+            max_turns=max_iterations,
+            allowed_tools=allowed_tools,
+            mcp_servers=mcp_servers,
+        )
 
-        # Story 71-40: the soft ``iteration_cap`` cap-hit span fires at most once
-        # per turn — a warning the turn is unusually tool-heavy, not a stop.
-        cap_hit_fired = False
+        last_text = ""
+        last_model = model
+        result_msg: Any = None
+        with llm_request_span(model=model) as span:
+            async for message in query(prompt=prompt, options=options):
+                if _is_agent_result_message(message):
+                    result_msg = message
+                    continue
+                model_id = getattr(message, "model", None)
+                if model_id:
+                    last_model = model_id
+                content = getattr(message, "content", None)
+                if isinstance(content, list):
+                    text_chunks = [
+                        b.text for b in content if getattr(b, "type", None) == "text"
+                    ]
+                    # Playtest 2026-06-07 (five_points doubled-narration): keep
+                    # only the LAST text block of an assistant message; earlier
+                    # blocks are drafts. Emit a WARNING span so the drop is
+                    # audited, never silent (house OTEL rule, spec §7.3).
+                    if len(text_chunks) > 1:
+                        discarded_chars = sum(len(c) for c in text_chunks[:-1])
+                        logger.warning(
+                            "narrator.multi_text_block_discarded count=%d "
+                            "discarded_chars=%d kept_chars=%d caller=%s",
+                            len(text_chunks) - 1,
+                            discarded_chars,
+                            len(text_chunks[-1]),
+                            caller,
+                        )
+                        with narrator_multi_text_block_discarded_span(
+                            discarded_count=len(text_chunks) - 1,
+                            discarded_chars=discarded_chars,
+                            kept_chars=len(text_chunks[-1]),
+                            iteration=1,
+                            caller=caller,
+                        ):
+                            pass
+                    if text_chunks:
+                        last_text = text_chunks[-1]
 
-        for iteration in range(1, max_iterations + 1):
-            # Story 71-40: a turn that reaches the soft cap (set below the hard
-            # ``max_iterations`` ceiling) records ONE cap-hit span so the GM panel
-            # surfaces the throttled turn. The loop is NOT stopped here — the
-            # fail-loud ``AnthropicSdkLoopExceeded`` ceiling below is unchanged.
-            if iteration_cap is not None and iteration >= iteration_cap and not cap_hit_fired:
-                cap_hit_fired = True
-                with narrator_tool_loop_cap_hit_span(
-                    iteration_cap=iteration_cap,
-                    iterations_used=iteration,
-                    max_iterations=max_iterations,
-                ):
-                    pass
-            # Story 60-4/60-7: every iter — iter=1 included — build the API
-            # payload with a moving cache_control breakpoint on the LAST
-            # content block of the newest user message. Without this marker
-            # the API auto-caches the content sitting past our last explicit
-            # breakpoint (the system_blocks[0]+tools prefix) at the default 5m
-            # TTL — on iter=1 that's the new user message + recency-zone
-            # deltas, on iter=2+ it's the appended tool_use / tool_result
-            # blocks. The marker pins that volatile tail to a known tier.
-            #
-            # Story 61-19 (TTL correction): the volatile-tail marker now resolves
-            # to ``_VOLATILE_CACHE_TTL`` (5m, 1.25x), NOT the client's 1h tier.
-            # The tail changes every turn, so a 1h (2x) write on it is invalidated
-            # after a single within-turn read — pure cross-turn waste; 5m covers
-            # the seconds-long tool loop at 1.25x. Only the stable system prefix
-            # (``system_blocks[0]``) + tools keep 1h, where they amortize.
-            # Story 61-20 (volume): the session-static AVAILABLE CULTURES roster
-            # and magic hard_limits are zone-promoted INTO that 1h prefix, so the
-            # recurring 5m tail shrinks toward the per-turn delta only.
-            #
-            # The payload is rebuilt fresh per iteration so prior calls' captured
-            # kwargs stay snapshot-clean.
-            payload_messages = self._build_messages_payload(
-                running_messages,
-                is_continuation=len(running_messages) > initial_message_count,
+            if result_msg is None:
+                raise AnthropicSdkClientError(
+                    "claude-agent-sdk query produced no terminal ResultMessage "
+                    f"(caller={caller!r}, model={model!r}) — cannot account for "
+                    "the call (No Silent Fallbacks)."
+                )
+
+            # Usage / cost accounting from ResultMessage.usage (dict|None, §3.2).
+            usage = getattr(result_msg, "usage", None)
+            input_tokens = _usage_int(usage, "input_tokens")
+            output_tokens = _usage_int(usage, "output_tokens")
+            cache_read = _usage_int(usage, "cache_read_input_tokens")
+            cache_write = _usage_int(usage, "cache_creation_input_tokens")
+            cost = compute_cost_usd(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cached_input_read_tokens=cache_read,
+                cached_input_write_tokens=cache_write,
+                model=last_model,
             )
-            # Aside-rides-the-cache (2026-06-07): forward tool_choice only
-            # when explicitly set — passing the kwarg at all on the narrator
-            # path would change the request payload that the cached prefix
-            # was minted against for no benefit. ``{"type": "none"}`` lets
-            # the read-only aside present the narrator's exact tools array
-            # (cache-prefix preservation) while forbidding tool calls.
-            create_kwargs: dict[str, Any] = {}
-            if tool_choice is not None:
-                create_kwargs["tool_choice"] = tool_choice
-            with llm_request_span(model=model, iteration=iteration) as span:
-                response = await self._sdk.messages.create(
-                    model=model,
-                    system=sdk_system,
-                    messages=payload_messages,
-                    tools=sdk_tools,
-                    max_tokens=max_tokens,
-                    extra_headers=extra_headers,
-                    **create_kwargs,
-                )
-                usage = response.usage
-                input_tokens = int(getattr(usage, "input_tokens", 0))
-                output_tokens = int(getattr(usage, "output_tokens", 0))
-                cache_read = int(getattr(usage, "cache_read_input_tokens", 0))
-                cache_write = int(getattr(usage, "cache_creation_input_tokens", 0))
-                # Per-TTL breakdown — exposed by anthropic-python>=0.51 via the
-                # nested cache_creation object. Older SDKs return no nested
-                # object; we keep aggregate-only behavior and report 0 for the
-                # breakdown so the operator can see "SDK doesn't expose it"
-                # rather than guessing.
-                cache_creation = getattr(usage, "cache_creation", None)
-                cache_write_5m = (
-                    int(getattr(cache_creation, "ephemeral_5m_input_tokens", 0))
-                    if cache_creation
-                    else 0
-                )
-                cache_write_1h = (
-                    int(getattr(cache_creation, "ephemeral_1h_input_tokens", 0))
-                    if cache_creation
-                    else 0
-                )
-                cumulative_in += input_tokens
-                cumulative_out += output_tokens
-                cumulative_cache_read += cache_read
-                cumulative_cache_write += cache_write
-                cumulative_cache_write_5m += cache_write_5m
-                cumulative_cache_write_1h += cache_write_1h
-                last_model = response.model
-
-                # Story 60-4: pass the per-TTL split so 1h writes are billed at
-                # the real 2x base rate instead of being aggregated into the 5m
-                # rate (compute_cost_usd previously had a single cache-write
-                # field that defaulted to the 5m rate). Fallback: if the SDK
-                # didn't expose the nested cache_creation breakdown (anthropic
-                # < 0.51) bill the aggregate at the 5m rate, matching the
-                # historical pricing behavior — no silent under-billing.
-                cost_kwargs: dict[str, Any] = {
+            span.set_attributes(
+                {
+                    "llm.caller": caller,
+                    "llm.input_tokens": input_tokens,
+                    "llm.output_tokens": output_tokens,
+                    "llm.cached_input_read_tokens": cache_read,
+                    "llm.cached_input_write_tokens": cache_write,
+                    "llm.cost_usd": cost,
+                }
+            )
+            subtype = getattr(result_msg, "subtype", None)
+            if subtype:
+                span.set_attribute("llm.stop_reason", str(subtype))
+            logger.info(
+                "narrator.sdk.usage caller=%s model=%s input=%d output=%d "
+                "cache_read=%d cache_write=%d cost_usd=%.6f",
+                caller,
+                last_model,
+                input_tokens,
+                output_tokens,
+                cache_read,
+                cache_write,
+                cost,
+            )
+            _watcher_publish_event(
+                "narrator.sdk.usage",
+                {
                     "input_tokens": input_tokens,
                     "output_tokens": output_tokens,
-                    "cached_input_read_tokens": cache_read,
-                    "model": response.model,
-                }
-                if cache_creation is not None:
-                    cost_kwargs["cached_input_write_5m_tokens"] = cache_write_5m
-                    cost_kwargs["cached_input_write_1h_tokens"] = cache_write_1h
-                else:
-                    cost_kwargs["cached_input_write_tokens"] = cache_write
-                cost = compute_cost_usd(**cost_kwargs)
-                cumulative_cost_usd += cost
-                span.set_attributes(
-                    {
-                        # Story 91-1: caller tag on every llm.request span so
-                        # span-based attribution can split narrator from
-                        # dungeon-curate (and any future tool-caller) traffic.
-                        "llm.caller": caller,
-                        "llm.input_tokens": input_tokens,
-                        "llm.output_tokens": output_tokens,
-                        "llm.cached_input_read_tokens": cache_read,
-                        "llm.cached_input_write_tokens": cache_write,
-                        "llm.stop_reason": response.stop_reason,
-                        "llm.cost_usd": cost,
-                    }
-                )
-                # Per-iter ledger to the server log so cache hit/miss is
-                # visible without a WS tap (Task B3). Story 91-1: the line
-                # carries ``caller`` and ``model`` so log-based cost
-                # accounting (the /sq-llm-costs Layer-1 reconciliation) can
-                # attribute every call — pre-91-1 it was caller- and
-                # model-blind.
-                logger.info(
-                    "narrator.sdk.usage caller=%s model=%s iter=%d input=%d "
-                    "output=%d cache_read=%d cache_write=%d 5m=%d 1h=%d "
-                    "cost_usd=%.6f",
-                    caller,
-                    response.model,
-                    iteration,
-                    input_tokens,
-                    output_tokens,
-                    cache_read,
-                    cache_write,
-                    cache_write_5m,
-                    cache_write_1h,
-                    cost,
+                    "cost_usd": cost,
+                    "model": last_model,
+                    "cache_read_tokens": cache_read,
+                    "cache_write_tokens": cache_write,
+                },
+                component="narrator.sdk",
+                severity="info",
+            )
+            # Story 61-4 — cost-runaway fingerprint detector (session_id=None is
+            # a no-op). Story 61-followup-D — per-call cumulative + $10 ceiling.
+            self._maybe_emit_cost_runaway(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_usd=cost,
+                model=last_model,
+                session_id=session_id,
+                caller=caller,
+            )
+            if session_id is not None:
+                self._update_session_cumulative(
+                    session_id=session_id, cost_usd=cost, model=last_model
                 )
 
-                # Story 61-followup-B — Promote the per-call usage line above
-                # to a watcher event so the GM panel has a continuous,
-                # plottable per-call cost baseline (the log line is invisible
-                # to the watcher transport). severity=info: this is the steady
-                # baseline the 61-4 warn alarm and the followup-D session
-                # ceiling compare against, not an alarm itself. Fires per SDK
-                # call / tool-loop iteration, mirroring the 60-7 cache event's
-                # component+shape. cumulative session totals remain
-                # followup-D's job (session.cost_running_total).
-                _watcher_publish_event(
-                    "narrator.sdk.usage",
-                    {
-                        "input_tokens": input_tokens,
-                        "output_tokens": output_tokens,
-                        "cost_usd": cost,
-                        "model": response.model,
-                        "cache_read_tokens": cache_read,
-                        "cache_write_tokens": cache_write,
-                    },
-                    component="narrator.sdk",
-                    severity="info",
-                )
+        num_turns = int(getattr(result_msg, "num_turns", 1) or 1)
 
-                # Story 60-7 — Lie-detector for the cache_control regression
-                # class: a single iter writing to BOTH tiers at once.
-                # Post-61-19 the tiers are split by content — the stable
-                # system prefix + tools are the only 1h-marked content, the
-                # volatile message tail the only 5m-marked content. So a
-                # healthy WARM iter writes 5m-only (tail) with 1h=0 (prefix is
-                # a read); a COLD/warmup iter may legitimately write both (1h
-                # prefix mint + 5m tail). Both > 0 in a STEADY-STATE iter means
-                # the same content is being written to two tiers (e.g. a tail
-                # marker defaulting to 5m while a 1h marker covers overlapping
-                # content) — the waste pattern 60-7 eliminated. Fires per
-                # offending iter (not aggregated per turn) so the GM panel can
-                # pin which iteration leaks.
-                #
-                # Story 91-6 — Gate the WARN on `cache_read > 0`. A cold start
-                # (cache_read == 0) has nothing to read back, so a dual write
-                # is the unavoidable first mint of both tiers — not the churn
-                # pathology. The genuine signal is the conjunction: the prefix
-                # IS being read back (cache_read > 0) yet the 1h tier is being
-                # re-minted anyway. Cold-start dual writes downgrade to
-                # severity=info / logger.info (not deleted — the GM panel
-                # still sees them, per the OTEL Observability Principle) and
-                # the warm pathology stays loud (severity=warn, lie-detector,
-                # not hard error — the call already succeeded; the observation
-                # is the waste).
-                if cache_write_5m > 0 and cache_write_1h > 0:
-                    both_writes_fields: dict[str, Any] = {
-                        "iteration": iteration,
-                        "cache_write_5m_tokens": cache_write_5m,
-                        "cache_write_1h_tokens": cache_write_1h,
-                        "cache_read_tokens": cache_read,
-                        "model": response.model,
-                    }
-                    if cache_read > 0:
-                        logger.warning(
-                            "narrator.cache.both_writes_fired iter=%d 5m=%d 1h=%d "
-                            "cache_read=%d model=%s",
-                            iteration,
-                            cache_write_5m,
-                            cache_write_1h,
-                            cache_read,
-                            response.model,
-                        )
-                        _watcher_publish_event(
-                            "narrator.cache.both_writes_fired",
-                            both_writes_fields,
-                            component="narrator.sdk",
-                            severity="warn",
-                        )
-                    else:
-                        logger.info(
-                            "narrator.cache.both_writes_fired (cold-start mint, "
-                            "expected) iter=%d 5m=%d 1h=%d model=%s",
-                            iteration,
-                            cache_write_5m,
-                            cache_write_1h,
-                            response.model,
-                        )
-                        _watcher_publish_event(
-                            "narrator.cache.both_writes_fired",
-                            both_writes_fields,
-                            component="narrator.sdk",
-                            severity="info",
-                        )
-
-                # Story 61-4 — Cost-runaway fingerprint detector. Check the
-                # just-observed call against the rolling baselines (or warmup
-                # floors), fire the watcher event if any trigger matches,
-                # then append to the baseline window so subsequent calls
-                # compare against PRIOR calls. The entire lifecycle
-                # (read → emit → append) lives inside
-                # ``_maybe_emit_cost_runaway`` to keep the detector's
-                # state management encapsulated. ``session_id=None``
-                # bypasses the detector entirely (non-narrator).
-                self._maybe_emit_cost_runaway(
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                    cost_usd=cost,
-                    model=response.model,
-                    session_id=session_id,
-                    caller=caller,
-                )
-
-                # Story 61-followup-D §C.2 — per-iter cumulative update +
-                # threshold-cross detection. Each iter has already billed;
-                # the ceiling cannot un-bill the call that just landed. The
-                # check fires the typed event + raises so subsequent iters
-                # (and subsequent calls for this session) refuse without
-                # touching the SDK.
-                if session_id is not None:
-                    self._update_session_cumulative(
-                        session_id=session_id,
-                        cost_usd=cost,
-                        model=response.model,
-                    )
-
-            text_chunks, tool_use_blocks = self._split_content(response.content)
-            # Playtest 2026-06-07 (five_points doubled-narration card): a
-            # message with MULTIPLE text blocks — e.g. a prose draft, a
-            # tool_use, then a revised retelling — must NOT be joined into one
-            # narration ("".join shipped both tellings back-to-back with the
-            # second scene title jammed inline). The model's LAST text block
-            # is its converged prose for the message; earlier blocks are
-            # drafts. Keep the last, discard the rest, and emit a WARNING-
-            # grade span so the GM panel shows exactly what was dropped — no
-            # silent trimming (house OTEL rule).
-            if len(text_chunks) > 1:
-                discarded_chars = sum(len(c) for c in text_chunks[:-1])
-                logger.warning(
-                    "narrator.multi_text_block_discarded count=%d discarded_chars=%d "
-                    "kept_chars=%d iteration=%d caller=%s",
-                    len(text_chunks) - 1,
-                    discarded_chars,
-                    len(text_chunks[-1]),
-                    iteration,
-                    caller,
-                )
-                with narrator_multi_text_block_discarded_span(
-                    discarded_count=len(text_chunks) - 1,
-                    discarded_chars=discarded_chars,
-                    kept_chars=len(text_chunks[-1]),
-                    iteration=iteration,
-                    caller=caller,
-                ):
-                    pass
-            text = text_chunks[-1] if text_chunks else ""
-            last_text = text or last_text
-
-            if response.stop_reason != "tool_use":
-                # Story 71-40: per-turn tool-loop summary. Fires once per
-                # CONVERGED turn (independent of session_id, unlike the cost
-                # events below), recording how many SDK round-trips the turn
-                # consumed so the GM panel can spot runaway loops inflating
-                # solo-turn p95.
-                #
-                # Story 82-9: ``caller`` tags the span so the non-narrator
-                # dungeon-curate caller (materializer.py) is filtered OUT of the
-                # narrator solo-turn p95 source. The converged path carries no
-                # loop_exceeded marker (that is reserved for the raise path).
+        if getattr(result_msg, "is_error", False):
+            if getattr(result_msg, "subtype", "") == "error_max_turns":
+                # Story 82-9: the worst-latency turn still emits the summary span
+                # (marked loop_exceeded) before the fail-loud raise.
                 with narrator_tool_loop_span(
-                    iterations_used=iteration,
+                    iterations_used=num_turns,
                     max_iterations=max_iterations,
                     caller=caller,
+                    loop_exceeded=True,
                 ):
                     pass
-
-                # Story 61-followup-D §C.3 — per-turn pulse for the GM
-                # panel live counter. Fires once per successful turn, not
-                # per tool-loop iteration; bypassed when session_id is
-                # None (non-narrator paths).
-                if session_id is not None:
-                    self._emit_cost_running_total(
-                        session_id=session_id,
-                        model=last_model,
-                    )
-                    # Story 61-19 AC5 — per-turn cache-write split so the GM
-                    # panel can spot churn regressions. Under the 61-19 tier
-                    # layout the TTL tier IS the stable/tail distinction: the
-                    # stable system prefix is the only 1h-marked content, and
-                    # the volatile per-turn tail is the only 5m-marked content.
-                    # A healthy session writes the stable prefix once (warmup)
-                    # then reads it (1h write ~0 thereafter); the tail write
-                    # recurs per turn but small. If a future field re-promotes
-                    # growth into the volatile block, tail_write_tokens climbs
-                    # and this event surfaces it. Fires once per turn (not per
-                    # tool-loop iter), aggregating the loop's writes.
-                    self._emit_cache_write_split(
-                        stable_prefix_write_tokens=cumulative_cache_write_1h,
-                        tail_write_tokens=cumulative_cache_write_5m,
-                        model=last_model,
-                    )
-
-                return ToolingResult(
-                    text=last_text,
-                    stop_reason=response.stop_reason,
-                    input_tokens=cumulative_in,
-                    output_tokens=cumulative_out,
-                    cached_input_read_tokens=cumulative_cache_read,
-                    cached_input_write_tokens=cumulative_cache_write,
-                    model=last_model,
-                    tool_calls=all_tool_uses,
-                    cumulative_cost_usd=cumulative_cost_usd,
-                    cached_input_write_5m_tokens=cumulative_cache_write_5m,
-                    cached_input_write_1h_tokens=cumulative_cache_write_1h,
+                raise AnthropicSdkLoopExceeded(
+                    "agent-sdk tool loop did not converge "
+                    f"(subtype=error_max_turns, num_turns={num_turns}, "
+                    f"max_turns={max(2, max_iterations)})"
                 )
+            # An auth/credit/transport failure surfaces as is_error — raise, never
+            # return a degraded-success result that masks the missing credential.
+            raise AgentSdkAuthUnavailable(
+                "claude-agent-sdk query failed (is_error, "
+                f"subtype={getattr(result_msg, 'subtype', None)!r}) — subscription "
+                "login absent or query rejected; no PAYG fallback (No Silent "
+                "Fallbacks)."
+            )
 
-            if tool_dispatch is None:
-                raise AnthropicSdkClientError(
-                    "Model emitted tool_use but no tool_dispatch was provided."
-                )
-
-            assistant_blocks: list[dict[str, Any]] = []
-            user_results: list[dict[str, Any]] = []
-            for tu in tool_use_blocks:
-                all_tool_uses.append(tu)
-                assistant_blocks.append(
-                    {
-                        "type": "tool_use",
-                        "id": tu.id,
-                        "name": tu.name,
-                        "input": tu.arguments,
-                    }
-                )
-                maybe = tool_dispatch(tu)
-                if inspect.isawaitable(maybe):
-                    result = await maybe
-                else:
-                    result = maybe
-                user_results.append(
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": result.tool_use_id,
-                        "content": result.content,
-                        "is_error": result.is_error,
-                    }
-                )
-            running_messages = running_messages + [
-                {"role": "assistant", "content": assistant_blocks},
-                {"role": "user", "content": user_results},
-            ]
-
-        # Story 82-9: a turn that exhausts max_iterations and raises is the
-        # WORST-latency turn — exactly the one the AC5 diagnosis most wants
-        # iterations_used for — yet 71-40 emitted no summary span here, leaving
-        # it invisible to the metric. Emit the per-turn summary before raising,
-        # marked loop_exceeded=True so the GM panel can tell a ceiling-blown turn
-        # from a deep-but-converged one. The fail-loud ceiling is unchanged.
+        # Story 71-40 / 82-9: soft cap-hit + per-turn tool-loop summary span.
+        if iteration_cap is not None and num_turns >= iteration_cap:
+            with narrator_tool_loop_cap_hit_span(
+                iteration_cap=iteration_cap,
+                iterations_used=num_turns,
+                max_iterations=max_iterations,
+            ):
+                pass
         with narrator_tool_loop_span(
-            iterations_used=max_iterations,
+            iterations_used=num_turns,
             max_iterations=max_iterations,
             caller=caller,
-            loop_exceeded=True,
         ):
             pass
+        if session_id is not None:
+            self._emit_cost_running_total(session_id=session_id, model=last_model)
 
-        raise AnthropicSdkLoopExceeded(
-            f"Tool-use loop did not converge in {max_iterations} iterations"
+        text = getattr(result_msg, "result", None) or last_text
+        return ToolingResult(
+            text=text,
+            stop_reason="end_turn",
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cached_input_read_tokens=cache_read,
+            cached_input_write_tokens=cache_write,
+            model=last_model,
+            tool_calls=all_tool_uses,
+            cumulative_cost_usd=cost,
+            # OQ-6: the agent SDK does not expose the per-TTL cache-creation
+            # split (5m/1h). Documented-zero, NOT measured — the CLI owns
+            # caching; never report a measured 0 (No Silent Fallbacks).
+            cached_input_write_5m_tokens=0,
+            cached_input_write_1h_tokens=0,
         )
+
+    def _build_narration_mcp(
+        self,
+        tools: list[ToolDefinition],
+        tool_dispatch: Callable[[ToolUseBlock], Awaitable[ToolResultBlock] | ToolResultBlock]
+        | None,
+        accumulator: list[ToolUseBlock],
+    ) -> tuple[dict[str, Any], list[str]]:
+        """Build the per-turn in-process SDK-MCP server + allowed_tools list from
+        the ruleset-filtered tool catalog (spec §5).
+
+        Each ``ToolDefinition`` becomes a ``@tool``-decorated handler (the §5.3
+        dispatch bridge) collected under :data:`_NARRATION_SERVER_NAME`. The set
+        is rebuilt per call because it is ruleset-filtered (a static server would
+        advertise the wrong tools — No Silent Fallbacks). A toolless call (no
+        tools, or no ``tool_dispatch`` — the read-only aside / fabricated-roll
+        rewrite) advertises nothing.
+        """
+        if not tools or tool_dispatch is None:
+            return {}, []
+        sdk_tools = []
+        allowed: list[str] = []
+        for t in tools:
+            handler = _build_narration_tool_handler(
+                bare_name=t.name, tool_dispatch=tool_dispatch, accumulator=accumulator
+            )
+            sdk_tools.append(_sdk_tool(t.name, t.description, t.input_schema)(handler))
+            allowed.append(f"mcp__{_NARRATION_SERVER_NAME}__{t.name}")
+        server = create_sdk_mcp_server(name=_NARRATION_SERVER_NAME, tools=sdk_tools)
+        return {_NARRATION_SERVER_NAME: server}, allowed
+
 
     # ------------------------------------------------------------------
     # cost-runaway fingerprint alarm (Story 61-4)
@@ -920,35 +808,6 @@ class AnthropicSdkClient:
             ceiling_usd=self.session_cost_ceiling_usd,
         )
 
-    def _emit_cache_write_split(
-        self,
-        *,
-        stable_prefix_write_tokens: int,
-        tail_write_tokens: int,
-        model: str,
-    ) -> None:
-        """Per-turn cache-write split (Story 61-19 AC5).
-
-        Splits the turn's cache_write into the amortizing stable prefix
-        (1h-tier write) vs the volatile per-turn tail (5m-tier write) so the
-        GM panel can plot write-churn and catch a regression that re-promotes
-        a growing field into the volatile block. Fires once per successful
-        turn (not per tool-loop iteration). Severity ``info`` — a routine
-        baseline pulse, grouped under ``narrator.sdk`` with the sibling cache
-        events.
-        """
-        _watcher_publish_event(
-            "narrator.cache.write_split",
-            {
-                "stable_prefix_write_tokens": stable_prefix_write_tokens,
-                "tail_write_tokens": tail_write_tokens,
-                "total_write_tokens": stable_prefix_write_tokens + tail_write_tokens,
-                "model": model,
-            },
-            component="narrator.sdk",
-            severity="info",
-        )
-
     def _emit_cost_running_total(
         self,
         *,
@@ -977,176 +836,3 @@ class AnthropicSdkClient:
             component="narrator.sdk",
             severity="info",
         )
-
-    # ------------------------------------------------------------------
-    # helpers
-    # ------------------------------------------------------------------
-
-    def _build_messages_payload(
-        self,
-        running_messages: list[dict[str, Any]],
-        *,
-        is_continuation: bool,
-    ) -> list[dict[str, Any]]:
-        """Build the ``messages`` array for a single ``messages.create`` call.
-
-        Story 60-7 (supersedes 60-4): every iter — iter=1 included — marks the
-        LAST content block of the newest user message. Story 61-19 (2026-05-30)
-        sets that marker's TTL to ``_VOLATILE_CACHE_TTL`` (5m), NOT
-        ``self.cache_ttl`` — the message tail is volatile, so it rides the 5m
-        tier while the stable system prefix + tools keep ``self.cache_ttl``
-        (1h). The marker's PRESENCE (every iter) is the 60-7 fix; its 5m VALUE
-        is the 61-19 fix.
-
-        Why marker every iter, not only on continuation: Anthropic auto-caches
-        content that sits past the last explicit breakpoint at the default 5m
-        TTL. The system_blocks[0] + tools[-1] prefix is marked at the
-        configured TTL (1h by default), but the user message + recency-zone
-        deltas added on iter=1 carry no marker by default, so the API
-        auto-caches that tail at 5m. Story 60-7 added an EXPLICIT marker on the
-        newest message every iter to pin that tail to a single write (the
-        unmarked auto-5m would otherwise be displaced by the iter=2 marker —
-        pure waste). Story 61-19 sets that marker's TTL to ``_VOLATILE_CACHE_TTL``
-        (5m), NOT the configured 1h: the tail is volatile, so the iter=1 write
-        lands at 5m deliberately and the within-turn iter=2 continuation reads
-        it at 5m (seconds later) without re-minting. The 1h amortization lives
-        on the stable prefix + tools (system_blocks[0] + tools[-1]), not on the
-        message tail. (The 60-7 "$0.137 → $0.096" figure was the pre-61-19
-        1h-tail layout; see ``sprint/archive/60-7-session.md`` and
-        ``sprint/context/context-story-61-19.md``.)
-
-        ``is_continuation`` is retained as caller-facing intent (iter=1 vs
-        iter=2+) — useful to the call site and to test naming — but no
-        longer branches the implementation. Both paths apply the marker.
-
-        Bare-string content on the newest user message is promoted to a
-        single-text-block list so ``cache_control`` (a content-block
-        attribute) has somewhere to attach. The wire shape stays valid:
-        Anthropic accepts both bare strings and block-list user content.
-
-        Each call returns a fresh list of fresh message dicts (content blocks
-        are copied where they're dicts). Two reasons:
-
-        1. **Snapshot semantics.** The Anthropic SDK doesn't mutate the kwargs
-           we hand it, but observers (tests, OTEL middleware) may capture them
-           by reference. A fresh per-iteration payload guarantees prior calls'
-           captured kwargs reflect what was actually sent then, not what the
-           in-place mutation looks like now.
-        2. **Stale-marker cleanup.** Earlier continuations marked their own
-           newest user message; this iteration's marker must be on the *new*
-           newest message, with prior message-level markers cleared. Building
-           fresh achieves the cleanup without mutating shared state.
-        """
-        del is_continuation  # informational only; behavior is uniform across iters
-        out: list[dict[str, Any]] = []
-        for msg in running_messages:
-            new_msg: dict[str, Any] = {"role": msg["role"]}
-            content = msg.get("content")
-            if isinstance(content, list):
-                new_msg["content"] = [
-                    dict(block) if isinstance(block, dict) else block for block in content
-                ]
-            else:
-                new_msg["content"] = content
-            out.append(new_msg)
-
-        if not out:
-            return out
-
-        last_msg = out[-1]
-        last_content = last_msg.get("content")
-        if isinstance(last_content, str):
-            # Promote bare string → single text block so cache_control has a
-            # content-block to land on.
-            promoted: list[dict[str, Any]] = [{"type": "text", "text": last_content}]
-            last_msg["content"] = promoted
-            last_content = promoted
-        if isinstance(last_content, list) and last_content:
-            last_block = last_content[-1]
-            if isinstance(last_block, dict):
-                # Story 61-19 — the newest message tail is VOLATILE (it changes
-                # every turn). It still carries a marker (preserving 60-7's
-                # single-write / within-turn-reuse property — the API would
-                # otherwise auto-cache the post-prefix tail at 5m and the
-                # continuation could displace it), but at the 5m volatile tier,
-                # NOT ``self.cache_ttl``. Marking it 1h paid the 2x write
-                # premium on content invalidated next turn — ~9.7k tok/turn of
-                # waste (session 894). The stable system prefix keeps 1h
-                # (``_build_system_array``); only this per-turn tail moves.
-                last_block["cache_control"] = {
-                    "type": "ephemeral",
-                    "ttl": _VOLATILE_CACHE_TTL,
-                }
-            else:
-                # No Silent Fallbacks: every live call site appends dict blocks
-                # to running_messages, so a non-dict last block means an
-                # upstream invariant has broken. Skipping the marker silently
-                # would re-introduce the iter=1 auto-5m write we are paying
-                # this whole story to eliminate — surface it loudly instead.
-                logger.warning(
-                    "_build_messages_payload: non-dict last block type=%s — "
-                    "cache_control marker skipped (upstream invariant broken)",
-                    type(last_block).__name__,
-                )
-
-        return out
-
-    def _build_system_array(self, system_blocks: list[CacheableBlock]) -> list[dict[str, Any]]:
-        out: list[dict[str, Any]] = []
-        for block in system_blocks:
-            entry: dict[str, Any] = {"type": "text", "text": block.text}
-            if block.cache:
-                # Echo the configured TTL unconditionally — no special-
-                # casing. Both "5m" and "1h" are valid cache_control TTLs;
-                # the 1h path additionally rides the beta header sent in
-                # complete_with_tools.
-                entry["cache_control"] = {"type": "ephemeral", "ttl": self.cache_ttl}
-            out.append(entry)
-        return out
-
-    def _build_tools_array(self, tools: list[ToolDefinition]) -> list[dict[str, Any]]:
-        out: list[dict[str, Any]] = [
-            {
-                "name": t.name,
-                "description": t.description,
-                "input_schema": t.input_schema,
-            }
-            for t in tools
-        ]
-        # The tools array is byte-stable across every turn — 27 definitions,
-        # ~7.6K tokens, no per-turn drift. A marker on the last entry requests
-        # caching of the whole tools array at the configured TTL (1h by
-        # default). See ADR-101 four-region cache layout amendment.
-        #
-        # Story 60-4 (2026-05-23): the continuation-append site in
-        # complete_with_tools adds a moving cache_control breakpoint on the
-        # newest tool_result message. Its PRESENCE stops the continuation from
-        # re-minting this 1h tools+prefix cache (the 60-3 waste). Story 61-19
-        # (2026-05-30): that message-level breakpoint is now 5m
-        # (``_VOLATILE_CACHE_TTL``), not 1h — so the volatile tail rides 5m
-        # while THIS tools array and system_blocks[0] keep ``self.cache_ttl``
-        # (1h) and continue to read back at 1h on warm continuations
-        # (probe-confirmed: warm-turn 1h write = 0).
-        if out:
-            out[-1]["cache_control"] = {"type": "ephemeral", "ttl": self.cache_ttl}
-        return out
-
-    @staticmethod
-    def _split_content(
-        content: list[Any],
-    ) -> tuple[list[str], list[ToolUseBlock]]:
-        text_chunks: list[str] = []
-        tool_uses: list[ToolUseBlock] = []
-        for block in content:
-            block_type = getattr(block, "type", None)
-            if block_type == "text":
-                text_chunks.append(block.text)
-            elif block_type == "tool_use":
-                tool_uses.append(
-                    ToolUseBlock(
-                        id=block.id,
-                        name=block.name,
-                        arguments=block.input,
-                    )
-                )
-        return text_chunks, tool_uses

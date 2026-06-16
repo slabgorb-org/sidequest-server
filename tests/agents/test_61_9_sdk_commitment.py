@@ -26,6 +26,19 @@ from pathlib import Path
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def _subscription_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Story 119-3: the claude-agent-sdk narrator transport runs over the Max
+    subscription pool — both PAYG credentials must be UNSET (a SET key re-routes
+    to PAYG and raises ``AgentSdkAuthUnavailable`` at call time). The span-shape
+    tests here drive ``build_narrator_prompt`` only (no ``query`` fire), but pin
+    the absence so a polluted environment cannot leak across files into the
+    SDK-orchestrator helper."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+
+
 # ---------------------------------------------------------------------------
 # AC-3 — llm_factory.build_llm_client() purpose gate (load-bearing)
 # ---------------------------------------------------------------------------

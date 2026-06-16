@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from sidequest.game.persistence import GameMode
+from sidequest.game.persistence import GameMode, SqliteStore, db_path_for_slug, upsert_game
 from sidequest.genre.loader import DEFAULT_GENRE_PACK_SEARCH_PATHS
 from sidequest.server.app import create_app
 
@@ -24,37 +24,19 @@ _WORLD = "grimvault"
 _SLUG = "2026-04-22-grimvault-mp"
 
 
-@pytest.fixture(autouse=True)
-def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
-    """Bind the process pool to a per-worker throwaway PG db (ADR-115 F1)."""
-    import psycopg
-
-    from sidequest.game import db_pool
-
-    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
-    with psycopg.connect(plain, autocommit=True) as conn:
-        rows = conn.execute(
-            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
-            "AND tablename <> 'alembic_version'"
-        ).fetchall()
-        if rows:
-            names = ", ".join(f'"{r[0]}"' for r in rows)
-            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
-    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
-    db_pool.close_pool()
-    yield
-    db_pool.close_pool()
-
-
 def _seed(tmp_path: Path, slug: str) -> None:
-    """Register an empty MP session in Postgres (ADR-115 F1)."""
-    from sidequest.game import db_pool
-    from sidequest.server.session_state import _build_pg_repos_for_slug
-
-    _build_pg_repos_for_slug(
-        db_pool.get_pool(), slug=slug, mode=str(GameMode.MULTIPLAYER),
-        genre_slug=_GENRE, world_slug=_WORLD,
+    db = db_path_for_slug(tmp_path, slug)
+    db.parent.mkdir(parents=True, exist_ok=True)
+    store = SqliteStore(db)
+    store.initialize()
+    upsert_game(
+        store,
+        slug=slug,
+        mode=GameMode.MULTIPLAYER,
+        genre_slug=_GENRE,
+        world_slug=_WORLD,
     )
+    store.close()
 
 
 def test_second_player_join_broadcasts_presence_to_first(tmp_path: Path):

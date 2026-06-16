@@ -34,11 +34,6 @@ from sidequest.protocol.messages import (
     PlayerPresencePayload,
 )
 from sidequest.protocol.types import NonBlankString  # noqa: F401
-from sidequest.server.player_identity import (
-    MissingPlayerIdentityError,
-    identity_source,
-    resolve_player_identity,
-)
 
 if TYPE_CHECKING:
     from sidequest.server.session_handler import WebSocketSessionHandler
@@ -46,26 +41,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-async def resolve_identity_or_close(websocket: Any) -> tuple[str, str] | None:
-    """Resolve the authenticated player identity from WS headers before accept.
-
-    Fail-loud (No Silent Fallbacks): a connection with no resolvable identity is
-    a misconfiguration, not a guest. Close 1008 (policy violation) and return None.
-    """
-    try:
-        identity = resolve_player_identity(websocket.headers)
-    except MissingPlayerIdentityError:
-        logger.error(
-            "ws.identity_unresolved remote=%s — closing (no Cf-Access email or Host header)",
-            getattr(websocket, "client", None),
-        )
-        await websocket.close(code=1008)
-        return None
-    return identity, identity_source(websocket.headers)
-
-
 async def ws_endpoint(websocket: WebSocket, handler: WebSocketSessionHandler) -> None:
-    """WebSocket connection lifecycle — resolve identity, accept, loop, cleanup.
+    """WebSocket connection lifecycle — accept, loop, cleanup.
 
     On PLAYER_ACTION: dispatch through session_handler → emit NARRATION.
     On SESSION_EVENT{connect}: bind genre/world, load or create session.
@@ -73,21 +50,11 @@ async def ws_endpoint(websocket: WebSocket, handler: WebSocketSessionHandler) ->
     On disconnect: detach outbound queue, disconnect from room, broadcast
       PLAYER_PRESENCE{disconnected} to remaining players, then persist and clean up.
     """
-    resolved = await resolve_identity_or_close(websocket)
-    if resolved is None:
-        return
-    player_identity, player_identity_source = resolved
     await websocket.accept()
     socket_id = uuid.uuid4().hex
     registry = websocket.app.state.room_registry
     out_queue: asyncio.Queue[Any] = asyncio.Queue()
-    handler.attach_room_context(
-        registry=registry,
-        socket_id=socket_id,
-        out_queue=out_queue,
-        player_identity=player_identity,
-        player_identity_source=player_identity_source,
-    )
+    handler.attach_room_context(registry=registry, socket_id=socket_id, out_queue=out_queue)
     logger.info("ws.connection_accepted remote=%s socket=%s", websocket.client, socket_id)
 
     async def _writer() -> None:
@@ -232,7 +199,11 @@ async def ws_endpoint(websocket: WebSocket, handler: WebSocketSessionHandler) ->
         # (real disconnect, empty room) is the outer guard; the
         # cleanup/save state decides between teardown and a loud skip log.
         save_failure = getattr(handler, "last_save_failure", None)
-        if room is not None and left_player is not None and not room.connected_player_ids():
+        if (
+            room is not None
+            and left_player is not None
+            and not room.connected_player_ids()
+        ):
             if not cleanup_failed and save_failure is None:
                 room.close_store()
                 logger.info("ws.room_teardown_close_store slug=%s", room.slug)
@@ -278,20 +249,7 @@ async def _send_message(websocket: WebSocket, msg: Any) -> None:
         json_str = msg.model_dump_json()
         await websocket.send_text(json_str)
     except Exception as exc:
-        # sq-playtest 2026-06-07 (#7): several disconnect-race exceptions
-        # (Starlette close-after-send RuntimeError, WebSocketDisconnect)
-        # stringify to "", so ``error=%s`` logged an empty diagnostic and a
-        # benign disconnect was indistinguishable from a real send bug (a
-        # CONFRONTATION payload failing to a live socket would look identical).
-        # Log the exception class + repr (always populated) plus the socket
-        # state at send time so the two cases separate in forensics.
-        logger.warning(
-            "ws.send_failed type=%s error_class=%s error=%r socket_state=%s",
-            getattr(msg, "type", "?"),
-            type(exc).__name__,
-            exc,
-            websocket.application_state.name,
-        )
+        logger.warning("ws.send_failed type=%s error=%s", getattr(msg, "type", "?"), exc)
 
 
 async def _send_error(

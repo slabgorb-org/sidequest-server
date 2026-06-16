@@ -70,9 +70,12 @@ def test_message_type_audio_cue_wire_string() -> None:
     assert MessageType.AUDIO_CUE == "AUDIO_CUE"
 
 
-# VOICE_SIGNAL / VOICE_TEXT wire-string tests removed by Story 101-2 — the
-# voice-generation protocol surface is dead and the members are being deleted.
-# Absence is now asserted in tests/game/test_101_2_voice_removal.py.
+def test_message_type_voice_signal_wire_string() -> None:
+    assert MessageType.VOICE_SIGNAL == "VOICE_SIGNAL"
+
+
+def test_message_type_voice_text_wire_string() -> None:
+    assert MessageType.VOICE_TEXT == "VOICE_TEXT"
 
 
 def test_message_type_action_queue_wire_string() -> None:
@@ -139,10 +142,6 @@ def test_message_type_dice_result_wire_string() -> None:
     assert MessageType.DICE_RESULT == "DICE_RESULT"
 
 
-def test_message_type_fate_action_wire_string() -> None:
-    assert MessageType.FATE_ACTION == "FATE_ACTION"
-
-
 def test_message_type_beat_selection_wire_string() -> None:
     assert MessageType.BEAT_SELECTION == "BEAT_SELECTION"
 
@@ -206,14 +205,8 @@ def test_message_type_dungeon_map_wire_string() -> None:
     assert MessageType.DUNGEON_MAP == "DUNGEON_MAP"
 
 
-def test_message_type_character_incapacitated_wire_string() -> None:
-    """sq-playtest 2026-06-07 (barsoom-3) — the player-facing death surface.
-    Emitted when a PC is taken out of play; the UI locks that seat's input."""
-    assert MessageType.CHARACTER_INCAPACITATED == "CHARACTER_INCAPACITATED"
-
-
 def test_message_type_complete_count() -> None:
-    """All 56 GameMessage variants must be represented.
+    """All 46 GameMessage variants must be represented.
 
     Group G Task 6 added SECRET_NOTE (structural hiding); bumped 37 → 38.
     Group D Task 7 reserved DISPATCH_PACKAGE, NARRATOR_DIRECTIVE_USED,
@@ -249,38 +242,10 @@ def test_message_type_complete_count() -> None:
     GameBoard ErrorBoundary catch can release the crashed player from the MP
     turn barrier instead of orphaning the table's turn. Intentional addition;
     bumped 51 → 52.
-    CHECK_THROW added for non-beat SWN skill checks and saves (2d6 / d20).
-    Client rolls in the 3D overlay and submits settled faces; server resolves
-    via dispatch_check and broadcasts DiceRequest + DiceResult. Intentional
-    addition; bumped 52 → 53.
-    ADR-136 added RELATIONSHIPS — the player-facing relationship roster snapshot.
-    Emitted reactively when the relationship set changes (disposition shift, NPC
-    promoted, claim recorded), not every turn. Intentional addition; bumped
-    53 → 54.
-    ADR-137 (story 77-8) added QUESTS — the player-facing quest-spine snapshot
-    (quest_log + quest_anchors + active_stakes). Emitted reactively on
-    seed/record_quest/set_stakes; transient broadcast, never event-sourced.
-    Intentional addition; bumped 54 → 55.
-    sq-playtest 2026-06-07 (barsoom-3) added CHARACTER_INCAPACITATED — the
-    player-facing death surface. Emitted when a PC is taken out of play (LETHAL
-    lethality verdict) so the UI locks that seat's input and shows a death
-    banner / re-roll CTA; the server-side turn-intake gate is the authority.
-    Intentional addition; bumped 55 → 56.
-    Story 101-2 removed VOICE_SIGNAL + VOICE_TEXT — the voice-generation
-    protocol surface is fully dead (zero emitters/handlers, no UI readers).
-    Dropped 56 → 54.
-    ADR-144 F1d added FATE_ACTION — the Fate-bound pack's player action (one of
-    the three proactive Fate actions or a concession). Routed to
-    FateActionHandler → fate_conflict, gated by isinstance(ruleset,
-    FateRulesetModule). Intentional addition; bumped 54 → 55.
-    ADR-144 F3a (story 118-1) added FATE_STATE — the player-facing Fate-spine
-    snapshot (per-PC sheets + scene situation aspects + active conflict). Emitted
-    reactively when the Fate state changes, ruleset=='fate'-gated; transient
-    broadcast, never event-sourced. Intentional addition; bumped 55 → 56.
     When new variants land, update this count and the individual wire-string
     test above so the contract test keeps catching silent drift.
     """
-    assert len(MessageType) == 56
+    assert len(MessageType) == 52
 
 
 # ===========================================================================
@@ -598,56 +563,3 @@ def test_session_event_with_both_verbosity_and_vocabulary() -> None:
     decoded = GameMessage.model_validate_json(json_str)
     assert decoded.payload.narrator_verbosity == NarratorVerbosity.concise  # type: ignore[union-attr]
     assert decoded.payload.narrator_vocabulary == NarratorVocabulary.epic  # type: ignore[union-attr]
-
-
-# ===========================================================================
-# Story 82-2 / AC3 — NarratorVocabulary.default_for_player_count parity
-#
-# ADR-049 specifies BOTH enums implement default_for_player_count(n):
-#   - Solo (n=1):       Verbose / Literary
-#   - Multiplayer (n>1): Standard / Literary
-# NarratorVerbosity already has it (covered above). NarratorVocabulary does
-# NOT on develop — these tests fail with AttributeError until 82-2 adds it.
-# The vocabulary axis is player-count-invariant per the ADR (always Literary);
-# the method exists for *interface parity* so the TurnContext fallback can call
-# Verbosity.default_for_player_count(n) and Vocabulary.default_for_player_count(n)
-# uniformly without special-casing one axis.
-# ===========================================================================
-
-
-def test_narrator_vocabulary_has_default_for_player_count() -> None:
-    """AC3: the method exists (parity with NarratorVerbosity). Fails with
-    AttributeError on develop — NarratorVocabulary lacks it entirely."""
-    assert hasattr(NarratorVocabulary, "default_for_player_count"), (
-        "NarratorVocabulary must implement default_for_player_count for "
-        "interface parity with NarratorVerbosity (ADR-049, story 82-2)"
-    )
-
-
-def test_narrator_vocabulary_solo_defaults_to_literary() -> None:
-    """ADR-049: Solo (n=1) -> Literary."""
-    result = NarratorVocabulary.default_for_player_count(1)
-    assert result == NarratorVocabulary.literary
-    assert isinstance(result, NarratorVocabulary)
-
-
-def test_narrator_vocabulary_multiplayer_defaults_to_literary() -> None:
-    """ADR-049: Multiplayer (n>1) -> Literary. Vocabulary is count-invariant
-    (unlike verbosity, which steps solo->verbose); both branches return
-    Literary, but the method must still exist and accept the count."""
-    assert NarratorVocabulary.default_for_player_count(2) == NarratorVocabulary.literary
-    assert NarratorVocabulary.default_for_player_count(4) == NarratorVocabulary.literary
-
-
-def test_narrator_vocabulary_zero_players_defaults_to_literary() -> None:
-    """Edge: the n<=0 'unknown count' path (room=None safe-empty default in
-    _build_turn_context) must still resolve to a real member, not raise."""
-    assert NarratorVocabulary.default_for_player_count(0) == NarratorVocabulary.literary
-
-
-def test_narrator_vocabulary_default_for_player_count_matches_plain_default() -> None:
-    """Since vocabulary is count-invariant, default_for_player_count(n) must
-    agree with default() for every n — guards against a future change that
-    silently diverges the two defaulting paths."""
-    for n in (0, 1, 2, 5):
-        assert NarratorVocabulary.default_for_player_count(n) == NarratorVocabulary.default()

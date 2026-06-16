@@ -142,19 +142,14 @@ def test_cite_known_pool_member_does_not_create_npc() -> None:
     assert snapshot.npc_pool[0].name == "Marya"
 
 
-def test_cite_pool_member_upserts_identity_fields() -> None:
-    """A pool member seeded with partial identity gains new fields from the
-    narrator's mention (fill-empty), and — per Story 72-7 — a *disagreeing*
-    role/pronoun on a narrator-sourced member is **overwritten** (authoritative
-    drift), not frozen. ``appearance`` stays additive (fill-empty only).
-
-    Pre-72-7 this asserted ``role`` stayed ``"barkeep"`` (additive-only); 72-7
-    reverses that for narrator-sourced members (``drawn_from`` !=
-    ``world_authored``)."""
+def test_cite_pool_member_additively_upserts_identity_fields() -> None:
+    """A pool member seeded with partial identity gains additional
+    fields when the narrator's mention provides them. Existing values
+    win on conflict (additive only)."""
     pool_member = NpcPoolMember(
         name="Marya",
         role="barkeep",  # already set
-        drawn_from="legacy_registry",  # narrator-sourced → drift applies
+        drawn_from="legacy_registry",
     )
     snapshot = GameSnapshot(npc_pool=[pool_member])
     _apply_npc_mentions(
@@ -162,15 +157,15 @@ def test_cite_pool_member_upserts_identity_fields() -> None:
         mentions=[
             _mention(
                 "Marya",
-                role="merchant",  # 72-7: disagrees → overwrites
-                pronouns="she/her",  # new, fills in
+                role="merchant",  # different, should NOT overwrite
+                pronouns="she/her",  # new, should fill in
                 appearance="weathered hands",
             )
         ],
         turn_num=1,
     )
     member = snapshot.npc_pool[0]
-    assert member.role == "merchant"  # 72-7: overwritten on disagreeing re-mention
+    assert member.role == "barkeep"  # preserved
     assert member.pronouns == "she/her"  # filled in
     assert member.appearance == "weathered hands"  # filled in
 

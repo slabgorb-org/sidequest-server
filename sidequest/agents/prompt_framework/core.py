@@ -25,13 +25,10 @@ from sidequest.agents.prompt_framework.types import (
 )
 
 if TYPE_CHECKING:
-    from sidequest.agents.npc_context import NpcWorkingSet
     from sidequest.dungeon.region_projection import RegionProjection
     from sidequest.game.chassis import ChassisInstance
     from sidequest.game.npc_pool import NpcPoolMember
-    from sidequest.game.resource_pool import ResourcePool
     from sidequest.game.session import Npc, PartyPeer
-    from sidequest.game.status import Status
 
 
 # ---------------------------------------------------------------------------
@@ -471,87 +468,12 @@ If nothing new is revealed and nothing prior is referenced, omit the footnotes a
             ),
         )
 
-    def register_light_section(
-        self,
-        agent_name: str,
-        *,
-        pool: ResourcePool | None,
-        statuses: list[Status],  # pre-filtered darkness Status objects (by source)
-    ) -> None:
-        """Surface the light survival-clock state to the narrator (Task 7.1).
-
-        Light & Darkness survival clock: the narrator's guttering / dark /
-        relit prose must be STATE-DRIVEN (gaslit by the snapshot), not
-        improvised. This injects a COMPACT block — live ``current``/``max``,
-        the active threshold's ``narrator_hint`` (e.g. "The torch is
-        guttering…", "The light is gone…"), and the active darkness status
-        (the −2 "every action is harder" penalty) when present.
-
-        Placed in the **Valley** zone: ``pool.current`` is VOLATILE (it
-        changes on every burn), so it must NOT ride the cached stable prefix
-        (Primacy/Early) or the prompt prefix cache would break each turn
-        (ADR-110 / ADR-112).
-
-        Zero-byte-leak: ``pool is None`` (a pack with no light clock) produces
-        no section. Only the active threshold hint is rendered — not the full
-        threshold ladder — to respect the token budget (ADR-110 slimming).
-        """
-        if pool is None:
-            return
-
-        current = float(pool.current)
-        maximum = float(pool.max)
-        # Compact, human-readable numbers: drop a trailing ``.0`` so the
-        # narrator sees "1/6", not "1.0/6.0".
-        cur_s = f"{current:g}"
-        max_s = f"{maximum:g}"
-
-        lines = [f"## LIGHT — survival clock: {cur_s}/{max_s}"]
-
-        # Active threshold hint: the DEEPEST downward boundary the pool has
-        # reached. For downward thresholds a lower ``at`` is more severe, so
-        # among the boundaries the pool has hit (``current <= at``) the active
-        # one is the smallest ``at``. For the light pool: guttering at
-        # current<=1, then dark at current<=0 (dark wins at the floor).
-        active_hint: str | None = None
-        active_at = float("inf")
-        for thr in pool.thresholds:
-            if thr.direction != "down":
-                continue
-            if current <= thr.at and thr.at <= active_at:
-                active_at = thr.at
-                active_hint = thr.narrator_hint
-        if active_hint:
-            lines.append(active_hint)
-
-        # Active darkness status — the structured penalty the environment_clock
-        # applies on the acting PC when light hits the floor in an unlit
-        # region. ``statuses`` is pre-filtered by the caller to the darkness
-        # status (matched on ``source``); surfacing its text makes "you are in
-        # the dark, everything is harder" prose state-driven, not invented.
-        for st in statuses:
-            if not st.text:
-                continue
-            suffix = f" (roll penalty {st.roll_modifier})" if st.roll_modifier else ""
-            lines.append(f"- {st.text}{suffix}")
-
-        self.register_section(
-            agent_name,
-            PromptSection.new(
-                "light_state",
-                "\n".join(lines),
-                AttentionZone.Valley,
-                SectionCategory.State,
-            ),
-        )
-
     def register_npc_roster_section(
         self,
         agent_name: str,
         *,
-        npc_pool: list[NpcPoolMember] | None = None,
-        npcs: list[Npc] | None = None,
-        working_set: NpcWorkingSet | None = None,
+        npc_pool: list[NpcPoolMember],
+        npcs: list[Npc],
     ) -> None:
         """Inject canonical NPC identity data into the narrator prompt.
 
@@ -561,14 +483,7 @@ If nothing new is revealed and nothing prior is referenced, omit the footnotes a
         sees one list of "people who exist in this world"; storage shape
         does not leak.
 
-        Story 75-2 adds the budgeted ``working_set`` path: when supplied, the
-        roster renders by tier — scene-present NPCs full (the floor), off-stage
-        NPCs/pool members brief (name+role) or compact (name only) — instead of
-        dumping the entire roster verbatim. The production turn path always
-        supplies ``working_set``; the legacy ``npc_pool`` / ``npcs`` path
-        remains for direct callers and renders the full roster unchanged.
-
-        Sources (legacy path):
+        Sources:
         - ``npc_pool`` — identity-only ``NpcPoolMember`` entries (regenerable
           cast pool; no last-seen, no mechanical state).
         - ``npcs`` — stateful ``Npc`` records. Identity fields plus
@@ -579,12 +494,6 @@ If nothing new is revealed and nothing prior is referenced, omit the footnotes a
         less over long sessions, which is the exact drift the original
         Story 37-44 fix was for.
         """
-        if working_set is not None:
-            self._register_budgeted_npc_roster(agent_name, working_set)
-            return
-
-        npc_pool = npc_pool or []
-        npcs = npcs or []
         if not npc_pool and not npcs:
             return
 
@@ -604,94 +513,25 @@ If nothing new is revealed and nothing prior is referenced, omit the footnotes a
             lines.append("- " + " ".join(parts))
 
         for npc in npcs:
-            lines.append(self._full_npc_line(npc))
-
-        lines.append(
-            "Use these exact pronouns and roles. Physical identity is "
-            "canonical; only emotional perception is POV."
-        )
-
-        self.register_section(
-            agent_name,
-            PromptSection.new(
-                "npc_roster",
-                "\n".join(lines),
-                AttentionZone.Early,
-                SectionCategory.State,
-            ),
-        )
-
-    def _full_npc_line(self, npc: Npc) -> str:
-        """Full-detail roster line for a stateful NPC — name, pronouns,
-        appearance, last-seen location, and the coarsened attitude band.
-
-        Shared by the legacy roster and the Story 75-2 budgeted full tier so
-        the format stays in sync. The ADR-104/105 perception firewall is
-        load-bearing here: only the qualitative ``attitude`` band reaches this
-        always-on narrator section — never the raw ``disposition.value``
-        integer, which is world-state-agent-only (Story 50-12).
-        """
-        parts = [npc.core.name]
-        tags: list[str] = []
-        if npc.pronouns:
-            tags.append(npc.pronouns)
-        if tags:
-            parts.append(f"({', '.join(tags)})")
-        if npc.appearance:
-            parts.append(f"— {npc.appearance}")
-        if npc.last_seen_location:
-            parts.append(f"[last seen: {npc.last_seen_location}]")
-        parts.append(f"[attitude: {npc.disposition.attitude().value}]")
-        return "- " + " ".join(parts)
-
-    def _register_budgeted_npc_roster(
-        self,
-        agent_name: str,
-        working_set: NpcWorkingSet,
-    ) -> None:
-        """Story 75-2: render the roster from the budgeted working-set.
-
-        Three tiers, cheapest detail for the least-relevant: scene-present NPCs
-        full (the floor — pronouns, appearance, last-seen, attitude band, same
-        as the legacy stateful rendering); off-stage NPCs/pool members brief
-        (name + pronouns/role); off-stage names compact (name only). The
-        perception firewall (ADR-104/105) is preserved — only the coarsened
-        attitude band reaches the prompt, never the raw disposition value, and
-        only on the full tier.
-        """
-        if (
-            not working_set.full_profiles
-            and not working_set.brief_entries
-            and not working_set.compact_names
-        ):
-            return
-
-        lines = ["## KNOWN NPCS — Canonical Identity (do not contradict)"]
-
-        for npc in working_set.full_profiles:
-            lines.append(self._full_npc_line(npc))
-
-        for entry in working_set.brief_entries:
-            core = getattr(entry, "core", None)
-            # core present → stateful Npc (name via ``.core.name``); absent →
-            # NpcPoolMember (``.name`` is a str attribute). ``str()`` keeps the
-            # type checker happy across the union — ``Npc.name`` is a method but
-            # that branch is never taken here (core is set for an Npc).
-            name = core.name if core is not None else str(entry.name)
+            parts = [npc.core.name]
             tags = []
-            pronouns = getattr(entry, "pronouns", None)
-            if pronouns:
-                tags.append(pronouns)
-            role = getattr(entry, "role", None)
-            if role:
-                tags.append(role)
-            parts = [name]
+            if npc.pronouns:
+                tags.append(npc.pronouns)
             if tags:
                 parts.append(f"({', '.join(tags)})")
+            if npc.appearance:
+                parts.append(f"— {npc.appearance}")
+            if npc.last_seen_location:
+                parts.append(f"[last seen: {npc.last_seen_location}]")
+            # Coarsened disposition stance — the "emotional perception is
+            # POV" layer the closing instruction references. Story 50-12:
+            # without this the narrator sees who exists but not how they
+            # feel, forcing a per-NPC query_npc round-trip. The raw
+            # disposition.value integer is world-state-agent-only and MUST
+            # NOT reach this always-on narrator section (ADR-104/105
+            # perception firewall) — emit only the qualitative band.
+            parts.append(f"[attitude: {npc.disposition.attitude().value}]")
             lines.append("- " + " ".join(parts))
-
-        for name in working_set.compact_names:
-            lines.append(f"- {name}")
 
         lines.append(
             "Use these exact pronouns and roles. Physical identity is "
@@ -760,8 +600,7 @@ If nothing new is revealed and nothing prior is referenced, omit the footnotes a
             lines.append("Exits from this region (describe these as the way out):")
             for e in visible:
                 tag = " (a shortcut back toward the surface)" if e.shortcut else ""
-                bearing = f"{e.bearing} — " if e.bearing else ""
-                lines.append(f"- {bearing}{e.kind} → {e.to_region_id}{tag}")
+                lines.append(f"- {e.kind} → {e.to_region_id}{tag}")
         else:
             lines.append(
                 "Exits from this region: none obvious — this is a dead end "
@@ -774,29 +613,8 @@ If nothing new is revealed and nothing prior is referenced, omit the footnotes a
                 "actively searches and finds one):"
             )
             for e in hidden:
-                bearing = f"{e.bearing} — " if e.bearing else ""
-                lines.append(f"- {bearing}{e.kind} → {e.to_region_id} [hidden]")
+                lines.append(f"- {e.kind} → {e.to_region_id} [hidden]")
 
-        # sq-playtest 2026-06-13: directions are now FIRST-CLASS, not banned.
-        # Each exit above carries a real bearing (assign_bearings, stable +
-        # distinct per region), the engine resolves a player's "I go north" /
-        # "down the shaft" against it, and the DUNGEON_MAP renders it. The
-        # earlier guard that forbade the narrator from naming directions was
-        # backwards (the Zork Problem in reverse — narrowing the player's
-        # natural language instead of resolving it): a player WILL say "north",
-        # and now the map knows which edge that is. Name the ways out BY those
-        # bearings so the player's natural echo lands on a real edge.
-        lines.append(
-            "EXIT VOCABULARY: every way out has a BEARING listed above "
-            "(north/east/south/west for a passage; up/down for stairs or a "
-            "shaft). Name the ways out by those bearings and their kind — "
-            "'a corridor runs north, stairs climb up, a shaft drops away "
-            "south'. These bearings are REAL geometry: a player who says 'I "
-            "go north' or 'down the shaft' is moved along the exit you named "
-            "that way. Use ONLY the bearings shown above; never assign a "
-            "direction the list does not carry (that edge does not exist and "
-            "the player will be told there is no such way)."
-        )
         example_id = (visible or hidden)[0].to_region_id if (visible or hidden) else rp.region_id
         lines.append(
             "MOVEMENT RULE: when the party leaves this region, set "

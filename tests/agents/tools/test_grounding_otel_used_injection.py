@@ -87,7 +87,7 @@ def _ctx(
         session_id="s1",
         perspective_pc=perspective_pc,
         turn_number=1,
-        repository=MagicMock(),
+        store=MagicMock(),
         otel_span=MagicMock(),
         perception_filter=NarratorPerceptionFilter(),
         weather_state=weather,

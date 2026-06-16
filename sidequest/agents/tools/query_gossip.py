@@ -97,7 +97,7 @@ def _resolve_scene_id(
     category=ToolCategory.READ,
 )
 async def query_gossip(args: QueryGossipArgs, ctx: ToolContext) -> ToolResult:
-    session = ctx.repository.load()
+    session = ctx.store.load()
     if session is None:
         return ToolResult.error("no active session", recoverable=False)
 

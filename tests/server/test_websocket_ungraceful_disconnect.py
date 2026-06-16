@@ -70,7 +70,6 @@ def _fake_ws(*, state_after_drop: WebSocketState) -> SimpleNamespace:
         application_state=WebSocketState.CONNECTED,
         client_state=WebSocketState.CONNECTED,
         app=SimpleNamespace(state=SimpleNamespace(room_registry=object())),
-        headers={"host": "localhost"},
         sent=sent,
     )
 

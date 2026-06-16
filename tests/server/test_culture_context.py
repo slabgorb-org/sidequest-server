@@ -141,11 +141,6 @@ class TestEvropiLoreOnlyNotLeaked:
 
 
 class TestSessionHandlerWiresWorldContext:
-    # Heavy end-to-end test: real connect to the evropi world through the real
-    # pack. Under ``-n auto`` contention it crosses the global ``--timeout=30``,
-    # whose thread method crashes the worker mid-test. Raise the per-test
-    # ceiling; the filtered-world-context assertion is unaffected.
-    @pytest.mark.timeout(120)
     def test_connect_to_evropi_populates_filtered_world_context(self, tmp_path: Path) -> None:
         _content_root()  # skip if sidequest-content unavailable
         # Use the resolved pack's parent root so the handler's pack-search

@@ -1,8 +1,0 @@
-name: timeline_malformed_fixture
-description: >-
-  Story 65-12 AC1 fail-loud world. legends.yaml is valid YAML but carries a
-  legend with an unknown field. `Legend` is `extra="forbid"`, so the TYPED
-  timeline loader (_load_legends_flexible -> Legend.model_validate) raises a
-  ValidationError. The Timeline section must surface that as a loud HTTP 500
-  (No Silent Fallbacks) — never a silently timeline-less 200. (The generic lore
-  walk does not validate via Legend, so this is a true RED for the new loader.)

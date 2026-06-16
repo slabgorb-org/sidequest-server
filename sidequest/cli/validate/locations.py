@@ -66,53 +66,6 @@ class ValidationResult:
 
 
 # ---------------------------------------------------------------------------
-# Safe YAML load (Story 63-13)
-# ---------------------------------------------------------------------------
-
-
-def _safe_load_yaml(
-    path: Path,
-    result: ValidationResult,
-    *,
-    pack: str,
-    world: str,
-    region_id: str | None = None,
-) -> Any:
-    """Parse ``path`` as YAML, routing a parse failure into a clean
-    ``MALFORMED_YAML`` error Issue instead of letting ``yaml.YAMLError``
-    propagate.
-
-    The validator is dev tooling whose whole job is to report authoring
-    errors — a tab/indent typo in a world file is exactly such an error, so it
-    must surface as an Issue (with ``file`` + ``line`` from ``problem_mark``),
-    never a traceback that aborts the run. Returns the parsed data, or ``None``
-    on a parse failure (callers already coalesce ``None`` to a safe default).
-    """
-    try:
-        return yaml.safe_load(path.read_text())
-    except yaml.YAMLError as exc:
-        # pyyaml's problem_mark.line is 0-indexed; 1-index it so the structured
-        # field matches the 1-indexed line the embedded {exc} prose reports (and
-        # author/editor conventions). A self-consistent Issue for the content
-        # author reading it.
-        mark = getattr(exc, "problem_mark", None)
-        line = mark.line + 1 if mark is not None else None
-        result.record(
-            Issue(
-                code="MALFORMED_YAML",
-                severity="error",
-                message=f"{path.name}: malformed YAML — {exc}",
-                pack=pack,
-                world=world,
-                region_id=region_id,
-                file=str(path),
-                line=line,
-            )
-        )
-        return None
-
-
-# ---------------------------------------------------------------------------
 # Prose-coherence regexes
 # ---------------------------------------------------------------------------
 
@@ -150,9 +103,7 @@ def _worlds_in(pack: Path) -> list[Path]:
 # ---------------------------------------------------------------------------
 
 
-def _load_npc_tokens(
-    world_dir: Path, result: ValidationResult, *, pack: str, world: str
-) -> set[str]:
+def _load_npc_tokens(world_dir: Path) -> set[str]:
     """Return the set of normalized NPC ids and names declared by ``npcs.yaml``.
 
     Both ``id`` and ``name`` are accepted so that an entity binding by id
@@ -162,7 +113,7 @@ def _load_npc_tokens(
     path = world_dir / "npcs.yaml"
     if not path.is_file():
         return set()
-    raw = _safe_load_yaml(path, result, pack=pack, world=world) or {}
+    raw = yaml.safe_load(path.read_text()) or {}
     npcs = raw.get("npcs") or []
     tokens: set[str] = set()
     for npc in npcs:
@@ -174,14 +125,14 @@ def _load_npc_tokens(
     return tokens
 
 
-def _load_clue_ids(world_dir: Path, result: ValidationResult, *, pack: str, world: str) -> set[str]:
+def _load_clue_ids(world_dir: Path) -> set[str]:
     """Return clue ids declared by any ``scenarios/*.yaml`` clue list."""
     ids: set[str] = set()
     scen_dir = world_dir / "scenarios"
     if not scen_dir.is_dir():
         return ids
     for scenario in sorted(scen_dir.glob("*.yaml")):
-        data = _safe_load_yaml(scenario, result, pack=pack, world=world) or {}
+        data = yaml.safe_load(scenario.read_text()) or {}
         for clue in data.get("clues") or []:
             if isinstance(clue, dict):
                 cid = clue.get("id")
@@ -190,13 +141,12 @@ def _load_clue_ids(world_dir: Path, result: ValidationResult, *, pack: str, worl
     return ids
 
 
-def _load_allowlist(pack_dir: Path, result: ValidationResult, *, pack: str) -> set[str]:
+def _load_allowlist(pack_dir: Path) -> set[str]:
     """Return the per-pack ``generic_allowlist[]``, normalized + article-stripped."""
     cfg = pack_dir / "pack.yaml"
     if not cfg.is_file():
         return set()
-    # pack.yaml is a pack-tier file — no world context, so world="".
-    data = _safe_load_yaml(cfg, result, pack=pack, world="") or {}
+    data = yaml.safe_load(cfg.read_text()) or {}
     raw = data.get("generic_allowlist") or []
     out: set[str] = set()
     for item in raw:
@@ -437,17 +387,15 @@ def _check_prose(
 # ---------------------------------------------------------------------------
 
 
-def _location_card_slugs(
-    world_dir: Path, result: ValidationResult, *, pack: str, world: str
-) -> set[str]:
+def _location_card_slugs(world_dir: Path) -> set[str]:
     """Slugs of the location cards the lore page actually renders from
     ``locations.yaml`` — normalised exactly as the reference renderer does."""
-    from sidequest.foundation.reference_slug import slugify
+    from sidequest.server.reference_slug import slugify
 
     path = world_dir / "locations.yaml"
     if not path.is_file():
         return set()
-    data = _safe_load_yaml(path, result, pack=pack, world=world) or {}
+    data = yaml.safe_load(path.read_text()) or {}
     items: Any = data
     if isinstance(data, dict):
         items = next((v for v in data.values() if isinstance(v, list)), [])
@@ -461,17 +409,15 @@ def _location_card_slugs(
     return slugs
 
 
-def _history_poi_slugs(
-    world_dir: Path, result: ValidationResult, *, pack: str, world: str
-) -> set[str]:
+def _history_poi_slugs(world_dir: Path) -> set[str]:
     """Story 63-8: POI landscape-image manifest slugs from ``history.yaml``
     (``chapters[].points_of_interest[]`` and/or top-level), slugify-normalised."""
-    from sidequest.foundation.reference_slug import slugify
+    from sidequest.server.reference_slug import slugify
 
     path = world_dir / "history.yaml"
     if not path.is_file():
         return set()
-    data = _safe_load_yaml(path, result, pack=pack, world=world) or {}
+    data = yaml.safe_load(path.read_text()) or {}
     if not isinstance(data, dict):
         return set()
     pois: list[Any] = []
@@ -501,10 +447,10 @@ def _check_poi_image_slugs(
     """Story 63-8 AC-6: every history.yaml POI image-manifest slug must map to
     a renderable location card. A dangling slug means a generated landscape
     image that can never attach to anything — flag it loudly."""
-    poi_slugs = _history_poi_slugs(world_dir, result, pack=pack, world=world)
+    poi_slugs = _history_poi_slugs(world_dir)
     if not poi_slugs:
         return
-    location_slugs = _location_card_slugs(world_dir, result, pack=pack, world=world)
+    location_slugs = _location_card_slugs(world_dir)
     for slug in sorted(poi_slugs - location_slugs):
         result.record(
             Issue(
@@ -531,8 +477,8 @@ def _validate_one_world(
     allowlist: set[str],
 ) -> None:
     world_slug = world_dir.name
-    npc_tokens = _load_npc_tokens(world_dir, result, pack=pack_slug, world=world_slug)
-    clue_ids = _load_clue_ids(world_dir, result, pack=pack_slug, world=world_slug)
+    npc_tokens = _load_npc_tokens(world_dir)
+    clue_ids = _load_clue_ids(world_dir)
 
     def _check_region(region_id: str, raw_entities: Any, prose: str, source_file: str) -> None:
         entities = _check_well_formed_region(
@@ -569,7 +515,7 @@ def _validate_one_world(
     # POI / cartography path
     cart = world_dir / "cartography.yaml"
     if cart.is_file():
-        data = _safe_load_yaml(cart, result, pack=pack_slug, world=world_slug) or {}
+        data = yaml.safe_load(cart.read_text()) or {}
         regions = data.get("regions") or {}
         if isinstance(regions, dict):
             for region_id, region_data in regions.items():
@@ -585,7 +531,7 @@ def _validate_one_world(
     rooms_dir = world_dir / "rooms"
     if rooms_dir.is_dir():
         for room_path in sorted(rooms_dir.glob("*.yaml")):
-            room_data = _safe_load_yaml(room_path, result, pack=pack_slug, world=world_slug) or {}
+            room_data = yaml.safe_load(room_path.read_text()) or {}
             _check_region(
                 room_path.stem,
                 room_data.get("entities") or [],
@@ -622,7 +568,7 @@ def validate_locations_in_world(world_dir: Path) -> ValidationResult:
         return result
     pack_dir = world_dir.parent.parent
     pack_slug = pack_dir.name if pack_dir.exists() else ""
-    allowlist = _load_allowlist(pack_dir, result, pack=pack_slug) if pack_dir.exists() else set()
+    allowlist = _load_allowlist(pack_dir) if pack_dir.exists() else set()
     _validate_one_world(
         result,
         pack_dir=pack_dir,
@@ -642,7 +588,7 @@ def validate_packs(pack_roots: list[Path]) -> ValidationResult:
     result = ValidationResult()
     for root in pack_roots:
         for pack in packs_in(root):
-            allowlist = _load_allowlist(pack, result, pack=pack.name)
+            allowlist = _load_allowlist(pack)
             for world_dir in _worlds_in(pack):
                 _validate_one_world(
                     result,

@@ -58,7 +58,6 @@ class YieldHandler:
             build_clear_confrontation_payload,
             build_confrontation_payload,
             find_confrontation_def,
-            make_confrontation_portrait_resolver,
             resolve_recipient_pc,
         )
         from sidequest.server.dispatch.yield_action import handle_yield
@@ -153,15 +152,6 @@ class YieldHandler:
                     genre_slug=sd.genre_slug,
                     recipient_pc=recipient_pc,
                     recipient_actor_name=recipient_actor,
-                    core_resolver=sd.snapshot.find_creature_core,
-                    # Story 85-3: this frame is DELIVERED (UI mirrors withdrawn);
-                    # carry stakes + opponent portrait like every other live frame.
-                    active_stakes=sd.snapshot.active_stakes,
-                    portrait_resolver=make_confrontation_portrait_resolver(
-                        snapshot=sd.snapshot, genre_pack=sd.genre_pack, genre_slug=sd.genre_slug
-                    ),
-                    # Story 97-3: server-authored per-beat difficulty on the offer.
-                    rules=sd.genre_pack.rules,
                 )
                 # Seat-aware count: NPC companions on the player side are
                 # excluded so the log line matches the actual yield gate

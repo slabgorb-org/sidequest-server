@@ -131,15 +131,7 @@ def test_load_genre_pack_publishes_loaded_event_on_success(
 
     load_genre_pack(pack_dir)
 
-    # Scope to the genre_pack:loaded event specifically. Epic 74 added
-    # per-world flavor spans (world_theme / world_audio / world_visual_style,
-    # also op="loaded"), so filter on field=="genre_pack" rather than counting
-    # every loaded event.
-    loaded = [
-        e
-        for e in _genre_events(captured_watcher_events, "loaded")
-        if e["fields"].get("field") == "genre_pack"
-    ]
+    loaded = _genre_events(captured_watcher_events, "loaded")
     assert len(loaded) == 1, (
         f"expected exactly one genre_pack:loaded event, got {len(loaded)}: "
         f"{[e['fields'] for e in captured_watcher_events]}"

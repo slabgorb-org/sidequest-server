@@ -34,7 +34,11 @@ import pytest
 from sidequest.game.event_log import EventLog
 from sidequest.game.persistence import (
     GameMode,
+    SqliteStore,
+    db_path_for_slug,
+    upsert_game,
 )
+from sidequest.game.sqlite_repository import SqliteSaveRepository
 from sidequest.protocol.messages import (
     SessionEventMessage,
     SessionEventPayload,
@@ -180,64 +184,47 @@ def test_build_message_for_kind_still_raises_on_truly_unknown_kind() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(autouse=True)
-def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
-    """Bind the process pool to a per-worker throwaway PG db, clean per test
-    (ADR-115 F1: reconnect replays events from Postgres)."""
-    import psycopg
-
-    from sidequest.game import db_pool
-
-    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
-    with psycopg.connect(plain, autocommit=True) as conn:
-        rows = conn.execute(
-            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
-            "AND tablename <> 'alembic_version'"
-        ).fetchall()
-        if rows:
-            names = ", ".join(f'"{r[0]}"' for r in rows)
-            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
-    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
-    db_pool.close_pool()
-    yield
-    db_pool.close_pool()
-
-
 @pytest.fixture
 def seeded_game_with_encounter_journal(tmp_path: Path) -> Path:
-    """Register a session in Postgres whose events table contains
-    ENCOUNTER_STARTED rows — the exact shape that crashed reconnect for the
-    Session 2 save (ADR-115 F1: events live in Postgres)."""
-    from sidequest.game import db_pool
-    from sidequest.server.session_state import _build_pg_repos_for_slug
-
-    repo, _dungeon, _sink = _build_pg_repos_for_slug(
-        db_pool.get_pool(),
+    """Build a save whose events table contains ENCOUNTER_STARTED rows —
+    the exact shape that crashed reconnect for the Session 2 save."""
+    db = db_path_for_slug(tmp_path, _SLUG)
+    db.parent.mkdir(parents=True, exist_ok=True)
+    store = SqliteStore(db)
+    store.initialize()
+    upsert_game(
+        store,
         slug=_SLUG,
-        mode=str(GameMode.MULTIPLAYER),
+        mode=GameMode.MULTIPLAYER,
         genre_slug=_GENRE,
         world_slug=_WORLD,
     )
 
-    # Inject ENCOUNTER_STARTED + ENCOUNTER_TAG_CREATED through the repository's
-    # event append (the watcher_hub's encounter sink does the same in prod).
-    repo.append_event(
-        kind="ENCOUNTER_STARTED",
-        payload_json=json.dumps({"field": "encounter", "op": "started"}),
+    # Inject ENCOUNTER_STARTED + ENCOUNTER_TAG_CREATED as the watcher_hub
+    # would. These don't go through EventLog.append because the watcher_hub
+    # writes them directly via SQL — match that behavior here.
+    store._conn.execute(
+        "INSERT INTO events (kind, payload_json, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
+        ("ENCOUNTER_STARTED", json.dumps({"field": "encounter", "op": "started"})),
     )
-    repo.append_event(
-        kind="ENCOUNTER_TAG_CREATED",
-        payload_json=json.dumps({"field": "encounter", "op": "tag_created"}),
+    store._conn.execute(
+        "INSERT INTO events (kind, payload_json, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
+        (
+            "ENCOUNTER_TAG_CREATED",
+            json.dumps({"field": "encounter", "op": "tag_created"}),
+        ),
     )
 
     # Also append a real NARRATION through EventLog so the replay has at
     # least one client-bound message to surface — proves the crash didn't
     # truncate the rest of the journal.
-    log = EventLog(repo)
+    log = EventLog(SqliteSaveRepository(store))
     log.append(
         kind="NARRATION",
         payload_json=json.dumps({"text": "Hello, traveler."}),
     )
+    store._conn.commit()
+    store.close()
     return tmp_path
 
 
@@ -280,45 +267,3 @@ async def test_reconnect_against_save_with_encounter_kinds_does_not_crash(
     # Encounter kinds must be skipped, not surfaced as protocol messages.
     assert "ENCOUNTER_STARTED" not in types
     assert "ENCOUNTER_TAG_CREATED" not in types
-
-
-# ---------------------------------------------------------------------------
-# ADR-136 Task 11: RELATIONSHIPS is transient (broadcast via
-# _emit_shared_world_frame, never _emit_event) — like LOCATION_DESCRIPTION it
-# must never be written to the events table, so reconnect replay must never
-# reconstruct it. This drives the REAL reconnect path against a real save and
-# asserts the journal replays cleanly with no RELATIONSHIPS frame surfaced.
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_reconnect_does_not_replay_transient_relationships(
-    seeded_game_with_encounter_journal: Path,
-) -> None:
-    """A normal reconnect surfaces durable kinds (NARRATION) but never a
-    RELATIONSHIPS frame — that roster is transient and re-broadcast on the next
-    turn, not replayed from the events table. Proves the prior crash gap
-    (RELATIONSHIPS mapped but branchless) is closed: no opaque ValueError and
-    no stray replayed roster."""
-    handler = _make_handler(seeded_game_with_encounter_journal)
-    msg = SessionEventMessage(
-        type="SESSION_EVENT",
-        player_id="alice",
-        payload=SessionEventPayload(
-            event="connect",
-            game_slug=_SLUG,
-            last_seen_seq=0,  # Force full replay
-        ),
-    )
-
-    # The crash gap manifested as a raised ValueError out of handle_message
-    # (the replay walker hitting a mapped-but-branchless RELATIONSHIPS row).
-    # Reaching this line without raising is the primary assertion.
-    outbound = await handler.handle_message(msg)
-
-    types = [getattr(m, "type", None) for m in outbound]
-    assert "SESSION_EVENT" in types, f"SESSION_EVENT(connected) missing from outbound: {types}"
-    # RELATIONSHIPS is transient — never persisted, never replayed from the
-    # events table. A reconnect re-broadcasts a fresh roster on the next turn
-    # instead (the turn-loop emitter wired in this task).
-    assert "RELATIONSHIPS" not in types

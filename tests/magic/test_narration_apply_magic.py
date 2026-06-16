@@ -170,7 +170,6 @@ async def test_dispatch_handler_invokes_apply_magic_working(coyote_snapshot):
             "consent_state": "involuntary",
         },
         idempotency_key="k-magic-test",
-        confidence=1.0,
         visibility=VisibilityTag(visible_to="all"),
     )
 

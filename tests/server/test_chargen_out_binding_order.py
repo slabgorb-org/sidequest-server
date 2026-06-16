@@ -33,11 +33,7 @@ import ast
 from pathlib import Path
 
 _MODULE = (
-    Path(__file__).resolve().parents[2]
-    / "sidequest"
-    / "server"
-    / "websocket_handlers"
-    / "chargen_mixin.py"
+    Path(__file__).resolve().parents[2] / "sidequest" / "server" / "websocket_session_handler.py"
 )
 
 
@@ -46,7 +42,7 @@ def _chargen_confirmation_node() -> ast.AsyncFunctionDef:
     for node in ast.walk(tree):
         if isinstance(node, ast.AsyncFunctionDef) and node.name == "_chargen_confirmation":
             return node
-    raise AssertionError("_chargen_confirmation not found in chargen_mixin.py")
+    raise AssertionError("_chargen_confirmation not found in websocket_session_handler.py")
 
 
 def _is_out_target(target: ast.expr) -> bool:

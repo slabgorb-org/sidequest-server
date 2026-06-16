@@ -119,10 +119,8 @@ def test_runtime_cavern_path_emits_tactical_grid_with_source_discriminator(
     # canonical entry order this mirrors. Auto-sort alphabetically would
     # place `sidequest.server` (bare module) before
     # `sidequest.server.session_handler` and re-introduce the cycle.
-    from unittest.mock import MagicMock  # noqa: I001
-
-    from sidequest.agents.orchestrator import Orchestrator
-    from sidequest.game.repository import SaveRepository
+    from sidequest.agents.orchestrator import Orchestrator  # noqa: I001
+    from sidequest.game.persistence import SqliteStore
     from sidequest.game.session import GameSnapshot
     from sidequest.genre.loader import load_genre_pack
     from sidequest.protocol.messages import TacticalGridMessage
@@ -162,6 +160,8 @@ def test_runtime_cavern_path_emits_tactical_grid_with_source_discriminator(
     snap.discovered_rooms = [region_id]
 
     orchestrator = Orchestrator.__new__(Orchestrator)
+    store = SqliteStore.open_in_memory()
+    store.init_session("caverns_and_claudes", "beneath_sunden")
 
     sd = _SessionData(
         genre_slug="caverns_and_claudes",
@@ -169,9 +169,7 @@ def test_runtime_cavern_path_emits_tactical_grid_with_source_discriminator(
         player_name="Rux",
         player_id="player-runtime-wiring",
         snapshot=snap,
-        repository=MagicMock(spec=SaveRepository),
-        dungeon_repository=MagicMock(),
-        telemetry_sink=MagicMock(),
+        store=store,
         genre_pack=pack,
         orchestrator=orchestrator,
     )
@@ -187,9 +185,7 @@ def test_runtime_cavern_path_emits_tactical_grid_with_source_discriminator(
         emitted_messages.append((kind, msg))
 
     watcher_events: list[tuple[str, dict[str, Any]]] = []
-    from sidequest.server.websocket_handlers import map_emit
-
-    original_publish = map_emit._watcher_publish
+    original_publish = wsh._watcher_publish
 
     def capture_watcher(
         event: str,
@@ -201,7 +197,7 @@ def test_runtime_cavern_path_emits_tactical_grid_with_source_discriminator(
         watcher_events.append((event, dict(attrs)))
         return original_publish(event, attrs, component=component, severity=severity)
 
-    monkeypatch.setattr(map_emit, "_watcher_publish", capture_watcher)
+    monkeypatch.setattr(wsh, "_watcher_publish", capture_watcher)
 
     wsh._maybe_emit_tactical_grid(
         None,

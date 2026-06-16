@@ -1,7 +1,0 @@
-name: timeline_dir_fixture
-description: >-
-  Story 65-12 spec-check fix world. Legends are authored as a per-file
-  ``legends/`` DIRECTORY (one legend per YAML) — the dominant real authoring
-  form (five_points, evropi, franchise_nations, …), NOT a flat legends.yaml.
-  The Timeline section must render for this form exactly as it does for the flat
-  form (AC1/AC2). One dated legend (clean year) + one undated legend.

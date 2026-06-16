@@ -1,8 +1,0 @@
-genre_key: wwn_test_pack
-default_reversibility: permanent
-verdicts_on_zero_hp:
-  pc: dead
-  npc: dead
-soul_md_constraint: "genre_truth:lethal_for_this_genre"
-must_narrate: "Render the death with specific, brutal detail. The genre promises lethality; honor the promise. The antagonist does not hesitate."
-must_not_narrate: "narrate survival; invent an ally's last-second intervention; let the enemy monologue instead of strike; soften the damage after the fact"

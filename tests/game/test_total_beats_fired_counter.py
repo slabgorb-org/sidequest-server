@@ -88,7 +88,6 @@ def _make_pack_with_combat() -> GenrePack:
     )
     rules = MagicMock(spec=RulesConfig)
     rules.confrontations = [cdef]
-    rules.ruleset = "native"
     pack = MagicMock()
     pack.rules = rules
     return pack

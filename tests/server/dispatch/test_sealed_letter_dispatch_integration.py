@@ -23,12 +23,8 @@ Coverage:
   - Persistence: per_actor_state survives a snapshot model_dump round
     trip after sealed-letter resolution
 
-Story 96-1: the dogfight tests drive the ``swn_test_pack`` FIXTURE
-(world-tier ``multifocal_laser`` catalog in ``test_world``) instead of live
-space_opera content, so content-only changes can never turn them red. Only
-the two legacy beat_selection regression tests still load live
-caverns_and_claudes (and carry their own content skipif) — flagged as a
-follow-up in the 96-1 delivery findings.
+Skips when ``sidequest-content`` is not checked out alongside
+``sidequest-server`` (matches the pattern in ``test_dogfight_content_loading.py``).
 """
 
 from __future__ import annotations
@@ -48,8 +44,6 @@ from sidequest.agents.orchestrator import (
     NarrationTurnResult,
     NpcMention,
 )
-from sidequest.game.character import Character
-from sidequest.game.creature_core import CreatureCore
 from sidequest.game.encounter import StructuredEncounter
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.loader import load_genre_pack
@@ -63,30 +57,13 @@ from sidequest.server.narration_apply import (
 from tests._helpers.session_room import room_for
 from tests._helpers.trigger_encounter import trigger_encounter
 
-
-def _make_pilot(name: str) -> Character:
-    """Minimal SWN PC with the flavor attrs that ship_attack_params needs.
-
-    Both Reflex and Intellect are 10 (modifier=0) so the to-hit arithmetic is
-    deterministic. The character model does not yet carry an SWN Pilot skill, so
-    pilot_skill falls back to the authored cdef default (player_default_stats) —
-    this is an authored default, not a silent fallback.
-    """
-    return Character(
-        core=CreatureCore(name=name, description="Test pilot.", personality="Calm."),
-        backstory="A pilot.",
-        char_class="Pilot",
-        race="Human",
-        stats={"Reflex": 10, "Intellect": 10},
-    )
-
-
-# Live-content root — used ONLY by the two legacy beat_selection regression
-# tests below (caverns_and_claudes), which carry their own skipif. The
-# dogfight tests drive the swn_test_pack fixture (story 96-1).
+# Real space_opera content carries the sealed_letter dogfight ConfrontationDef
+# and the loaded InteractionTable. The fixture pack at tests/fixtures/packs
+# does not — these integration tests are about driving real loaded content
+# through the production code path, so we depend on the sibling repo.
 CONTENT_ROOT = Path(__file__).resolve().parents[3].parent / "sidequest-content" / "genre_packs"
 
-_NEEDS_LIVE_CONTENT = pytest.mark.skipif(
+pytestmark = pytest.mark.skipif(
     not CONTENT_ROOT.is_dir(),
     reason="sidequest-content not on disk alongside sidequest-server",
 )
@@ -98,21 +75,15 @@ _NEEDS_LIVE_CONTENT = pytest.mark.skipif(
 
 
 @pytest.fixture(scope="module")
-def swn_fixture_pack() -> GenrePack:
-    from tests._helpers.fixture_packs import SWN_TEST_PACK, load_fixture_pack
-
-    return load_fixture_pack(SWN_TEST_PACK)
+def space_opera_pack() -> GenrePack:
+    return load_genre_pack(CONTENT_ROOT / "space_opera")
 
 
 @pytest.fixture
-def swn_snap(swn_fixture_pack: GenrePack) -> tuple[GameSnapshot, GenrePack]:
-    from tests._helpers.fixture_packs import SWN_TEST_PACK, TEST_WORLD
-
-    snap = GameSnapshot(genre=SWN_TEST_PACK)
-    snap.genre_slug = SWN_TEST_PACK
-    # Epic 94 production shape: weapon lookup resolves world-tier inventory.
-    snap.world_slug = TEST_WORLD
-    return snap, swn_fixture_pack
+def space_opera_snap(space_opera_pack: GenrePack) -> tuple[GameSnapshot, GenrePack]:
+    snap = GameSnapshot(genre="space_opera")
+    snap.genre_slug = "space_opera"
+    return snap, space_opera_pack
 
 
 @pytest.fixture
@@ -127,28 +98,10 @@ def cac_pack() -> GenrePack:
     return load_genre_pack(CONTENT_ROOT / "caverns_and_claudes")
 
 
-def _make_wwn_pc(name: str) -> Character:
-    """Minimal caverns_and_claudes (WWN ruleset) PC carrying the WWN attribute
-    block. cac was ported to WWN (PR #429), so combat instantiation rolls
-    initiative (1d8+DEX) and resolves each player-side actor's DEX from
-    ``snapshot.characters`` — failing loud on a seated player that isn't a real
-    Character. The WWN DEXTERITY flavor is "DEX" (rules.yaml attribute_map)."""
-    return Character(
-        core=CreatureCore(name=name, description="A delver.", personality="Steady."),
-        backstory="Sünden-born.",
-        char_class="Warrior",
-        race="Human",
-        stats={"STR": 12, "DEX": 12, "CON": 12, "INT": 10, "WIS": 10, "CHA": 10},
-    )
-
-
 @pytest.fixture
 def cac_snap(cac_pack: GenrePack) -> tuple[GameSnapshot, GenrePack]:
     snap = GameSnapshot(genre="caverns_and_claudes")
     snap.genre_slug = "caverns_and_claudes"
-    # Seat the PC the legacy-beat regression tests drive ("Rux") so the WWN
-    # initiative seam can resolve its DEX (No Silent Fallbacks).
-    snap.characters.append(_make_wwn_pc("Rux"))
     return snap, cac_pack
 
 
@@ -175,18 +128,15 @@ def otel_capture():
 
 
 def test_dogfight_instantiation_assigns_red_blue_roles(
-    swn_snap: tuple[GameSnapshot, GenrePack],
+    space_opera_snap: tuple[GameSnapshot, GenrePack],
 ) -> None:
     """When a dogfight starts, the instantiator must tag actors with
     role="red" (player) and role="blue" (opponent) — NOT "combatant" —
     so the sealed-letter handler can find them by role lookup.
     """
-    snap, pack = swn_snap
+    snap, pack = space_opera_snap
     trigger_encounter(
-        snap,
-        pack,
-        "dogfight",
-        "Maverick",
+        snap, pack, "dogfight", "Maverick",
         npcs_present=[
             NpcMention(name="Bandit Ace", role="hostile", side="opponent"),
         ],
@@ -209,7 +159,7 @@ def test_dogfight_instantiation_assigns_red_blue_roles(
 
 
 def test_dogfight_instantiation_rejects_zero_npcs(
-    swn_snap: tuple[GameSnapshot, GenrePack],
+    space_opera_snap: tuple[GameSnapshot, GenrePack],
     otel_capture: InMemorySpanExporter,
 ) -> None:
     """Sealed-letter dogfights need exactly one opponent. Playtest
@@ -220,7 +170,7 @@ def test_dogfight_instantiation_rejects_zero_npcs(
     """
     from sidequest.server.dispatch.encounter_lifecycle import SealedLetterArityError
 
-    snap, pack = swn_snap
+    snap, pack = space_opera_snap
     with pytest.raises(SealedLetterArityError):
         trigger_encounter(snap, pack, "dogfight", "Maverick", npcs_present=[])
     assert snap.encounter is None, "no encounter must instantiate when arity guard fires"
@@ -232,7 +182,7 @@ def test_dogfight_instantiation_rejects_zero_npcs(
 
 
 def test_dogfight_instantiation_rejects_two_npcs(
-    swn_snap: tuple[GameSnapshot, GenrePack],
+    space_opera_snap: tuple[GameSnapshot, GenrePack],
     otel_capture: InMemorySpanExporter,
 ) -> None:
     """Sealed-letter dogfights are 1v1 — multi-NPC scenes (drift gang
@@ -243,13 +193,10 @@ def test_dogfight_instantiation_rejects_two_npcs(
     """
     from sidequest.server.dispatch.encounter_lifecycle import SealedLetterArityError
 
-    snap, pack = swn_snap
+    snap, pack = space_opera_snap
     with pytest.raises(SealedLetterArityError):
         trigger_encounter(
-            snap,
-            pack,
-            "dogfight",
-            "Maverick",
+            snap, pack, "dogfight", "Maverick",
             npcs_present=[
                 NpcMention(name="Bandit One", role="hostile", side="opponent"),
                 NpcMention(name="Bandit Two", role="hostile", side="opponent"),
@@ -270,7 +217,7 @@ def test_dogfight_instantiation_rejects_two_npcs(
 
 
 def test_dogfight_instantiation_arity_error_propagates_at_lifecycle_layer(
-    swn_snap: tuple[GameSnapshot, GenrePack],
+    space_opera_snap: tuple[GameSnapshot, GenrePack],
 ) -> None:
     """The wrapper at ``_apply_narration_result_to_snapshot`` is what
     grants the graceful skip. The lifecycle helper itself must still
@@ -282,7 +229,7 @@ def test_dogfight_instantiation_arity_error_propagates_at_lifecycle_layer(
         instantiate_encounter_from_trigger,
     )
 
-    snap, pack = swn_snap
+    snap, pack = space_opera_snap
     with pytest.raises(SealedLetterArityError, match="exactly one opponent"):
         instantiate_encounter_from_trigger(
             snapshot=snap,
@@ -303,7 +250,7 @@ def test_dogfight_instantiation_arity_error_propagates_at_lifecycle_layer(
 
 
 def test_dogfight_turn_resolves_through_sealed_letter_dispatch(
-    swn_snap: tuple[GameSnapshot, GenrePack],
+    space_opera_snap: tuple[GameSnapshot, GenrePack],
     otel_capture: InMemorySpanExporter,
 ) -> None:
     """The keystone wiring test.
@@ -314,32 +261,19 @@ def test_dogfight_turn_resolves_through_sealed_letter_dispatch(
     apply_beat), mutate per_actor_state, fire the cell_resolved span,
     and push the narration_hint onto the encounter.
     """
-    snap, pack = swn_snap
-    snap.characters = [_make_pilot("Vega")]
+    snap, pack = space_opera_snap
 
     # Turn 1: instantiate the dogfight encounter
     trigger_encounter(
-        snap,
-        pack,
-        "dogfight",
-        "Vega",
+        snap, pack, "dogfight", "Vega",
         npcs_present=[
             NpcMention(name="Iron Fang", role="ace", side="opponent"),
         ],
     )
     enc = snap.encounter
     assert enc is not None
-    # Task 12: frame HP is now seeded at instantiation — per_actor_state carries
-    # frame_hp/frame_hp_max; the turn resolver will add gun-geometry keys on top.
-    from sidequest.game.dogfight_shot import FRAME_HP_KEY, FRAME_HP_MAX_KEY
-
-    for actor in enc.actors:
-        assert FRAME_HP_KEY in actor.per_actor_state, (
-            f"actor {actor.name!r} missing frame_hp after instantiation"
-        )
-        assert FRAME_HP_MAX_KEY in actor.per_actor_state, (
-            f"actor {actor.name!r} missing frame_hp_max after instantiation"
-        )
+    assert enc.actors[0].per_actor_state == {}
+    assert enc.actors[1].per_actor_state == {}
     assert enc.narrator_hints == []
 
     # Clear the captured spans so the next turn's spans are isolated
@@ -398,7 +332,7 @@ def test_dogfight_turn_resolves_through_sealed_letter_dispatch(
 
 
 def test_dogfight_dispatch_does_not_invoke_apply_beat(
-    swn_snap: tuple[GameSnapshot, GenrePack],
+    space_opera_snap: tuple[GameSnapshot, GenrePack],
 ) -> None:
     """Sealed-letter resolution is exclusive of the legacy beat path.
 
@@ -409,14 +343,10 @@ def test_dogfight_dispatch_does_not_invoke_apply_beat(
     Pin: player_metric.current MUST stay at its starting value because
     the sealed-letter path does not move dual-track dials directly.
     """
-    snap, pack = swn_snap
-    snap.characters = [_make_pilot("Pilot")]
+    snap, pack = space_opera_snap
 
     trigger_encounter(
-        snap,
-        pack,
-        "dogfight",
-        "Pilot",
+        snap, pack, "dogfight", "Pilot",
         npcs_present=[
             NpcMention(name="Wraith", role="hostile", side="opponent"),
         ],
@@ -456,20 +386,16 @@ def test_dogfight_dispatch_does_not_invoke_apply_beat(
 
 
 def test_per_actor_state_round_trip_after_dispatch(
-    swn_snap: tuple[GameSnapshot, GenrePack],
+    space_opera_snap: tuple[GameSnapshot, GenrePack],
 ) -> None:
     """After sealed-letter dispatch mutates per_actor_state, the
     StructuredEncounter must survive model_dump → model_validate without
     losing the cockpit descriptors. This is the save/load contract.
     """
-    snap, pack = swn_snap
-    snap.characters = [_make_pilot("Lance")]
+    snap, pack = space_opera_snap
 
     trigger_encounter(
-        snap,
-        pack,
-        "dogfight",
-        "Lance",
+        snap, pack, "dogfight", "Lance",
         npcs_present=[
             NpcMention(name="Spectre", role="hostile", side="opponent"),
         ],
@@ -510,28 +436,24 @@ def test_per_actor_state_round_trip_after_dispatch(
 # ---------------------------------------------------------------------------
 
 
-@_NEEDS_LIVE_CONTENT
 def test_legacy_beat_selection_path_still_works(
     cac_snap: tuple[GameSnapshot, GenrePack],
 ) -> None:
     """The CAC ``combat`` confrontation must continue to resolve through
-    the legacy non-sealed-letter path. After the WWN port (PR #429) CAC
-    combat resolves via ``beat_selection`` (the literal legacy beat path
-    this test is named for). What's being pinned is the legacy code path
-    that handles non-sealed-letter resolution via apply_beat — not the
-    specific resolution_mode value; the only invariant that matters here
-    is that it is NOT ``sealed_letter_lookup``. If the sealed-letter
-    branch were wired too greedily, this test would diverge from prior
-    behavior.
+    the legacy non-sealed-letter path; ``resolution_mode`` is now
+    ``opposed_check`` after PR #130 (CAC combat was migrated off
+    ``beat_selection``). The test name retains the historical
+    ``legacy_beat_selection_path`` framing because what's being pinned
+    is the legacy code path that handles non-sealed-letter resolution
+    via apply_beat — not the specific resolution_mode value. If the
+    sealed-letter branch were wired too greedily, this test would
+    diverge from prior behavior.
     """
     snap, pack = cac_snap
 
     # Turn 1: instantiate combat with a hostile NPC
     trigger_encounter(
-        snap,
-        pack,
-        "combat",
-        "Rux",
+        snap, pack, "combat", "Rux",
         npcs_present=[
             NpcMention(name="Goblin", role="hostile", side="opponent"),
         ],
@@ -547,26 +469,22 @@ def test_legacy_beat_selection_path_still_works(
         "combat",
     )
     assert cdef is not None
-    assert cdef.resolution_mode != ResolutionMode.sealed_letter_lookup, (
-        "the legacy beat path must not be the sealed-letter branch; CAC "
-        f"combat resolves via {cdef.resolution_mode} after the WWN port"
-    )
+    assert cdef.resolution_mode == ResolutionMode.opposed_check
     assert all(a.role in ("combatant", "participant") for a in enc.actors), (
         f"legacy combat encounter should keep legacy role tags, got "
         f"{[(a.name, a.role) for a in enc.actors]}"
     )
 
-    # Pick a damage beat that exists on CAC combat. The WWN port (PR #429)
-    # renamed the attack beat to "strike" (ablative-HP damage channel).
+    # Pick a beat that exists on CAC combat — the standard "attack"
     beat_ids = {b.id for b in cdef.beats}
-    assert "strike" in beat_ids, (
-        f"CAC combat needs a 'strike' beat for this regression test; has {beat_ids}"
+    assert "attack" in beat_ids, (
+        f"CAC combat needs an 'attack' beat for this regression test; has {beat_ids}"
     )
 
     starting_opp = enc.opponent_metric.current
 
-    # Turn 2: player strikes — this MUST go through apply_beat (the legacy
-    # non-sealed-letter resolution path).
+    # Turn 2: player attacks — this MUST go through apply_beat (which
+    # advances the opponent dial via the resolve_attack mechanic).
     _apply_narration_result_to_snapshot(
         snap,
         NarrationTurnResult(
@@ -574,7 +492,7 @@ def test_legacy_beat_selection_path_still_works(
             beat_selections=[
                 BeatSelection(
                     actor="Rux",
-                    beat_id="strike",
+                    beat_id="attack",
                     outcome=RollOutcome.Success,
                 ),
             ],
@@ -592,7 +510,6 @@ def test_legacy_beat_selection_path_still_works(
     )
 
 
-@_NEEDS_LIVE_CONTENT
 def test_legacy_beat_path_returns_narration_apply_outcome(
     cac_snap: tuple[GameSnapshot, GenrePack],
 ) -> None:
@@ -611,10 +528,7 @@ def test_legacy_beat_path_returns_narration_apply_outcome(
 
     # Turn 1: instantiate combat with a hostile NPC.
     trigger_encounter(
-        snap,
-        pack,
-        "combat",
-        "Rux",
+        snap, pack, "combat", "Rux",
         npcs_present=[
             NpcMention(name="Goblin", role="hostile", side="opponent"),
         ],
@@ -656,7 +570,7 @@ def test_legacy_beat_path_returns_narration_apply_outcome(
 
 
 def test_narrator_hints_does_not_accumulate_across_dogfight_turns(
-    swn_snap: tuple[GameSnapshot, GenrePack],
+    space_opera_snap: tuple[GameSnapshot, GenrePack],
 ) -> None:
     """narrator_hints must hold only the LAST cell's hint, not the history.
 
@@ -666,15 +580,11 @@ def test_narrator_hints_does_not_accumulate_across_dogfight_turns(
     "; " and pastes that into the prompt every turn — accumulation here
     silently degrades narration quality with each round.
     """
-    snap, pack = swn_snap
-    snap.characters = [_make_pilot("Saber")]
+    snap, pack = space_opera_snap
 
     # Turn 1: instantiate the dogfight encounter
     trigger_encounter(
-        snap,
-        pack,
-        "dogfight",
-        "Saber",
+        snap, pack, "dogfight", "Saber",
         npcs_present=[
             NpcMention(name="Reaper", role="ace", side="opponent"),
         ],
@@ -730,18 +640,14 @@ def test_narrator_hints_does_not_accumulate_across_dogfight_turns(
 
 
 def test_unknown_maneuver_in_sealed_letter_raises(
-    swn_snap: tuple[GameSnapshot, GenrePack],
+    space_opera_snap: tuple[GameSnapshot, GenrePack],
 ) -> None:
     """A beat_id that is not in maneuvers_consumed must surface as a
     ValueError from the dispatch path (CLAUDE.md no-silent-fallback)."""
-    snap, pack = swn_snap
-    snap.characters = [_make_pilot("Apex")]
+    snap, pack = space_opera_snap
 
     trigger_encounter(
-        snap,
-        pack,
-        "dogfight",
-        "Apex",
+        snap, pack, "dogfight", "Apex",
         npcs_present=[
             NpcMention(name="Hydra", role="hostile", side="opponent"),
         ],

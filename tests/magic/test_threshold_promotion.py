@@ -226,7 +226,6 @@ async def test_pipeline_wires_promotion_into_character_statuses(coyote_world_con
             "consent_state": "involuntary",
         },
         idempotency_key="k-magic-promo",
-        confidence=1.0,
         visibility=VisibilityTag(visible_to="all"),
     )
 

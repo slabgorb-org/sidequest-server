@@ -136,7 +136,6 @@ def _magic_working_dispatch(
         subsystem="magic_working",
         params=_magic_working_params(actor=actor),
         idempotency_key=idempotency_key,
-        confidence=1.0,
         visibility=_open_viz(),
     )
 
@@ -399,6 +398,7 @@ def test_narration_apply_ignores_result_magic_working_sidecar() -> None:
     result.status_changes = None
     result.narration = "A magical ward shimmers into existence."
     result.action_rewrite = None
+    result.quest_updates = None
     result.lore_established = None
     result.beat_selections = None
     result.npc_pool = None

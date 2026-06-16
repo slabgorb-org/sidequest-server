@@ -83,7 +83,7 @@ class UpdateResourcePoolArgs(BaseModel):
     category=ToolCategory.WRITE,
 )
 async def update_resource_pool(args: UpdateResourcePoolArgs, ctx: ToolContext) -> ToolResult:
-    session = ctx.repository.load()
+    session = ctx.store.load()
     if session is None:
         return ToolResult.error("no active session", recoverable=False)
 
@@ -99,7 +99,7 @@ async def update_resource_pool(args: UpdateResourcePoolArgs, ctx: ToolContext) -
     except UnknownResource:
         return ToolResult.not_found(f"unknown pool: {args.pool!r}")
 
-    ctx.repository.save(snapshot)
+    ctx.store.save(snapshot)
 
     ctx.otel_span.set_attribute("tool.resource.pool", args.pool)
     ctx.otel_span.set_attribute("tool.resource.delta", args.delta)

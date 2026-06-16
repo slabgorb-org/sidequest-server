@@ -5,63 +5,6 @@ All notable changes to the SideQuest game-engine backend.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Added
-- **PostgreSQL persistence migration completed (ADR-115)** — the live cutover.
-  Full `game/pg/` repository family (`PgSaveRepository`, `PgDungeonRepository`,
-  `PgTelemetrySink` riding the turn transaction, `PgForensicReader` MVCC reads
-  retiring `?mode=ro`, plus events/snapshot/world_save/narrative/scrapbook/
-  location_promotions/asset_ledger/sessions sub-stores). psycopg3 + `psycopg_pool`
-  foundation, per-session row-lock transactions, Alembic-owned DDL, fail-loud
-  `SIDEQUEST_DATABASE_URL` (no silent default), pool open/close on app startup/
-  shutdown. First CI workflow (postgres:18 service, lint + suite).
-- **Single-save SQLite→PG read-only importer (ADR-115 TG-E)** — `game/importer.py`.
-- **CWN ruleset (Cities Without Number) bound to neon_dystopia (ADR-117)** —
-  `ruleset_config()` dispatch, System Strain as a CON-bound engine resource,
-  combat lethality (Trauma, Shock, Mortal/Major Injury), `net_run`
-  hacking-as-confrontation (2d6 Program check + OTEL lie-detector), `shock_ac`
-  decoupled from the AC ceiling.
-- **SWN dogfight shot resolution** layered onto the maneuver cross-product; SWN
-  **P4 initiative spine** — engine-rolled 1d8+DEX, ceremony-free.
-- **Fail-loud DB schema guard at startup (71-20)** — refuses to boot when the
-  schema is behind the Alembic head.
-- **`asset_ledger` subsystem (65-2)** — persist + serve + write-on-render; CDN
-  URLs resolved in `/assets`.
-- **Room-graph transition trope-tick + item depletion (ADR-055, 71-15)**;
-  **per-dispatch confidence gate + threshold gating (ADR-113, 71-16)** — begins
-  closing the Intent Router "every dispatch fires" caveat.
-- World-level NPC portraits + display-on-invocation (65-6); `round` required on
-  `PlayerActionPayload` (71-10); per-class signature ability in the space_opera
-  class picker (71-1); cross-reference content lint — ID membership + adjacency
-  closure (64-5).
-
-### Changed
-- Confrontation-trigger steering migrated onto the SDK path (61-18); dice routing
-  mid-turn + resume consolidated through the single `emit_event` supplier (59-20).
-- REST forensic/games endpoints repointed at `PgForensicReader`; `SAVE_WRITE_LOCK`
-  and the in-transaction `MAX(seq)` heuristic deleted (ADR-115 D5).
-- `websocket_session_handler` decomposed into `websocket_handlers/` (helpers,
-  audio, chargen mixins).
-
-### Fixed
-- MP opening routed through `emit_event` — per-recipient POV + perception +
-  event-sourcing (71-13); POV-swap the driving player's own MP opening card
-  (71-5); authored crew hydrated on fresh sessions (71-7).
-- Narration POV person-agreement — predicate possessive + adverb-stranded verb
-  (71-6).
-- `scenario_clue` coerces an off-enum router `FactCategory` instead of crashing;
-  mid-broadcast recipient drops are surfaced, not silently skipped.
-- `ACTION_REVEAL` delivery resilience — reconnect seal reconcile (67-2).
-- Reference renderer humanizes snake_case keys + suppresses empty sections
-  (63-9/63-11); malformed world YAML → clean `Issue`, not a traceback (63-13).
-
-### Removed
-- **SQLite write layer deleted (ADR-115 F1)** — `SqliteStore` / `SqliteSaveRepository`
-  and dead write machinery removed (not dual-pathed); SQLite survives only as the
-  read-only importer source.
-- Dead `negative_prompt` config field on `VisualStyle` (64-11).
-
 ## [1.3.0] - 2026-05-26
 
 ### Added
@@ -75,13 +18,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sidecar retired (59-5/59-6/59-7).
 - **Ablative HP substrate (ADR-114)** — HP reclaims the lethality track beneath
   the dials.
-- **Pluggable Ruleset Module System (ADR-117)** — `RulesetModule` ABC (resolution
-  surface), fail-loud registry (`native` registered; unknown raises
-  `UnknownRulesetError`), `RulesConfig.ruleset` field with fail-loud bind at pack
-  load, and confrontation dispatch routed through the bound module (inline
-  resolution deleted; `NativeRulesetModule` relocates the dial resolution).
-- **SWN ruleset module bound to space_opera (ADR-117)** — `swn.py`: attack-vs-AC +
-  `hp_depletion` combat engine, non-beat skill checks & saves.
 - **Per-PC dungeon movement subsystem** — `run_movement_dispatch` with per-PC
   region data model and per-PC `dungeon.map_emitted` (movement Phases 1-3).
 - **SaveRepository persistence layer (ADR-115 P0)** — `SaveRepository` +
@@ -156,10 +92,6 @@ the **runtime procedural megadungeon** (ADR-106, `beneath_sunden`), the
 test-wiring hardening.
 
 ### Added
-- **Broadcast-layer perception firewall (ADR-104/105)** — secret-routing as a
-  `CoreInvariant`, real private-route map derivation, public-safe output contract
-  + segment channel, and per-segment POV + owner delivery. The per-recipient
-  narration security boundary for multiplayer.
 - **Anthropic SDK narrator migration (ADR-101/102)** — SDK narrator path made
   live and flipped to the default backend; native tool-use replaces the JSON
   sidecar. `ToolingLlmClient` routes to the SDK path; narrator cache cost

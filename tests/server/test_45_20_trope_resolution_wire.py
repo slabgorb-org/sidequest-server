@@ -33,7 +33,7 @@ Two boundary seams are exercised:
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 from opentelemetry import trace as otel_trace
@@ -48,29 +48,6 @@ from sidequest.game.session import TropeState
 from sidequest.telemetry.setup import init_tracer
 from tests._helpers.session_room import room_for
 from tests.server.conftest import _build_turn_context_for_test
-
-
-@pytest.fixture(autouse=True)
-def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
-    """Bind the process pool to a per-worker throwaway PG db, clean per test
-    (ADR-115 F1: the save/reload durability test round-trips through PG)."""
-    import psycopg
-
-    from sidequest.game import db_pool
-
-    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
-    with psycopg.connect(plain, autocommit=True) as conn:
-        rows = conn.execute(
-            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
-            "AND tablename <> 'alembic_version'"
-        ).fetchall()
-        if rows:
-            names = ", ".join(f'"{r[0]}"' for r in rows)
-            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
-    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
-    db_pool.close_pool()
-    yield
-    db_pool.close_pool()
 
 
 @pytest.fixture
@@ -157,9 +134,7 @@ class TestDispatchSeamWritesDurableRecord:
         )
         # Turn-marker — interaction is bumped during the turn, so the
         # entry references the post-bump value.
-        # Story 77-2: quest_log values are QuestEntry; the handshake records the
-        # turn marker in the status field.
-        entry = sd.snapshot.quest_log["trope_extraction_panic"].status
+        entry = sd.snapshot.quest_log["trope_extraction_panic"]
         assert str(sd.snapshot.turn_manager.interaction) in entry, (
             "quest_log entry must reference the interaction count so "
             "the next narrator can anchor the resolution in time; got "
@@ -387,23 +362,15 @@ class TestStateSummaryTimingSeam:
 class TestSaveReloadDurability:
     @pytest.mark.asyncio
     async def test_quest_log_entry_survives_save_reload(self, session_fixture, tmp_path) -> None:
-        from sidequest.game import db_pool
-        from sidequest.server.session_state import _build_pg_repos_for_slug
+        from sidequest.game.persistence import SqliteStore
 
         sd, handler = session_fixture
         _seed_active_trope(sd, "extraction_panic", "progressing")
 
-        # ADR-115 F1: real PgSaveRepository so the snapshot round-trips; a
-        # second repo handle on the same slug reads the persisted state back.
+        # Use a real on-disk store so we can close + re-open it.
+        store_path = str(tmp_path / "save.db")
+        sd.store = SqliteStore.open(store_path)
         sd.snapshot.world_slug = "test_world"
-        _save_slug = "trope-resolution-durability"
-        sd.repository, _d, _s = _build_pg_repos_for_slug(
-            db_pool.get_pool(),
-            slug=_save_slug,
-            mode="solo",
-            genre_slug=sd.snapshot.genre_slug,
-            world_slug="test_world",
-        )
 
         sd.orchestrator.run_narration_turn = _flipping_orchestrator(sd, "extraction_panic")
         turn_context = _build_turn_context_for_test(sd)
@@ -418,17 +385,11 @@ class TestSaveReloadDurability:
         )
 
         # Persist explicitly — the dispatch already saves once via
-        # sd.repository.save(snapshot), but we save again to be defensive.
-        sd.repository.save(sd.snapshot)
+        # sd.store.save(snapshot), but we save again to be defensive.
+        sd.store.save(sd.snapshot)
 
-        # Reload via a fresh repository handle on the same slug.
-        reloaded_store, _d2, _s2 = _build_pg_repos_for_slug(
-            db_pool.get_pool(),
-            slug=_save_slug,
-            mode="solo",
-            genre_slug=sd.snapshot.genre_slug,
-            world_slug="test_world",
-        )
+        # Reload via a fresh store handle on the same DB.
+        reloaded_store = SqliteStore.open(store_path)
         saved = reloaded_store.load()
         assert saved is not None, (
             "Persistence path returned None on reload — save did not round-trip the snapshot."
@@ -458,24 +419,17 @@ class TestSaveReloadDurability:
         re-detect) so the panel sees the path engaged.
         """
 
-        from sidequest.game import db_pool
+        from sidequest.game.persistence import SqliteStore
         from sidequest.server.session_handler import (
             WebSocketSessionHandler,
             _SessionData,
         )
-        from sidequest.server.session_state import _build_pg_repos_for_slug
 
         sd, handler = session_fixture
         _seed_active_trope(sd, "extraction_panic", "progressing")
+        store_path = str(tmp_path / "save.db")
+        sd.store = SqliteStore.open(store_path)
         sd.snapshot.world_slug = "test_world"
-        _save_slug = "trope-resolution-reload"
-        sd.repository, _d, _s = _build_pg_repos_for_slug(
-            db_pool.get_pool(),
-            slug=_save_slug,
-            mode="solo",
-            genre_slug=sd.snapshot.genre_slug,
-            world_slug="test_world",
-        )
 
         # Turn 1: resolution.
         sd.orchestrator.run_narration_turn = _flipping_orchestrator(sd, "extraction_panic")
@@ -485,14 +439,8 @@ class TestSaveReloadDurability:
         active_stakes_after_turn_1 = sd.snapshot.active_stakes
 
         # Persist + reload into a fresh _SessionData/handler.
-        sd.repository.save(sd.snapshot)
-        reloaded_store, _d2, _s2 = _build_pg_repos_for_slug(
-            db_pool.get_pool(),
-            slug=_save_slug,
-            mode="solo",
-            genre_slug=sd.snapshot.genre_slug,
-            world_slug="test_world",
-        )
+        sd.store.save(sd.snapshot)
+        reloaded_store = SqliteStore.open(store_path)
         saved = reloaded_store.load()
         assert saved is not None
         reloaded_snap = saved.snapshot
@@ -502,9 +450,7 @@ class TestSaveReloadDurability:
             player_name=sd.player_name,
             player_id=sd.player_id,
             snapshot=reloaded_snap,
-            repository=reloaded_store,
-            dungeon_repository=MagicMock(),
-            telemetry_sink=MagicMock(),
+            store=reloaded_store,
             genre_pack=sd.genre_pack,
             orchestrator=sd.orchestrator,
         )

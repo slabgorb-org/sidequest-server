@@ -36,18 +36,15 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from sidequest.agents.npc_context import NpcWorkingSet
-    from sidequest.agents.subsystems import BankResult
     from sidequest.game.lore_store import LoreStore
     from sidequest.game.monster_manual import MonsterManual
     from sidequest.game.session import GameSnapshot
 
 # Importing this package wires the 26 tool adapters onto default_registry at
-# module import time. Required for the SDK path; the sync ClaudeClient
-# path does not depend on the registry.
+# module import time. Required for the SDK path; the streaming/sync ClaudeClient
+# paths do not depend on the registry.
 import sidequest.agents.tools  # noqa: F401  (registration side effect)
 from sidequest.agents.anthropic_cost import cost_band
-from sidequest.agents.aside_resolver import AsidePromptStash
 from sidequest.agents.claude_client import (
     ClaudeClient,
     ClaudeResponse,
@@ -56,10 +53,7 @@ from sidequest.agents.claude_client import (
 from sidequest.agents.claude_client import (
     TimeoutError as _ClaudeTimeoutError,
 )
-from sidequest.agents.narrator import (
-    NarratorAgent,
-    resolve_narrator_iteration_cap,
-)
+from sidequest.agents.narrator import NarratorAgent, is_streaming_enabled
 from sidequest.agents.narrator_guardrails import (
     CONFRONTATION_TRIGGER_CONSTRAINT,
     GUARDRAIL_NAMES,
@@ -90,7 +84,6 @@ from sidequest.game.tension_tracker import PacingHint
 from sidequest.game.weather import WeatherState
 from sidequest.genre.models.lethality import LethalityPolicy
 from sidequest.genre.models.narrative import Prompts
-from sidequest.genre.models.rules import ResolutionMode
 from sidequest.protocol.dice import RollOutcome
 from sidequest.protocol.dispatch import DispatchPackage, NarratorDirective
 from sidequest.telemetry.leak_audit import audit_canonical_prose
@@ -280,22 +273,6 @@ class BeatSelection:
     # narration_apply uses this to look up the Spell in the world's catalog
     # and route the save branch.
     spell_id: str | None = None
-    # Story 102-7 — when the applied beat carries the AWN Plan 2 §6.3
-    # ``mutation_resolution`` marker, the narrator nominates WHICH owned
-    # mutation via this sidecar (the spell_id mirror). None on every
-    # non-mutation beat; the mutation handler in narration_apply routes it
-    # through sidequest.mutation.use_ops.
-    mutation_id: str | None = None
-    # Story 102-6 — when the applied beat is a ``psionic_activation``, the
-    # narrator nominates WHICH discipline via this sidecar (the spell_id /
-    # mutation_id mirror). None on every non-psionic beat; the activation handler
-    # routes it through ``WithoutNumberRulesetModule.activate_discipline`` (ADR-142:
-    # any WN sibling that ships a discipline catalog, swn or wwn).
-    discipline_id: str | None = None
-    # Table confrontations (poker/auction): raise/bet chips. None on every
-    # non-table beat. The existing ``target`` field carries the Read/Accuse
-    # target seat_id.
-    amount: int | None = None
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> BeatSelection:
@@ -341,25 +318,12 @@ class BeatSelection:
                     f"BeatSelection declared_tier={raw_outcome!r} not in RollOutcome"
                 ) from exc
         spell_id_raw = d.get("spell_id")
-        # Defensive coercion (parity with gold_change / declared_tier): a
-        # malformed amount degrades to None rather than throwing out of
-        # from_dict. The table branch reads `int(sel.amount or 0)`.
-        amount_raw = d.get("amount")
-        try:
-            amount = int(amount_raw) if amount_raw is not None else None
-        except (TypeError, ValueError):
-            amount = None
-        mutation_id_raw = d.get("mutation_id")
-        discipline_id_raw = d.get("discipline_id")
         return cls(
             actor=str(d.get("actor", "")),
             beat_id=str(d.get("beat_id", "")),
             outcome=outcome,
             target=d.get("target"),
             spell_id=str(spell_id_raw) if spell_id_raw else None,
-            mutation_id=str(mutation_id_raw) if mutation_id_raw else None,
-            discipline_id=str(discipline_id_raw) if discipline_id_raw else None,
-            amount=amount,
         )
 
 
@@ -401,23 +365,6 @@ class NpcMention:
     appearance: str = ""
     side: str = "neutral"
     is_new: bool = False
-    # ping-pong #74: the narrator marks a mention as a wild animal / beast /
-    # monster that belongs to NO culture or faction. When true, the invented-
-    # name seam must NOT route the name through the culture-bound person namer
-    # (which would mint a person-name + a random culture — "a lion called
-    # Keeper Goldbraid of the Emerald City"). Defaults False so every existing
-    # mention stays a person, fully backward-compatible.
-    is_creature: bool = False
-    # sq-playtest 2026-06-10 (long_foundry zombie negotiation): the narrator
-    # marks a seated opponent that has LEFT the confrontation (walked away from a
-    # negotiation, fled a parley). ADR-116 §4 end-on-no-Other needs a grounded
-    # signal for the SOCIAL path — ``opponents_disposition`` is morale-only and
-    # nothing else flips a social opponent's ``withdrawn``. When true on a
-    # ``side="opponent"`` mention, the engine withdraws the matching opponent
-    # actor so the end-on-no-Other sweep resolves the encounter instead of
-    # trapping the player. Defaults False (No Silent Fallbacks — absence is never
-    # read as departure).
-    disengaged: bool = False
 
     @classmethod
     def from_value(cls, value: Any) -> NpcMention:
@@ -444,8 +391,6 @@ class NpcMention:
                 appearance=str(value.get("appearance", "")),
                 side=side,
                 is_new=bool(value.get("is_new", False)),
-                is_creature=bool(value.get("is_creature", False)),
-                disengaged=bool(value.get("disengaged", False)),
             )
         return cls(name=str(value), side="neutral")
 
@@ -509,6 +454,7 @@ class NarrationTurnResult:
     # extractor lane existed for the consume verb.
     items_consumed: list[dict[str, Any]] = field(default_factory=list)
     footnotes: list[dict[str, Any]] = field(default_factory=list)
+    quest_updates: dict[str, str] = field(default_factory=dict)
     sfx_triggers: list[str] = field(default_factory=list)
     action_rewrite: ActionRewrite | None = None
     # ADR-105 B3 — per-PC private narration prose the narrator
@@ -580,7 +526,7 @@ class NarrationTurnResult:
     # narrator can no longer "wing it" — a state change with no ledger entry
     # is a lie). Each entry is ``{"id", "name", "arguments"}`` mirroring the
     # ``ToolUseBlock`` the SDK emitted. EMPTY on every non-SDK path
-    # (sync ClaudeClient) — no tool loop runs there, so there is
+    # (ClaudeClient sync/streaming) — no tool loop runs there, so there is
     # nothing to ledger.
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
 
@@ -649,9 +595,9 @@ class TurnContext:
     # (the slug-based session id, e.g. "2026-05-14-caverns_sunden-28").
     world_id: str | None = None
     session_id: str | None = None
-    # SaveRepository — kept ``Any`` to avoid a circular import (mirrors
-    # ``ToolContext.repository``'s "kept Any to avoid coupling" rationale).
-    repository: Any = None
+    # SqliteStore — kept ``Any`` to avoid a circular import (mirrors
+    # ``ToolContext.store``'s "kept Any to avoid coupling" rationale).
+    store: Any = None
     # Active GenrePack — kept ``Any`` (same circular-import rationale as
     # ``confrontation_def``/``encounter`` above). Story 59-1: the SDK
     # ToolContext stamps this so ``begin_confrontation`` can VALIDATE the
@@ -701,19 +647,6 @@ class TurnContext:
     # after consumption), matching Rust's `opening_directive.take()`.
     opening_directive: str | None = None
 
-    # Pingpong 2026-06-05 [BAR-1] (MP doubled-opening): True only on an
-    # opening turn whose ``action`` is the authored
-    # ``first_turn_invitation`` that the cold-open path has ALREADY
-    # emitted to the player as a NARRATION. The prompt builder then
-    # frames the recency-zone action block as "already shown — continue,
-    # do not restate" instead of ``"<PC> says: <invitation>"``, which
-    # cued the narrator (via the action-rewrite contract) to novelize
-    # the invitation back into its narration — every seeded opening
-    # rendered near-duplicate prose twice. False for joiner-orientation
-    # openings and the no-seed fallback (their actions are not
-    # already-displayed prose).
-    opening_seed_shown: bool = False
-
     # Persistent narrator world context (Valley zone, every turn).
     # Story 41-11 / ADR-082 Phase 2.2 IOU: resolved once at connect time
     # in the session handler. Currently contains the ``AVAILABLE
@@ -736,14 +669,6 @@ class TurnContext:
 
     # Full NPC structs (for merchant context injection — Phase 1 slice: skipped)
     npcs: list[Npc] = field(default_factory=list)
-
-    # Story 75-2: budgeted NPC working-set — the relevance-selected projection
-    # of ``npc_pool`` + ``npcs`` that actually enters the narrator prompt
-    # (scene-present full floor / off-stage brief or compact). The full roster
-    # above persists for other consumers; this is the bounded prompt view that
-    # ``register_npc_roster_section`` renders. ``None`` only on contexts built
-    # before the budgeting seam ran (legacy/direct construction).
-    npc_working_set: NpcWorkingSet | None = None
 
     # Chassis registry — chassis-as-speaker voice data (register, vocal tics,
     # bond-tier address-form). Defensive copy from session.chassis_registry
@@ -819,38 +744,10 @@ class TurnContext:
     # returns a non-empty ``<lore>`` block).
     lore_context: str | None = None
 
-    # Retrieved entity fill (Valley zone) — Story 75-5, ADR-118 §D4. The
-    # semantic top-k NPC/location/faction cards from the universal index,
-    # pre-rendered into typed blocks by ``_build_turn_context`` from
-    # :func:`sidequest.game.retrieval_orchestration.retrieve_turn_context`.
-    # Each is ``None`` when that type retrieved nothing, so no empty section is
-    # registered (zero-byte-leak). The scene-present floor is NOT carried here —
-    # it already reaches the prompt via ``npc_working_set`` (no double-injection).
-    retrieved_entity_npcs: str | None = None
-    retrieved_entity_locations: str | None = None
-    retrieved_entity_factions: str | None = None
-    # Story 84-3 (WI-4, ADR-118 §A2): the §A2 floor-companion relationship section
-    # — the PC↔NPC standing + key beats for a present/named NPC. ``None`` when no
-    # relationship card surfaced (zero-byte-leak), like the others.
-    retrieved_entity_relationships: str | None = None
-    # Story 84-5 (WI-2, ADR-118 §A2): the DORMANT quest / trope recall sections —
-    # a completed quest / resolved trope the player referenced this turn. ``None``
-    # when none surfaced. Distinct from the ACTIVE quest/trope paths (state_summary /
-    # trope foreground), which are unchanged — these carry DORMANT recall only.
-    retrieved_entity_quests: str | None = None
-    retrieved_entity_tropes: str | None = None
-
     # Group B (Local DM decomposer) — session handler populates before calling
     # run_narration_turn. Consumed by build_narrator_prompt to register the
     # narrator_directives PromptSection. Default None = decomposer did not run.
     dispatch_package: DispatchPackage | None = None
-
-    # The BankResult from the SINGLE pre-narrator dispatch-bank run
-    # (intent_router_pass). build_narrator_prompt consumes this for the
-    # narrator_directives section + the lethality arbiter instead of
-    # re-running the bank (which would engage every engine twice). Default
-    # None = no pre-narrator pass ran (decomposer absent / degraded path).
-    bank_result: BankResult | None = None
 
     # Group C — LethalityArbiter inputs. Session handler populates all three
     # from the active GenrePack + live snapshot before run_narration_turn.
@@ -872,17 +769,6 @@ class TurnContext:
     # — matches the existing pattern for ``confrontation_def: Any`` and
     # ``encounter: Any``.
     statuses_by_actor: dict[str, list[Any]] = field(default_factory=dict)
-
-    # Light & Darkness survival clock (Task 7.1). The ``light`` ResourcePool
-    # (current/max + threshold narrator_hints) and the acting PC's active
-    # darkness statuses (the environment_clock −2 penalty), surfaced to the
-    # narrator so guttering/dark prose is state-driven, not improvised. Both
-    # are VOLATILE (light.current changes every burn) → registered in the
-    # Valley zone, never the cached prefix. ``None``/empty on packs without a
-    # light clock (zero-byte-leak). Typed as Any to avoid a ResourcePool/Status
-    # circular import in this layer (same pattern as statuses_by_actor).
-    light_pool: Any = None
-    darkness_statuses: list[Any] = field(default_factory=list)
 
     # Per-PC class + spell-slot lookup for the live encounter zone (Task 7,
     # C&C B/X class beats). Maps PC actor name → (ClassDef, spell_slots_remaining).
@@ -914,22 +800,6 @@ class TurnContext:
     # the narrator knows the active plugins, hard_limits, and per-actor ledger
     # bars before composing narration for any magic working.
     magic_state: Any = None  # runtime type: sidequest.magic.state.MagicState | None
-
-    # Fate state projection (ADR-144 F2b, Story 116-2). When non-None,
-    # build_narrator_prompt injects the ``fate_state`` section so the narrator sees the
-    # PCs' aspects, skills, fate points, and live scene aspects — and the invokable-aspect
-    # directive. Populated by the session handler from
-    # ``game.ruleset.fate_projection.build_fate_projection(snapshot)`` (the one source of
-    # truth it shares with the intent router). None on non-Fate packs — they pay zero tokens.
-    fate_state: dict[str, Any] | None = None
-
-    # AWN mutation surface (story 102-7, Plan 2 §5.4). When BOTH are
-    # non-None, build_narrator_prompt injects the mutation-context block so
-    # the narrator sees owned mutations, costs, and live MP/usage — the same
-    # single-chokepoint economics as magic_state (non-mutation worlds pay
-    # zero tokens).
-    mutation_state: Any = None  # runtime: sidequest.mutation.state.MutationState | None
-    mutation_catalog: Any = None  # runtime: sidequest.mutation.models.MutationCatalog | None
 
     # World-tier items catalog (Story 47-5). When non-None, the
     # reliquaries section drives the Cleric's <available-reliquaries>
@@ -1113,41 +983,10 @@ _WORD = re.compile(r"[a-z0-9]+")
 # verbatim-modulo-POV duplicate still scores as a duplicate.
 _OVERLAP_STOP = frozenset(
     {
-        "you",
-        "your",
-        "yours",
-        "yourself",
-        "he",
-        "his",
-        "him",
-        "himself",
-        "she",
-        "her",
-        "hers",
-        "herself",
-        "they",
-        "their",
-        "them",
-        "i",
-        "me",
-        "my",
-        "mine",
-        "myself",
-        "the",
-        "a",
-        "an",
-        "of",
-        "to",
-        "is",
-        "it",
-        "its",
-        "and",
-        "as",
-        "at",
-        "in",
-        "on",
-        "no",
-        "not",
+        "you", "your", "yours", "yourself", "he", "his", "him", "himself",
+        "she", "her", "hers", "herself", "they", "their", "them", "i", "me",
+        "my", "mine", "myself", "the", "a", "an", "of", "to", "is", "it",
+        "its", "and", "as", "at", "in", "on", "no", "not",
     }
 )
 
@@ -1205,7 +1044,9 @@ def _scrub_public_prose(
 
     # Pass 2 — near-duplicate of a private segment copied into PART 1.
     if private_segments:
-        seg_token_sets = [_overlap_tokens(str(s.get("text", ""))) for s in private_segments]
+        seg_token_sets = [
+            _overlap_tokens(str(s.get("text", ""))) for s in private_segments
+        ]
         seg_token_sets = [ts for ts in seg_token_sets if ts]
         if seg_token_sets:
             sentences = _SENT_SPLIT.split(work)
@@ -1238,7 +1079,9 @@ def _scrub_public_prose(
     report["chars_removed"] = original_len - len(scrubbed)
 
     fired = (
-        report["labelled_blocks_removed"] or report["dup_sentences_removed"] or report["degraded"]
+        report["labelled_blocks_removed"]
+        or report["dup_sentences_removed"]
+        or report["degraded"]
     )
     if fired:
         try:
@@ -1274,7 +1117,7 @@ def extract_structured_from_response(raw: str) -> dict[str, Any]:
     maps it to a plain dict, then strips the fence from the returned prose.
 
     Returns a dict with keys:
-      prose, footnotes, items_gained, items_lost, npcs_present,
+      prose, footnotes, items_gained, items_lost, npcs_present, quest_updates,
       visual_scene, scene_mood, sfx_triggers, action_rewrite,
       beat_selections, confrontation, location, affinity_progress, gold_change,
       lore_established.
@@ -1289,7 +1132,7 @@ def extract_structured_from_response(raw: str) -> dict[str, Any]:
         "game_patch.extracted "
         "footnotes=%d items_gained=%d items_lost=%d items_discarded=%d "
         "items_consumed=%d "
-        "npcs_present=%d sfx_triggers=%d "
+        "npcs_present=%d quest_updates=%d sfx_triggers=%d "
         "has_visual_scene=%s has_scene_mood=%s has_action_rewrite=%s "
         "beat_selections=%d confrontation=%r "
         "has_location=%s gold_change=%r status_changes=%d "
@@ -1300,6 +1143,7 @@ def extract_structured_from_response(raw: str) -> dict[str, Any]:
         len(patch.get("items_discarded", [])),
         len(patch.get("items_consumed", [])),
         len(patch.get("npcs_present", [])),
+        len(patch.get("quest_updates", {})),
         len(patch.get("sfx_triggers", [])),
         patch.get("visual_scene") is not None,
         patch.get("mood") is not None or patch.get("scene_mood") is not None,
@@ -1323,10 +1167,14 @@ def extract_structured_from_response(raw: str) -> dict[str, Any]:
     _private_segments: list[dict[str, Any]] = [
         {
             "text": str(seg["text"]).strip(),
-            "anchor_pc": (str(seg["anchor_pc"]).strip() or None) if seg.get("anchor_pc") else None,
+            "anchor_pc": (str(seg["anchor_pc"]).strip() or None)
+            if seg.get("anchor_pc")
+            else None,
         }
         for seg in patch.get("private_segments", [])
-        if isinstance(seg, dict) and isinstance(seg.get("text"), str) and seg["text"].strip()
+        if isinstance(seg, dict)
+        and isinstance(seg.get("text"), str)
+        and seg["text"].strip()
     ]
 
     # ADR-105 B3 ENFORCEMENT: scrub the public blob of any private content
@@ -1343,6 +1191,7 @@ def extract_structured_from_response(raw: str) -> dict[str, Any]:
         "items_discarded": patch.get("items_discarded", []),
         "items_consumed": patch.get("items_consumed", []),
         "npcs_present": patch.get("npcs_present", []),
+        "quest_updates": patch.get("quest_updates", {}),
         "visual_scene": patch.get("visual_scene"),
         "scene_mood": patch.get("scene_mood", patch.get("mood")),
         "sfx_triggers": patch.get("sfx_triggers", []),
@@ -1381,7 +1230,7 @@ def extract_structured_from_response(raw: str) -> dict[str, Any]:
 # Task E1.5-B — SDK-path tool-owned / presentation partition.
 #
 # On the SDK narration path the 26 WRITE tools mutate AND persist
-# (``ctx.repository.save``) game state during the tool-dispatch loop. The
+# (``ctx.store.save``) game state during the tool-dispatch loop. The
 # narrator ALSO emits a sidecar ``game_patch`` block (the prompt still
 # injects ``narrator_output_only``). Feeding that sidecar through the
 # normal assembler would make ``narration_apply`` re-apply every
@@ -1403,14 +1252,13 @@ def extract_structured_from_response(raw: str) -> dict[str, Any]:
 # ``apply_world_patch`` (patches_other) and ``update_npc_disposition``
 # (patches_disposition) now own.
 #
-# items_* / gold_change / lore_established / companions_*
+# items_* / gold_change / quest_updates / lore_established / companions_*
 # are deliberately NOT in this partition: NO registered tool in
-# sidequest/agents/tools/ mutates inventory, gold, lore, or
+# sidequest/agents/tools/ mutates inventory, gold, the quest log, lore, or
 # the companion roster (verified — query_character/query_encounter only
 # READ inventory), and none has a COVERAGE_MAP row. They stay
 # sidecar-sourced so narration_apply remains their single applier on BOTH
-# paths. (``quest_updates`` was retired in 77-4 — record_quest is its typed
-# successor; a stale key is auto-forwarded by the narration-apply guard.)
+# paths.
 #
 # KNOWN GAP (out of scope, follow-up): zeroing ``location`` means
 # narration_apply's region canonicalization / room-graph promotion
@@ -1506,53 +1354,6 @@ def _consume_next_turn_directives(snapshot: GameSnapshot) -> str:
     rendered = "\n".join(f"- {d}" for d in snapshot.next_turn_directives)
     snapshot.next_turn_directives.clear()
     return rendered
-
-
-def _build_fate_state_section(projection: dict[str, Any]) -> str:
-    """Render the Fate projection into the narrator's ``fate_state`` prompt section
-    (ADR-144 F2b, Story 116-2).
-
-    Surfaces, per PC, the skills + current fate points + invokable character aspects, plus
-    the live scene aspects, then the invokable-aspect directive. Returns ``""`` when no PC
-    has a Fate sheet (loud-absent — the caller skips the section, never a blank header).
-
-    Agency invariant (SOUL "The Test"): the directive instructs the narrator to PROPOSE
-    invokes/compels and never to spend a player's fate point or invoke an aspect on their
-    behalf — invoking is the player's choice (the engine debits the point on the player's
-    command; the F3 UI surfaces it).
-    """
-    skills: dict[str, dict[str, int]] = projection.get("skills", {})
-    fate_points: dict[str, int] = projection.get("fate_points", {})
-    character_aspects: dict[str, list[str]] = projection.get("character_aspects", {})
-    scene_aspects: list[str] = projection.get("scene_aspects", [])
-
-    pcs = sorted(set(skills) | set(fate_points) | set(character_aspects))
-    if not pcs:
-        return ""
-
-    lines: list[str] = ["<fate-state>"]
-    for pc in pcs:
-        fp = fate_points.get(pc, 0)
-        lines.append(f"{pc} — Fate points: {fp}")
-        pc_skills = skills.get(pc) or {}
-        if pc_skills:
-            rendered = ", ".join(f"{name} {rating:+d}" for name, rating in pc_skills.items())
-            lines.append(f"  Skills: {rendered}")
-        aspects = character_aspects.get(pc) or []
-        if aspects:
-            lines.append("  Invokable aspects:")
-            lines.extend(f"    - {a}" for a in aspects)
-    if scene_aspects:
-        lines.append("Scene aspects (invokable by anyone):")
-        lines.extend(f"  - {a}" for a in scene_aspects)
-    lines.append(
-        "Directive: you MAY remind the player which aspects are invokable and propose a "
-        "compel rooted in one of their aspects. PROPOSE / OFFER only — do NOT spend a "
-        "player's fate point or invoke an aspect on their behalf. Invoking is the player's "
-        "choice."
-    )
-    lines.append("</fate-state>")
-    return "\n".join(lines)
 
 
 def _build_verbosity_section(verbosity: str) -> str:
@@ -1661,8 +1462,8 @@ class Orchestrator:
         Args:
             client: LlmClient or ToolingLlmClient for LLM invocations.
                     If None, creates a default ClaudeClient. When the client
-                    is a ToolingLlmClient (AnthropicSdkClient),
-                    ``run_narration_turn`` routes through
+                    is a ToolingLlmClient (AnthropicSdkClient) and streaming
+                    is disabled, ``run_narration_turn`` routes through
                     ``complete_with_tools`` with the registered tool catalog.
             soul_data: Optional SoulData for SOUL.md principle injection.
                        If None, SOUL.md is loaded from CWD (if present).
@@ -1692,28 +1493,6 @@ class Orchestrator:
         # attach onto the NarrationTurnResult so the session handler can route
         # them as SECRET_NOTE events (Task 6).
         self._last_secret_routes: list[object] = []
-
-        # Aside-rides-the-cache (playtest 2026-06-07): the most recent SDK
-        # turn's exact system blocks + tools + model, refreshed every
-        # ``_run_narration_turn_sdk`` call. None until the first SDK turn —
-        # the player_action handler falls back to the legacy thin read-view
-        # (logged) in that window.
-        self._aside_prompt_stash: AsidePromptStash | None = None
-
-    @property
-    def aside_prompt_stash(self) -> AsidePromptStash | None:
-        """The narrator's stashed SDK prompt artifacts (read-only surface)."""
-        return self._aside_prompt_stash
-
-    @property
-    def aside_cache_client(self) -> ToolingLlmClient | None:
-        """The tooling client a narrator-cache aside can ride, or ``None``.
-
-        ``None`` when the configured backend has no tool loop (legacy
-        ``claude -p`` / Ollama) — the aside handler falls back to the thin
-        read-view path in that case.
-        """
-        return self._client if isinstance(self._client, ToolingLlmClient) else None
 
     # ------------------------------------------------------------------
     # Group G Task 7 — entity token resolver for the leak audit
@@ -1759,29 +1538,15 @@ class Orchestrator:
     ) -> None:
         """Register a Recency-zone guardrail PromptSection on the legacy backend only.
 
-        ADR-111 (story 57-4) + story 61-18: on the SDK tool-use path
-        (``isinstance(self._client, ToolingLlmClient)``) the guardrail prose
-        lives at per-guardrail migration targets, NOT in the Recency zone:
-
-          - ``npc_intro_visual`` / ``npc_extraction`` → the slimmed-sidecar
-            Primacy/Stable cached prose (``NARRATOR_OUTPUT_ONLY``).
-          - ``location_patch`` → the ``apply_world_patch`` tool ``description``.
-          - ``confrontation_trigger`` → its framing-neutral
-            ``CONFRONTATION_TRIGGER_CORE`` is composed into the IntentRouter
-            ``_SYSTEM_PROMPT`` (``intent_router.py``). On the SDK path the
-            narrator does not emit the ``confrontation`` patch field — the
-            IntentRouter (ADR-113) decides the trigger pre-narrator — so the
-            recognition steering rides the router, not a narrator surface.
-            (Story 61-18 corrected the earlier docstring, which wrongly
-            implied this guardrail reached the SDK model via a tool
-            description; it reached nothing — it was dead prose on the SDK
-            path until the core moved to the router.)
-
-        On the legacy ``claude -p`` / Ollama paths (opt-in, non-default) the
-        narrator still emits a ``game_patch``, so the Recency-zone
-        registration stays byte-identical to pre-111. This helper centralises
-        the gate so the registration sites in ``build_narrator_prompt``
-        collapse from ~10 lines each to one call.
+        ADR-111 (story 57-4): on the SDK tool-use path
+        (``isinstance(self._client, ToolingLlmClient)``) the four guardrail
+        prose blocks live at their migration targets — the
+        ``tools=`` array's ``description`` field (for tool-owned artifacts)
+        or the slimmed-sidecar Primacy/Stable cached prose (for sidecar-
+        owned artifacts). On the legacy ``claude -p`` / Ollama paths the
+        Recency-zone registration stays byte-identical to pre-111. This
+        helper centralises the gate so the four registration sites in
+        ``build_narrator_prompt`` collapse from ~10 lines each to one call.
         """
         if not isinstance(self._client, ToolingLlmClient):
             registry.register_section(
@@ -2174,17 +1939,7 @@ class Orchestrator:
         # than the deprecated ``npc_registry``; gaslight-preserving format
         # makes pool members and stateful Npcs indistinguishable to the
         # narrator.
-        # Story 75-2: render the budgeted working-set (scene-present full floor /
-        # off-stage brief or compact) instead of dumping the full roster every
-        # turn. The working-set is always populated by the live turn-build path;
-        # the npc_pool/npcs branch is the legacy fallback for contexts built
-        # without the budgeting seam (direct construction / older tests).
-        if context.npc_working_set is not None:
-            registry.register_npc_roster_section(
-                agent_name,
-                working_set=context.npc_working_set,
-            )
-        elif context.npc_pool or context.npcs:
+        if context.npc_pool or context.npcs:
             registry.register_npc_roster_section(
                 agent_name,
                 npc_pool=context.npc_pool,
@@ -2200,18 +1955,6 @@ class Orchestrator:
             registry.register_region_section(
                 agent_name,
                 region_projection=context.region_projection,
-            )
-
-        # Light & Darkness survival clock (Task 7.1). Surface the compact light
-        # state (current/max + active threshold hint) and the acting PC's
-        # darkness penalty so guttering/dark prose is state-driven. Valley
-        # (volatile) zone — light.current changes every burn, must not ride the
-        # cached prefix. None pool → no section (zero-byte-leak).
-        if context.light_pool is not None:
-            registry.register_light_section(
-                agent_name,
-                pool=context.light_pool,
-                statuses=context.darkness_statuses,
             )
 
         # Chassis voices — chassis as named speakers with bond-tier name-form.
@@ -2266,23 +2009,19 @@ class Orchestrator:
                 ),
             )
 
-        # World context — persistent across turns. Carries the AVAILABLE
-        # CULTURES block with ``Culture.chargen=False`` entries filtered out
-        # (Story 41-11, closing the Phase 2.2 IOU). Strip the leading newline
-        # the helper emits for Rust-style concat — the registry handles
+        # World context (Valley zone) — persistent across turns.
+        # Currently carries the AVAILABLE CULTURES block with
+        # ``Culture.chargen=False`` entries filtered out (Story 41-11,
+        # closing the Phase 2.2 IOU). Strip the leading newline the
+        # helper emits for Rust-style concat — the registry handles
         # section separation.
-        #
-        # Story 61-20 (ADR-112 zone-promotion): zoned ``Early`` (was Valley)
-        # and added to ``STABLE_SECTION_NAMES`` so the session-static culture
-        # roster rides the cache-marked system prefix and is written once per
-        # session instead of re-written into the volatile tail every turn.
         if context.world_context:
             registry.register_section(
                 agent_name,
                 PromptSection.new(
                     "world_context",
                     context.world_context.lstrip("\n"),
-                    AttentionZone.Early,
+                    AttentionZone.Valley,
                     SectionCategory.State,
                 ),
             )
@@ -2303,35 +2042,6 @@ class Orchestrator:
                 ),
             )
 
-        # Retrieved entity fill (Valley zone) — Story 75-5, ADR-118 §D4. Typed
-        # NPC/location/faction sections from the universal index, registered only
-        # when non-empty (zero-byte-leak — an empty type is ``None`` and registers
-        # nothing). Sibling of the lore block above; the scene-present floor is
-        # NOT registered here (it rides ``npc_working_set``, no double-injection).
-        for section_name, section_body in (
-            ("retrieved_npcs", context.retrieved_entity_npcs),
-            ("retrieved_locations", context.retrieved_entity_locations),
-            ("retrieved_factions", context.retrieved_entity_factions),
-            # Story 84-3 (WI-4, §A2, Reviewer blocker): inject the relationship
-            # section so the narrator sees the present/named NPC's standing + beats.
-            ("retrieved_relationships", context.retrieved_entity_relationships),
-            # Story 84-5 (WI-2, §A2): inject the DORMANT quest / trope recall
-            # sections so the narrator can answer "what happened with X?". Active
-            # quests/tropes ride their existing paths — not registered here.
-            ("retrieved_quests", context.retrieved_entity_quests),
-            ("retrieved_tropes", context.retrieved_entity_tropes),
-        ):
-            if section_body:
-                registry.register_section(
-                    agent_name,
-                    PromptSection.new(
-                        section_name,
-                        section_body,
-                        AttentionZone.Valley,
-                        SectionCategory.State,
-                    ),
-                )
-
         # Magic context (Valley zone) — injected when a world has magic.yaml loaded.
         # Tells the narrator which plugins are active, what the hard_limits are,
         # and the per-actor ledger bars so it can emit magic_working correctly.
@@ -2342,10 +2052,7 @@ class Orchestrator:
         # pay the ~400 tok these rules cost. Single gate, no parallel mechanism.
         if context.magic_state is not None:
             from sidequest.agents.narrator_prompts import NARRATOR_MAGIC_OUTPUT_RULES
-            from sidequest.magic.context_builder import (
-                build_magic_static_block,
-                build_magic_volatile_block,
-            )
+            from sidequest.magic.context_builder import build_magic_context_block
 
             registry.register_section(
                 agent_name,
@@ -2360,100 +2067,17 @@ class Orchestrator:
             reliquaries = None
             if context.world_items is not None:
                 reliquaries = list(context.world_items.reliquaries)
-
-            # Story 61-20 (ADR-112 zone-promotion): split the old single
-            # ``magic_context`` block into its session-static head (world config
-            # + hard_limits) and its volatile per-actor tail (live ledger bar
-            # values, learned-magic, reliquaries). The static head rides the
-            # cache-marked system prefix (Early + STABLE_SECTION_NAMES) and is
-            # written once; the volatile tail stays in Valley (User bucket) so
-            # the per-turn ledger churn never pollutes the 1h prefix (the 61-19
-            # regression). Both still reach the narrator, just in different
-            # cacheable blocks.
-            magic_static = build_magic_static_block(magic_state=context.magic_state)
-            if magic_static:
-                registry.register_section(
-                    agent_name,
-                    PromptSection.new(
-                        "magic_hard_limits",
-                        f"<magic-context>\n{magic_static}\n</magic-context>",
-                        AttentionZone.Early,
-                        SectionCategory.State,
-                    ),
-                )
-
-            magic_volatile = build_magic_volatile_block(
+            magic_block = build_magic_context_block(
                 magic_state=context.magic_state,
                 actor_id=context.character_name or None,
                 reliquaries=reliquaries,
             )
-            if magic_volatile:
+            if magic_block:
                 registry.register_section(
                     agent_name,
                     PromptSection.new(
                         "magic_context",
-                        f"<magic-ledger>\n{magic_volatile}\n</magic-ledger>",
-                        AttentionZone.Valley,
-                        SectionCategory.State,
-                    ),
-                )
-
-        # Story 102-7 (Plan 2 §5.4) — AWN mutation context. The magic-block
-        # pattern retold for the pack whose magic IS mutation: static owned
-        # surface at Early (changes only on acquisition; NOT added to
-        # STABLE_SECTION_NAMES — cache promotion is a separate ADR-112 pass),
-        # live MP/usage ledger in Valley. Worlds without a mutation surface
-        # register nothing and pay nothing.
-        if context.mutation_state is not None and context.mutation_catalog is not None:
-            from sidequest.mutation.context_builder import (
-                build_mutation_static_block,
-                build_mutation_volatile_block,
-            )
-
-            mutation_static = build_mutation_static_block(
-                mutation_state=context.mutation_state,
-                catalog=context.mutation_catalog,
-            )
-            if mutation_static:
-                registry.register_section(
-                    agent_name,
-                    PromptSection.new(
-                        "mutation_context_static",
-                        f"<mutation-context>\n{mutation_static}\n</mutation-context>",
-                        AttentionZone.Early,
-                        SectionCategory.State,
-                    ),
-                )
-
-            mutation_volatile = build_mutation_volatile_block(
-                mutation_state=context.mutation_state,
-                catalog=context.mutation_catalog,
-            )
-            if mutation_volatile:
-                registry.register_section(
-                    agent_name,
-                    PromptSection.new(
-                        "mutation_context",
-                        f"<mutation-ledger>\n{mutation_volatile}\n</mutation-ledger>",
-                        AttentionZone.Valley,
-                        SectionCategory.State,
-                    ),
-                )
-
-        # Fate state (ADR-144 F2b, Story 116-2). The narrator sees the SAME projection the
-        # router built (one source of truth — build_fate_projection), rendered with the
-        # invokable-aspect directive. Dynamic per turn (fate points + aspects mutate in play)
-        # → Valley/State zone, NOT cache-promoted (ADR-112: only session-static sections ride
-        # the cache). Presence of the injected projection IS the gate (the session handler only
-        # populates it for Fate packs) — same discipline as magic_state above.
-        if context.fate_state is not None:
-            fate_block = _build_fate_state_section(context.fate_state)
-            if fate_block:
-                registry.register_section(
-                    agent_name,
-                    PromptSection.new(
-                        "fate_state",
-                        fate_block,
+                        f"<magic-context>\n{magic_block}\n</magic-context>",
                         AttentionZone.Valley,
                         SectionCategory.State,
                     ),
@@ -2706,24 +2330,8 @@ class Orchestrator:
                     agent_name,
                     PromptSection.new(
                         "intent_directives",
-                        # Header hardening (sq-playtest 2026-06-13 directive-leak):
-                        # these notes are INTERNAL scaffolding. The narrator must
-                        # apply their content to the prose but never surface the
-                        # machinery — no quoting the note, no naming "directives",
-                        # no citing dice rolls or AC. Paired with dropping
-                        # next_turn_directives from the <game_state> JSON so the
-                        # raw field name can no longer be echoed either.
-                        "GM-NOTE (internal — apply silently, never quote): "
-                        "mechanical facts and intent notes from the previous turn. "
-                        "Weave their substance into your narration, but do NOT "
-                        "mention this note, do NOT say 'directive(s)', and do NOT "
-                        "cite dice rolls, to-hit, or AC in the player-facing prose. "
-                        "You were NOT given any die result this turn, so NEVER write "
-                        "'the roll of N', 'you rolled N', 'a roll of N', 'd20', "
-                        "'vs AC', or any number-bearing mechanic — any such number is "
-                        "fabricated. Narrate only the fictional outcome (the blow "
-                        "lands or goes wide), never a mechanical summary line:"
-                        f"\n{_intent_directive_block}",
+                        f"GM-NOTE: One or more inferred intent suggestions from "
+                        f"the previous turn:\n{_intent_directive_block}",
                         AttentionZone.Recency,
                         SectionCategory.Guardrail,
                     ),
@@ -2915,19 +2523,22 @@ class Orchestrator:
         # computed at the top of this method — entries flagged
         # ``redact_from_narrator_canonical`` are already gone.
         if visible_dispatch_package is not None:
-            # The dispatch bank already ran ONCE in the pre-narrator pass
-            # (``intent_router_pass``), engaging every engine on the snapshot
-            # with a complete context. Re-running it here would engage each
-            # engine a SECOND time (double-dispatch — a PC moves twice, a clue
-            # is consumed twice), so consume the stashed ``BankResult`` instead.
-            bank_result = context.bank_result
-            if bank_result is None:
-                # Invariant: a present dispatch_package means the pre-narrator
-                # pass ran and stashed its BankResult. None here is a wiring
-                # break, not an expected state — fail loud (No Silent Fallbacks).
-                raise RuntimeError(
-                    "build_narrator_prompt: dispatch_package present but "
-                    "context.bank_result is None — pre-narrator pass wiring missing"
+            from sidequest.agents.subsystems import run_dispatch_bank
+
+            # ``npc_pool`` is required by ``run_npc_agency`` (kw-only,
+            # no default; rewired from ``npc_registry`` in story 45-52).
+            # Always include it — even when empty — so the subsystem can
+            # invoke without TypeError. The bank filters context keys per
+            # subsystem signature so we don't accidentally blast
+            # ``npc_pool`` into subsystems that don't accept it.
+            bank_context: dict[str, object] = {
+                "npc_pool": list(context.npc_pool or []),
+            }
+
+            with context.phase_timings.phase("dispatch_bank"):
+                bank_result = await run_dispatch_bank(
+                    visible_dispatch_package,
+                    context=bank_context,
                 )
 
             # Group C — lethality arbitration runs after the bank and before
@@ -2951,19 +2562,7 @@ class Orchestrator:
                     arbiter_directives = l_result.directives
 
             with context.phase_timings.phase("prompt_build"):
-                # The bank ran on the FULL package; strip directives whose
-                # visibility is redacted-from-narrator-canonical so the
-                # narrator prompt never sees a secret dispatch's directive (MP
-                # perception firewall, ADR-105). Mirrors redact_dispatch_package
-                # by the same visibility flag, at directive granularity — and
-                # uniformly covers subsystem-output directives, confidence-gate
-                # degraded hints, and decomposer narrator_instructions.
-                visible_bank_directives = [
-                    d
-                    for d in bank_result.directives
-                    if not d.visibility.redact_from_narrator_canonical
-                ]
-                combined_directives = visible_bank_directives + arbiter_directives
+                combined_directives = list(bank_result.directives) + arbiter_directives
                 if combined_directives:
                     block = "\n".join(f"- [{d.kind}] {d.payload}" for d in combined_directives)
                     registry.register_section(
@@ -3006,27 +2605,6 @@ class Orchestrator:
                     "decisions, or new physical actions for any PC listed "
                     "above — only what their player declared. NPCs may speak "
                     "and react. PCs may not be made to speak."
-                )
-            elif context.opening_seed_shown:
-                # Pingpong 2026-06-05 [BAR-1]: the action on a seeded opening
-                # turn is the authored first_turn_invitation, ALREADY emitted
-                # to the player verbatim by the cold-open path. Framing it as
-                # `"<PC> says: <invitation>"` told the narrator the player
-                # spoke that prose, and the action-rewrite contract dutifully
-                # novelized it back — every seeded opening doubled its prose
-                # (barsoom MP turn 1: seed + near-verbatim restatement). Keep
-                # the invitation in recency for continuity, but mark it as
-                # already-displayed authored prose, not player input.
-                player_action_text = (
-                    "OPENING TURN. The authored invitation below has ALREADY "
-                    "been shown to the player verbatim — do NOT repeat, "
-                    "restate, or paraphrase any sentence of it. Begin your "
-                    "narration at the moment it ends and move the scene "
-                    "forward. The player has not yet acted; do not invent "
-                    "actions or dialogue for them.\n"
-                    "<already-shown-invitation>\n"
-                    f"{action}\n"
-                    "</already-shown-invitation>"
                 )
             else:
                 player_action_text = f"{context.character_name} says: {action}"
@@ -3126,17 +2704,20 @@ class Orchestrator:
         action: str,
         context: TurnContext,
         *,
+        room: object | None = None,
         extra_directive: str | None = None,
     ) -> NarrationTurnResult:
         """Process a player action through the Phase 1 narration pipeline.
 
-        Routes to the SDK tool-loop path when the client is tooling-capable,
-        otherwise delegates to the synchronous path. Narration is delivered
-        complete-only — narrator-text streaming was removed (2026-06-07).
+        Routes to the streaming path when SIDEQUEST_NARRATOR_STREAMING=1,
+        otherwise delegates to the synchronous path (default, flag-off behavior
+        is byte-identical to prior implementation).
 
         Args:
             action: Raw player input text.
             context: Turn context (world state, genre prompts, etc.).
+            room: Optional SessionRoom for streaming delta fan-out. Only
+                  consumed by the streaming path; the sync path ignores it.
             extra_directive: Per-call reprompt directive injected by the
                   reprompt loop (spec 2026-05-20 step 7). When set, the
                   directive is stored on context so build_narrator_prompt
@@ -3152,110 +2733,379 @@ class Orchestrator:
         # Phase D Task 1: when the configured client is a tooling-capable
         # LLM (AnthropicSdkClient — the ADR-101 default), route through
         # complete_with_tools so the 26-tool registry is exposed to the
-        # model. Non-tooling clients (claude -p ClaudeClient, Ollama) take
-        # the synchronous path. Narrator-text streaming was removed entirely
-        # (playtest 2026-06-07, operator-directed): narration is delivered
-        # complete-only — no partial-narration chunks ride the WebSocket.
+        # model. This check MUST take precedence over the streaming flag:
+        # SDK streaming is Phase D Task 7 and is NOT yet implemented, and
+        # _run_narration_turn_streaming asserts the client is not a
+        # ToolingLlmClient. Letting SIDEQUEST_NARRATOR_STREAMING=1 win here
+        # routed the default backend into the streaming path and crashed
+        # every turn with AssertionError. The tooling client always takes
+        # the SDK path until Task 7 lands; streaming remains for non-tooling
+        # clients (claude -p ClaudeClient) only.
         if isinstance(self._client, ToolingLlmClient):
-            result = await self._run_narration_turn_sdk(action, context)
-        else:
-            result = await self._run_narration_turn_synchronous(action, context)
-        # sq-playtest 2026-06-13 — fabricated-roll lie detector + prose-only
-        # repair. The narrator never sees server-rolled dice (reprisals,
-        # opposed NPC checks), so any roll/AC NUMBER it printed when no
-        # dice tool fired this turn is an invented mechanic. Emit the
-        # narrator.fabricated_roll span (GM panel) and launder the prose via
-        # a toolless rewrite so the player never reads the fabrication.
-        return await self._maybe_repair_fabricated_roll(action=action, result=result)
+            return await self._run_narration_turn_sdk(action, context)
+        if is_streaming_enabled():
+            return await self._run_narration_turn_streaming(action, context, room=room)
+        return await self._run_narration_turn_synchronous(action, context)
 
-    async def _maybe_repair_fabricated_roll(
+    async def _run_narration_turn_streaming(
         self,
-        *,
         action: str,
-        result: NarrationTurnResult,
+        context: TurnContext,
+        *,
+        room: object | None = None,
     ) -> NarrationTurnResult:
-        """Detect + repair fabricated dice/AC numbers in finished narration.
+        """Streaming variant — broadcasts prose deltas live, emits canonical
+        NarrationTurnResult at end-of-stream using the same extraction path
+        as the synchronous variant.
 
-        The narrator never sees server-rolled dice; a roll/AC number printed
-        when no ``roll_dice`` tool fired this turn is a fabricated mechanic
-        ("the worst lie the narrator can tell"). On a hit, emit the
-        ``narrator.fabricated_roll`` OTEL span — the GM-panel lie detector —
-        and, on the tooling path, reprompt a TOOLLESS prose-only rewrite
-        (``tools=[]`` so it cannot re-run WRITE tools / double-apply state)
-        that launders the invented mechanic out while preserving the fiction.
+        Pipeline:
+          action → build_narrator_prompt → send_stream (ClaudeClient)
+               → StreamFenceParser (prose deltas → broadcast_delta)
+               → extract_structured_from_response on full_text
+               → NarrationTurnResult (same shape as sync path)
+
+        Falls back to the synchronous path if the client does not support
+        streaming (e.g. Ollama or a test double that only has send_with_session).
         """
-        from sidequest.agents.fabricated_roll_guard import (
-            ROLL_TOOL_NAMES,
-            detect_fabricated_roll,
-        )
-        from sidequest.telemetry.spans.span import Span
+        import asyncio
+        import uuid
 
-        narration = result.narration or ""
-        roll_tool_fired = any(
-            (tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", "")) in ROLL_TOOL_NAMES
-            for tc in (result.tool_calls or [])
+        from sidequest.agents.claude_client import (
+            StreamComplete,
+            StreamError,
+            TextDelta,
         )
-        matched = detect_fabricated_roll(narration, roll_tool_fired=roll_tool_fired)
-        if matched is None:
-            return result
+        from sidequest.agents.stream_fence import StreamFenceParser
+        from sidequest.server.emitters import broadcast_delta
+        from sidequest.telemetry.spans import (
+            narrator_stream_complete_span,
+            narrator_stream_error_span,
+            narrator_stream_fence_detected,
+            narrator_stream_first_token,
+            narrator_stream_start_span,
+        )
 
-        repaired_text: str | None = None
-        if isinstance(self._client, ToolingLlmClient):
-            try:
-                repaired_text = await self._rewrite_prose_without_fabricated_roll(narration)
-            except Exception:  # noqa: BLE001 — repair is best-effort; never fail the turn
-                logger.warning(
-                    "narrator.fabricated_roll repair_failed matched=%r", matched, exc_info=True
+        # Narrow self._client back to LlmClient for the streaming path —
+        # run_narration_turn gates the SDK path on isinstance(...,
+        # ToolingLlmClient), so by the time we reach the streaming path the
+        # client is guaranteed NOT to be a ToolingLlmClient. The assert
+        # pins that invariant for pyright (the union widening landed in
+        # Phase D Task 1) and fails loudly if a future caller bypasses
+        # run_narration_turn. We deliberately do NOT assert isinstance
+        # against LlmClient — Protocol runtime-checks reject AsyncMock and
+        # other structural test doubles that nevertheless work at runtime.
+        assert not isinstance(self._client, ToolingLlmClient), (
+            f"streaming path must not see a ToolingLlmClient, got {type(self._client).__name__}"
+        )
+        client: LlmClient = self._client  # type: ignore[assignment]
+
+        # Degrade to synchronous if the client doesn't support send_stream
+        # (e.g. Ollama or legacy test doubles). No silent fallback — we log
+        # loudly so the discrepancy is visible in the GM panel.
+        if not hasattr(client, "send_stream"):
+            logger.warning(
+                "orchestrator.streaming_unsupported — client=%r lacks send_stream; "
+                "falling back to synchronous path",
+                type(self._client).__name__,
+            )
+            return await self._run_narration_turn_synchronous(action, context)
+
+        with orchestrator_process_action_span(action_len=len(action)):
+            agent_name = self._narrator.name()
+
+            prompt_text, _registry = await self.build_narrator_prompt(action, context)
+
+            # ADR-098: stateless — no persistent session; every turn is a fresh call.
+            current_session_id: str | None = None
+            system_prompt_for_establish = prompt_text
+            send_prompt = action
+
+            # Mint a turn_id for delta sequencing.  Use the interaction counter
+            # when available so deltas are correlated with the canonical event.
+            turn_id: str = str(context.turn_number) if context.turn_number else str(uuid.uuid4())
+
+            seq = 0
+            delta_count = 0
+            prose_chunks: list[str] = []
+            first_token_time: float | None = None
+
+            async def on_prose_delta(chunk: str) -> None:
+                nonlocal seq
+                prose_chunks.append(chunk)
+                if room is not None:
+                    await broadcast_delta(
+                        turn_id=turn_id,
+                        chunk=chunk,
+                        seq=seq,
+                        room=room,
+                    )
+                seq += 1
+
+            call_start = time.monotonic()
+
+            async def on_fence(prose_bytes: int) -> None:
+                narrator_stream_fence_detected(
+                    turn_id=turn_id,
+                    prose_bytes_at_fence=prose_bytes,
+                    seconds_to_fence=time.monotonic() - call_start,
                 )
-                repaired_text = None
-            # Only accept a rewrite that is actually clean.
-            if repaired_text and detect_fabricated_roll(repaired_text, roll_tool_fired=False):
-                logger.warning("narrator.fabricated_roll repair_still_dirty matched=%r", matched)
-                repaired_text = None
 
-        repaired = repaired_text is not None
-        with Span.open(
-            "narrator.fabricated_roll",
-            {
-                "matched": matched[:120],
-                "repaired": repaired,
-                "roll_tool_fired": roll_tool_fired,
-                "action": action[:120],
-            },
-        ):
-            pass
-        logger.warning(
-            "narrator.fabricated_roll matched=%r repaired=%s — narrator printed a "
-            "die/AC number with no dice tool this turn",
-            matched,
-            repaired,
-        )
-        if repaired and repaired_text is not None:
-            result.narration = repaired_text
-        return result
+            parser = StreamFenceParser(on_prose_delta=on_prose_delta, on_fence_detected=on_fence)
+            terminal: StreamComplete | StreamError | None = None
 
-    async def _rewrite_prose_without_fabricated_roll(self, narration: str) -> str | None:
-        """Toolless rewrite pass that strips invented roll/AC numbers.
+            with narrator_stream_start_span(
+                turn_id=turn_id,
+                prompt_tokens=len(send_prompt) // 4,
+                model=NARRATOR_MODEL,
+                session_id=current_session_id,
+            ):
+                try:
+                    with (
+                        context.phase_timings.phase("narrator_subprocess"),
+                        turn_agent_llm_inference_span(
+                            model=NARRATOR_MODEL,
+                            prompt_len=len(send_prompt),
+                        ),
+                    ):
+                        async for event in client.send_stream(
+                            prompt=send_prompt,
+                            model=NARRATOR_MODEL,
+                            session_id=current_session_id,
+                            system_prompt=system_prompt_for_establish,
+                            allowed_tools=[],
+                            env_vars={},
+                        ):
+                            if isinstance(event, TextDelta):
+                                if first_token_time is None:
+                                    first_token_time = time.monotonic() - call_start
+                                    narrator_stream_first_token(
+                                        turn_id=turn_id, ttft_seconds=first_token_time
+                                    )
+                                delta_count += 1
+                                await parser.feed(event.text)
+                            elif isinstance(event, (StreamComplete, StreamError)):
+                                terminal = event
+                except asyncio.CancelledError:
+                    elapsed_s = time.monotonic() - call_start
+                    from sidequest.telemetry.spans import narrator_stream_cancelled_span
 
-        Runs through the production tooling client with ``tools=[]`` so it makes
-        a plain completion — no WRITE tools, no state mutation, no double-apply.
-        Returns the cleaned prose, or None if the model returned nothing.
-        """
-        from sidequest.agents.fabricated_roll_guard import FABRICATED_ROLL_REWRITE_SYSTEM
-        from sidequest.agents.model_routing import CallType, resolve_model
-        from sidequest.agents.tooling_protocol import CacheableBlock, Message
+                    narrator_stream_cancelled_span(
+                        turn_id=turn_id,
+                        reason="task_cancelled",
+                        partial_prose_bytes=len("".join(prose_chunks)),
+                    )
+                    logger.warning(
+                        "CLAUDE CLI STREAMING CANCELLED turn_id=%s elapsed_s=%.2f",
+                        turn_id,
+                        elapsed_s,
+                    )
+                    raise
+                except Exception as e:
+                    elapsed_ms = int((time.monotonic() - call_start) * 1000)
+                    narrator_stream_error_span(
+                        turn_id=turn_id,
+                        error_kind=type(e).__name__,
+                        partial_prose_bytes=len("".join(prose_chunks)),
+                        total_seconds=elapsed_ms / 1000.0,
+                        detail=str(e),
+                    )
+                    logger.error(
+                        "CLAUDE CLI STREAMING FAILED — returning degraded response (ADR-005) "
+                        "agent=%s duration_ms=%d error=%s",
+                        agent_name,
+                        elapsed_ms,
+                        e,
+                    )
+                    return NarrationTurnResult(
+                        narration=(
+                            f"**{context.current_location}**\n\n"
+                            "The world holds its breath for a moment... "
+                            "something shifts in the distance, but the moment passes."
+                        ),
+                        is_degraded=True,
+                        agent_name=agent_name,
+                        agent_duration_ms=elapsed_ms,
+                        prompt_tier="",  # ADR-098: tier system removed
+                        prompt_text=prompt_text,
+                        secret_routes=list(self._last_secret_routes),
+                    )
 
-        if not isinstance(self._client, ToolingLlmClient):
-            return None
-        rewrite = await self._client.complete_with_tools(
-            system_blocks=[CacheableBlock(text=FABRICATED_ROLL_REWRITE_SYSTEM, cache=False)],
-            messages=[Message(role="user", content=f"Narration to clean:\n\n{narration}")],
-            tools=[],
-            model=resolve_model(CallType.SCRATCH),
-            caller="fabricated_roll_repair",
-        )
-        cleaned = (rewrite.text or "").strip()
-        return cleaned or None
+                elapsed_ms = int((time.monotonic() - call_start) * 1000)
+                result = await parser.finalize()
+
+                # On StreamError, return degraded response with whatever partial
+                # prose we collected before the failure.
+                if isinstance(terminal, StreamError):
+                    narrator_stream_error_span(
+                        turn_id=turn_id,
+                        error_kind=terminal.kind,
+                        partial_prose_bytes=len(result.prose),
+                        total_seconds=elapsed_ms / 1000.0,
+                        detail=terminal.detail,
+                    )
+                    logger.error(
+                        "CLAUDE CLI STREAM ERROR — returning degraded response "
+                        "agent=%s kind=%s duration_ms=%d detail=%s",
+                        agent_name,
+                        terminal.kind,
+                        elapsed_ms,
+                        terminal.detail,
+                    )
+                    partial_prose = (
+                        result.prose
+                        or terminal.partial_text
+                        or (
+                            f"**{context.current_location}**\n\n"
+                            "The world holds its breath for a moment... "
+                            "something shifts in the distance, but the moment passes."
+                        )
+                    )
+                    return NarrationTurnResult(
+                        narration=partial_prose,
+                        is_degraded=True,
+                        agent_name=agent_name,
+                        agent_duration_ms=elapsed_ms,
+                        prompt_tier="",  # ADR-098: tier system removed
+                        prompt_text=prompt_text,
+                        secret_routes=list(self._last_secret_routes),
+                    )
+
+            # Emit complete span for successful streaming turn.
+            input_tokens = terminal.input_tokens if isinstance(terminal, StreamComplete) else None
+            output_tokens = terminal.output_tokens if isinstance(terminal, StreamComplete) else None
+            narrator_stream_complete_span(
+                turn_id=turn_id,
+                total_seconds=elapsed_ms / 1000.0,
+                ttft_seconds=first_token_time,
+                prose_bytes=len(result.prose),
+                delta_count=delta_count,
+                json_parse_status=result.status,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            )
+
+            # Use the full_text from StreamComplete for extraction (authoritative
+            # source — avoids double-reconstruction from chunk list).
+            raw_response = (
+                terminal.full_text
+                if isinstance(terminal, StreamComplete)
+                else result.prose
+                + (
+                    f"\n```game_patch\n{result.game_patch_json}\n```"
+                    if result.game_patch_json
+                    else ""
+                )
+            )
+
+            logger.info(
+                "Claude CLI returned streaming narration len=%d duration_ms=%d "
+                "delta_count=%d fence_status=%s",
+                len(raw_response),
+                elapsed_ms,
+                seq,
+                result.status,
+            )
+
+            # Parse narrator response using the same helper as the sync path.
+            with context.phase_timings.phase("narrator_extraction"):
+                extraction = extract_structured_from_response(raw_response)
+
+            prose = extraction["prose"]
+
+            # Group G Task 7 — canonical-leak audit (safety net).
+            if context.dispatch_package is not None:
+                audit_canonical_prose(
+                    prose=prose,
+                    package=context.dispatch_package,
+                    entity_tokens_by_id=self._entity_tokens_for_registry(context),
+                )
+
+            if extraction["action_rewrite"] is None:
+                logger.warning("action_rewrite absent from extraction (streaming) — using default")
+
+            if extraction["confrontation"]:
+                logger.info(
+                    "encounter.confrontation_initiated confrontation_type=%s",
+                    extraction["confrontation"],
+                )
+
+            for bs_dict in extraction["beat_selections"]:
+                if isinstance(bs_dict, dict):
+                    logger.info(
+                        "encounter.agent_beat_selection actor=%s beat_id=%s target=%r",
+                        bs_dict.get("actor"),
+                        bs_dict.get("beat_id"),
+                        bs_dict.get("target"),
+                    )
+
+            npc_mentions = [NpcMention.from_value(v) for v in extraction["npcs_present"]]
+            beat_selections = [
+                BeatSelection.from_dict(d)
+                for d in extraction["beat_selections"]
+                if isinstance(d, dict)
+            ]
+            visual_scene: VisualScene | None = None
+            if extraction["visual_scene"] and isinstance(extraction["visual_scene"], dict):
+                visual_scene = VisualScene.from_dict(extraction["visual_scene"])
+            action_rewrite: ActionRewrite | None = None
+            if isinstance(extraction["action_rewrite"], dict):
+                action_rewrite = ActionRewrite.from_dict(extraction["action_rewrite"])
+
+            return NarrationTurnResult(
+                narration=prose,
+                is_degraded=False,
+                location=extraction["location"],
+                scene_mood=extraction["scene_mood"],
+                visual_scene=visual_scene,
+                confrontation=extraction["confrontation"],
+                beat_selections=beat_selections,
+                npcs_present=npc_mentions,
+                items_gained=extraction["items_gained"]
+                if isinstance(extraction["items_gained"], list)
+                else [],
+                items_lost=extraction.get("items_lost", []),
+                items_discarded=extraction.get("items_discarded", []),
+                items_consumed=extraction.get("items_consumed", []),
+                footnotes=extraction["footnotes"]
+                if isinstance(extraction["footnotes"], list)
+                else [],
+                quest_updates=extraction["quest_updates"]
+                if isinstance(extraction["quest_updates"], dict)
+                else {},
+                sfx_triggers=extraction["sfx_triggers"]
+                if isinstance(extraction["sfx_triggers"], list)
+                else [],
+                action_rewrite=action_rewrite,
+                # ADR-105 B3 — firewall must hold on the streaming
+                # backend too (this assembler builds the result by hand;
+                # the shared helper is not used here).
+                private_prose_segments=extraction["private_segments"]
+                if isinstance(extraction["private_segments"], list)
+                else [],
+                affinity_progress=extraction["affinity_progress"],
+                gold_change=extraction["gold_change"],
+                lore_established=extraction["lore_established"],
+                status_changes=extraction["status_changes"]
+                if isinstance(extraction["status_changes"], list)
+                else [],
+                magic_working=(
+                    extraction["magic_working"]
+                    if isinstance(extraction.get("magic_working"), dict)
+                    else None
+                ),
+                companions_added=extraction.get("companions_added", []),
+                companions_dismissed=extraction.get("companions_dismissed", []),
+                days_advanced=extraction.get("days_advanced", 0),
+                game_patch_dict=_extract_game_patch_json(raw_response),
+                agent_name=agent_name,
+                agent_duration_ms=elapsed_ms,
+                token_count_in=input_tokens,
+                token_count_out=output_tokens,
+                prompt_tier="",  # ADR-098: tier system removed
+                prompt_text=prompt_text,
+                raw_response_text=raw_response,
+                secret_routes=list(self._last_secret_routes),
+            )
 
     async def _invoke_with_retry_once(
         self,
@@ -3269,11 +3119,12 @@ class Orchestrator:
         Returns (response, elapsed_ms). On unrecoverable failure returns
         (None, elapsed_ms) — caller renders the degraded in-fiction stall.
         """
+        # Same narrowing rationale as _run_narration_turn_streaming —
         # _invoke_with_retry_once is only reached on the synchronous
         # LlmClient path, never the SDK path. The assert pins that
         # invariant for pyright and fails loudly if it's ever violated.
-        # We assert "not Tooling" instead of "is LlmClient" because test
-        # doubles (AsyncMock) don't satisfy an isinstance LlmClient check.
+        # See the streaming-path comment for why we assert "not Tooling"
+        # instead of "is LlmClient" (AsyncMock / test doubles).
         assert not isinstance(self._client, ToolingLlmClient), (
             f"synchronous path must not see a ToolingLlmClient, got {type(self._client).__name__}"
         )
@@ -3425,7 +3276,7 @@ class Orchestrator:
         )
 
         # Non-SDK-only observability — these log lines belong to the
-        # sync sidecar path (the SDK path's mechanics are
+        # sync/streaming sidecar path (the SDK path's mechanics are
         # tool-driven, so the tools' own spans carry the equivalent).
         if extraction["confrontation"]:
             logger.info(
@@ -3483,7 +3334,7 @@ class Orchestrator:
         Covers the fields that are sidecar-sourced on every path:
         presentation/signal fields with no successor tool (scene_mood,
         visual_scene, npcs_present, footnotes, sfx_triggers, action_rewrite),
-        the no-successor-tool state lanes (items_*,
+        the no-successor-tool state lanes (items_*, quest_updates,
         gold_change, lore_established, companions_*), and the
         agent/token/prompt/raw/secret telemetry tail. Also performs the two
         shared side effects: the canonical-prose leak audit and the
@@ -3494,7 +3345,7 @@ class Orchestrator:
         shared helper provably cannot emit a tool-owned key), which is what
         makes the SDK-path fail-loud invariant a backstop rather than the
         only guard. ``_assemble_turn_result`` adds the tool-owned keys back
-        (it is the single applier on the sync path);
+        (it is the single applier on the sync/streaming path);
         ``_assemble_turn_result_sdk`` adds only ``tool_calls``.
         """
         prose = extraction["prose"]
@@ -3548,6 +3399,9 @@ class Orchestrator:
             "items_lost": extraction.get("items_lost", []),
             "items_discarded": extraction.get("items_discarded", []),
             "items_consumed": extraction.get("items_consumed", []),
+            "quest_updates": extraction["quest_updates"]
+            if isinstance(extraction["quest_updates"], dict)
+            else {},
             "gold_change": extraction["gold_change"],
             "lore_established": extraction["lore_established"],
             "companions_added": extraction.get("companions_added", []),
@@ -3590,9 +3444,9 @@ class Orchestrator:
         """SDK-path NarrationTurnResult assembly — the hybrid split (Task E1.5-B).
 
         Distinct from :meth:`_assemble_turn_result` (the ClaudeClient
-        sync assembler, which stays byte-for-byte unchanged for
+        sync/streaming assembler, which stays byte-for-byte unchanged for
         its callers). On the SDK path the 26 WRITE tools already mutated AND
-        persisted (``ctx.repository.save``) game state during the tool-dispatch
+        persisted (``ctx.store.save``) game state during the tool-dispatch
         loop, so re-applying the narrator's sidecar would double-apply.
 
         The split:
@@ -3600,7 +3454,7 @@ class Orchestrator:
         * **Presentation / no-successor-tool fields** — built by the shared
           :meth:`_presentation_and_untooled_fields` helper (scene_mood,
           visual_scene, npcs_present, footnotes, sfx_triggers,
-          action_rewrite, items_*, gold_change,
+          action_rewrite, items_*, quest_updates, gold_change,
           lore_established, companions_*, telemetry tail). That helper
           STRUCTURALLY cannot emit a tool-owned key, so the SDK result
           carries only sidecar-sourced presentation/untooled state.
@@ -3651,47 +3505,15 @@ class Orchestrator:
         # not set on the SDK path. The retired ``begin_confrontation`` tool
         # stub lives at ``sidequest/agents/tools/_retired/begin_confrontation.py``
         # with a breadcrumb docstring.
-        #
-        # RW-2 opposed_check carve-out (playtest 2026-06-05, the_circuit
-        # chase): ``narration_apply._resolve_opposed_check_branch`` consumes
-        # ``result.beat_selections`` — the narrator's OPPONENT-side beat pick
-        # paired with the player's stashed DICE_THROW d20. Zeroing the field
-        # unconditionally made the entire opposed_check engine structurally
-        # unreachable on the SDK path: the player's roll was silently
-        # discarded every turn and all dial movement came from the narrator
-        # free-handing ``advance_confrontation``. When the ACTIVE
-        # confrontation declares ``resolution_mode: opposed_check`` we lift
-        # the sidecar selections through. This is NOT a double-apply risk for
-        # that mode — no WRITE tool applies opposed_check beats during
-        # dispatch (``advance_confrontation`` refuses the mode), and the SOUL
-        # gate in narration_apply still drops PC-side selections. All other
-        # modes stay zeroed (anti-double-apply guard unchanged).
-        _opposed_check_active = (
-            getattr(context.confrontation_def, "resolution_mode", None)
-            == ResolutionMode.opposed_check
-        )
-        beat_selections: list[BeatSelection] = []
-        if _opposed_check_active:
-            beat_selections = [
-                BeatSelection.from_dict(d)
-                for d in extraction["beat_selections"]
-                if isinstance(d, dict)
-            ]
-
-        assembled = NarrationTurnResult(
-            **shared, tool_calls=tool_calls_ledger, beat_selections=beat_selections
-        )
+        assembled = NarrationTurnResult(**shared, tool_calls=tool_calls_ledger)
 
         # Fail-loud backstop (CLAUDE.md no silent fallbacks): the tool-owned
         # partition must remain at dataclass defaults so narration_apply
         # does not double-apply what the WRITE tools already persisted.
-        # ``beat_selections`` is exempt exactly when the opposed_check
-        # carve-out above is active — that is the single sanctioned carrier.
         _violations = [
             name
             for name in _SDK_TOOL_OWNED_FIELDS
-            if not (name == "beat_selections" and _opposed_check_active)
-            and getattr(assembled, name) != getattr(_NTR_DEFAULTS, name)
+            if getattr(assembled, name) != getattr(_NTR_DEFAULTS, name)
         ]
         if _violations:
             raise AssertionError(
@@ -3784,7 +3606,7 @@ class Orchestrator:
         # dependencies stay co-located with the method that uses them,
         # which makes Phase D Tasks 4 (sidecar retirement) and 6 (three-zone
         # cache split) easier to refactor without disturbing module-level
-        # imports used by the sync path.
+        # imports used by the streaming/sync paths.
         from sidequest.agents.model_routing import CallType, resolve_model
         from sidequest.agents.narrator_perception_filter import NarratorPerceptionFilter
         from sidequest.agents.tool_registry import ToolContext, default_registry
@@ -3872,48 +3694,15 @@ class Orchestrator:
                     narration="[narrator-overload — operator paged]",
                 )
 
-            # Story 73-15 (ADR-117 tightening): advertise only the tools the
-            # bound ruleset can actually use. The WWN/CWN-only tools declare a
-            # ``ruleset`` and are filtered out on any other pack so the narrator
-            # neither wastes tool-budget on, nor mis-attempts, tools it can only
-            # fail to use. ``context.pack`` is None on legacy/fixture paths —
-            # there we pass ruleset=None (the full catalog) so behavior is
-            # unchanged (No Silent Fallbacks: the unfiltered list is the honest
-            # answer when no ruleset is bound, and each tool keeps its fail-loud
-            # self-guard backstop). Computed once here and reused for the real
-            # ``tools=`` array below.
-            _pack = context.pack
-            bound_ruleset: str | None = None
-            if _pack is not None and getattr(_pack, "rules", None) is not None:
-                bound_ruleset = _pack.rules.ruleset
-            advertised_tool_defs = default_registry.tool_definitions(bound_ruleset)
-            _total_tool_count = len(default_registry.list_names())
-            _advertised_tool_count = len(advertised_tool_defs)
-            # GM-panel lie detector (CLAUDE.md OTEL Observability Principle):
-            # surface the filter decision so the panel can verify the tightening
-            # engaged rather than the narrator improvising.
-            from sidequest.telemetry.spans.span import Span as _ToolFilterSpan
-
-            with _ToolFilterSpan.open(
-                "narrator.tools.ruleset_filter",
-                {
-                    "tools.bound_ruleset": bound_ruleset or "none",
-                    "tools.advertised_count": _advertised_tool_count,
-                    "tools.excluded_count": _total_tool_count - _advertised_tool_count,
-                },
-            ):
-                pass
-
             # Stability-audit diagnostic — per-block token estimate using the
             # project's standard char/4 approximation (see orchestrator.py
             # token-estimate pattern). Tools size is computed from the
-            # registry's serialized JSON (now the ruleset-filtered set, so the
-            # estimate reflects what the narrator is actually handed). Drift in
-            # the 'stable' region surfaces as a growing value across turns.
+            # registry's serialized JSON. Drift in the 'stable' region
+            # surfaces as a growing value across turns of one session.
             tools_payload = json.dumps(
                 [
                     {"name": t.name, "description": t.description, "input_schema": t.input_schema}
-                    for t in advertised_tool_defs
+                    for t in default_registry.tool_definitions()
                 ]
             )
             system_block_sizes = {
@@ -3925,34 +3714,6 @@ class Orchestrator:
             messages = [Message(role="user", content=user_message)]
 
             model = resolve_model(CallType.NARRATION)
-
-            # Aside-rides-the-cache (playtest 2026-06-07, ADR-107 re-scope):
-            # stash the EXACT system blocks + tools + model this turn ships,
-            # so an out-of-band aside can re-present the identical prefix to
-            # the API and read it from cache (caches are per-model and
-            # byte-exact — any drift is a miss, which the aside's cache_hit
-            # span attribute surfaces as the lie-detector). The stash is a
-            # reference copy, not a rebuild: rebuilding would risk byte
-            # drift. Refreshed every SDK turn; None until the first turn
-            # (the handler's legacy thin read-view covers that window).
-            # DRIVER verification failure 2026-06-07: the per-turn game state
-            # rides user_message (ADR-110 user-bucket placement), not the
-            # system blocks — and the calendar reaches the narrator only via
-            # the get_world_grounding TOOL. Stash both so the aside's user
-            # turn can re-present them (user-turn bytes are outside the cache
-            # prefix; this cannot bust the cache).
-            _stash_calendar = ""
-            if context.world_calendar:
-                _stash_calendar = json.dumps(
-                    context.world_calendar, ensure_ascii=False, default=str
-                )
-            self._aside_prompt_stash = AsidePromptStash(
-                system_blocks=list(system_blocks),
-                tools=list(advertised_tool_defs),
-                model=model,
-                user_state_text=user_message,
-                calendar_summary=_stash_calendar,
-            )
 
             # Phase E now plumbs world_id/session_id/store/lore_store/
             # monster_manual onto TurnContext via _build_turn_context (off
@@ -4027,7 +3788,7 @@ class Orchestrator:
                     session_id=session_id,
                     perspective_pc=context.character_name,
                     turn_number=context.turn_number,
-                    repository=context.repository,
+                    store=context.store,
                     otel_span=span,
                     perception_filter=perception_filter,
                     # Phase E wiring — THE fix for query_lore hit_count=0.
@@ -4052,15 +3813,6 @@ class Orchestrator:
                     # context.pack — begin_confrontation fails loudly rather than
                     # silently no-opping if it is missing.
                     genre_pack=context.pack,
-                    # Story 73-3: the canonical in-turn snapshot the rest of the
-                    # turn mutates and the end-of-turn save persists. WRITE tools
-                    # (advance_confrontation) must mutate THIS object — not a
-                    # fresh repository.load() copy — or the end-of-turn save
-                    # clobbers their write (the lost-update bug). Same seam as
-                    # genre_pack/lore_store above. None until _build_turn_context
-                    # stamps context.snapshot; the tool fails loud rather than
-                    # silently loading a fresh copy.
-                    snapshot=context.snapshot,
                 )
 
                 # Positive wiring confirmation (CLAUDE.md OTEL principle —
@@ -4089,10 +3841,7 @@ class Orchestrator:
                 result = await self._client.complete_with_tools(
                     system_blocks=system_blocks,
                     messages=messages,
-                    # Story 73-15: the ruleset-filtered set computed once above
-                    # (bound_ruleset derived from context.pack). Pack-less paths
-                    # get the full catalog unchanged.
-                    tools=advertised_tool_defs,
+                    tools=default_registry.tool_definitions(),
                     tool_dispatch=dispatch,
                     model=model,
                     # Story 61-followup-D §C.1 — forward the session_id so
@@ -4102,12 +3851,6 @@ class Orchestrator:
                     # tracker cleanly; do NOT substitute the "adhoc"
                     # sentinel here.
                     session_id=context.session_id,
-                    # Story 82-9 — forward the operator's soft tool-loop cap
-                    # (SIDEQUEST_NARRATOR_ITERATION_CAP; None = off) and tag the
-                    # tool_loop summary span as a narrator solo-turn so the GM
-                    # panel can filter curate calls out of solo-turn p95.
-                    iteration_cap=resolve_narrator_iteration_cap(),
-                    caller="narrator",
                 )
 
                 # Cost-rollup attributes — names per cost.py docstring.
@@ -4201,7 +3944,7 @@ class Orchestrator:
             _pub_prompt("prompt_assembled", _prompt_payload, component="prompt_builder")
 
             # Task E1.5-B — hybrid split. The WRITE tools already mutated +
-            # persisted (``ctx.repository.save``) every tool-owned state category
+            # persisted (``ctx.store.save``) every tool-owned state category
             # during the dispatch loop above. ``_assemble_turn_result_sdk``
             # builds the NarrationTurnResult so the tool-owned fields are
             # ZEROED (narration_apply must not re-apply them) while

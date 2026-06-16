@@ -7,8 +7,6 @@ Pipeline: CoreInvariantStage (GM / targeted / self-authored / gm-only)
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from sidequest.game.projection.envelope import MessageEnvelope
 from sidequest.game.projection.genre_stage import GenreRuleStage
 from sidequest.game.projection.invariants import CoreInvariantStage
@@ -16,9 +14,6 @@ from sidequest.game.projection.rules import ProjectionRules, load_rules_from_yam
 from sidequest.game.projection.view import GameStateView
 from sidequest.game.projection_filter import FilterDecision
 from sidequest.telemetry.spans import projection_decide_span
-
-if TYPE_CHECKING:
-    from sidequest.game.repository import SaveTransaction
 
 
 class ComposedFilter:
@@ -50,21 +45,13 @@ class ComposedFilter:
         envelope: MessageEnvelope,
         view: GameStateView,
         player_id: str,
-        tx: SaveTransaction | None = None,
-        event_seq: int | None = None,
     ) -> FilterDecision:
         with projection_decide_span(
             event_kind=envelope.kind,
             event_seq=envelope.origin_seq,
             player_id=player_id,
         ) as span:
-            outcome = self._invariants.evaluate(
-                envelope=envelope,
-                view=view,
-                player_id=player_id,
-                tx=tx,
-                event_seq=event_seq,
-            )
+            outcome = self._invariants.evaluate(envelope=envelope, view=view, player_id=player_id)
             if outcome.terminal:
                 assert outcome.decision is not None
                 assert outcome.source is not None, (

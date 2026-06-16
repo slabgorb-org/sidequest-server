@@ -1,14 +1,7 @@
 """Tests for AuthoredNpc pre-loading at world materialization (Task 13).
 
-Fresh sessions (no seated player character): NPCs land in state.npcs with
-disposition seeded. Resumed sessions (a player character already present):
-pre-loading is SKIPPED.
-
-Story 71-7: the freshness gate keys on the absence of a seated player
-character, NOT on ``turn_manager.interaction`` — a real fresh snapshot
-baselines at interaction == 1, so the old ``interaction == 0`` clause was
-unsatisfiable in production. These fixtures now use the real baseline so they
-no longer mask the regression.
+Fresh sessions: NPCs land in state.npcs with disposition seeded.
+Resumed sessions: pre-loading is SKIPPED.
 """
 
 from __future__ import annotations
@@ -31,12 +24,11 @@ def _make_npc(npc_id: str, disposition: int = 0) -> AuthoredNpc:
 
 
 def test_fresh_session_preloads_npcs() -> None:
-    """No seated player character = fresh; pre-load. Uses the real fresh
-    interaction baseline (1), not the fabricated 0 that masked story 71-7."""
+    """Empty state.npcs + interaction == 0 + characters == [] = fresh; pre-load."""
     state = MagicMock()
     state.npcs = []
     state.characters = []
-    state.turn_manager = MagicMock(interaction=1)
+    state.turn_manager = MagicMock(interaction=0)
 
     authored = [_make_npc("captain", disposition=60), _make_npc("doc", disposition=50)]
 
@@ -49,31 +41,26 @@ def test_fresh_session_preloads_npcs() -> None:
 
 
 def test_resumed_session_skips_preload_when_characters_exist() -> None:
-    """A seated player character = resumed; do NOT pre-load."""
+    """Existing characters or interaction > 0 = resumed; do NOT pre-load."""
     state = MagicMock()
     state.npcs = []
     state.characters = [MagicMock()]  # already a character — resumed
-    state.turn_manager = MagicMock(interaction=5)
+    state.turn_manager = MagicMock(interaction=0)
 
     preload_authored_npcs(state, [_make_npc("captain")])
 
     assert state.npcs == []  # untouched
 
 
-def test_interaction_count_does_not_gate_preload() -> None:
-    """Story 71-7 regression guard: interaction count is NOT part of the
-    freshness gate. With no seated player character, the crew loads regardless
-    of interaction value (a fresh snapshot really baselines at interaction 1,
-    and the gate must not key on it)."""
+def test_past_turn_zero_skips_preload() -> None:
     state = MagicMock()
     state.npcs = []
     state.characters = []
-    state.turn_manager = MagicMock(interaction=5)
+    state.turn_manager = MagicMock(interaction=5)  # past turn 0
 
-    preload_authored_npcs(state, [_make_npc("captain", disposition=60)])
+    preload_authored_npcs(state, [_make_npc("captain")])
 
-    assert len(state.npcs) == 1
-    assert state.npcs[0].core.name == "Authored-captain"
+    assert state.npcs == []
 
 
 def test_empty_authored_list_is_noop() -> None:

@@ -10,8 +10,6 @@ inbound message router.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
-
 from sidequest.orbital.conjunction import next_conjunction
 from sidequest.orbital.course_render import _resolve_drop_reason, render_course_overlay
 from sidequest.orbital.render import Scope, render_chart
@@ -23,43 +21,15 @@ from sidequest.protocol.orbital_intent import (
     OrbitalIntentResponse,
     ViewMapIntent,
 )
+from sidequest.server.session import Session
 from sidequest.telemetry.spans.course import emit_course_render_overlay
-
-if TYPE_CHECKING:
-    from sidequest.orbital.clock import Clock
-    from sidequest.orbital.course import PlottedCourse
-    from sidequest.orbital.loader import OrbitalContent
-
-
-@runtime_checkable
-class OrbitalIntentSession(Protocol):
-    """The narrow read surface ``handle_orbital_intent`` needs from a session.
-
-    Declared in the orbital tier so ``intent.py`` no longer imports
-    ``sidequest.server`` — the upward edge ADR-147 forbids. A real
-    ``sidequest.server.session.Session`` satisfies this structurally; so does
-    any object exposing the same five members.
-
-    ``orbital_scope`` is read **and written** (drill_out reads the current
-    center; every branch assigns the resolved scope back). ``plotted_course``
-    is the clean accessor that replaces the old
-    ``session._snapshot.plotted_course`` private reach-through.
-    """
-
-    orbital_content: OrbitalContent | None
-    orbital_scope: Scope
-    clock: Clock
-    party_body_id: str | None
-    plotted_course: PlottedCourse | None
 
 
 class OrbitalContentUnavailableError(RuntimeError):
     """Intent received for a session whose world has no orbital tier."""
 
 
-def handle_orbital_intent(
-    session: OrbitalIntentSession, intent: OrbitalIntent
-) -> OrbitalIntentResponse:
+def handle_orbital_intent(session: Session, intent: OrbitalIntent) -> OrbitalIntentResponse:
     """Resolve an orbital intent against the session's content + state.
 
     Side effect: updates ``session.orbital_scope`` so a subsequent
@@ -99,7 +69,7 @@ def handle_orbital_intent(
         party_at=session.party_body_id,
     )
 
-    plotted_course = session.plotted_course
+    plotted_course = session._snapshot.plotted_course
     if plotted_course is not None:
         drop_reason = _resolve_drop_reason(
             course=plotted_course,

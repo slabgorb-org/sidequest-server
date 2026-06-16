@@ -1,4 +1,4 @@
-"""Story 42-2 (port of Story 16-12): Wire genre resources — Luck, Heat,
+"""Story 42-2 (port of Story 16-12): Wire genre resources — Luck, Humanity, Heat,
 Fuel-at-rest as ResourcePool instances.
 
 RED phase tests. Verify genre-specific resource declarations in rules.yaml load
@@ -6,15 +6,12 @@ correctly, initialize ResourcePools, and wire through the full pipeline.
 
 ACs tested:
   AC1: spaghetti_western declares Luck (0-6, voluntary, thresholds at 1 and 0)
+  AC2: neon_dystopia declares Humanity (0-100, involuntary, thresholds at 50/25/0)
   AC3: pulp_noir declares Heat (0-5, involuntary, decay 0.1/turn)
   AC4: road_warrior declares Fuel (0-100, transfer to RigStats on confrontation)
   AC5: Genre loader parses and inits ResourcePools on GameSnapshot
   AC6: Bounds validation per genre
   AC7: Integration: load → init → patch → threshold → LoreStore
-
-Note: AC2 (pack-specific involuntary drain resource) is retired per CWN plan 2.
-System Strain (CON-bound engine resource on CreatureCore) is tested separately in
-test_cwn_system_strain.py and test_neon_system_strain_wiring.py.
 
 Port discipline: Rust source at
 ``sidequest-api/crates/sidequest-game/tests/wire_genre_resources_story_16_12_tests.rs``
@@ -33,13 +30,13 @@ Port translations:
   Rust ``process_resource_patch_with_lore(...).unwrap()`` → Python same
     (raises on error).
 
-Known Delivery Finding (logged in .session/42-2-session.md): three of the four
-genre packs referenced by this file (``pulp_noir``, ``road_warrior``,
-``low_fantasy``) were moved from ``genre_packs/`` to ``genre_workshopping/``
-after the Rust tests were authored. Tests depending on those packs will RED
-with "pack not found" until the packs are restored or the paths are updated.
-This is a CONTENT-side decision, not a test-port decision — surfacing to
-Dev/Architect/team-lead for resolution.
+Known Delivery Finding (logged in .session/42-2-session.md): four of the five
+genre packs referenced by this file (``neon_dystopia``, ``pulp_noir``,
+``road_warrior``, ``low_fantasy``) were moved from ``genre_packs/`` to
+``genre_workshopping/`` after the Rust tests were authored. Tests depending
+on those packs will RED with "pack not found" until the packs are restored
+or the paths are updated. This is a CONTENT-side decision, not a test-port
+decision — surfacing to Dev/Architect/team-lead for resolution.
 """
 
 from __future__ import annotations
@@ -108,8 +105,8 @@ def find_resource(rules: RulesConfig, name: str) -> ResourceDeclaration:
 # ═══════════════════════════════════════════════════════════
 # Conditional skip markers — workshopping packs
 #
-# Three of the four genre packs referenced by this file (``pulp_noir``,
-# ``road_warrior``, ``low_fantasy``) were moved from
+# Four of the five genre packs referenced by this file (``neon_dystopia``,
+# ``pulp_noir``, ``road_warrior``, ``low_fantasy``) were moved from
 # ``sidequest-content/genre_packs/`` to ``sidequest-content/genre_workshopping/``
 # in content commit ``acc89a3`` ("chore: move incomplete genre packs to
 # genre_workshopping"). Team-lead + architect decision (2026-04-21): tests
@@ -139,6 +136,10 @@ def _is_promoted(name: str) -> bool:
     return (GENRE_PACKS_DIR / name / "pack.yaml").is_file()
 
 
+_requires_neon_dystopia = pytest.mark.skipif(
+    not _is_promoted("neon_dystopia"),
+    reason=_pack_missing_reason("neon_dystopia"),
+)
 _requires_pulp_noir = pytest.mark.skipif(
     not _is_promoted("pulp_noir"),
     reason=_pack_missing_reason("pulp_noir"),
@@ -203,6 +204,62 @@ def test_spaghetti_western_luck_thresholds_have_event_ids():
     for threshold in luck.thresholds:
         assert threshold.event_id, "every threshold should have a non-empty event_id"
         assert threshold.narrator_hint, "every threshold should have a non-empty narrator_hint"
+
+
+# ═══════════════════════════════════════════════════════════
+# AC2: neon_dystopia — Humanity (0-100, involuntary, thresholds at 50/25/0)
+# ═══════════════════════════════════════════════════════════
+
+
+@_requires_neon_dystopia
+def test_neon_dystopia_has_humanity_resource():
+    rules = load_rules_yaml("neon_dystopia")
+    humanity = find_resource(rules, "humanity")
+
+    assert humanity.label == "Humanity"
+    assert abs(humanity.min - 0.0) < 1e-9
+    assert abs(humanity.max - 100.0) < 1e-9
+    assert not humanity.voluntary, "humanity should be involuntary"
+
+
+@_requires_neon_dystopia
+def test_neon_dystopia_humanity_has_threshold_at_50():
+    rules = load_rules_yaml("neon_dystopia")
+    humanity = find_resource(rules, "humanity")
+
+    assert any(abs(t.at - 50.0) < 1e-9 for t in humanity.thresholds), (
+        "humanity should have a threshold at 50"
+    )
+
+
+@_requires_neon_dystopia
+def test_neon_dystopia_humanity_has_threshold_at_25():
+    rules = load_rules_yaml("neon_dystopia")
+    humanity = find_resource(rules, "humanity")
+
+    assert any(abs(t.at - 25.0) < 1e-9 for t in humanity.thresholds), (
+        "humanity should have a threshold at 25"
+    )
+
+
+@_requires_neon_dystopia
+def test_neon_dystopia_humanity_has_threshold_at_0():
+    rules = load_rules_yaml("neon_dystopia")
+    humanity = find_resource(rules, "humanity")
+
+    assert any(abs(t.at - 0.0) < 1e-9 for t in humanity.thresholds), (
+        "humanity should have a threshold at 0"
+    )
+
+
+@_requires_neon_dystopia
+def test_neon_dystopia_humanity_thresholds_have_narrator_hints():
+    rules = load_rules_yaml("neon_dystopia")
+    humanity = find_resource(rules, "humanity")
+
+    assert len(humanity.thresholds) >= 3, "humanity should have at least 3 thresholds (50, 25, 0)"
+    for threshold in humanity.thresholds:
+        assert threshold.narrator_hint, f"threshold at {threshold.at} should have a narrator_hint"
 
 
 # ═══════════════════════════════════════════════════════════
@@ -280,6 +337,15 @@ def test_genre_loader_parses_spaghetti_western_resources():
     assert luck is not None, "loader should parse luck resource from spaghetti_western"
 
 
+@_requires_neon_dystopia
+def test_genre_loader_parses_neon_dystopia_resources():
+    path = genre_pack_path("neon_dystopia")
+    pack = load_genre_pack(path)
+
+    humanity = next((r for r in pack.rules.resources if r.name == "humanity"), None)
+    assert humanity is not None, "loader should parse humanity resource from neon_dystopia"
+
+
 def test_init_pools_from_spaghetti_western_declarations():
     rules = load_rules_yaml("spaghetti_western")
     snap = GameSnapshot()
@@ -292,6 +358,20 @@ def test_init_pools_from_spaghetti_western_declarations():
     pool = snap.resources["luck"]
     assert abs(pool.max - 6.0) < 1e-9
     assert pool.voluntary
+
+
+@_requires_neon_dystopia
+def test_init_pools_from_neon_dystopia_declarations():
+    rules = load_rules_yaml("neon_dystopia")
+    snap = GameSnapshot()
+
+    snap.init_resource_pools(rules.resources)
+
+    assert "humanity" in snap.resources
+    pool = snap.resources["humanity"]
+    assert abs(pool.max - 100.0) < 1e-9
+    assert not pool.voluntary
+    assert len(pool.thresholds) >= 3, "humanity pool should have at least 3 thresholds from YAML"
 
 
 @_requires_pulp_noir
@@ -331,6 +411,17 @@ def test_spaghetti_western_luck_validates_bounds():
     # Try to exceed luck max (6.0) — should clamp, not raise
     snap.apply_resource_patch_by_name("luck", ResourcePatchOp.Add, 100.0)
     assert snap.resources["luck"].current <= 6.0, "luck should clamp to max 6.0"
+
+
+@_requires_neon_dystopia
+def test_neon_dystopia_humanity_validates_bounds():
+    rules = load_rules_yaml("neon_dystopia")
+    snap = GameSnapshot()
+    snap.init_resource_pools(rules.resources)
+
+    # Try to go below humanity min (0.0) — should clamp, not raise
+    snap.apply_resource_patch_by_name("humanity", ResourcePatchOp.Subtract, 999.0)
+    assert snap.resources["humanity"].current >= 0.0, "humanity should clamp to min 0.0"
 
 
 @_requires_pulp_noir
@@ -373,6 +464,20 @@ def test_spaghetti_western_luck_threshold_fires_known_fact():
     snap.process_resource_patch_with_lore("luck", ResourcePatchOp.Subtract, drain, store, 10)
 
     assert len(store) > 0, "draining luck past thresholds should mint KnownFacts"
+
+
+@_requires_neon_dystopia
+def test_neon_dystopia_humanity_threshold_fires_known_fact():
+    rules = load_rules_yaml("neon_dystopia")
+    snap = GameSnapshot()
+    snap.init_resource_pools(rules.resources)
+
+    store = LoreStore()
+
+    # Drop humanity from 100 to 40 — should cross threshold at 50
+    snap.process_resource_patch_with_lore("humanity", ResourcePatchOp.Subtract, 60.0, store, 15)
+
+    assert len(store) > 0, "dropping humanity below 50 should mint a KnownFact"
 
 
 @_requires_pulp_noir

@@ -112,13 +112,10 @@ def test_apply_patch_atmosphere():
     assert s.atmosphere == "eerie"
 
 
-# Story 77-4 (ADR-137 AC-3): the legacy ``quest_updates`` apply lane was retired.
-# ``WorldStatePatch`` no longer carries the field (construction is rejected by
-# ``extra="forbid"``), and a stale narrator key is auto-forwarded by the
-# narration-apply guard. The full contract lives in
-# tests/game/test_quest_updates_retirement.py; the old
-# ``test_apply_patch_quest_updates`` was removed here as it exercised the
-# now-deleted field.
+def test_apply_patch_quest_updates():
+    s = _make_snapshot()
+    s.apply_world_patch(WorldStatePatch(quest_updates={"New Quest": "active"}))
+    assert "New Quest" in s.quest_log
 
 
 def test_apply_patch_discover_regions():

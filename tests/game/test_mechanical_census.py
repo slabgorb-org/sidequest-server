@@ -2,11 +2,6 @@
 game model for a seeded character (anti-log-absence — every gap closed
 against real state, not a hoped-for emitter)."""
 
-import uuid
-
-import pytest
-
-from sidequest.game import db_pool
 from sidequest.game.mechanical_census import (
     build_pc_census,
     build_trope_census,
@@ -15,24 +10,8 @@ from sidequest.game.mechanical_census import (
     inventory_digest,
     seat_index,
 )
-from sidequest.game.pg import sessions
-from sidequest.game.pg.save_repository import PgSaveRepository
-from sidequest.game.pg.telemetry import PgTelemetrySink
+from sidequest.game.persistence import SqliteStore
 from sidequest.telemetry.watcher_hub import bind_event_store
-
-
-@pytest.fixture
-def repo_and_sink(monkeypatch, migrated_db: str):
-    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
-    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
-    db_pool.close_pool()
-    pool = db_pool.get_pool()
-    slug = f"sq_mc_{uuid.uuid4().hex[:8]}"
-    sid = sessions.ensure_session(pool, slug=slug, mode="solo", genre_slug="g", world_slug="w")
-    repo = PgSaveRepository(pool, session_id=sid)
-    sink = PgTelemetrySink(pool, sid)
-    yield repo, sink, pool, sid
-    db_pool.close_pool()
 
 
 # --- inventory_digest: aggregate by name, sum quantity, singleton-safe ---
@@ -182,16 +161,12 @@ def test_build_trope_census_is_session_scoped():
     ]
 
 
-def test_one_bad_pc_is_isolated_others_and_trope_still_emit(repo_and_sink, caplog):
+def test_one_bad_pc_is_isolated_others_and_trope_still_emit(tmp_path, caplog):
     """A PC whose build raises must loud-log mechanical_census.build_failed
-    and NOT drop the healthy PC or the session trope row.
-
-    Mirrors the prod caller (emitters.emit_event ~:258): the census is emitted
-    INSIDE the open turn ``tx`` with that turn's ``event_seq``, so both rows
-    ride the turn transaction (ADR-115 D5)."""
-    repo, sink, pool, sid = repo_and_sink
+    and NOT drop the healthy PC or the session trope row."""
+    store = SqliteStore.open(str(tmp_path / "s.db"))
     try:
-        bind_event_store(sink)
+        bind_event_store(store)
 
         class _GoodCore:
             name = "Rux"
@@ -246,21 +221,20 @@ def test_one_bad_pc_is_isolated_others_and_trope_still_emit(repo_and_sink, caplo
             def playing_player_ids(self):
                 return ["p1", "p2"]
 
-        with caplog.at_level("WARNING"), repo.transaction() as tx:
-            ev = tx.append_event(kind="NARRATION", payload_json="{}")
-            emit_mechanical_census(
-                _Room(), _Snap(), tx=tx, event_seq=ev.seq
-            )  # must not raise
-        with pool.connection() as conn:
-            rows = conn.execute(
-                "SELECT event_type FROM turn_telemetry WHERE session_id = %s ORDER BY seq",
-                (sid,),
-            ).fetchall()
+        with caplog.at_level("WARNING"), store._conn:
+            store._conn.execute(
+                "INSERT INTO events (kind, payload_json, created_at) VALUES ('NARRATION','{}','t')"
+            )
+            emit_mechanical_census(_Room(), _Snap())  # must not raise
+        rows = store._conn.execute(
+            "SELECT event_type, payload_json FROM turn_telemetry ORDER BY seq"
+        ).fetchall()
         types = [r[0] for r in rows]
         assert types == ["census", "trope_census"]  # good PC + trope kept
         assert "mechanical_census.build_failed pc=p2" in caplog.text
     finally:
         bind_event_store(None)
+        store.close()
 
 
 def test_census_payload_never_sets_encounter_field(tmp_path):

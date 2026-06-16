@@ -8,13 +8,8 @@ archetype resolver took (base archetypes, genre constraints, optional world
 funnels) and produces an ArchetypeResolution carrying the resolved
 ArchetypeResolved value plus lookup metadata (source tier, pairing weight).
 
-OTEL emission lives in the production caller, not here: chargen
-(``chargen_mixin._resolve_character_archetype``) emits
-``character_creation.archetype_resolved`` / ``archetype_resolution_failed``
-span events around this function, and the tier-annotated ``Provenance``
-built here rides the wire as ``archetype_provenance``. This shim is the
-production archetype-resolution path per ADR-121 (as narrowed by Story
-82-4 — the four-tier ``Resolver`` walk was removed).
+OTEL emission is omitted in this Python port — the Python daemon does not
+run the OTEL span infrastructure. The resolution logic is verbatim.
 """
 
 from __future__ import annotations

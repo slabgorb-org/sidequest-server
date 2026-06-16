@@ -1,17 +1,9 @@
 """Encounter generator CLI.
 
-Generates enemy stat blocks from genre pack data. Routing by the pack's bound
-ruleset:
-
-* **Ruleset-module packs** (``ruleset: wwn|cwn|swn|awn``) drop ``allowed_classes``,
-  so encountergen samples the content-authored ``bestiary.yaml`` (resolved
-  world-over-genre via ``GenrePack.effective_bestiary``) for the combat layer and
-  composes the narrative layers (OCEAN, visual prompt) on top. A ruleset-module
-  pack with no bestiary at either tier fails LOUD (story 90-1; No Silent Fallbacks).
-* **Native packs:** when ``--world`` is provided and the world has a
-  ``creatures.yaml`` (now nested as ``regions.{region}.creatures`` post-2026-05-10
-  fold), samples creatures by tier from it. Otherwise generates humanoid NPCs from
-  genre ``allowed_classes``.
+Generates enemy stat blocks from genre pack data. When ``--world`` is provided
+and the world has a ``creatures.yaml`` (now nested as ``regions.{region}.creatures``
+post-2026-05-10 fold), samples creatures by tier from the bestiary. Otherwise
+generates humanoid NPCs from genre rules.
 
 Ported from ``crates/sidequest-encountergen/src/main.rs``.
 
@@ -47,8 +39,6 @@ from sidequest.genre import (
     NpcArchetype,
     load_genre_pack,
 )
-from sidequest.genre.models.bestiary import Bestiary
-from sidequest.genre.models.character import spawnable_archetypes
 from sidequest.genre.models.narrative import PowerTier
 from sidequest.genre.names import build_from_culture
 
@@ -85,11 +75,6 @@ class EnemyBlock:
     ocean_summary: str
     trope_connections: list[TropeConnection]
     visual_prompt: str
-    # Bestiary combat layer (story 90-1) — only set on the ruleset-module
-    # path; None on the native / creatures.yaml paths, where the keys are
-    # dropped from JSON output so the legacy shape is byte-identical.
-    armor_class: int | None = None
-    attack_bonus: int | None = None
 
 
 @dataclass
@@ -101,12 +86,6 @@ def _enemy_block_to_dict(block: EnemyBlock) -> dict[str, Any]:
     """Serialize EnemyBlock — rename ``class_`` to ``class`` for JSON compat."""
     data = asdict(block)
     data["class"] = data.pop("class_")
-    # Keep the legacy (native / creatures.yaml) output shape unchanged:
-    # the bestiary combat keys only appear when the bestiary path set them.
-    if data["armor_class"] is None:
-        del data["armor_class"]
-    if data["attack_bonus"] is None:
-        del data["attack_bonus"]
     return data
 
 
@@ -349,80 +328,6 @@ def creature_to_enemy_block(creature: dict[str, Any], rng: random.Random) -> Ene
 
 
 # ---------------------------------------------------------------------------
-# Pack bestiary → EnemyBlock (ruleset-module packs, story 90-1)
-# ---------------------------------------------------------------------------
-
-
-def generate_enemy_from_bestiary(
-    pack: GenrePack,
-    bestiary: Bestiary,
-    args: argparse.Namespace,
-    rng: random.Random,
-) -> EnemyBlock:
-    """Generate an enemy from the resolved bestiary (``ruleset != native``).
-
-    The bestiary entry supplies the combat layer (level / hp / armor_class /
-    attack_bonus, SRD-aligned per the bound ruleset); encountergen composes
-    the narrative layers (OCEAN, visual prompt) the same way the
-    creatures.yaml path does. ``bestiary`` is the world-over-genre resolution
-    from :meth:`GenrePack.effective_bestiary` (guaranteed non-None by main()'s
-    fail-loud branch); ``pack`` still supplies the genre visual style.
-    """
-    entries = bestiary.entries
-
-    tier = args.tier if args.tier is not None else rng.randint(1, 3)
-    level_min, level_max = tier_to_level_range(tier)
-    pool = [e for e in entries if level_min <= e.level <= level_max]
-    if not pool:
-        # Mirror the creatures.yaml sampling rule: an unpopulated tier falls
-        # back to the full entry list (a sampling decision, not a config
-        # fallback — the bestiary itself is validated non-empty at load).
-        pool = list(entries)
-    entry = rng.choice(pool)
-
-    role = entry.role if entry.role else entry.name.lower()
-
-    # Narrative layers stay encountergen's job (90-1 schema decision).
-    parts: list[str] = [entry.description if entry.description else f"{entry.name}, {role}"]
-    if args.context:
-        parts.append(args.context)
-    if pack.visual_style is not None:
-        parts.append(pack.visual_style.positive_suffix)
-    visual_prompt = ", ".join(p.strip().rstrip(",") for p in parts if p and p.strip())
-
-    ocean = OceanValues(
-        openness=rng.uniform(1.0, 4.0),
-        conscientiousness=rng.uniform(2.0, 5.0),
-        extraversion=rng.uniform(2.0, 6.0),
-        agreeableness=rng.uniform(1.0, 3.0),
-        neuroticism=rng.uniform(4.0, 8.0),
-    )
-
-    return EnemyBlock(
-        name=entry.name,
-        class_="creature",
-        race=entry.tags[0] if entry.tags else "hostile",
-        level=entry.level,
-        tier_label=f"tier-{tier}",
-        role=role,
-        hp=entry.hp,
-        abilities=list(entry.abilities),
-        weaknesses=[],
-        disposition=-20,
-        personality=[],
-        dialogue_quirks=[],
-        inventory=[],
-        stat_scores={},
-        ocean=ocean,
-        ocean_summary=summarize_ocean(ocean),
-        trope_connections=[],
-        visual_prompt=visual_prompt,
-        armor_class=entry.armor_class,
-        attack_bonus=entry.attack_bonus,
-    )
-
-
-# ---------------------------------------------------------------------------
 # Abilities (class-tiered tables ported verbatim from Rust)
 # ---------------------------------------------------------------------------
 
@@ -560,11 +465,7 @@ def build_visual_prompt(
     if context:
         parts.append(context)
 
-    # Pack-level visual_style is optional (2026-05-29 directive — style lives
-    # at world level). When the genre carries no pack-level style there is no
-    # genre suffix to append; this is by-design absence, not a dropped config.
-    if pack.visual_style is not None:
-        parts.append(pack.visual_style.positive_suffix)
+    parts.append(pack.visual_style.positive_suffix)
 
     cleaned = [p.strip().rstrip(",") for p in parts]
     return ", ".join(cleaned)
@@ -627,17 +528,11 @@ def generate_enemy(
     # Fall back to DEFAULT_HP_BASE; the materializer translates to EdgePool.
     hp = DEFAULT_HP_BASE * level
 
-    # Archetype — world-over-genre resolution (GenrePack.effective_*), the SAME
-    # resolution namegen + pregen.seed_manual use. Reading pack.archetypes raw
-    # here was the perseus_cloud divergence (session 894) reaching this CLI:
-    # genres that keep flavor in the world (epic-74) ship empty genre-tier
-    # archetypes/cultures, so the raw read seeds zero encounters.
-    archetypes, _ = pack.effective_archetypes(args.world)
+    # Archetype
+    archetypes = pack.archetypes
     if not archetypes:
-        world_clause = f" world '{args.world}'" if args.world else ""
         print(
-            f"sidequest-encountergen: no archetypes for genre '{args.genre}'{world_clause} "
-            "— archetypes.yaml is empty at both genre and world tiers",
+            f"sidequest-encountergen: genre '{args.genre}' has no archetypes",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -654,25 +549,13 @@ def generate_enemy(
             )
             sys.exit(1)
     else:
-        spawnable = spawnable_archetypes(archetypes)
-        if not spawnable:
-            world_clause = f" world '{args.world}'" if args.world else ""
-            print(
-                f"sidequest-encountergen: no spawnable archetypes for genre "
-                f"'{args.genre}'{world_clause} — all archetypes are named_individual "
-                "(specific people who must not be randomly generated as enemies)",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        archetype = rng.choice(spawnable)
+        archetype = rng.choice(archetypes)
 
-    # Culture + name — world-over-genre resolution (see archetype note above).
-    cultures, _ = pack.effective_cultures(args.world)
+    # Culture + name
+    cultures = pack.cultures
     if not cultures:
-        world_clause = f" world '{args.world}'" if args.world else ""
         print(
-            f"sidequest-encountergen: no cultures for genre '{args.genre}'{world_clause} "
-            "— cultures.yaml is empty at both genre and world tiers",
+            f"sidequest-encountergen: genre '{args.genre}' has no cultures",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -763,15 +646,6 @@ def _generate_name(
 # ---------------------------------------------------------------------------
 
 
-def _emit(enemies: list[EnemyBlock]) -> int:
-    """Print the encounter JSON to stdout + write the sidecar. Always 0."""
-    block = EncounterBlock(enemies=enemies)
-    out = {"enemies": [_enemy_block_to_dict(e) for e in block.enemies]}
-    print(json.dumps(out, indent=2))
-    write_sidecar(block)
-    return 0
-
-
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     genre_dir = Path(args.genre_packs_path) / args.genre
@@ -802,34 +676,21 @@ def main(argv: list[str] | None = None) -> int:
             creature = rng.choice(pool)
             enemies.append(creature_to_enemy_block(creature, rng))
 
-        return _emit(enemies)
+        block = EncounterBlock(enemies=enemies)
+        out = {"enemies": [_enemy_block_to_dict(e) for e in block.enemies]}
+        print(json.dumps(out, indent=2))
+        write_sidecar(block)
+        return 0
 
-    # Ruleset-module packs (ADR-117) deliberately drop allowed_classes —
-    # enemies come from the pack-root bestiary instead (story 90-1). Fail
-    # loud when the bestiary is absent: silently seeding an empty Monster
-    # Manual pool was the 87-4 bug this branch retires.
-    if pack.rules.ruleset != "native":
-        bestiary, _source = pack.effective_bestiary(args.world)
-        if bestiary is None:
-            world_clause = f" world '{args.world}'" if args.world else ""
-            print(
-                f"sidequest-encountergen: genre '{args.genre}'{world_clause} binds ruleset "
-                f"'{pack.rules.ruleset}' but resolves no bestiary — ruleset-module packs "
-                "REQUIRE one (90-1 fail-loud contract). The genre/world repoint moved "
-                "creature rosters to the world tier: author SRD-aligned combat stat blocks "
-                "in worlds/<world>/bestiary.yaml (or keep a genre-tier bestiary.yaml)",
-                file=sys.stderr,
-            )
-            return 1
-        for _ in range(args.count):
-            enemies.append(generate_enemy_from_bestiary(pack, bestiary, args, rng))
-        return _emit(enemies)
-
-    # Native packs: humanoid NPCs from rules.yaml allowed_classes
+    # Fallback: humanoid NPCs from rules.yaml
     for _ in range(args.count):
         enemies.append(generate_enemy(pack, genre_dir, args, rng))
 
-    return _emit(enemies)
+    block = EncounterBlock(enemies=enemies)
+    out = {"enemies": [_enemy_block_to_dict(e) for e in block.enemies]}
+    print(json.dumps(out, indent=2))
+    write_sidecar(block)
+    return 0
 
 
 if __name__ == "__main__":

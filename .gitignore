@@ -59,8 +59,6 @@ logs/
 .session/
 .envrc.local
 .claude/
-.frame-port
-frame-pid
 
 # Test scratch (pf solo / benchmark write-out targets)
 tests/server/_tmp_solo_new/
@@ -73,13 +71,3 @@ tests/server/_tmp_solo_new/
 # Build artifacts
 *.pyc
 *.pyo
-
-# 92-x router A/B eval corpora — re-derivable, see artifacts/router_ab_92_2_gate_decision.md
-artifacts/router_prompts.jsonl
-artifacts/router_corpus.jsonl
-
-# brm (brainstorm/agent tool) scratch
-.brm/
-
-# 123-1 test-baseline census run logs — regenerable, see docs/test-baseline-manifest.json
-artifacts/123-1/

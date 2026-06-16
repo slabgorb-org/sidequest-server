@@ -350,7 +350,6 @@ def _redacted_dispatch(
         subsystem=subsystem,
         params={"reading": "no ward-heat"},
         idempotency_key=key,
-        confidence=1.0,
         visibility=VisibilityTag(
             visible_to=visible_to,
             perception_fidelity={},

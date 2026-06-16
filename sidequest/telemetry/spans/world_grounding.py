@@ -44,7 +44,6 @@ if TYPE_CHECKING:
 
 SPAN_WORLD_GROUNDING_WEATHER_PROPOSED = "world_grounding.weather_proposed"
 SPAN_WORLD_GROUNDING_WEATHER_USED = "world_grounding.weather_used"
-SPAN_WORLD_GROUNDING_WEATHER_ABSENT = "world_grounding.weather_absent"
 SPAN_WORLD_GROUNDING_DEMOGRAPHICS_INJECTED = "world_grounding.demographics_injected"
 
 
@@ -79,17 +78,6 @@ SPAN_ROUTES[SPAN_WORLD_GROUNDING_WEATHER_USED] = SpanRoute(
         "season": (span.attributes or {}).get("season", ""),
         "condition": (span.attributes or {}).get("condition", ""),
         "seed": (span.attributes or {}).get("seed", 0),
-        "world_id": (span.attributes or {}).get("world_id", ""),
-        "perspective_pc": (span.attributes or {}).get("perspective_pc", ""),
-    },
-)
-
-SPAN_ROUTES[SPAN_WORLD_GROUNDING_WEATHER_ABSENT] = SpanRoute(
-    event_type="state_transition",
-    component="world_grounding",
-    extract=lambda span: {
-        "field": "weather",
-        "op": "absent",
         "world_id": (span.attributes or {}).get("world_id", ""),
         "perspective_pc": (span.attributes or {}).get("perspective_pc", ""),
     },
@@ -156,32 +144,6 @@ def emit_weather_used_span(
             "season": season,
             "condition": condition,
             "seed": int(seed),
-            "world_id": world_id,
-            "perspective_pc": perspective_pc or "",
-        },
-    ):
-        pass
-
-
-def emit_weather_absent_span(*, world_id: str, perspective_pc: str | None) -> None:
-    """Emit a ``world_grounding.weather_absent`` span.
-
-    Fires from the ``get_world_grounding`` tool handler when the narrator's
-    ``include`` list contains ``"weather"`` but the session-bound
-    ``WeatherState`` is ``None`` — i.e. weather was requested but the world has
-    none wired. Companion to ``weather_used``: exactly one of the two fires per
-    weather-requested grounding call. Lets the GM panel distinguish "this world
-    has no weather **by design**" from "the weather subsystem broke" (CLAUDE.md
-    OTEL Observability Principle).
-
-    There is no ``WeatherState`` to record — that is the point — so the span is
-    identity-only: which world, whose viewpoint. Per "no silent fallbacks" an
-    absent ``perspective_pc`` (single-player) is encoded as ``""``, never
-    omitted, so the dashboard's column-presence check stays reliable.
-    """
-    with Span.open(
-        SPAN_WORLD_GROUNDING_WEATHER_ABSENT,
-        attrs={
             "world_id": world_id,
             "perspective_pc": perspective_pc or "",
         },

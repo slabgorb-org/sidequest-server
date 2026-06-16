@@ -29,27 +29,19 @@ from sidequest.agents.orchestrator import Orchestrator
 from sidequest.audio.interpreter import AudioInterpreter
 from sidequest.audio.library_backend import LibraryBackend
 from sidequest.game.builder import CharacterBuilder
-from sidequest.game.entity_store import EntityStore
 from sidequest.game.history_chapter import HistoryChapter
 from sidequest.game.lore_store import LoreStore
-from sidequest.game.pg.dungeon import PgDungeonRepository
-from sidequest.game.pg.save_repository import PgSaveRepository
-from sidequest.game.pg.telemetry import PgTelemetrySink
-from sidequest.game.repository import DungeonRepository, SaveRepository, TelemetrySink
+from sidequest.game.persistence import SqliteStore
 from sidequest.game.session import GameSnapshot
 from sidequest.game.shared_world_delta import SharedWorldDelta
-from sidequest.game.tension_tracker import TensionTracker
 from sidequest.game.weather import WeatherState
 from sidequest.genre.models.pack import GenrePack
 from sidequest.genre.models.scenario import ScenarioPack
-from sidequest.protocol.enums import NarratorVerbosity, NarratorVocabulary
 from sidequest.protocol.models import PartyFormationWireEntry, StateDelta
 from sidequest.server.image_pacing import ImagePacingThrottle
 from sidequest.server.session_helpers import _resolve_acting_character_name
 
 if TYPE_CHECKING:
-    from psycopg_pool import ConnectionPool
-
     from sidequest.dungeon.lookahead_worker import LookaheadWorkerHandle
     from sidequest.game.monster_manual import MonsterManual
     from sidequest.game.persistence import GameMode
@@ -142,40 +134,6 @@ def _build_pc_descriptor(sd: _SessionData, pc_slug: str) -> dict | None:
     }
 
 
-def _build_pg_repos_for_slug(
-    pool: ConnectionPool,
-    *,
-    slug: str,
-    mode: str,
-    genre_slug: str,
-    world_slug: str,
-) -> tuple[PgSaveRepository, PgDungeonRepository, PgTelemetrySink]:
-    """Construct all three Postgres repositories for a session slug (ADR-115 D1).
-
-    Called from the connect handler after the game row has been resolved.
-    ``PgSaveRepository.for_slug`` is idempotent on ``session_slug`` — safe to
-    call on every connect for an existing session.
-
-    Returns a ``(repository, dungeon_repository, telemetry_sink)`` triple
-    whose members all share the same ``session_id``.
-
-    Synchronous (``ensure_session`` borrows a pooled connection).  Follows the
-    existing connect-handler convention of calling blocking DB/IO helpers
-    directly from the async path (e.g. ``GenreLoader.load``).
-    """
-    repository = PgSaveRepository.for_slug(
-        pool,
-        slug=slug,
-        mode=mode,
-        genre_slug=genre_slug,
-        world_slug=world_slug,
-    )
-    session_id = repository.session_id
-    dungeon_repository = PgDungeonRepository(pool, session_id=session_id)
-    telemetry_sink = PgTelemetrySink(pool, session_id)
-    return repository, dungeon_repository, telemetry_sink
-
-
 class _State(Enum):
     AwaitingConnect = auto()
     Creating = auto()
@@ -191,9 +149,7 @@ class _SessionData:
     player_name: str
     player_id: str
     snapshot: GameSnapshot
-    repository: SaveRepository  # PgSaveRepository — ADR-115 D1 (replaces SqliteStore)
-    dungeon_repository: DungeonRepository  # PgDungeonRepository — ADR-115 D1
-    telemetry_sink: TelemetrySink  # PgTelemetrySink — ADR-115 D1
+    store: SqliteStore
     genre_pack: GenrePack
     orchestrator: Orchestrator
     # Back-reference to the per-slug SessionRoom. Populated by the connect
@@ -210,12 +166,6 @@ class _SessionData:
     # _handle_character_creation's confirmation commit when the Character lands
     # on snapshot.characters.
     builder: CharacterBuilder | None = None
-    # Epic 66 portrait picker. portrait_step_shown gates the one-time
-    # interposition of the pick_portrait scene before the confirmation
-    # summary; selected_portrait_ref holds the player's choice until the
-    # confirmation commit copies it onto the built Character.
-    portrait_step_shown: bool = False
-    selected_portrait_ref: str | None = None
     # Opening-hook seed + directive (Story 2.3 Slice B). Resolved once at
     # connect time from pack/world.openings. Both consumed together by the
     # opening-turn bootstrap after chargen confirmation (Slice H): the seed
@@ -245,21 +195,6 @@ class _SessionData:
     # the player's backstory decisions. Rust parity: Arc<Mutex<LoreStore>>
     # on app state — Python single-player keeps it on the session.
     lore_store: LoreStore = field(default_factory=LoreStore)
-    # Entity store (Story 75-4 / 75-5, ADR-118 universal retrieval). The typed
-    # sibling of ``lore_store`` — holds NPC / location / faction EntityCards that
-    # per-turn floor+fill retrieval (``retrieve_turn_context``) queries for the
-    # semantic fill. Population / reproject of the index is the 75-6 sync hook;
-    # 75-5 only queries it. Round-trips through the save like ``lore_store``.
-    entity_store: EntityStore = field(default_factory=EntityStore)
-    # Dual-track tension model (ADR-024, story 81-2). Per-session producer:
-    # driven once per turn from ``_execute_narration_turn`` so the action and
-    # stakes tracks accumulate across the session and the
-    # ``tension:round_observed`` watcher event fires on every turn (the GM-panel
-    # pacing signal). In-memory only — resets on reload for v1, mirroring the
-    # ``entity_store`` default_factory precedent. Story 81-3 consumes
-    # ``tension_tracker.pacing_hint(thresholds)`` to drive the ``[PACING]``
-    # narrator injection; this story only constructs and feeds it.
-    tension_tracker: TensionTracker = field(default_factory=TensionTracker)
     # Audio DJ — per-session LibraryBackend so ThemeRotator cooldowns
     # persist across turns within a session. None when the genre pack
     # has no resolvable audio directory on disk (e.g. a pack defining
@@ -278,14 +213,6 @@ class _SessionData:
     # game_slug rather than the legacy genre+world path.
     game_slug: str | None = None
     mode: GameMode | None = None
-    # Story 82-2 (ADR-049): player-chosen narrator tuning. The LIVE runtime
-    # choice read every turn by ``_build_turn_context`` — ``None`` means the
-    # player made no choice, so the builder falls back to
-    # ``default_for_player_count`` (No Silent Fallbacks: never a hardcoded
-    # literal). Hydrated from the inbound CONNECT payload (new session) or from
-    # ``snapshot.narrator_*`` (resume); the snapshot is the durable mirror.
-    narrator_verbosity: NarratorVerbosity | None = None
-    narrator_vocabulary: NarratorVocabulary | None = None
     # Lore embed worker lifecycle (Story 37-33 round-trip #4). A live
     # reference to the most recent background embed task so cleanup() can
     # cancel it before the SQLite store closes and so _dispatch_embed_worker
@@ -327,28 +254,6 @@ class _SessionData:
     # span, and applies both beats. Cleared by the consuming turn.
     pending_opposed_player_d20: int | None = None
     pending_opposed_player_beat_id: str | None = None
-    # Dice-path confrontation clear (ping-pong 2026-06-07 "MP confrontation
-    # DESYNC"). Set by ``DiceThrowHandler`` when ``dispatch_dice_throw``
-    # resolves the encounter mid-turn (hp_depletion / dial threshold /
-    # opponent-reprisal close). The post-narration CONFRONTATION emit seam
-    # captures ``prior_live`` AFTER the narrator runs — by then the dice path
-    # (a separate handler invocation) already flipped ``resolved=True``, so
-    # the live→resolved transition is invisible there and no
-    # ``CONFRONTATION {active: false}`` frame was ever broadcast: every
-    # client fell back to its own NARRATION_END heuristic, which forks
-    # per-seat in MP. Read + cleared (take semantics) by the emit seam,
-    # which broadcasts the deterministic clear to every connected socket.
-    # Holds the resolved encounter's ``encounter_type``; None when no
-    # dice-path resolution is pending.
-    pending_confrontation_clear: str | None = None
-    # Dogfight player-throw stash (Task 14). Set by
-    # ``_apply_narration_result_to_snapshot`` when a sealed-letter cell yields
-    # a player gun solution — the NPC's d20 is server-rolled and held here while
-    # the player's shot awaits a client Rapier throw. Read+cleared by
-    # ``DiceThrowHandler`` when the player's DICE_THROW arrives; all shots then
-    # resolve together against pre-shot frame HP. None between turns (not yet
-    # stashed or already consumed).
-    pending_dogfight_shot: Any | None = None
     # ADR-050 — image pacing throttle. Per-session, time-based cooldown that
     # suppresses render dispatches faster than human absorption speed.
     # Default 30s solo / 60s MP; created at chargen confirmation once the

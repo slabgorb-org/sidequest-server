@@ -1,17 +1,14 @@
 """Lore-seeding integration — Story 2.3 Slice F.
 
-Drives a real chargen confirmation through ``WebSocketSessionHandler``
-against the in-repo synthetic ``test_genre`` / ``flickering_reach`` fixture
-pack (story 74-5: no real-pack coupling — the wiring proof is preserved
-because it still boots the production handler and dispatch path) and asserts:
+Drives chargen confirmation against caverns_and_claudes/grimvault and
+asserts:
 
 - ``sd.lore_store`` ends up non-empty after commit
-- char-creation fragments carry :class:`LoreSource.CharacterCreation` with
-  the Rust ``lore_char_creation_<scene_id>_<choice_index>`` id format
-- world-lore fragments carry :class:`LoreSource.GenrePack` with
-  ``lore_world_<slug>_*`` ids (``flickering_reach`` authors world lore, so
-  the world seeder fires at confirmation) and NO ``lore_genre_*`` fragments
-  appear (epic 74: lore is world-only)
+- fragments carry :class:`LoreSource.CharacterCreation` (not the genre
+  pack's generic lore — that's a later slice when the narrator boot
+  path picks up its own store)
+- ids match the Rust ``lore_char_creation_<scene_id>_<choice_index>``
+  format
 - OTEL emits ``lore.char_creation_seeded`` with the expected counts
 
 The seeding call fires BEFORE ``sd.builder = None`` so the scene list
@@ -44,42 +41,16 @@ from tests.server.conftest import (
     mock_claude_client_factory as _mock_claude_client_factory,
 )
 
-_FIXTURE_PACKS_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "packs"
-
-
-@pytest.fixture(autouse=True)
-def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
-    """Bind the process pool to a per-worker throwaway PG db, clean per test.
-
-    ADR-115 F1: chargen connect resolves the bootstrap row from Postgres and
-    confirmation persists the snapshot there. ``seed_slug_for_test`` registers
-    the session in this isolated db; TRUNCATE per test prevents fixed-slug
-    bleed across sibling tests.
-    """
-    import psycopg
-
-    from sidequest.game import db_pool
-
-    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
-    with psycopg.connect(plain, autocommit=True) as conn:
-        rows = conn.execute(
-            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
-            "AND tablename <> 'alembic_version'"
-        ).fetchall()
-        if rows:
-            names = ", ".join(f'"{r[0]}"' for r in rows)
-            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
-    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
-    db_pool.close_pool()
-    yield
-    db_pool.close_pool()
+CONTENT_ROOT = Path(__file__).resolve().parents[3] / "sidequest-content" / "genre_packs"
 
 
 @pytest.fixture
 def handler(tmp_path: Path) -> WebSocketSessionHandler:
+    if not (CONTENT_ROOT / "caverns_and_claudes").is_dir():
+        pytest.skip("content pack not found")
     return WebSocketSessionHandler(
         claude_client_factory=_mock_claude_client_factory(),
-        genre_pack_search_paths=[_FIXTURE_PACKS_DIR],
+        genre_pack_search_paths=[CONTENT_ROOT],
         save_dir=tmp_path,
     )
 
@@ -134,7 +105,7 @@ def _events(exporter: InMemorySpanExporter, name: str) -> list:
 
 
 class TestLoreSeedingDispatch:
-    def test_flickering_reach_confirmation_seeds_lore_store(
+    def test_grimvault_confirmation_seeds_lore_store(
         self, handler: WebSocketSessionHandler
     ) -> None:
         async def body() -> None:
@@ -142,8 +113,8 @@ class TestLoreSeedingDispatch:
 
             slug = seed_slug_for_test(
                 handler._save_dir,
-                genre="test_genre",
-                world="flickering_reach",
+                genre="caverns_and_claudes",
+                world="grimvault",
             )
             attach_default_room_context(handler)
             await handler.handle_message(
@@ -165,21 +136,19 @@ class TestLoreSeedingDispatch:
             assert out[0].payload.phase == "complete"
 
             # Post-confirmation: lore store has fragments from every
-            # chargen scene's choices PLUS the world's lore corpus
+            # chargen scene's choices PLUS the genre pack's lore corpus
             # (history/geography/cosmology/factions) — added by the
-            # pingpong 2026-04-30 fix that wired ``seed_lore_from_world``
-            # into chargen-confirm. Pre-fix only ``seed_lore_from_char_creation``
-            # ran, leaving the narrator's RAG retrieval to query an
-            # effectively-empty store and improvise lore on every turn.
-            # (Epic 74: genre-tier lore is no longer seeded; ``flickering_reach``
-            # authors its own world lore, so the world seeder fires here.)
+            # pingpong 2026-04-30 fix that wired ``seed_lore_from_genre_pack``
+            # and ``seed_lore_from_world`` into chargen-confirm. Pre-fix
+            # only ``seed_lore_from_char_creation`` ran, leaving the
+            # narrator's RAG retrieval to query an effectively-empty
+            # store and improvise lore on every turn.
             assert not sd.lore_store.is_empty()
 
             # Partition: every fragment must carry one of the expected
             # source flags. Char-creation fragments still keep their
-            # ``lore_char_creation_`` id prefix; genre-pack fragments carry the
-            # ``lore_world_`` prefix (epic 74: genre-tier ``lore_genre_*`` ids
-            # are no longer produced, so that arm would be dead code).
+            # ``lore_char_creation_`` id prefix; genre-pack fragments
+            # carry ``lore_genre_`` / ``lore_world_`` prefixes.
             char_creation_frags = []
             genre_pack_frags = []
             for frag in sd.lore_store.fragments_iter():
@@ -187,9 +156,11 @@ class TestLoreSeedingDispatch:
                     assert frag.id.startswith("lore_char_creation_")
                     char_creation_frags.append(frag)
                 elif frag.source == LoreSource.GenrePack:
-                    assert frag.id.startswith("lore_world_"), (
-                        f"Genre-pack fragment {frag.id!r} must use the "
-                        "world-scoped lore_world_* prefix (epic 74: world-only lore)"
+                    assert frag.id.startswith("lore_genre_") or frag.id.startswith(
+                        "lore_world_",
+                    ), (
+                        f"Genre-pack fragment {frag.id!r} must use "
+                        "lore_genre_*/lore_world_* prefix; got %s" % frag.id
                     )
                     genre_pack_frags.append(frag)
                 else:
@@ -198,29 +169,20 @@ class TestLoreSeedingDispatch:
                     )
                 assert frag.content  # all fragments must have body text
 
-            # Char-creation lore still seeds at confirmation.
+            # Both seeders must have contributed something. Pingpong
+            # 2026-04-30 root cause was zero genre_pack_frags — the
+            # genre lore corpus wasn't being seeded at all.
             assert len(char_creation_frags) > 0, (
                 "Char-creation seeder must add at least one fragment "
-                "(test_genre has populated chargen scenes)."
+                "(grimvault has populated chargen scenes)."
             )
-            # Epic 74 — lore is WORLD-ONLY. ``flickering_reach`` authors world
-            # lore, so the world seeder fires at confirmation: GenrePack-sourced
-            # fragments must be PRESENT and every one must use the world-scoped
-            # ``lore_world_flickering_reach_*`` id (never a genre-tier id).
             assert len(genre_pack_frags) > 0, (
-                "epic 74: flickering_reach authors world lore, so the world "
-                "seeder must add at least one GenrePack-sourced fragment at "
-                "confirmation; got none"
+                "Genre-pack seeder must add at least one fragment after "
+                "the pingpong 2026-04-30 wiring fix — caverns_and_claudes "
+                "ships populated history/geography/cosmology/factions. "
+                "Zero genre fragments means the genre seeder was un-wired "
+                "again (the regression this test guards against)."
             )
-            assert all(
-                frag.id.startswith("lore_world_flickering_reach_") for frag in genre_pack_frags
-            ), (
-                "every GenrePack-sourced fragment must be world-scoped to "
-                f"flickering_reach; got {[f.id for f in genre_pack_frags]}"
-            )
-            assert not any(
-                frag.id.startswith("lore_genre_") for frag in sd.lore_store.fragments_iter()
-            ), "epic 74: genre lore must not be seeded (lore is world-only)"
 
         asyncio.run(body())
 
@@ -237,8 +199,8 @@ class TestLoreSeedingDispatch:
 
             slug = seed_slug_for_test(
                 handler._save_dir,
-                genre="test_genre",
-                world="flickering_reach",
+                genre="caverns_and_claudes",
+                world="grimvault",
             )
             attach_default_room_context(handler)
             await handler.handle_message(
@@ -275,7 +237,7 @@ class TestLoreSeedingDispatch:
                 "ran AFTER char-creation, breaking the wiring order."
             )
             assert attrs["total_tokens"] == sd.lore_store.total_tokens()
-            assert attrs["genre"] == "test_genre"
-            assert attrs["world"] == "flickering_reach"
+            assert attrs["genre"] == "caverns_and_claudes"
+            assert attrs["world"] == "grimvault"
 
         asyncio.run(body())

@@ -24,23 +24,20 @@ from sidequest.genre.genre_code import GenreCode
 from sidequest.genre.models.archetype_axes import BaseArchetypes
 from sidequest.genre.models.archetype_constraints import ArchetypeConstraints
 from sidequest.genre.models.archetype_funnels import ArchetypeFunnels
-from sidequest.genre.models.audio import AudioConfig
+from sidequest.genre.models.audio import AudioConfig, VoicePresets
 from sidequest.genre.models.authored_npc import AuthoredNpc
 from sidequest.genre.models.axes import AxesConfig
-from sidequest.genre.models.bestiary import Bestiary
 from sidequest.genre.models.character import (
-    Background,
     BackstoryTables,
     CharCreationScene,
     ClassDef,
     EquipmentTables,
-    Focus,
     NpcArchetype,
     VisualStyle,
 )
 from sidequest.genre.models.chassis import ChassisClassesConfig
 from sidequest.genre.models.culture import Culture
-from sidequest.genre.models.inventory import GearDef, InventoryConfig
+from sidequest.genre.models.inventory import InventoryConfig
 from sidequest.genre.models.items import WorldItemsCatalog
 from sidequest.genre.models.legends import Legend
 from sidequest.genre.models.lore import Lore, WorldLore
@@ -59,22 +56,14 @@ from sidequest.genre.models.pack import (
     PortraitManifestEntry,
     World,
 )
-from sidequest.genre.models.premises import PremisesFile, WitnessedActsFile
 from sidequest.genre.models.progression import ProgressionConfig
-from sidequest.genre.models.psionics import PsionicDisciplineCatalog
 from sidequest.genre.models.rigs_world import ChassisInstanceConfig, RigsWorldConfig
-from sidequest.genre.models.rules import FateConfig, RulesConfig, WinCondition
+from sidequest.genre.models.rules import RulesConfig
 from sidequest.genre.models.scenario import ScenarioNpc, ScenarioPack
 from sidequest.genre.models.theme import GenreTheme
 from sidequest.genre.models.tropes import SeedTrope, TropeDefinition
 from sidequest.genre.models.world import CartographyConfig, NavigationMode, WorldConfig
-from sidequest.genre.models.wwn_spell import WwnSpellCatalog
-from sidequest.genre.premise_validate import validate_premises
 from sidequest.genre.resolve import resolve_trope_inheritance
-from sidequest.mutation.catalog import load_mutation_catalog
-from sidequest.mutation.models import MutationCatalog
-from sidequest.mutation.saints import SaintRegistry, load_saint_registry
-from sidequest.mutation.stocks import StockRegistry, load_stock_registry
 
 # ---------------------------------------------------------------------------
 # Default search paths (mirrors Rust loader convention)
@@ -89,51 +78,6 @@ DEFAULT_GENRE_PACK_SEARCH_PATHS: list[Path] = [
     Path.cwd().parent / "sidequest-content" / "genre_packs",
     Path.home() / ".sidequest" / "genre_packs",
 ]
-
-
-# ---------------------------------------------------------------------------
-# Genre-pack-root allowlist — the single source of truth for the OPTIONAL
-# (extension-tier) YAML filenames ``load_genre_pack`` reads at the genre pack
-# root. Every name below has a real read-site in this module (see the
-# corresponding load in ``load_genre_pack`` / ``_load_single_world``).
-#
-# This is the loader's half of the schema↔loader allowlist (story 113-2). The
-# content half is ``sidequest-content/pack_schema.yaml`` ``genre_pack.extensions``;
-# the two MUST stay equal as FILE sets, enforced by
-# ``tests/cli/validate/test_pack_schema_loader_drift_113_2.py`` so the validator
-# can flag dead files and recognize live ones (No Silent Fallbacks). When you add
-# or remove a genre-root optional read here, update the schema (and vice versa) —
-# the drift guard fails CI otherwise.
-#
-# Scope: this is the EXTENSION tier only. Genre-tier REQUIRED files
-# (pack.yaml/rules.yaml/theme.yaml/audio.yaml/progression.yaml/axes.yaml/
-# prompts.yaml/visibility_baseline.yaml/lethality_policy.yaml/client_theme.css)
-# are a separate schema list, and the unlisted world-authoritative optional files
-# the loader also reads (archetypes/tropes/cultures/char_creation/inventory/
-# power_tiers/visual_style) are a third category — neither is part of this set.
-GENRE_PACK_ROOT_EXTENSION_FILES: frozenset[str] = frozenset(
-    {
-        "magic.yaml",  # genre_root/magic.yaml — _load_single_world magic_loader
-        "classes.yaml",  # genre-tier class roster
-        "projection.yaml",  # perception/projection rules (load_rules_from_yaml_path)
-        "beat_vocabulary.yaml",  # BeatVocabulary
-        "archetype_constraints.yaml",  # ArchetypeConstraints
-        "achievements.yaml",  # Achievement list
-        "chassis_classes.yaml",  # ChassisClassesConfig
-        "pacing.yaml",  # DramaThresholds
-        "seed_tropes.yaml",  # SeedTrope deck
-        "equipment_tables.yaml",  # EquipmentTables
-        "backstory_tables.yaml",  # BackstoryTables
-        "skills.yaml",  # genre-tier skill catalog (ADR-143)
-        "spells_wwn.yaml",  # WWN spell catalog (_load_wwn_spell_catalog)
-        "foci.yaml",  # genre-tier foci (ADR-143)
-        "bestiary.yaml",  # SRD combat stat blocks (story 90-1)
-        "backgrounds.yaml",  # genre-tier backgrounds (ADR-143)
-        "witnessed_acts.yaml",  # WitnessedActsFile vocabulary
-        "mutations.yaml",  # AWN mutation catalog
-        "disciplines_psionic.yaml",  # PsionicDisciplineCatalog (story 102-6)
-    }
-)
 
 
 # ---------------------------------------------------------------------------
@@ -199,41 +143,6 @@ def _load_yaml_raw_optional(path: Path) -> Any | None:
     if not path.exists():
         return None
     return _load_yaml_raw(path)
-
-
-def _parse_char_creation_scenes(raw: Any | None, *, path: Path) -> list[CharCreationScene]:
-    """Validate and parse a ``char_creation.yaml`` payload into scenes.
-
-    Contract (see ``server/dispatch/char_creation_resolve.py``): a world's
-    char_creation list REPLACES the genre's wholesale — there is no per-scene
-    merge, and ``inherits_scenes_from_genre_pack`` is **not** a supported key.
-    So the on-disk shape is a BARE LIST of scene mappings.
-
-    - ``None`` (absent or empty file) → ``[]``. For a world this means "inherit
-      the genre's scenes"; for the genre it means "no chargen scenes".
-    - a ``list`` → parsed scenes.
-    - anything else (a mapping such as the unsupported
-      ``inherits_scenes_from_genre_pack`` wrapper, or a scalar) → **fail loud**.
-
-    The old code silently coerced any non-list to ``[]``, which let a
-    mapping-shaped world file degrade to genre scenes with no signal — a No
-    Silent Fallbacks violation (the_real_mccoy desert-chargen leak, 2026-06-01).
-    """
-    if raw is None:
-        return []
-    if not isinstance(raw, list):
-        raise GenreLoadError(
-            path=path,
-            detail=(
-                f"char_creation.yaml must be a bare list of chargen scenes, got "
-                f"{type(raw).__name__}. A world's char_creation list REPLACES the "
-                "genre's wholesale — there is no per-scene merge, and "
-                "'inherits_scenes_from_genre_pack' is not a supported key. Provide "
-                "the complete ordered scene list (origins first), or omit the file "
-                "to inherit the genre's scenes."
-            ),
-        )
-    return [CharCreationScene.model_validate(c) for c in raw]
 
 
 def _load_text_optional(path: Path) -> str | None:
@@ -667,174 +576,17 @@ def _validate_opening_bank_coverage(
 # ---------------------------------------------------------------------------
 
 
-def _is_without_number(ruleset: str) -> bool:
-    """True when ``ruleset`` binds a Without Number module (swn/wwn/cwn/awn).
-
-    The WN family shares one engine that owns the combat action set, so the
-    native beat scaffolding is *removed* — not balanced — from its path
-    (ADR-143, SOUL "Bind the Ruleset, Don't Balance It"). Local import avoids a
-    load-time cycle (mirrors get_ruleset_module's use lower in this module).
-    """
-    from sidequest.game.ruleset import get_ruleset_module
-    from sidequest.game.ruleset.without_number import WithoutNumberRulesetModule
-
-    return isinstance(get_ruleset_module(ruleset), WithoutNumberRulesetModule)
-
-
-def _emit_wn_beat_optional(ruleset: str, confrontation_type: str) -> None:
-    """Fire a ``state_transition`` watcher span when the loader allows a beatless
-    WN combat def, so the GM panel (the lie detector) can prove the WN gate
-    engaged rather than the beat-count check having been silently removed
-    (story 108-7). Mirrors the other loader ``_emit_*`` load spans."""
-    from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
-
-    _watcher_publish(
-        "state_transition",
-        {
-            "field": "wn_beat_optional",
-            "ruleset": ruleset,
-            "confrontation_type": confrontation_type,
-        },
-        component="genre",  # matches the other loader load-spans (GM-panel grouping)
-    )
-
-
-def _validate_confrontation_beats(rules: RulesConfig) -> None:
-    """Every confrontation must declare at least one beat — EXCEPT a
-    ``category=combat`` / ``win_condition=hp_depletion`` def under a bound
-    Without Number ruleset, where the WN initiative engine (wn_round.py) supplies
-    attack/move/item-use/cast and the def authors ZERO native beats (story
-    108-7, unblocks 108-3; ADR-143). This gate lived on ``ConfrontationDef``'s
-    model validator, but the model can't see ``rules.ruleset`` — so it lives here
-    now. Native packs, and non-combat (dial) defs even under WN, still fail loud.
-    """
-    is_wn = _is_without_number(rules.ruleset)
-    for cd in rules.confrontations:
-        if cd.beats:
-            continue
-        wn_combat = (
-            is_wn and cd.category == "combat" and cd.win_condition == WinCondition.hp_depletion
-        )
-        if not wn_combat:
-            raise PackError(f"confrontation '{cd.confrontation_type}' must have at least one beat")
-        _emit_wn_beat_optional(rules.ruleset, cd.confrontation_type)
-
-
-def _validate_genre_baseline_no_bespoke(ruleset: str, inventory: InventoryConfig | None) -> None:
-    """ADR-145 D3 (story 114-14, broadened to verbatim-only by 120-3) — a Without
-    Number pack's genre-tier item catalog must be SRD-sourced: every item's
-    ``provenance.mode`` must be ``"verbatim"`` or ``"derived"``.
-
-    The genre tier IS the SRD rulebook for a pack that binds an SRD ruleset, so its
-    baseline gear must come from that SRD. Two kinds of item are rejected:
-      * ``bespoke`` (invented) gear — a WORLD-tier privilege (the original 114-14 rule);
-      * UNPROVENANCED items (no ``provenance`` block at all) — legacy gear that was
-        never SRD-sourced (the 120-3 broadening; caverns_and_claudes / road_warrior
-        were swept verbatim in 120-1 / 120-2, so no live WN pack trips this today).
-
-    Native-ruleset packs are EXEMPT — their genre inventory is authored content with
-    no SRD to be verbatim from, so unprovenanced/bespoke gear there is legitimate
-    homebrew. Fails loud, naming every offending id grouped by reason (No Silent
-    Fallbacks). The function name predates the broadening (the story extends it in
-    place); ``ship_weapons`` stay out of scope — only ``item_catalog`` is scanned.
-    """
-    if inventory is None or not _is_without_number(ruleset):
-        return
-    unprovenanced = sorted(item.id for item in inventory.item_catalog if item.provenance is None)
-    bespoke = sorted(
-        item.id
-        for item in inventory.item_catalog
-        if item.provenance is not None and item.provenance.mode == "bespoke"
-    )
-    if not unprovenanced and not bespoke:
-        return
-    problems: list[str] = []
-    if unprovenanced:
-        problems.append(f"unprovenanced item(s) {unprovenanced}")
-    if bespoke:
-        problems.append(f"bespoke item(s) {bespoke}")
-    raise PackError(
-        f"genre-tier baseline carries non-verbatim {' and '.join(problems)}: a "
-        f"{ruleset!r} pack's genre catalog is the SRD rulebook — every genre item must "
-        "be mode=verbatim (or derived) (ADR-145 D3). SRD-source each verbatim at the "
-        "genre tier, or move genuinely-unique gear to the world tier "
-        "(worlds/<world>/inventory.yaml)."
-    )
-
-
-def _load_gear(path: Path) -> list[GearDef]:
-    """Load a ``gear.yaml`` (a top-level list of GearDef) from ``path``. Absent
-    file → empty list (legitimate absence, not a silent fallback); a present but
-    malformed file fails loud via pydantic. Mirrors the archetypes.yaml pattern."""
-    raw = _load_yaml_raw_optional(path)
-    if raw is None:
-        return []
-    if not isinstance(raw, list):
-        raise GenreLoadError(path=path, detail="gear.yaml must be a list of GearDef")
-    return [GearDef.model_validate(g) for g in raw]
-
-
-def _validate_fate_gear(
-    *,
-    rules: RulesConfig,
-    has_inventory: bool,
-    gear: list[GearDef],
-) -> None:
-    """Fail loud on a paradigm-mismatched or unbalanced Fate gear pack (114-10,
-    design §Validator). Three checks: no inventory.yaml under fate; every default
-    gear id resolves; the pack's refresh invariant balances. No-op for non-fate
-    packs except the inventory check (which clears them)."""
-    # Local import of the validator helpers only (cli.validate has no genre.loader
-    # dependency, but cli/* is a heavy package — defer it to keep loader import-light).
-    from sidequest.cli.validate.fate_gear import (
-        check_dangling_gear_ids,
-        check_no_inventory_under_fate,
-        check_refresh_invariant,
-    )
-
-    errors: list[str] = []
-    inv_err = check_no_inventory_under_fate(ruleset=rules.ruleset, has_inventory=has_inventory)
-    if inv_err is not None:
-        errors.append(inv_err)
-
-    cfg = rules.ruleset_config()
-    if rules.ruleset == "fate" and isinstance(cfg, FateConfig):
-        available = {g.id for g in gear}
-        selected = set(cfg.gear)
-        errors.extend(
-            check_dangling_gear_ids(
-                archetype="(default)", referenced_ids=cfg.gear, available_ids=available
-            )
-        )
-        total_stunts = sum(len(g.grants_stunts) for g in gear if g.id in selected)
-        refresh_err = check_refresh_invariant(
-            archetype="(default)",
-            authored_refresh=cfg.refresh,
-            base_refresh=cfg.base_refresh,
-            free_stunts=cfg.free_stunts,
-            total_stunts=total_stunts,
-        )
-        if refresh_err is not None:
-            errors.append(refresh_err)
-
-    if errors:
-        raise PackError("Fate gear validation failed: " + "; ".join(errors))
-
-
 def _validate_class_filter_refs(rules: RulesConfig, classes: list[ClassDef]) -> None:
     """Loud-fail if any beat.class_filter references a class not in classes.yaml,
     if any class.encounter_beat_choices references a missing beat ID,
     or if a class in allowed_classes has empty encounter_beat_choices.
 
     Only runs when classes list is non-empty (packs without classes.yaml are
-    not subject to these rules). Under a Without Number binding the WN engine
-    owns the action set, so WN classes may leave encounter_beat_choices empty
-    (story 108-7, ADR-143); native packs still require it.
+    not subject to these rules).
     """
     if not classes:
         return
 
-    is_wn = _is_without_number(rules.ruleset)
     declared_classes = {c.display_name for c in classes}
     all_beat_ids: set[str] = set()
     for cd in rules.confrontations:
@@ -851,14 +603,6 @@ def _validate_class_filter_refs(rules: RulesConfig, classes: list[ClassDef]) -> 
     for c in classes:
         if c.display_name in rules.allowed_classes:
             if not c.encounter_beat_choices:
-                if is_wn:
-                    # WN engine owns the action set — a WN class need not declare
-                    # encounter_beat_choices (story 108-7, ADR-143). NOTE the
-                    # asymmetry: only an EMPTY list is skipped. A WN class that
-                    # still carries stale choices against a de-nativized (zero-beat)
-                    # pool falls through to the missing_beats check below and fails
-                    # loud per ref — the signal to strip them, not just empty them.
-                    continue
                 raise PackError(
                     f"class '{c.display_name}' encounter_beat_choices is empty "
                     f"(class is in allowed_classes and must declare beat choices)"
@@ -890,81 +634,6 @@ def _validate_saving_throws_refs(classes: list[ClassDef], *, has_spell_catalogs:
             f"pack has spell catalogs but classes missing saving_throws: {missing}. "
             f"Spells with save effects cannot resolve without a B/X B26 table per class."
         )
-
-
-def _load_wwn_spell_catalog(
-    path: Path,
-    rules: RulesConfig,
-    classes: list[ClassDef],
-) -> WwnSpellCatalog | None:
-    """Load spells_wwn.yaml for wwn packs; return None for non-wwn packs.
-
-    Fail-loud contract: if ruleset == 'wwn' AND the pack declares at least one
-    caster class (magic_access == 'wwn' with non-empty casts_per_day_by_level)
-    AND spells_wwn.yaml is absent, raise GenreLoadError.  No silent fallback.
-    """
-    if rules.ruleset != "wwn":
-        return None
-
-    spells_file = path / "spells_wwn.yaml"
-
-    if not spells_file.exists():
-        # Fail loud if there are caster classes — they need a spell catalog.
-        caster_classes = [
-            c
-            for c in classes
-            if c.magic_access == "wwn"
-            and c.wwn_magic is not None
-            and bool(c.wwn_magic.casts_per_day_by_level)
-        ]
-        if caster_classes:
-            names = [c.id for c in caster_classes]
-            raise GenreLoadError(
-                path=spells_file,
-                detail=(
-                    f"wwn pack has caster classes {names} but spells_wwn.yaml is absent. "
-                    "Author a spell catalog or remove the casts_per_day_by_level entries."
-                ),
-            )
-        return None
-
-    from sidequest.genre.models.wwn_spell import load_wwn_spell_catalog as _load
-
-    try:
-        return _load(spells_file)
-    except Exception as exc:
-        raise GenreLoadError(path=spells_file, detail=str(exc)) from exc
-
-
-def _validate_wwn_starting_prepared_refs(
-    classes: list[ClassDef],
-    catalog: WwnSpellCatalog | None,
-) -> None:
-    """For a wwn pack with a loaded catalog, every starting_prepared spell id
-    in every class must exist in the catalog.  Fail loud on any unknown id.
-
-    No-op when catalog is None (packs with no spell catalog are covered by the
-    caster-without-catalog branch in _load_wwn_spell_catalog).  No-op when no
-    class has starting_prepared entries.
-    """
-    if catalog is None:
-        return
-    if not classes:
-        return
-
-    catalog_ids = {s.id for s in catalog.spells}
-    for cls in classes:
-        if cls.wwn_magic is None:
-            continue
-        for spell_id in cls.wwn_magic.starting_prepared:
-            if spell_id not in catalog_ids:
-                raise GenreLoadError(
-                    path=Path("spells_wwn.yaml"),
-                    detail=(
-                        f"class '{cls.id}' starting_prepared references unknown spell id "
-                        f"'{spell_id}'. Add the spell to spells_wwn.yaml or fix the id."
-                    ),
-                )
 
 
 # ---------------------------------------------------------------------------
@@ -1083,234 +752,10 @@ def _load_world_items(items_path: Path, *, world_slug: str) -> WorldItemsCatalog
     return catalog
 
 
-def _emit_world_flavor_loaded(field: str, *, world_slug: str, source: Path) -> None:
-    """Emit a ``state_transition`` watcher event for a world-tier flavor load.
-
-    Epic 74: the world tier is authoritative for flavor (theme/audio/
-    visual_style). Each load fires a span — mirroring the ``world_items`` and
-    ``genre_pack`` spans — so the GM panel can prove the world-tier read fired
-    rather than the engine improvising from a genre default.
-    """
-    from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
-
-    _watcher_publish(
-        "state_transition",
-        {
-            "field": field,
-            "op": "loaded",
-            "world_slug": world_slug,
-            "source": str(source / f"{field.removeprefix('world_')}.yaml"),
-        },
-        component="genre",
-    )
-
-
-def _world_lore_seedable_count(lore: WorldLore) -> int:
-    """Count the LoreStore fragments a world's ``lore.yaml`` will seed.
-
-    Mirrors the seedable fields read by ``seed_lore_from_world``
-    (history / geography / cosmology / factions). A text field counts only when
-    it is non-empty AFTER stripping — a whitespace-only string seeds a junk
-    fragment and is treated as empty here, matching both the validator
-    (``validate/pack._validate_world_lore_seedable``, which ``.strip()``s) and
-    the stripped guards in ``seed_lore_from_world``. Inlined rather than
-    importing ``game.lore_seeding`` — the genre layer must not depend on the
-    game layer (dependency graph, server CLAUDE.md). Keep in sync with that seeder.
-    """
-
-    def _seedable_text(value: str | None) -> bool:
-        return bool(value and value.strip())
-
-    return (
-        int(_seedable_text(lore.history))
-        + int(_seedable_text(lore.geography))
-        + int(_seedable_text(lore.cosmology))
-        + len(lore.factions)
-    )
-
-
-def _require_seedable_world_lore(lore: WorldLore, world_path: Path) -> int:
-    """Return the world's seedable lore-fragment count, or raise.
-
-    Epic 74 (story 74-3): lore is world-only and authoritative — genre lore is
-    no longer seeded. A world whose lore.yaml carries no SEEDABLE content
-    (history/geography/cosmology/factions all empty — e.g. prose stranded under
-    non-seedable extra keys) would leave the narrator's LoreStore empty. Raise
-    ``GenreLoadError`` naming the world (No Silent Fallbacks; mirrors the
-    visibility_baseline / lethality_policy required-surface guards).
-    """
-    count = _world_lore_seedable_count(lore)
-    if count == 0:
-        raise GenreLoadError(
-            path=world_path / "lore.yaml",
-            detail=(
-                f"world {world_path.name!r} has no seedable lore — lore.yaml must "
-                "populate at least one of history / geography / cosmology / "
-                "factions (content under other keys is not seeded into the "
-                "LoreStore). An empty world LoreStore is forbidden."
-            ),
-        )
-    return count
-
-
-def _emit_world_lore_loaded(*, world_slug: str, source: Path, fragment_count: int) -> None:
-    """Emit a ``state_transition`` watcher event for a world-tier lore load.
-
-    Epic 74: lore is world-only and authoritative. The load fires a span —
-    mirroring the ``world_items`` and ``world_theme``/``world_audio`` spans — so
-    the GM panel can prove the world LoreStore was fed from world-tier lore
-    rather than the narrator improvising from a deleted genre default.
-    """
-    from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
-
-    _watcher_publish(
-        "state_transition",
-        {
-            "field": "world_lore",
-            "op": "loaded",
-            "world_slug": world_slug,
-            "lore_fragment_count": fragment_count,
-            "source": str(source / "lore.yaml"),
-        },
-        component="genre",
-    )
-
-
-def _emit_world_chassis_classes_loaded(*, world_slug: str, source: Path, class_count: int) -> None:
-    """Emit a ``state_transition`` watcher event for a world-tier chassis load.
-
-    Epic 94 (genre/world boundary correction): chassis classes are a world-tier
-    CAST/CATALOG surface, not a genre mechanic. The load fires a span — mirroring
-    the ``world_items`` / ``world_lore`` spans — so the GM panel can prove the
-    rig cast was read from the world tier rather than improvised from a removed
-    genre default.
-    """
-    from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
-
-    _watcher_publish(
-        "state_transition",
-        {
-            "field": "world_chassis_classes",
-            "op": "loaded",
-            "world_slug": world_slug,
-            "class_count": class_count,
-            "source": str(source),
-        },
-        component="genre",
-    )
-
-
-def _emit_world_seed_tropes_loaded(*, world_slug: str, source: Path, seed_count: int) -> None:
-    """Emit a ``state_transition`` watcher event for a world-tier seed-deck load.
-
-    Epic 94 (genre/world boundary correction): the seed-trope deck is world-tier
-    CAST/CATALOG (the seeds a world plants), not a genre mechanic. The load fires
-    a span so the GM panel can prove the deck was read from the world tier.
-    """
-    from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
-
-    _watcher_publish(
-        "state_transition",
-        {
-            "field": "world_seed_tropes",
-            "op": "loaded",
-            "world_slug": world_slug,
-            "seed_count": seed_count,
-            "source": str(source),
-        },
-        component="genre",
-    )
-
-
-def _emit_world_classes_loaded(*, world_slug: str, source: Path, class_count: int) -> None:
-    """Emit a ``state_transition`` watcher event for a world-tier class load.
-
-    Epic 94 (genre/world boundary correction): a world's classes/callings are a
-    world-tier CAST/CATALOG surface — the roster of playable archetypes a world
-    ships (C&C kits, Victoria callings) — not a genre mechanic. The genre tier is
-    the rulebook only. The load fires a span (mirroring the chassis_classes /
-    seed_tropes spans) so the GM panel can prove the class roster the chargen
-    pipeline picked up was read from the world tier, not improvised from a
-    removed genre default.
-    """
-    from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
-
-    _watcher_publish(
-        "state_transition",
-        {
-            "field": "world_classes",
-            "op": "loaded",
-            "world_slug": world_slug,
-            "class_count": class_count,
-            "source": str(source),
-        },
-        component="genre",
-    )
-
-
-def _emit_world_inventory_loaded(
-    *, world_slug: str, source: Path, catalog_count: int, class_kit_count: int
-) -> None:
-    """Emit a ``state_transition`` watcher event for a world-tier inventory load.
-
-    Epic 94 (genre/world boundary correction, supersedes ADR-120
-    "mechanics-in-genre"): a world's item catalog, class starting-kits, gold, and
-    currency are a world-tier CAST/CATALOG surface — the loot a world ships — not
-    a genre mechanic. The genre tier is the rulebook only. The load fires a span
-    (mirroring the world_classes / world_spell_catalog spans) so the GM panel can
-    prove the loadout the chargen pipeline picked up was read from the world tier,
-    not improvised from a removed genre default.
-    """
-    from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
-
-    _watcher_publish(
-        "state_transition",
-        {
-            "field": "world_inventory",
-            "op": "loaded",
-            "world_slug": world_slug,
-            "catalog_count": catalog_count,
-            "class_kit_count": class_kit_count,
-            "source": str(source),
-        },
-        component="genre",
-    )
-
-
-def _emit_world_spell_catalog_loaded(*, world_slug: str, source: Path, spell_count: int) -> None:
-    """Emit a ``state_transition`` watcher event for a world-tier spell-catalog load.
-
-    Epic 94 (genre/world boundary correction, supersedes ADR-120
-    "mechanics-in-genre"): a world's WWN spell catalog is a world-tier
-    CAST/CATALOG surface — the catalog of magic a world ships — not a genre
-    mechanic. The genre tier is the rulebook only. The load fires a span
-    (mirroring the world_classes / world_seed_tropes spans) so the GM panel can
-    prove the spell catalog the cast pipeline picked up was read from the world
-    tier, not improvised from a removed genre default.
-    """
-    from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
-
-    _watcher_publish(
-        "state_transition",
-        {
-            "field": "world_spell_catalog",
-            "op": "loaded",
-            "world_slug": world_slug,
-            "spell_count": spell_count,
-            "source": str(source),
-        },
-        component="genre",
-    )
-
-
 def _load_single_world(
     world_path: Path,
     genre_tropes: list[TropeDefinition],
     genre_root: Path,
-    *,
-    genre_theme: GenreTheme | None = None,
-    valid_act_ids: frozenset[str] = frozenset(),
-    mutations: MutationCatalog | None = None,
 ) -> World | None:
     """Load a single world from its directory.
 
@@ -1326,12 +771,6 @@ def _load_single_world(
             Used to locate the genre-tier ``magic.yaml`` so the magic loader
             can compose genre+world layers — both files are required by
             ``load_world_magic`` (see ``magic_loader.py``).
-        genre_theme: Genre-tier theme passed as a fallback when the world
-            authors no ``worlds/<slug>/theme.yaml`` (epic 74). ``None`` when the
-            genre pack ships no theme (mechanics-only pack). The effective theme
-            is the world's own ``theme.yaml`` if present, else ``genre_theme``;
-            when both are absent the pack-level invariant in ``load_genre_pack``
-            raises ``GenreLoadError`` naming the world (No Silent Fallbacks).
 
     Returns:
         A fully assembled World, or None if the world's world.yaml declares
@@ -1344,18 +783,6 @@ def _load_single_world(
     if config.draft:
         return None
     lore: WorldLore = _load_yaml(world_path / "lore.yaml", WorldLore)
-    # Epic 74 (story 74-3): lore is world-only and authoritative — genre lore is
-    # no longer seeded. A world whose lore.yaml carries no SEEDABLE content
-    # (history/geography/cosmology/factions all empty — e.g. prose stranded under
-    # non-seedable extra keys) would leave the narrator's LoreStore empty. Fail
-    # loud at load, naming the world (No Silent Fallbacks; mirrors the
-    # visibility_baseline / lethality_policy required-surface guards). Emit a
-    # state_transition span so the GM panel can prove the world-tier lore load
-    # fired.
-    _lore_fragment_count = _require_seedable_world_lore(lore, world_path)
-    _emit_world_lore_loaded(
-        world_slug=world_path.name, source=world_path, fragment_count=_lore_fragment_count
-    )
 
     cartography: CartographyConfig = _load_cartography(world_path / "cartography.yaml")
 
@@ -1384,9 +811,7 @@ def _load_single_world(
     legends_dir = world_path / "legends"
     if legends_dir.is_dir():
         legends_files = sorted(legends_dir.glob("*.yaml"))
-        legends_files = [
-            f for f in legends_files if f.name != "_meta.yaml" and f.name != ".gitkeep"
-        ]
+        legends_files = [f for f in legends_files if f.name != "_meta.yaml" and f.name != ".gitkeep"]
         legends: list[Legend] = [Legend.model_validate(_load_yaml_raw(f)) for f in legends_files]
         meta_path = legends_dir / "_meta.yaml"
         legends_raw: Any = _load_yaml_raw(meta_path) if meta_path.exists() else None
@@ -1412,54 +837,6 @@ def _load_single_world(
 
     visual_style: Any = _load_yaml_raw_optional(world_path / "visual_style.yaml")
     history: Any = _load_yaml_raw_optional(world_path / "history.yaml")
-
-    # === World-tier flavor — theme / audio / visual_style (epic 74) ===
-    # The genre tier is mechanics-only; flavor is world-authoritative. Load each
-    # surface the world authors; emit a state_transition span per load so the GM
-    # panel can prove world-tier flavor actually fired (mirrors _load_world_items
-    # and the genre_pack span). Loaded RAW like visual_style: world flavor files
-    # are free-form hard-overrides (e.g. five_points/audio.yaml), not the strict
-    # genre schemas. Absence yields None — no silent fabrication.
-    world_theme: Any = _load_yaml_raw_optional(world_path / "theme.yaml")
-    world_audio: Any = _load_yaml_raw_optional(world_path / "audio.yaml")
-
-    # Shape guard (story 74-4): theme/audio are loaded RAW, so a non-mapping
-    # document (a YAML list or bare scalar) would otherwise flow into World(...)
-    # and surface an OPAQUE pydantic ValidationError that names neither the file
-    # nor the world. Fail loud and world-scoped here instead — mirroring the
-    # fail-loud shape guard in _parse_char_creation_scenes. Absence (None) stays
-    # valid: the genre tier is the transitional fallback (No Silent Fallbacks
-    # applies to wrong SHAPE, not to a legitimately-absent override).
-    for _flavor_file, _flavor_value in (("theme.yaml", world_theme), ("audio.yaml", world_audio)):
-        if _flavor_value is not None and not isinstance(_flavor_value, dict):
-            raise GenreLoadError(
-                path=world_path / _flavor_file,
-                detail=(
-                    f"expected a mapping (world {_flavor_file} is loaded as a dict), "
-                    f"got {type(_flavor_value).__name__}"
-                ),
-            )
-
-    for field_name, value in (
-        ("world_theme", world_theme),
-        ("world_audio", world_audio),
-        ("world_visual_style", visual_style),
-    ):
-        if value is not None:
-            _emit_world_flavor_loaded(field_name, world_slug=world_path.name, source=world_path)
-
-    # Theme is world-authoritative; the genre theme is a fallback only during the
-    # transitional refactor (story 74-1) while live packs still ship genre flavor.
-    # The two branches yield DIFFERENT runtime types — a raw ``dict`` (world tier)
-    # or a ``GenreTheme`` (genre fallback). The union annotation is deliberate so
-    # consumers branch on the type rather than assume one shape (World.theme docs).
-    # ``effective_theme`` is None only when NEITHER tier supplies one — the
-    # loud-fail for that lives in ``load_genre_pack`` (pack-level invariant: every
-    # world in a real pack must resolve a theme), so direct ``_load_single_world``
-    # callers building themeless fixtures aren't forced to author a theme.
-    effective_theme: GenreTheme | dict[str, Any] | None = (
-        world_theme if world_theme is not None else genre_theme
-    )
 
     archetype_funnels: ArchetypeFunnels | None = _load_yaml_optional(
         world_path / "archetype_funnels.yaml", ArchetypeFunnels
@@ -1491,9 +868,11 @@ def _load_single_world(
         npcs_list_raw = npcs_raw.get("npcs", []) if isinstance(npcs_raw, dict) else []
         authored_npcs = [AuthoredNpc.model_validate(n) for n in npcs_list_raw]
 
-    char_creation_path = world_path / "char_creation.yaml"
-    char_creation: list[CharCreationScene] = _parse_char_creation_scenes(
-        _load_yaml_raw_optional(char_creation_path), path=char_creation_path
+    char_creation_raw = _load_yaml_raw_optional(world_path / "char_creation.yaml")
+    char_creation: list[CharCreationScene] = (
+        [CharCreationScene.model_validate(c) for c in char_creation_raw]
+        if isinstance(char_creation_raw, list)
+        else []
     )
 
     # === World-tier rigs.yaml — OPTIONAL ===
@@ -1554,298 +933,19 @@ def _load_single_world(
     # docs/research/items-as-confrontation-modifiers.md.
     items = _load_world_items(world_path / "items.yaml", world_slug=world_path.name)
 
-    # === World-tier bestiary.yaml — OPTIONAL (genre/world repoint) ===
-    # "Genre is rulebook only, world owns cast/catalog": creature rosters moved
-    # to the world tier. Ruleset-module packs (wwn/cwn/swn/awn) author their
-    # hostiles here; the world set REPLACES the genre-tier pool via
-    # GenrePack.effective_bestiary (world-over-genre, like cultures/archetypes).
-    # Absent file → None (the genre-tier bestiary serves; encountergen fails loud
-    # only when NEITHER tier supplies one for a ruleset-module pack).
-    world_bestiary = _load_yaml_optional(world_path / "bestiary.yaml", Bestiary)
-
     # ADR-079: optional world-level theme override (worlds/<slug>/client_theme.css).
     # When present, this CSS replaces the genre-level theme at connect time.
     client_theme_css = _load_text_optional(world_path / "client_theme.css")
-
-    # ADR-053 / Story 71-32: world-tier scenarios (worlds/<slug>/scenarios/).
-    # Each world owns its scenarios; bind_scenario binds only the active world's.
-    # Absent dir → {} (no silent fallback to pack-level GenrePack.scenarios).
-    world_scenarios: dict[str, ScenarioPack] = _load_subdirectories(
-        world_path, "scenarios", _load_single_scenario
-    )
-
-    # === World-tier premises.yaml — OPTIONAL (spec 2026-06-02) ===
-    # The world's political illusions and the blocs that prop them. Absent file
-    # → no political layer (a valid authoring choice, NOT a fallback). When
-    # present, cross-references are validated fail-loud against this world's
-    # authored NPCs and the genre-tier witnessed-act vocabulary.
-    premises_file = _load_yaml_optional(world_path / "premises.yaml", PremisesFile)
-    world_premises = list(premises_file.premises) if premises_file is not None else []
-    world_blocs = list(premises_file.blocs) if premises_file is not None else []
-    if premises_file is not None:
-        validate_premises(
-            premises=world_premises,
-            blocs=world_blocs,
-            authored_npc_ids={npc.id for npc in authored_npcs},
-            valid_act_ids=valid_act_ids,
-            world_slug=world_path.name,
-        )
-
-    # === World-tier chassis_classes.yaml — OPTIONAL (epic 94) ===
-    # Genre/world boundary correction (supersedes ADR-120 "mechanics-in-genre"):
-    # chassis classes are a world-tier CAST/CATALOG surface — the cast of rigs a
-    # world ships — not a genre mechanic. The genre tier is the rulebook only.
-    # Worlds that don't use the rig framework omit the file → None (distinguishes
-    # "world has no rigs" from "empty config"; no silent fallback to a genre
-    # default). Station cross-validation runs at load (same as the old genre-tier
-    # path) so a malformed chassis fails loud, world-scoped.
-    chassis_classes: ChassisClassesConfig | None = _load_yaml_optional(
-        world_path / "chassis_classes.yaml", ChassisClassesConfig
-    )
-    if chassis_classes is not None:
-        from sidequest.interior.loader import validate_chassis_stations
-
-        for cc in chassis_classes.classes:
-            validate_chassis_stations(cc)
-        _emit_world_chassis_classes_loaded(
-            world_slug=world_path.name,
-            source=world_path / "chassis_classes.yaml",
-            class_count=len(chassis_classes.classes),
-        )
-
-    # === World-tier seed_tropes.yaml — OPTIONAL (epic 94) ===
-    # Genre/world boundary correction: the seed-trope deck is world-tier CAST/
-    # CATALOG (the seeds a world plants), not a genre mechanic. Absent file →
-    # empty list (no silent fallback to a shared default deck — per "No Silent
-    # Fallbacks"; missing file is fine, the field reflects reality).
-    seed_tropes_raw = _load_yaml_raw_optional(world_path / "seed_tropes.yaml")
-    world_seed_tropes: list[SeedTrope] = (
-        [SeedTrope.model_validate(s) for s in seed_tropes_raw]
-        if isinstance(seed_tropes_raw, list)
-        else []
-    )
-    if world_seed_tropes:
-        _emit_world_seed_tropes_loaded(
-            world_slug=world_path.name,
-            source=world_path / "seed_tropes.yaml",
-            seed_count=len(world_seed_tropes),
-        )
-
-    # === World-tier classes.yaml — OPTIONAL (epic 94) ===
-    # Genre/world boundary correction (supersedes ADR-120 "mechanics-in-genre"):
-    # a world's classes/callings are a world-tier CAST/CATALOG surface (C&C kits,
-    # Victoria callings), not a genre mechanic — the genre tier is the rulebook
-    # only. Absent file → empty list (a world may be axis-archetype-only). A
-    # malformed file still fails loud, world-scoped (no silent fallback). The
-    # genre-tier ``classes_list`` remains the shared default for packs that have
-    # not migrated classes down.
-    world_classes_path = world_path / "classes.yaml"
-    world_classes: list[ClassDef] = []
-    if world_classes_path.exists():
-        raw_world_classes = _load_yaml_raw_optional(world_classes_path)
-        if raw_world_classes is not None and not isinstance(raw_world_classes, list):
-            raise GenreLoadError(
-                path=world_classes_path,
-                detail="expected a list of class definitions",
-            )
-        world_classes = [
-            ClassDef.model_validate(item)
-            for item in (raw_world_classes if isinstance(raw_world_classes, list) else [])
-        ]
-    if world_classes:
-        _emit_world_classes_loaded(
-            world_slug=world_path.name,
-            source=world_classes_path,
-            class_count=len(world_classes),
-        )
-
-    # === World-tier spells_wwn.yaml — OPTIONAL (epic 94) ===
-    # Genre/world boundary correction (supersedes ADR-120 "mechanics-in-genre"):
-    # a world's WWN spell catalog is a world-tier CAST/CATALOG surface — the
-    # catalog of magic a world ships — NOT a genre mechanic. The genre tier is
-    # the rulebook only (resolution rules + the WWN magic block on ``rules.wwn``).
-    # Absent file → None (a valid choice for a pack that keeps a shared catalog at
-    # the genre tier). A malformed file fails loud, world-scoped (no silent
-    # fallback). The genre-tier catalog remains the shared default; the
-    # caster-without-catalog and starting_prepared fail-loud invariants are
-    # enforced at pack level where the ruleset and class roster are both in hand.
-    world_spell_catalog_path = world_path / "spells_wwn.yaml"
-    world_spell_catalog: WwnSpellCatalog | None = None
-    if world_spell_catalog_path.exists():
-        from sidequest.genre.models.wwn_spell import load_wwn_spell_catalog as _load_catalog
-
-        try:
-            world_spell_catalog = _load_catalog(world_spell_catalog_path)
-        except Exception as exc:
-            raise GenreLoadError(path=world_spell_catalog_path, detail=str(exc)) from exc
-        _emit_world_spell_catalog_loaded(
-            world_slug=world_path.name,
-            source=world_spell_catalog_path,
-            spell_count=len(world_spell_catalog.spells),
-        )
-
-    # === World-tier disciplines_psionic.yaml — OPTIONAL (Story 102-6) ===
-    # A world's psionic discipline catalog is a world-tier CAST/CATALOG surface
-    # (the disciplines a world ships, ADR-140 "Crunch in the Genre"), NOT a genre
-    # mechanic. Absent file → None (a valid choice — psionics is optional content,
-    # and a pack may keep a shared catalog at the genre tier). A malformed file
-    # fails loud, world-scoped (dup-id / unknown-field / non-safe-load via the
-    # catalog model). Consumers resolve world-first via
-    # ``server.dispatch.psionic_discipline_resolve.resolve_psionic_discipline_catalog``.
-    world_psionic_catalog_path = world_path / "disciplines_psionic.yaml"
-    world_psionic_catalog: PsionicDisciplineCatalog | None = None
-    if world_psionic_catalog_path.exists():
-        from sidequest.genre.models.psionics import (
-            load_psionic_discipline_catalog as _load_disc,
-        )
-
-        try:
-            world_psionic_catalog = _load_disc(world_psionic_catalog_path)
-        except Exception as exc:
-            raise GenreLoadError(path=world_psionic_catalog_path, detail=str(exc)) from exc
-
-    # === World-tier inventory.yaml — OPTIONAL (epic 94) ===
-    # Genre/world boundary correction (supersedes ADR-120 "mechanics-in-genre"):
-    # a world's item catalog, class starting-kits, gold, and currency are a
-    # world-tier CAST/CATALOG surface — the loot a world ships — NOT a genre
-    # mechanic. The genre tier is the rulebook only. Absent file → None (a valid
-    # choice for a pack that keeps a shared catalog at the genre tier, e.g.
-    # caverns_and_claudes). A malformed file fails loud, world-scoped (no silent
-    # fallback). The genre-tier ``GenrePack.inventory`` remains the shared default
-    # for packs that have not migrated the catalog down; consumers resolve
-    # world-first via ``server.dispatch.inventory_resolve.resolve_inventory``.
-    world_inventory: InventoryConfig | None = _load_yaml_optional(
-        world_path / "inventory.yaml", InventoryConfig
-    )
-    if world_inventory is not None:
-        _emit_world_inventory_loaded(
-            world_slug=world_path.name,
-            source=world_path / "inventory.yaml",
-            catalog_count=len(world_inventory.item_catalog),
-            class_kit_count=len(world_inventory.starting_equipment),
-        )
-
-    # === World-tier equipment_tables.yaml — OPTIONAL (story 120-4) ===
-    # The genre tier is the SRD chargen-kit rulebook; a world's dungeon/flavor kit
-    # additions are CAST/CATALOG (ADR-140). Absent file → None (the genre-tier
-    # ``GenrePack.equipment_tables`` then serves unchanged — additive, no behavior
-    # change for unmigrated worlds). Consumers resolve world-first via
-    # ``server.dispatch.equipment_tables_resolve.resolve_equipment_tables``.
-    world_equipment_tables: EquipmentTables | None = _load_yaml_optional(
-        world_path / "equipment_tables.yaml", EquipmentTables
-    )
-
-    # === World-tier Saint canon (worlds/<slug>/saints.yaml, story 103-1) ===
-    # Curated presets over the genre mutation catalog. Absence = the world
-    # ships no Saints (valid authored choice). Presence REQUIRES the genre
-    # mutation catalog — there is nothing else to validate bundle/drawback
-    # ids against — and every id must resolve, loudly (No Silent Fallbacks).
-    saints_path = world_path / "saints.yaml"
-    world_saints: SaintRegistry | None = None
-    if saints_path.is_file():
-        if mutations is None:
-            raise GenreLoadError(
-                path=saints_path,
-                detail=(
-                    f"World {world_path.name!r} authors saints.yaml but the pack has "
-                    "no mutations.yaml catalog — Saints are curated bundles of genre "
-                    "mutation ids and cannot be validated without one"
-                ),
-            )
-        try:
-            world_saints = load_saint_registry(saints_path, mutations)
-        except ValueError as e:
-            # pydantic ValidationError subclasses ValueError — both shapes land
-            # here. Re-raise as GenreLoadError so pack load failures carry the
-            # file path; the detail keeps the saint id + offending mutation id.
-            raise GenreLoadError(path=saints_path, detail=str(e)) from e
-
-    # === World-tier stock roster (worlds/<slug>/stocks.yaml, story 103-2) ===
-    # Chargen entry-path trait sets over the genre mutation catalog. Absence =
-    # single-path chargen (valid authored choice — the flickering_reach shape).
-    # Presence REQUIRES the genre mutation catalog to validate granted ids
-    # against, and every id must resolve, loudly (No Silent Fallbacks).
-    stocks_path = world_path / "stocks.yaml"
-    world_stocks: StockRegistry | None = None
-    if stocks_path.is_file():
-        if mutations is None:
-            raise GenreLoadError(
-                path=stocks_path,
-                detail=(
-                    f"World {world_path.name!r} authors stocks.yaml but the pack has "
-                    "no mutations.yaml catalog — stock trait sets grant genre "
-                    "mutation ids and cannot be validated without one"
-                ),
-            )
-        try:
-            world_stocks = load_stock_registry(stocks_path, mutations)
-        except ValueError as e:
-            # pydantic ValidationError subclasses ValueError — both shapes land
-            # here; the detail keeps the stock id + offending mutation id.
-            raise GenreLoadError(path=stocks_path, detail=str(e)) from e
-
-    # === World-tier backgrounds.yaml — OPTIONAL (ADR-143) ===
-    # A world's background CATALOG is a world-tier CAST/CATALOG surface — the
-    # backgrounds a world ships. Absent file → empty dict (a valid authored
-    # choice; the genre-tier default serves). A present-but-malformed file
-    # fails loud via pydantic validation. Mirrors the world classes pattern.
-    world_backgrounds_path = world_path / "backgrounds.yaml"
-    world_backgrounds: dict[str, Background] = {}
-    if world_backgrounds_path.exists():
-        raw_world_backgrounds = _load_yaml_raw_optional(world_backgrounds_path)
-        if raw_world_backgrounds is not None and not isinstance(raw_world_backgrounds, list):
-            raise GenreLoadError(
-                path=world_backgrounds_path,
-                detail="expected a list of background definitions",
-            )
-        world_backgrounds = {
-            bg.id: bg
-            for bg in (
-                Background.model_validate(item)
-                for item in (
-                    raw_world_backgrounds if isinstance(raw_world_backgrounds, list) else []
-                )
-            )
-        }
-
-    # === World-tier foci.yaml — OPTIONAL (ADR-143) ===
-    # Same pattern as backgrounds above.
-    world_foci_path = world_path / "foci.yaml"
-    world_foci: dict[str, Focus] = {}
-    if world_foci_path.exists():
-        raw_world_foci = _load_yaml_raw_optional(world_foci_path)
-        if raw_world_foci is not None and not isinstance(raw_world_foci, list):
-            raise GenreLoadError(
-                path=world_foci_path,
-                detail="expected a list of focus definitions",
-            )
-        world_foci = {
-            f.id: f
-            for f in (
-                Focus.model_validate(item)
-                for item in (raw_world_foci if isinstance(raw_world_foci, list) else [])
-            )
-        }
-
-    # Story 104-1 / M-A: single-vs-cluster is a system COUNT, decided at load
-    # time and cached on the World so the in-game MAP_UPDATE path (which holds
-    # only the World, not its dir) can ship the flag. Emits the decision span.
-    from sidequest.genre.cluster_detection import detect_is_cluster
-
-    is_cluster = detect_is_cluster(world_path)
 
     return World(
         config=config,
         lore=lore,
         legends=legends,
         cartography=cartography,
-        is_cluster=is_cluster,
         cultures=cultures,
         tropes=tropes,
         archetypes=archetypes,
         visual_style=visual_style,
-        theme=effective_theme,
-        audio=world_audio,
         history=history,
         legends_raw=legends_raw,
         portrait_manifest=portrait_manifest,
@@ -1853,24 +953,9 @@ def _load_single_world(
         openings=openings,
         authored_npcs=authored_npcs,
         char_creation=char_creation,
-        classes=world_classes,
-        wwn_spell_catalog=world_spell_catalog,
-        psionic_discipline_catalog=world_psionic_catalog,
         chassis_instances=chassis_instances,
-        chassis_classes=chassis_classes,
-        seed_tropes=world_seed_tropes,
         magic_register=magic_register,
         items=items,
-        inventory=world_inventory,
-        equipment_tables=world_equipment_tables,
-        bestiary=world_bestiary,
-        saints=world_saints,
-        stocks=world_stocks,
-        scenarios=world_scenarios,
-        premises=world_premises,
-        blocs=world_blocs,
-        backgrounds=world_backgrounds,
-        foci=world_foci,
         client_theme_css=client_theme_css,
     )
 
@@ -1948,57 +1033,36 @@ def load_genre_pack(path: Path | str) -> GenrePack:
             detail="directory does not exist",
         )
 
-    # Load required mechanics files
+    # Load required files
     meta = _load_yaml(path / "pack.yaml", PackMeta)
     rules = _load_rules_config(path / "rules.yaml", path)
-    # Epic 74 — genre tier is mechanics-only. Flavor (lore/theme/archetypes/
-    # cultures/audio/visual_style) becomes OPTIONAL at the genre tier; the world
-    # tier is authoritative. Live packs still ship these files until the
-    # per-world migration, so absence is tolerated, not assumed. No silent
-    # fallback: a malformed file still raises (the *_optional helpers raise on
-    # parse/schema error, only absence yields None).
-    lore = _load_yaml_optional(path / "lore.yaml", Lore)
-    theme = _load_yaml_optional(path / "theme.yaml", GenreTheme)
-    archetypes_raw = _load_yaml_raw_optional(path / "archetypes.yaml")
+    lore = _load_yaml(path / "lore.yaml", Lore)
+    theme = _load_yaml(path / "theme.yaml", GenreTheme)
+    archetypes_raw = _load_yaml_raw(path / "archetypes.yaml")
     archetypes: list[NpcArchetype] = (
         [NpcArchetype.model_validate(a) for a in archetypes_raw]
         if isinstance(archetypes_raw, list)
         else []
     )
-    # Genre/world boundary correction (supersedes ADR-120 "mechanics-in-genre"):
-    # char_creation is a world-tier CAST/CATALOG surface, not a genre mechanic.
-    # The genre tier MAY ship a shared default, but absence is valid — the world
-    # tier is authoritative. Absent → []; a malformed file still raises (the
-    # *_optional helper only returns None on absence). The per-world resolution
-    # invariant below fails loud if a world resolves no chargen from either tier.
-    char_creation_path = path / "char_creation.yaml"
-    char_creation: list[CharCreationScene] = _parse_char_creation_scenes(
-        _load_yaml_raw_optional(char_creation_path), path=char_creation_path
+    char_creation_raw = _load_yaml_raw(path / "char_creation.yaml")
+    char_creation: list[CharCreationScene] = (
+        [CharCreationScene.model_validate(c) for c in char_creation_raw]
+        if isinstance(char_creation_raw, list)
+        else []
     )
-    # Pack-level visual_style is optional (2026-05-29 directive — visual
-    # prompts live at world level). Absent → None; the daemon resolves style
-    # from the world scope and fails loud if neither scope supplies it.
-    visual_style = _load_yaml_optional(path / "visual_style.yaml", VisualStyle)
+    visual_style = _load_yaml(path / "visual_style.yaml", VisualStyle)
     progression = _load_yaml(path / "progression.yaml", ProgressionConfig)
     axes = _load_yaml(path / "axes.yaml", AxesConfig)
-    # Epic 74 — genre audio optional / world-authoritative.
-    audio = _load_yaml_optional(path / "audio.yaml", AudioConfig)
-    if audio is not None:
-        _resolve_audio_urls(audio, genre_slug=path.name)
-    cultures_raw = _load_yaml_raw_optional(path / "cultures.yaml")
+    audio = _load_yaml(path / "audio.yaml", AudioConfig)
+    _resolve_audio_urls(audio, genre_slug=path.name)
+    cultures_raw = _load_yaml_raw(path / "cultures.yaml")
     cultures: list[Culture] = (
         [Culture.model_validate(c) for c in cultures_raw] if isinstance(cultures_raw, list) else []
     )
     prompts = _load_yaml(path / "prompts.yaml", Prompts)
 
-    # Genre/world boundary correction (supersedes ADR-120 "mechanics-in-genre"):
-    # tropes are a world-tier CAST surface, not a genre mechanic — a genre's
-    # tropes authored for one world are wrong for its siblings (the
-    # the_real_mccoy vs dust_and_lead problem). The genre tier MAY ship tropes
-    # to serve as an inheritance base; absence is valid (mechanics-only genre).
-    # Absent → []; a malformed file still raises. World tropes are authoritative
-    # (each world ships its own tropes.yaml per the world required-file contract).
-    genre_tropes_raw = _load_yaml_raw_optional(path / "tropes.yaml")
+    # Load required genre-level tropes
+    genre_tropes_raw = _load_yaml_raw(path / "tropes.yaml")
     genre_tropes: list[TropeDefinition] = (
         [TropeDefinition.model_validate(t) for t in genre_tropes_raw]
         if isinstance(genre_tropes_raw, list)
@@ -2042,25 +1106,14 @@ def load_genre_pack(path: Path | str) -> GenrePack:
 
         for cc in chassis_classes.classes:
             validate_chassis_stations(cc)
+    voice_presets: VoicePresets | None = _load_yaml_optional(
+        path / "voice_presets.yaml", VoicePresets
+    )
     drama_thresholds: DramaThresholds | None = _load_yaml_optional(
         path / "pacing.yaml", DramaThresholds
     )
     inventory: InventoryConfig | None = _load_yaml_optional(
         path / "inventory.yaml", InventoryConfig
-    )
-
-    # === Genre-tier gear.yaml — OPTIONAL (114-10, Fate gear model) ===
-    # The lightweight Fate analogue of inventory. Absent → []; present-but-malformed
-    # fails loud. Injected into the FateConfig below so the chargen seed can compile
-    # the pack's signature gear without the builder needing the whole GenrePack.
-    genre_gear: list[GearDef] = _load_gear(path / "gear.yaml")
-    if rules.ruleset == "fate" and rules.fate is not None:
-        rules.fate.gear_catalog = list(genre_gear)
-    # Fail loud on a paradigm-mismatched (inventory under fate) or unbalanced pack.
-    _validate_fate_gear(
-        rules=rules,
-        has_inventory=(path / "inventory.yaml").exists(),
-        gear=genre_gear,
     )
 
     # Genre-tier openings.yaml is dead. Per the canned-openings design
@@ -2089,67 +1142,9 @@ def load_genre_pack(path: Path | str) -> GenrePack:
             )
         classes_list = [ClassDef.model_validate(item) for item in raw_classes]
 
-    # === Genre-tier backgrounds.yaml — OPTIONAL (ADR-143) ===
-    # Absent file → empty dict (documented correct state, NOT a silent fallback
-    # masking a config error). A present-but-malformed file fails loud via
-    # pydantic validation. Mirrors the classes.yaml loading pattern exactly.
-    backgrounds_path = path / "backgrounds.yaml"
-    genre_backgrounds: dict[str, Background] = {}
-    if backgrounds_path.exists():
-        with backgrounds_path.open("r", encoding="utf-8") as f:
-            raw_backgrounds = yaml.safe_load(f) or []
-        if not isinstance(raw_backgrounds, list):
-            raise GenreLoadError(
-                path=backgrounds_path,
-                detail="expected a list of background definitions",
-            )
-        genre_backgrounds = {
-            bg.id: bg for bg in (Background.model_validate(item) for item in raw_backgrounds)
-        }
-
-    # === Genre-tier foci.yaml — OPTIONAL (ADR-143) ===
-    # Same absent-OK contract as backgrounds.yaml.
-    foci_path = path / "foci.yaml"
-    genre_foci: dict[str, Focus] = {}
-    if foci_path.exists():
-        with foci_path.open("r", encoding="utf-8") as f:
-            raw_foci = yaml.safe_load(f) or []
-        if not isinstance(raw_foci, list):
-            raise GenreLoadError(
-                path=foci_path,
-                detail="expected a list of focus definitions",
-            )
-        genre_foci = {f.id: f for f in (Focus.model_validate(item) for item in raw_foci)}
-
-    # === Genre-tier skills.yaml — OPTIONAL (ADR-143) ===
-    # A flat list of skill-name strings. Absent → empty list (no catalog
-    # required). A present-but-malformed file fails loud.
-    skills_path = path / "skills.yaml"
-    genre_skills: list[str] = []
-    if skills_path.exists():
-        with skills_path.open("r", encoding="utf-8") as f:
-            raw_skills = yaml.safe_load(f) or []
-        if not isinstance(raw_skills, list):
-            raise GenreLoadError(
-                path=skills_path,
-                detail="expected a list of skill names",
-            )
-        genre_skills = [str(s) for s in raw_skills]
-
     archetype_constraints: ArchetypeConstraints | None = _load_yaml_optional(
         path / "archetype_constraints.yaml", ArchetypeConstraints
     )
-
-    # Beat-count gate (moved off the ConfrontationDef model validator, story
-    # 108-7): every confrontation needs >=1 beat, except a WN combat/hp_depletion
-    # def whose action set the WN engine owns. Runs before the class-filter check
-    # so a beatless native def fails loud here regardless of classes.yaml.
-    _validate_confrontation_beats(rules)
-
-    # ADR-145 D3 (story 114-14): a Without Number pack's genre baseline is the SRD
-    # rulebook — a genre-tier item_catalog entry with provenance.mode == "bespoke"
-    # is a hard error. Native packs are exempt. Fail loud (No Silent Fallbacks).
-    _validate_genre_baseline_no_bespoke(rules.ruleset, inventory)
 
     # Cross-reference validation: class_filter / encounter_beat_choices consistency.
     # Only enforced when a classes.yaml is present (classes_list is non-empty).
@@ -2162,42 +1157,6 @@ def load_genre_pack(path: Path | str) -> GenrePack:
         classes_list,
         has_spell_catalogs=(path / "spells").is_dir(),
     )
-
-    # WWN spell catalog — load spells_wwn.yaml when ruleset == "wwn".
-    # Fail loud: a wwn pack that declares a caster class (magic_access == "wwn"
-    # AND non-empty casts_per_day_by_level) but has no spells_wwn.yaml is an
-    # authoring bug. No silent fallback.
-    wwn_catalog = _load_wwn_spell_catalog(path, rules, classes_list)
-
-    # Genre-tier psionic discipline catalog — load disciplines_psionic.yaml when
-    # present (Story 102-6). OPTIONAL and uncoupled to classes (unlike WWN
-    # spells): psionics is optional content, and the catalog may instead live at
-    # the world tier. Absent → None (no silent fallback). A malformed file fails
-    # loud via the catalog model (dup-id / unknown-field / non-safe-load).
-    genre_psionic_catalog: PsionicDisciplineCatalog | None = None
-    _genre_psionic_path = path / "disciplines_psionic.yaml"
-    if _genre_psionic_path.exists():
-        from sidequest.genre.models.psionics import (
-            load_psionic_discipline_catalog as _load_disc,
-        )
-
-        try:
-            genre_psionic_catalog = _load_disc(_genre_psionic_path)
-        except Exception as exc:
-            raise GenreLoadError(path=_genre_psionic_path, detail=str(exc)) from exc
-
-    # Pack-root bestiary (story 90-1) — SRD-aligned combat stat blocks for
-    # ruleset-module packs. Optional at load (synthetic fixtures and non-
-    # encounter consumers don't need it); a malformed file still fails loud.
-    # The REQUIRED-for-ruleset-module-packs contract is enforced at the
-    # generation seam: encountergen exits loud when ruleset != native and
-    # this is None, and pregen.seed_manual raises rather than silently
-    # seeding an empty encounters pool.
-    bestiary = _load_yaml_optional(path / "bestiary.yaml", Bestiary)
-
-    # Fail loud: every starting_prepared spell id on every class must resolve
-    # against the loaded catalog.  Unknown ids are authoring bugs.
-    _validate_wwn_starting_prepared_refs(classes_list, wwn_catalog)
 
     # Base archetypes and npc_traits live at content root (parent of genre_packs/)
     content_root: Path | None = None
@@ -2213,187 +1172,12 @@ def load_genre_pack(path: Path | str) -> GenrePack:
         base_archetypes = _load_yaml_optional(content_root / "archetypes_base.yaml", BaseArchetypes)
         npc_traits = _load_yaml_optional(content_root / "npc_traits.yaml", NpcTraitsDatabase)
 
-    # Genre-tier witnessed-act vocabulary (spec 2026-06-02). OPTIONAL — packs
-    # without a political layer omit the file. World premises/blocs validate
-    # their act bindings against these ids.
-    witnessed_acts_file = _load_yaml_optional(path / "witnessed_acts.yaml", WitnessedActsFile)
-    genre_witnessed_acts = (
-        list(witnessed_acts_file.witnessed_acts) if witnessed_acts_file is not None else []
-    )
-    valid_act_ids = frozenset(a.id for a in genre_witnessed_acts)
-
-    # === Genre-tier mutations.yaml — OPTIONAL (silent-skip when absent) ===
-    # Packs without a mutation system simply omit the file; that's a deliberate
-    # authoring choice (mirrors the magic.yaml pattern above). A present-but-
-    # invalid file still fails loud via ValidationError. Loaded BEFORE the
-    # worlds so each world's saints.yaml (story 103-1) can cross-validate its
-    # bundle/drawback ids against the catalog at load time.
-    mutations_path = path / "mutations.yaml"
-    mutations = load_mutation_catalog(mutations_path) if mutations_path.is_file() else None
-
     # Load worlds and scenarios from subdirectories.
     # _load_single_world returns None for worlds with draft: true — filter them out.
     worlds_raw: dict[str, World | None] = _load_subdirectories(
-        path,
-        "worlds",
-        lambda p: _load_single_world(
-            p,
-            genre_tropes,
-            path,
-            genre_theme=theme,
-            valid_act_ids=valid_act_ids,
-            mutations=mutations,
-        ),
+        path, "worlds", lambda p: _load_single_world(p, genre_tropes, path)
     )
     worlds: dict[str, World] = {slug: w for slug, w in worlds_raw.items() if w is not None}
-
-    # Epic 74 — theme is world-authoritative and required. Every world must
-    # resolve a theme from its own tier or the genre fallback; a world that
-    # resolves none fails loud, named (No Silent Fallbacks). A themeless client
-    # (connect-time + reference-chrome) is broken. This pack-level check lets
-    # direct ``_load_single_world`` unit fixtures stay themeless while real packs
-    # enforce the invariant.
-    for slug, w in worlds.items():
-        if w.theme is None:
-            raise GenreLoadError(
-                path=path / "worlds" / slug / "theme.yaml",
-                detail=(
-                    f"World {slug!r} resolves no theme — neither worlds/{slug}/theme.yaml "
-                    f"nor the genre theme.yaml is present. Theme is world-authoritative "
-                    "(epic 74); every world must supply or inherit a theme."
-                ),
-            )
-
-    # Genre/world boundary correction: char_creation is world-authoritative with
-    # an optional genre default (see the genre-tier load above). Now that the
-    # genre file is optional, guard against a world that resolves NO chargen from
-    # either tier — a world you cannot build a character in is broken, not empty.
-    # Mirrors the theme invariant; fails loud, named (No Silent Fallbacks).
-    for slug, w in worlds.items():
-        if not w.char_creation and not char_creation:
-            raise GenreLoadError(
-                path=path / "worlds" / slug / "char_creation.yaml",
-                detail=(
-                    f"World {slug!r} resolves no character creation — neither "
-                    f"worlds/{slug}/char_creation.yaml nor the genre char_creation.yaml "
-                    "is present. char_creation is world-authoritative with an optional "
-                    "genre default; every world must supply or inherit one."
-                ),
-            )
-
-    # === Pack-level class roster — world-first aggregation (epic 94) ===
-    # Genre/world boundary correction (supersedes ADR-120 "mechanics-in-genre"):
-    # classes/callings are a world-tier CAST/CATALOG surface. When the genre tier
-    # ships no classes.yaml (tea_and_murder, which moved its callings down to
-    # blackthorn_moor/glenross), the pack-level ``GenrePack.classes`` roster is
-    # the union of every world's classes — that roster is what the chargen
-    # builder, confrontation, dice, and views consumers read to resolve a
-    # ``char_class`` → ClassDef. Worlds that share a calling (identical id) must
-    # agree on its definition; a genuine divergence fails loud rather than
-    # silently picking one (No Silent Fallbacks). When the genre tier DOES ship
-    # classes (space_opera, heavy_metal, C&C), that genre roster is authoritative
-    # and worlds are not aggregated up — the genre default is intentional.
-    if not classes_list:
-        aggregated_classes: dict[str, ClassDef] = {}
-        for slug, w in worlds.items():
-            for cls in w.classes:
-                existing = aggregated_classes.get(cls.id)
-                if existing is not None and existing != cls:
-                    raise GenreLoadError(
-                        path=path / "worlds" / slug / "classes.yaml",
-                        detail=(
-                            f"class id {cls.id!r} is defined differently across worlds "
-                            f"in this pack — world-tier class rosters that share an id "
-                            f"must agree on its definition (epic 94 genre/world "
-                            f"boundary). Reconcile the divergent definitions or give "
-                            f"them distinct ids."
-                        ),
-                    )
-                aggregated_classes.setdefault(cls.id, cls)
-        classes_list = list(aggregated_classes.values())
-
-    # === Pack-level WWN spell catalog — world-first aggregation (epic 94) ===
-    # Genre/world boundary correction (supersedes ADR-120 "mechanics-in-genre"):
-    # the WWN spell catalog is a world-tier CAST/CATALOG surface. When the genre
-    # tier ships no spells_wwn.yaml, the pack-level ``GenrePack.wwn_spell_catalog``
-    # is the union of every world's catalog — that is what the cast pipeline
-    # (``narration_apply._resolve_wwn_cast_for_beat``) and the long_rest reprepare
-    # tool read to resolve a spell id → spell. Worlds that share a spell id must
-    # agree on its definition; a genuine divergence fails loud (No Silent
-    # Fallbacks). When the genre tier DOES ship a catalog (elemental_harmony keeps
-    # one shared catalog for both worlds), that genre catalog is authoritative and
-    # worlds are not aggregated up — the genre default is intentional.
-    if wwn_catalog is None:
-        from sidequest.genre.models.wwn_spell import WwnSpell
-
-        aggregated_spells: dict[str, WwnSpell] = {}
-        for slug, w in worlds.items():
-            if w.wwn_spell_catalog is None:
-                continue
-            for spell in w.wwn_spell_catalog.spells:
-                existing = aggregated_spells.get(spell.id)
-                if existing is not None and existing != spell:
-                    raise GenreLoadError(
-                        path=path / "worlds" / slug / "spells_wwn.yaml",
-                        detail=(
-                            f"spell id {spell.id!r} is defined differently across worlds "
-                            f"in this pack — world-tier spell catalogs that share an id "
-                            f"must agree on its definition (epic 94 genre/world "
-                            f"boundary). Reconcile the divergent definitions or give "
-                            f"them distinct ids."
-                        ),
-                    )
-                aggregated_spells.setdefault(spell.id, spell)
-        if aggregated_spells:
-            wwn_catalog = WwnSpellCatalog(
-                version="aggregated", spells=list(aggregated_spells.values())
-            )
-
-    # Re-run the WWN fail-loud invariants against the world-first-resolved roster
-    # and catalog. The genre-tier pass at load time only saw the genre roster /
-    # catalog; for a pack that migrated classes + the catalog down to worlds, the
-    # caster-without-catalog and starting_prepared checks must see the aggregated
-    # values (epic 94). No-op for genre-authoritative packs (already validated).
-    if rules.ruleset == "wwn":
-        caster_classes = [
-            c
-            for c in classes_list
-            if c.magic_access == "wwn"
-            and c.wwn_magic is not None
-            and bool(c.wwn_magic.casts_per_day_by_level)
-        ]
-        if caster_classes and wwn_catalog is None:
-            raise GenreLoadError(
-                path=path / "spells_wwn.yaml",
-                detail=(
-                    f"wwn pack has caster classes {[c.id for c in caster_classes]} but no "
-                    "spells_wwn.yaml at the genre tier OR any world tier (epic 94). Author a "
-                    "spell catalog or remove the casts_per_day_by_level entries."
-                ),
-            )
-        _validate_wwn_starting_prepared_refs(classes_list, wwn_catalog)
-
-    # === Pack-level chargen scenes — world-first aggregation (epic 94) ===
-    # Same boundary correction for char_creation: when the genre tier ships no
-    # char_creation.yaml (spaghetti_western, tea_and_murder — both moved chargen
-    # down to the world tier), the pack-level ``GenrePack.char_creation`` is the
-    # union of every world's scenes. Production reads chargen world-first via
-    # ``resolve_char_creation_scenes``; this aggregate keeps pack-level
-    # introspection (and the reputation_bonus / archetype-hint drift consumers)
-    # honest about what the migrated pack actually offers. The genre default,
-    # when present, stays authoritative (no aggregation).
-    if not char_creation:
-        aggregated_scenes: list[CharCreationScene] = []
-        seen_scene_keys: set[tuple[str, int]] = set()
-        for w in worlds.values():
-            for idx, scene in enumerate(w.char_creation):
-                key = (scene.id, idx)
-                if key in seen_scene_keys:
-                    continue
-                seen_scene_keys.add(key)
-                aggregated_scenes.append(scene)
-        char_creation = aggregated_scenes
-
     scenarios: dict[str, ScenarioPack] = _load_subdirectories(
         path, "scenarios", _load_single_scenario
     )
@@ -2446,7 +1230,6 @@ def load_genre_pack(path: Path | str) -> GenrePack:
         lore=lore,
         theme=theme,
         archetypes=archetypes,
-        witnessed_acts=genre_witnessed_acts,
         char_creation=char_creation,
         visual_style=visual_style,
         progression=progression,
@@ -2459,12 +1242,12 @@ def load_genre_pack(path: Path | str) -> GenrePack:
         beat_vocabulary=beat_vocabulary,
         chassis_classes=chassis_classes,
         achievements=achievements,
+        voice_presets=voice_presets,
         power_tiers=power_tiers,
         worlds=worlds,
         scenarios=scenarios,
         drama_thresholds=drama_thresholds,
         inventory=inventory,
-        gear=genre_gear,
         openings=openings,
         backstory_tables=backstory_tables,
         equipment_tables=equipment_tables,
@@ -2475,21 +1258,9 @@ def load_genre_pack(path: Path | str) -> GenrePack:
         projection_rules=projection_rules,
         visibility_baseline=visibility_baseline,
         lethality_policy=lethality_policy,
-        wwn_spell_catalog=wwn_catalog,
-        psionic_discipline_catalog=genre_psionic_catalog,
-        bestiary=bestiary,
-        mutations=mutations,
-        backgrounds=genre_backgrounds,
-        foci=genre_foci,
-        skills=genre_skills,
         source_dir=path,
         client_theme_css=client_theme_css,
     )
-
-    # Fail loud at load if the pack names an unregistered ruleset (no silent default).
-    from sidequest.game.ruleset import get_ruleset_module  # local import avoids a load-time cycle
-
-    get_ruleset_module(pack.rules.ruleset)
 
     # Sprint 3 cold-subsystem audit: pack load was invisible to the GM
     # panel. A failed load raises GenreLoadError above (caught by callers,
@@ -2600,10 +1371,14 @@ def _resolve_audio_urls(audio: AudioConfig, *, genre_slug: str) -> None:
     ``tests/genre/test_audio_url_resolution.py`` (per CLAUDE.md "Verify
     Wiring").
     """
-    from sidequest.genre.audio_paths import resolve_audio_relpath
+    from sidequest.server.asset_urls import resolve_asset_url
 
     def _fix(rel: str) -> str:
-        return resolve_audio_relpath(rel, genre_slug=genre_slug)
+        if not rel:
+            return rel
+        if rel.startswith(("http://", "https://", "/")):
+            return rel  # already resolved (e.g. test fixtures)
+        return resolve_asset_url(f"genre_packs/{genre_slug}/{rel}")
 
     for tracks in audio.mood_tracks.values():
         for track in tracks:

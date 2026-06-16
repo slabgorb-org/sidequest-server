@@ -28,7 +28,6 @@ from enum import StrEnum
 from opentelemetry import trace
 
 from sidequest.game.builder import CharacterBuilder, humanize_snake_case
-from sidequest.genre.models.inventory import InventoryConfig
 from sidequest.genre.models.pack import GenrePack
 from sidequest.genre.models.rules import RulesConfig
 from sidequest.protocol.messages import (
@@ -154,7 +153,6 @@ def render_confirmation_summary(
     pack: GenrePack,
     lobby_name: str | None,
     player_id: str,
-    world_slug: str | None = None,
 ) -> CharacterCreationMessage:
     """Render the Confirmation-phase summary message for a builder.
 
@@ -216,17 +214,11 @@ def render_confirmation_summary(
     # Only show fields the chargen actually accumulated. Genres like
     # caverns_and_claudes deliberately omit race/class scenes — we don't lie
     # with "Unknown" for fields the genre doesn't define.
-    # Prefer the player-chosen flavor LABEL over the collapsed mechanical
-    # archetype slug (sq-playtest 2026-05-28 BUG-LOW: tea_and_murder maps
-    # "The Village Itself"/"Country Veterinary Surgeon" onto race_hint
-    # "Servant" / class_hint "Doctor"; the sheet should show the chosen
-    # flavor). Falls back to the hint for packs whose choice label IS the
-    # archetype (label == hint → unchanged). Symmetric with backstory_source.
     if acc.race_hint is not None:
-        _add("race", acc.race_label or acc.race_hint)
+        _add("race", acc.race_hint)
 
     if acc.class_hint is not None:
-        _add("class", acc.class_label or acc.class_hint)
+        _add("class", acc.class_hint)
     elif (default_class := builder.default_class()) is not None:
         # If the genre has a default_class in rules.yaml (e.g. caverns
         # default_class: Delver), show it on the summary so the player sees
@@ -249,18 +241,8 @@ def render_confirmation_summary(
         _add("mutation", humanize_display(acc.mutation_hint))
     if acc.affinity_hint is not None:
         _add("affinity", humanize_display(acc.affinity_hint))
-    # Rig: the player-given vessel name (the_name scene's second half,
-    # playtest 2026-06-05 RW-2) leads; the mechanical type hint stays as a
-    # parenthetical so the sheet shows "Duck Soup (Interceptor)" instead of
-    # silently dropping the name the player just gave.
-    vessel = builder.vessel_name()
     if acc.rig_type_hint is not None:
-        rig_display = humanize_display(acc.rig_type_hint)
-        if vessel:
-            rig_display = f"{vessel} ({rig_display})"
-        _add("rig", rig_display)
-    elif vessel:
-        _add("rig", vessel)
+        _add("rig", humanize_display(acc.rig_type_hint))
     if acc.rig_trait is not None:
         _add("rig_trait", humanize_display(acc.rig_trait))
 
@@ -276,16 +258,9 @@ def render_confirmation_summary(
     used_scene_hints = False
     used_pack_starting = False
 
-    # Epic 94: inventory is a world-tier CAST/CATALOG surface — resolve
-    # world-first so the preview's Equipment line matches the wired character
-    # (which now reads the world-tier loadout). Reading ``pack.inventory``
-    # directly showed an empty Equipment line for migrated packs.
-    from sidequest.server.dispatch.inventory_resolve import resolve_inventory
-
-    resolved_inventory = resolve_inventory(pack, world_slug)
-    if resolved_inventory is not None and lookup_class is not None:
+    if pack.inventory is not None and lookup_class is not None:
         class_lower = lookup_class.lower()
-        for key, loadout in resolved_inventory.starting_equipment.items():
+        for key, loadout in pack.inventory.starting_equipment.items():
             if key.lower() == class_lower:
                 equipment_ids.extend(loadout)
                 used_pack_starting = bool(loadout)
@@ -307,9 +282,7 @@ def render_confirmation_summary(
         equipment_source = _EquipmentSource.NONE
 
     if equipment_ids:
-        display_items = [
-            _resolve_item_display_name(resolved_inventory, item_id) for item_id in equipment_ids
-        ]
+        display_items = [_resolve_item_display_name(pack, item_id) for item_id in equipment_ids]
         _add("equipment", ", ".join(display_items))
 
     # Backstory display source preference (added 2026-04-30, Parsley
@@ -391,13 +364,13 @@ def render_confirmation_summary(
     return CharacterCreationMessage(payload=payload, player_id=player_id)
 
 
-def _resolve_item_display_name(inventory: InventoryConfig | None, item_id: str) -> str:
-    """Map a starting-equipment item ID to a display name via the resolved
-    ``inventory.item_catalog`` (world-first, epic 94), falling back to
-    Title-Cased snake_case if the catalog has no entry.
+def _resolve_item_display_name(pack: GenrePack, item_id: str) -> str:
+    """Map a starting-equipment item ID to a display name via
+    ``pack.inventory.item_catalog``, falling back to Title-Cased snake_case
+    if the catalog has no entry.
     """
-    if inventory is not None:
-        for entry in inventory.item_catalog:
+    if pack.inventory is not None:
+        for entry in pack.inventory.item_catalog:
             if entry.id == item_id and entry.name:
                 return entry.name
     return humanize_snake_case(item_id)

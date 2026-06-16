@@ -5,14 +5,11 @@ simple-DC path (``dispatch_dice_throw``) and the opposed-check path
 (``narration_apply._resolve_opposed_check_branch``) can reuse the same
 weapon-damage resolution logic without copy-paste.
 
-The public helpers defined here are:
+The three public helpers are:
 
 - ``damage_request_from_spec`` — ``DamageSpec`` → ``DiceRequestPayload``
 - ``generate_server_faces``    — server-side random face roll for a dice pool
-
-``resolve_damage_spec_from_beat_and_actor`` is **pure combat-rules logic** and
-moved down to ``sidequest.game.ruleset.combat_rules`` (ADR-147 / story 122-2); it
-is re-exported from here so existing callers keep importing it from this path.
+- ``resolve_damage_spec_from_beat_and_actor`` — beat + actor + pack → ``DamageSpec | None``
 
 ``dice.py`` re-imports and re-exports these names so existing callers
 (tests included) keep working unchanged.
@@ -20,20 +17,13 @@ is re-exported from here so existing callers keep importing it from this path.
 
 from __future__ import annotations
 
+import logging
 import random
 import re
 
-# ADR-147 / story 122-2: resolve_damage_spec_from_beat_and_actor is pure combat-rules
-# logic that moved down to the game tier. Re-exported here so existing server-tier
-# callers keep importing it from this path (server -> game is the legal direction).
-from sidequest.game.ruleset.combat_rules import (  # noqa: F401
-    resolve_damage_spec_from_beat_and_actor,
-)
-from sidequest.genre.models.inventory import (
-    PARITY_BACKING_SIDES,
-    DamageSpec,
-    parity_value,
-)
+from sidequest.genre.models.inventory import DamageSpec
+from sidequest.genre.models.pack import GenrePack
+from sidequest.genre.models.rules import BeatDef
 from sidequest.protocol.dice import (
     DiceRequestPayload,
     DieSides,
@@ -41,6 +31,8 @@ from sidequest.protocol.dice import (
     ThrowParams,
 )
 from sidequest.protocol.types import Stat
+
+logger = logging.getLogger(__name__)
 
 _DICE_RE = re.compile(r"^(?P<count>\d+)d(?P<faces>\d+)$")
 
@@ -73,11 +65,6 @@ def damage_request_from_spec(
     ``rolling_player_id`` defaults to ``"server"`` for server-originated rolls;
     override when a specific player should animate the throw.
 
-    A parity die (Nd2) has no overlay mesh, so the request throws N backing d6
-    instead (``PARITY_BACKING_SIDES``); the caller maps the settled faces to d2
-    values via ``parity_damage_total`` for the actual damage total. The context
-    string names the mapping so the readout can explain "the d6 shows 4 → 1".
-
     Raises ``ValueError`` if the dice string is malformed or uses an
     unsupported face count (validated at ``DamageSpec`` construction, so this
     is a belt-and-suspenders guard).
@@ -90,18 +77,12 @@ def damage_request_from_spec(
         )
     count = int(m["count"])
     faces = int(m["faces"])
-    if spec.is_parity_die:
-        # Throw a renderable backing d6 per die; the parity map (even→1/odd→2)
-        # is applied to the total by parity_damage_total at the call site.
-        sides = PARITY_BACKING_SIDES
-        context = "unarmed damage (d2: backing d6, even→1 / odd→2)"
-    else:
-        sides = DieSides.from_wire(faces)
-        if sides is DieSides.Unknown:
-            raise ValueError(
-                f"damage_request_from_spec: unsupported die face count d{faces} in {spec.dice!r}"
-            )
-        context = "weapon damage"
+    sides = DieSides.from_wire(faces)
+    if sides is DieSides.Unknown:
+        raise ValueError(
+            f"damage_request_from_spec: unsupported die face count d{faces} "
+            f"in {spec.dice!r}"
+        )
     # One DieSpec per die so the overlay renders individual dice.
     dice_pool = [DieSpec(sides=sides, count=1) for _ in range(count)]
     return DiceRequestPayload(
@@ -112,19 +93,8 @@ def damage_request_from_spec(
         modifier=spec.bonus,
         stat=_DAMAGE_STAT,
         difficulty=1,  # damage rolls have no DC
-        context=context,
-        roll_role="damage",  # follow-on weapon roll — never the primary overlay
+        context="weapon damage",
     )
-
-
-def parity_damage_total(faces: list[int], bonus: int) -> int:
-    """Total a parity (d2) damage roll from its backing-die faces.
-
-    Each backing face maps even→1 / odd→2 (``parity_value``); the mapped
-    values are summed and ``bonus`` added. Used in place of the plain
-    face-sum total for an ``is_parity_die`` DamageSpec so the d6 shown in the
-    overlay never leaks its raw face into the HP math."""
-    return sum(parity_value(f) for f in faces) + bonus
 
 
 def generate_server_faces(dice: list[DieSpec]) -> list[int]:
@@ -145,3 +115,80 @@ def generate_server_faces(dice: list[DieSpec]) -> list[int]:
         for _ in range(spec.count):
             faces.append(random.randint(1, sides))
     return faces
+
+
+def resolve_damage_spec_from_beat_and_actor(
+    *,
+    beat: BeatDef,
+    actor_core: object | None,
+    pack: GenrePack | None,
+) -> DamageSpec | None:
+    """Resolve the weapon DamageSpec for a strike beat.
+
+    Resolution priority (CLAUDE.md no-silent-fallback — skip loudly, never fabricate):
+    1. ``beat.damage_override`` — explicit spec on the beat (natural attack / creature).
+    2. Actor's equipped weapon item dict carrying a ``damage`` dict (from inventory).
+    3. Pack catalog lookup: find the actor's first equipped weapon item by id,
+       then read ``CatalogItem.damage`` from the pack's item catalog.
+    4. No match — returns None; caller must log and skip.
+
+    ``actor_core`` is the actor's ``CreatureCore`` (may be None for actors without
+    a resolved core). ``pack`` is the live genre pack (provides the item catalog).
+    """
+    # Priority 1: beat-level override (natural attack, creature).
+    if beat.damage_override is not None:
+        return beat.damage_override
+
+    # Priority 2 & 3: actor's inventory.
+    if actor_core is None:
+        return None
+
+    inventory_items: list[dict] = getattr(
+        getattr(actor_core, "inventory", None), "items", []
+    )
+    if not inventory_items:
+        return None
+
+    # Priority 2: item dict already carries a serialised damage field.
+    # (This path fires for materialised NPCs whose item dicts were built
+    # with a ``damage`` key.)
+    for item_dict in inventory_items:
+        dmg_raw = item_dict.get("damage")
+        if dmg_raw is not None:
+            if isinstance(dmg_raw, dict):
+                try:
+                    return DamageSpec.model_validate(dmg_raw)
+                except Exception:
+                    logger.warning(
+                        "damage_spec: item %r has unparseable damage dict %r — skipping",
+                        item_dict.get("id"),
+                        dmg_raw,
+                    )
+            elif isinstance(dmg_raw, str):
+                try:
+                    return DamageSpec.model_validate({"dice": dmg_raw})
+                except Exception:
+                    logger.warning(
+                        "damage_spec: item %r has unparseable damage string %r — skipping",
+                        item_dict.get("id"),
+                        dmg_raw,
+                    )
+
+    # Priority 3: pack catalog lookup by item id.
+    catalog = None
+    if pack is not None:
+        inv_config = getattr(pack, "inventory", None)
+        if inv_config is not None:
+            catalog = getattr(inv_config, "item_catalog", None)
+
+    if catalog:
+        catalog_by_id = {c.id: c for c in catalog}
+        for item_dict in inventory_items:
+            item_id = item_dict.get("id")
+            if not item_id:
+                continue
+            catalog_item = catalog_by_id.get(item_id)
+            if catalog_item is not None and catalog_item.damage is not None:
+                return catalog_item.damage
+
+    return None

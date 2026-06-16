@@ -1,7 +1,0 @@
-name: map_escape_fixture
-description: >-
-  Story 65-11 / Python rule #11 (HTML/SVG output must be escaped, CWE-79). One
-  region whose name carries HTML-special characters. When that name is
-  interpolated into the SVG node label it MUST be escaped (< -> &lt;, & ->
-  &amp;, etc.) — the raw "<flag>" must never appear unescaped in the output, the
-  way _cast_portrait_img_html escapes every interpolation.

@@ -41,11 +41,15 @@ from sidequest.game.creature_core import CreatureCore, Inventory
 from sidequest.game.event_log import EventLog
 from sidequest.game.persistence import (
     GameMode,
+    SqliteStore,
+    db_path_for_slug,
+    upsert_game,
 )
 from sidequest.game.projection.cache import ProjectionCache
 from sidequest.game.projection.composed import ComposedFilter
 from sidequest.game.projection.rules import load_rules_from_yaml_str
 from sidequest.game.session import GameSnapshot
+from sidequest.game.sqlite_repository import SqliteSaveRepository
 from sidequest.server.session_handler import WebSocketSessionHandler, _SessionData
 from sidequest.server.session_room import RoomRegistry
 
@@ -99,42 +103,19 @@ def _setup_tracing() -> InMemorySpanExporter:
     return exporter
 
 
-@pytest.fixture(autouse=True)
-def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
-    """Bind the process pool to a per-worker throwaway PG db, clean per test
-    (ADR-115 F1: events/projection persist to Postgres)."""
-    import psycopg
-
-    from sidequest.game import db_pool
-
-    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
-    with psycopg.connect(plain, autocommit=True) as conn:
-        rows = conn.execute(
-            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
-            "AND tablename <> 'alembic_version'"
-        ).fetchall()
-        if rows:
-            names = ", ".join(f'"{r[0]}"' for r in rows)
-            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
-    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
-    db_pool.close_pool()
-    yield
-    db_pool.close_pool()
-
-
-def _seed_game_row(tmp_path: Path):
-    """Register the session in Postgres and return the PgSaveRepository."""
-    from sidequest.game import db_pool
-    from sidequest.server.session_state import _build_pg_repos_for_slug
-
-    repo, _dungeon, _sink = _build_pg_repos_for_slug(
-        db_pool.get_pool(),
+def _seed_game_row(tmp_path: Path) -> SqliteStore:
+    db = db_path_for_slug(tmp_path, _SLUG)
+    db.parent.mkdir(parents=True, exist_ok=True)
+    store = SqliteStore(db)
+    store.initialize()
+    upsert_game(
+        store,
         slug=_SLUG,
-        mode=str(GameMode.MULTIPLAYER),
+        mode=GameMode.MULTIPLAYER,
         genre_slug=_GENRE,
         world_slug=_WORLD,
     )
-    return repo
+    return store
 
 
 def _make_handler_three_pcs(tmp_path: Path) -> WebSocketSessionHandler:
@@ -155,7 +136,7 @@ def _make_handler_three_pcs(tmp_path: Path) -> WebSocketSessionHandler:
     handler._session_data.world_slug = _WORLD
 
     store = _seed_game_row(tmp_path)
-    repo = store
+    repo = SqliteSaveRepository(store)
     handler._event_log = EventLog(repo)
     handler._projection_filter = ComposedFilter(
         rules=load_rules_from_yaml_str(_RULES_YAML),

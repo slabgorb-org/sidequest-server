@@ -29,6 +29,7 @@ from sidequest.protocol.messages import (
     ConfrontationMessage,
     ConfrontationPayload,
     DungeonMapMessage,
+    NarrationDelta,
     NarrationMessage,
     NarrationSegmentMessage,
     NarrationSegmentPayload,
@@ -69,6 +70,9 @@ _KIND_TO_MESSAGE_CLS: dict[str, type] = {
     "CONFRONTATION": ConfrontationMessage,
     "SECRET_NOTE": SecretNoteMessage,
     "SCRAPBOOK_ENTRY": ScrapbookEntryMessage,
+    # Ephemeral streaming delta — NOT event-sourced, NOT replayed on reconnect.
+    # Registered here for protocol-catalog completeness only.
+    "narration.delta": NarrationDelta,
     # Cavern renderer revival (ADR-096 Task 20b). Emitted on room entry; not
     # event-sourced (no replay on reconnect — room payloads are re-emitted on
     # the next room transition; the initial room is emitted at chargen time).
@@ -78,15 +82,6 @@ _KIND_TO_MESSAGE_CLS: dict[str, type] = {
     # just replaces its MapState, so reconnect repopulates on the next
     # turn). The NEW ADR-055 map message (ADR-019 MAP_UPDATE is dead).
     "DUNGEON_MAP": DungeonMapMessage,
-    # ADR-136 (RELATIONSHIPS) is deliberately ABSENT here. Like its transient
-    # sibling LOCATION_DESCRIPTION, the relationship roster is emitted via the
-    # non-durable _emit_shared_world_frame broadcast path (not _emit_event), so
-    # it is never written to the events table and never replayed by
-    # _build_message_for_kind. On reconnect the resume site re-runs
-    # _maybe_emit_relationships, which rebroadcasts a fresh roster from live
-    # snapshot state. Registering it here would be a latent reconnect crash: a
-    # stray persisted RELATIONSHIPS row would fall through _build_message_for_kind's
-    # per-kind branches to the terminal ValueError (no reconstructor exists).
 }
 
 # Kinds persisted to the events table by side-channel writers (e.g.
@@ -99,18 +94,12 @@ _REPLAY_SKIP_KINDS: frozenset[str] = frozenset(
         "ENCOUNTER_STARTED",
         "ENCOUNTER_BEAT_APPLIED",
         "ENCOUNTER_METRIC_ADVANCE",
-        "ENCOUNTER_NARRATOR_DIAL_ADVANCE",
         "ENCOUNTER_BEAT_SKIPPED",
         "ENCOUNTER_TAG_CREATED",
         "ENCOUNTER_STATUS_ADDED",
         "ENCOUNTER_YIELD",
         "ENCOUNTER_RESOLVED",
         "ENCOUNTER_RESOLUTION_SIGNAL",
-        "ENCOUNTER_OPPONENT_ATTACK",
-        # Damage roll split off from ENCOUNTER_OPPONENT_ATTACK so a reprisal's
-        # to-hit and damage rows are self-describing (sq-playtest 2026-06-13
-        # telemetry-gap). Same internal/replay-skip treatment as the to-hit kind.
-        "ENCOUNTER_OPPONENT_DAMAGE",
     }
 )
 
@@ -259,8 +248,6 @@ def _project_frames(
     connected_players: list[str],
     view: object = None,
     on_decision: Callable[[str, FilterDecision], None] | None = None,
-    tx: object = None,
-    event_seq: int | None = None,
 ) -> list[tuple[str, FilterDecision]]:
     """Run the projection filter once per connected player.
 
@@ -270,24 +257,10 @@ def _project_frames(
 
     The canonical EventLog append is the caller's responsibility; this helper
     is purely the filter fan-out step.
-
-    ``tx`` / ``event_seq`` are threaded down to the filter ONLY when this
-    fan-out runs inside emit_event's open turn transaction. They let the
-    visibility-gated invariant's ``invariant.secret_routed`` telemetry ride
-    the turn tx (same connection) rather than opening a competing pooled
-    connection that would self-deadlock on the per-session ``FOR UPDATE`` row
-    lock under Postgres (ADR-115). The test-facing helper and lazy-fill caller
-    omit them.
     """
     decisions: list[tuple[str, FilterDecision]] = []
     for pid in connected_players:
-        decision = projection_filter.project(
-            envelope=envelope,
-            view=view,
-            player_id=pid,
-            tx=tx,  # type: ignore[arg-type]
-            event_seq=event_seq,
-        )
+        decision = projection_filter.project(envelope=envelope, view=view, player_id=pid)
         if on_decision is not None:
             on_decision(pid, decision)
         decisions.append((pid, decision))
@@ -369,11 +342,9 @@ from sidequest.server.session_helpers import (  # noqa: E402 — back-compat re-
     build_secret_note_events,
     emit_secret_notes,
 )
-from sidequest.server.websocket_handlers.opening_helpers import (  # noqa: E402 — back-compat re-export
-    _populate_opening_directive_on_chargen_complete,
-)
 from sidequest.server.websocket_session_handler import (  # noqa: E402 — back-compat re-export
     WebSocketSessionHandler,
+    _populate_opening_directive_on_chargen_complete,
 )
 
 __all__ = [

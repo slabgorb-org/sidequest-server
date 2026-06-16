@@ -150,62 +150,6 @@ def _looks_like_verb(word: str) -> bool:
     return lower.endswith("s") and not lower.endswith("ss")
 
 
-
-
-def _is_pronoun(word: str) -> bool:
-    """Check if a word is a pronoun (subject, object, or possessive form).
-
-    Used in Pass 8 and Pass 9 to avoid treating pronouns as verbs/adverbs.
-    A pronoun following a comma/"and" is never a coordinated verb of the
-    swapped subject — it heads a clause about a different referent (an NPC
-    or other actor), OR (for possessives like "its"/"his") modifies a noun.
-    Either way it must never be conjugated/de-pluralized.
-
-    Possessive forms that end in -s ("its", "hers", "ours", "yours",
-    "theirs") are explicitly included: they otherwise satisfy the naive
-    ``_looks_like_verb`` -s test and were being stripped to "it"/"her"/…
-    ([BAR-2] 2026-06-06: "turning its eyeless gaze" → "turning it eyeless
-    gaze"; #708 "his copper face" → "hi copper face").
-    """
-    if not word:
-        return False
-    lower = word.lower()
-    # All canonical pronouns across all three pronoun sets
-    pronouns = {
-        # he/him set
-        "he", "him", "his",
-        # she/her set
-        "she", "her",
-        # they/them set
-        "they", "them", "their",
-        # Generic/other pronouns that should block Pass 8/9
-        "i", "me", "we", "us", "you", "it",
-        # Possessive / absolute forms that end in -s (would otherwise trip
-        # the naive _looks_like_verb -s test).
-        "its", "hers", "ours", "yours", "theirs", "mine",
-    }
-    return lower in pronouns
-
-
-def _is_skippable_adverb(word: str) -> bool:
-    """Whether ``word`` is a leading adverb the Pass 8/9 stranded-verb
-    passes may skip over to reach the real coordinated verb.
-
-    Deliberately narrow: only ``then`` and -ly adverbs qualify. The legacy
-    test (``lowercase and not a pronoun``) admitted numbers ("four"),
-    adjectives ("ivory"), and participles ("turning") as "adverbs", so the
-    *next* word — a plural noun heading an absolute phrase — got conjugated
-    ([BAR-2] "four arms"→"four arm", "ivory tusks"→"ivory tusk"). Regex
-    cannot POS-tag, so the safe set is restricted to the two surface forms
-    the Story 71-6 adverb-skip was actually built for ("…, then fires" /
-    "…and slowly raises"). Anything else leaves the following word alone.
-    """
-    if not word:
-        return False
-    lower = word.lower()
-    return lower == "then" or (lower.endswith("ly") and len(lower) > 2)
-
-
 def _split_by_dialogue(text: str) -> list[tuple[str, str]]:
     """Split text into alternating prose / dialogue regions.
 
@@ -299,30 +243,12 @@ def _rewrite_sentence(
     name_esc = re.escape(target_name)
 
     # ------------------------------------------------------------------
-    # Pass 1: possessive name "Carl's" -> "Your"/"your" (attributive)
-    #         or "Yours"/"yours" (predicate/absolute).
-    #
-    # English distinguishes:
-    #   attributive  "Carl's polearm"  → "Your polearm"   (governs a noun)
-    #   predicate    "The polearm was Carl's." → "...was yours."  (stands alone)
-    #
-    # Predicate position: {Name}'s is followed by terminal punctuation
-    # (.!?…), a comma, semicolon, colon, end-of-text, or a coordinating
-    # conjunction (and/or/but/nor/so/yet).  Anything else is attributive.
+    # Pass 1: possessive name "Carl's" -> "Your"/"your"
     # ------------------------------------------------------------------
     def _pos_name_sub(m: re.Match) -> str:
         nonlocal count
         count += 1
         at_start = (m.start() == 0) or _is_sentence_start_in(text, m.start())
-        rest = text[m.end():]
-        stripped = rest.lstrip()
-        is_predicate = (
-            not stripped  # end of string
-            or stripped[0] in ".!?,;:…"  # terminal punctuation or clause boundary
-            or bool(re.match(r"\b(?:and|or|but|nor|so|yet)\b", stripped))  # coordinating conj
-        )
-        if is_predicate:
-            return "Yours" if at_start else "yours"
         return "Your" if at_start else "your"
 
     text = re.sub(rf"\b{name_esc}'s\b", _pos_name_sub, text)
@@ -460,57 +386,18 @@ def _rewrite_sentence(
     # Pass 8: "and <verb>" continuation. When this sentence had a
     # subject swap earlier, the implicit subject after "and" is still
     # "you" — conjugate the verb if it's in 3rd-person form.
-    #
-    # Adverb-skip extension (Story 71-6): if a single leading adverb /
-    # "then" sits between "and" and the real verb, capture both words so
-    # the verb can be conjugated.  Examples:
-    #   "…and slowly raises…"  → "…and slowly raise…"
-    #   "…and then fires…"     → "…and then fire…"
-    # The second-word group is optional — falls back to original
-    # single-word behaviour when no adverb is present.
     # ------------------------------------------------------------------
     if had_subject_swap:
 
         def _and_verb_sub(m: re.Match) -> str:
             nonlocal count
-            word1 = m.group(1)
-            word2 = m.group(2)
-            if word2 is None:
-                # Single word after "and" — original behaviour. Pronouns are
-                # never verbs ("and his …"/"and its …" must not be stripped).
-                if not _looks_like_verb(word1) or _is_pronoun(word1):
-                    return m.group(0)
-                conjugated = _conjugate(word1)
-                if conjugated == word1:
-                    return m.group(0)
-                count += 1
-                return f"and {conjugated}"
-            # Two words captured: "and <word1> <word2>".
-            if _looks_like_verb(word1) and not _is_pronoun(word1):
-                # word1 is the verb (no adverb before it).
-                conjugated = _conjugate(word1)
-                if conjugated == word1:
-                    return m.group(0)
-                count += 1
-                return f"and {conjugated} {word2}"
-            if (
-                _is_skippable_adverb(word1)
-                and _looks_like_verb(word2)
-                and not _is_pronoun(word2)
-            ):
-                # word1 is a leading adverb/"then" — skip it, conjugate word2.
-                # Restricting to real adverbs (not "any lowercase non-pronoun")
-                # stops numbers/adjectives/participles ("four arms", "ivory
-                # tusks", "turning its") from being mistaken for adverbs and
-                # their following plural noun de-pluralized ([BAR-2]).
-                conjugated = _conjugate(word2)
-                if conjugated == word2:
-                    return m.group(0)
-                count += 1
-                return f"and {word1} {conjugated}"
-            return m.group(0)
+            verb = m.group(1)
+            if not _looks_like_verb(verb):
+                return m.group(0)
+            count += 1
+            return f"and {_conjugate(verb)}"
 
-        text = re.sub(r"\band\s+(\w+)(?:\s+(\w+))?", _and_verb_sub, text)
+        text = re.sub(r"\band\s+(\w+)", _and_verb_sub, text)
 
     # ------------------------------------------------------------------
     # Pass 9: ", <verb>" comma-coordinated continuation. Same logic as
@@ -528,61 +415,25 @@ def _rewrite_sentence(
     # clause boundaries). Further gated by ``_looks_like_verb`` so plural
     # nouns or commas-before-articles ("..., the bronze fitting") pass
     # through unchanged.
-    #
-    # Adverb-skip extension (Story 71-6): mirrors Pass 8 — if a single
-    # leading adverb/"then" sits between the comma and the real verb,
-    # capture both words so the verb can be conjugated.  Example:
-    #   "…steadies it, then fires."  → "…steady it, then fire."
     # ------------------------------------------------------------------
     if had_subject_swap:
 
         def _comma_verb_sub(m: re.Match) -> str:
             nonlocal count
-            word1 = m.group(1)
-            word2 = m.group(2)
-            # Pass 8 owns the "and <verb>" surface.
-            if word1.lower() == "and":
+            verb = m.group(1)
+            if not _looks_like_verb(verb):
                 return m.group(0)
-            if word2 is None:
-                # Single word after comma — original behaviour. Pronouns are
-                # never verbs (", his …"/", its …" must not be stripped to
-                # "hi"/"it" — [BAR-2] / #708).
-                if not _looks_like_verb(word1) or _is_pronoun(word1):
-                    return m.group(0)
-                conjugated = _conjugate(word1)
-                if conjugated == word1:
-                    return m.group(0)
-                count += 1
-                return f", {conjugated}"
-            # Two words captured: ", <word1> <word2>".
-            if word2.lower() == "and":
-                # ", word and …" — let Pass 8 handle the "and <verb>" part.
+            # Don't conjugate "and" itself if the regex happens to catch
+            # ", and " — Pass 8 owns the "and <verb>" surface.
+            if verb.lower() == "and":
                 return m.group(0)
-            if _looks_like_verb(word1) and not _is_pronoun(word1):
-                # word1 is the verb (no adverb before it).
-                conjugated = _conjugate(word1)
-                if conjugated == word1:
-                    return m.group(0)
-                count += 1
-                return f", {conjugated} {word2}"
-            if (
-                _is_skippable_adverb(word1)
-                and _looks_like_verb(word2)
-                and not _is_pronoun(word2)
-            ):
-                # word1 is a leading adverb/"then" — skip it, conjugate word2.
-                # Restricting to real adverbs (not "any lowercase non-pronoun")
-                # stops a number/adjective/participle ("four arms", "ivory
-                # tusks", "turning its") from being read as an adverb and its
-                # following plural noun / possessive de-pluralized ([BAR-2]).
-                conjugated = _conjugate(word2)
-                if conjugated == word2:
-                    return m.group(0)
-                count += 1
-                return f", {word1} {conjugated}"
-            return m.group(0)
+            conjugated = _conjugate(verb)
+            if conjugated == verb:
+                return m.group(0)
+            count += 1
+            return f", {conjugated}"
 
-        text = re.sub(r",\s+(\w+)(?:\s+(\w+))?", _comma_verb_sub, text)
+        text = re.sub(r",\s+(\w+)", _comma_verb_sub, text)
 
     return text, count
 

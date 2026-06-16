@@ -258,10 +258,7 @@ def test_handshake_prefers_explicit_npcs_present_when_provided(
     """
     snap, pack = playtest3_snapshot
     trigger_encounter(
-        snap,
-        pack,
-        "combat",
-        "Orin",
+        snap, pack, "combat", "Orin",
         npcs_present=[
             NpcMention(
                 name="Goblin",
@@ -578,16 +575,8 @@ def test_no_orphan_actors_assignment_in_production_code():
     offenders: list[str] = []
 
     for py in server_root.rglob("*.py"):
-        # Allowed construction sites: the canonical handshake module, plus the
-        # ADR-092 scene harness — the dev-gated fixture loader whose whole job
-        # is materializing a synthetic encounter (actors included) from a
-        # scenario fixture's YAML. It cannot route through the live handshake
-        # (a fixture seeds state directly; there is no narrator trigger to
-        # seat actors from) and it is reachable only through the dev-gated
-        # HTTP route (scene_harness_router), so the live-play invariant —
-        # only the handshake registers actors — is untouched. (Fixture
-        # ``actors:`` support landed with the 90-7 WWN fixtures.)
-        if py.name in ("encounter_lifecycle.py", "scene_harness.py"):
+        # Allowed construction sites: the canonical handshake module.
+        if py.name == "encounter_lifecycle.py":
             continue
 
         try:

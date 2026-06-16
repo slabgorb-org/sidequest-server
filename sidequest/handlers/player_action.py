@@ -6,8 +6,6 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
-from sidequest.game.incapacitation import find_incapacitating_status
-from sidequest.game.ruleset.without_number import is_dying_window_status
 from sidequest.game.turn import TurnPhase
 from sidequest.protocol import sanitize_player_text
 from sidequest.protocol.messages import (
@@ -20,14 +18,10 @@ from sidequest.protocol.types import NonBlankString
 from sidequest.server.session_handler import _State
 from sidequest.server.session_helpers import (
     _build_turn_context,
-    _emit_unbound_rejection_event,
     _error_msg,
     _resolve_acting_character_name,
 )
-from sidequest.server.turn_status_roster import (
-    build_turn_status_roster,
-    project_all_submitted,
-)
+from sidequest.server.turn_status_roster import build_turn_status_roster
 from sidequest.telemetry.phase_timing import PhaseTimings
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
 
@@ -36,73 +30,6 @@ if TYPE_CHECKING:
     from sidequest.server.websocket_session_handler import WebSocketSessionHandler
 
 logger = logging.getLogger(__name__)
-
-
-def _bound_wn_slug(sd) -> str | None:
-    """The bound ruleset slug for OTEL namespacing, or None when unavailable."""
-    rules = getattr(getattr(sd, "genre_pack", None), "rules", None)
-    ruleset = getattr(rules, "ruleset", None)
-    return ruleset if isinstance(ruleset, str) else None
-
-
-def _dying_window_expired(sd, status) -> bool:
-    """True when a WWN dying window has passed its deadline (story 108-6, AC4).
-
-    The deadline is ``created_turn + cfg.trauma.mortal_injury_rounds`` against the
-    current interaction round. Reads the bound WN cfg from the session's genre
-    pack (a capability gate, not a slug string — same idiom as the downed seam):
-    with no Cwn/Wwn config bound there is no deadline to enforce, so the window is
-    not expired this turn (it still blocks normal play via ``incapacitating``).
-    """
-    from sidequest.genre.models.rules import CwnConfig, WwnConfig
-
-    rules = getattr(getattr(sd, "genre_pack", None), "rules", None)
-    cfg = rules.ruleset_config() if rules is not None else None
-    if not isinstance(cfg, (CwnConfig, WwnConfig)):
-        # A stabilizable window is a structural guarantee that a WN cfg was bound
-        # when it opened. Reaching here means the bound cfg changed out from under
-        # an open window (a pack hot-swap / reload inconsistency) — fail LOUD
-        # rather than silently never-expiring a window that would then block play
-        # forever (No Silent Fallbacks). We still return False (don't expire on a
-        # cfg we can't read) but the error surfaces the misconfiguration.
-        logger.error(
-            "dying_window.no_wn_cfg actor_window_open created_turn=%s cfg=%s — "
-            "cannot compute the WWN dying-window deadline; window will not expire "
-            "until a WN cfg is readable",
-            getattr(status, "created_turn", None),
-            type(cfg).__name__,
-        )
-        return False
-    deadline = status.created_turn + cfg.trauma.mortal_injury_rounds
-    return sd.snapshot.turn_manager.interaction >= deadline
-
-
-def initiative_preamble(encounter: object | None) -> str | None:
-    """SWN P4: the authoritative resolution-order line for the narrator turn.
-
-    Returns None when the encounter has no initiative (native rulesets, non-combat),
-    OR when the encounter has already resolved. The 'reduced to 0 HP' clause keeps
-    the prose correct before P5's tool walk mechanically enforces dead_premise.
-
-    sq-playtest 2026-06-07 barsoom (#177 defect b): a resolved encounter
-    (``check_hp_depletion`` sets ``resolved=True`` on a kill but leaves
-    ``snapshot.encounter`` populated for forensics) still carried its
-    ``initiative`` list, so the scaffold kept stamping ~10 rounds of looting
-    and resting past the opponent's death. Gate on ``resolved`` to match the
-    "active encounter" semantics used everywhere else
-    (``enc is not None and not enc.resolved``).
-    """
-    if getattr(encounter, "resolved", False):
-        return None
-    init = getattr(encounter, "initiative", None)
-    if not init:
-        return None
-    order = ", ".join(f"{e.token_id}({e.value})" for e in init)
-    return (
-        f"[INITIATIVE ORDER] Resolve the committed actions strictly in this "
-        f"1d8+DEX order: {order}. An actor reduced to 0 HP earlier in this "
-        f"order does not act."
-    )
 
 
 def _broadcast_cleared_to_party(
@@ -266,32 +193,6 @@ async def dispatch_fired_barrier(
     )
 
     combined_action = "\n".join(f"{p.character_name}: {p.action}" for _, p in pending)
-    _encounter = getattr(snapshot, "encounter", None)
-    _preamble = initiative_preamble(_encounter)
-    if _preamble is not None:
-        combined_action = f"{_preamble}\n{combined_action}"
-    elif (
-        _encounter is not None
-        and getattr(_encounter, "resolved", False)
-        and getattr(_encounter, "initiative", None)
-    ):
-        # #177 defect (b) lie-detector: the encounter resolved (a kill set
-        # ``resolved=True``) but still lingers in ``snapshot.encounter`` with a
-        # populated initiative list. We correctly DECLINE to stamp the
-        # [INITIATIVE ORDER] scaffold. Surface it so the GM panel can verify the
-        # scaffold stopped firing post-resolution — and see the deeper smell of a
-        # resolved encounter never cleared from the snapshot.
-        _watcher_publish(
-            "initiative_preamble_suppressed",
-            {
-                "slug": session._room.slug,
-                "round": snapshot.turn_manager.round,
-                "reason": "encounter_resolved",
-                "encounter_type": getattr(_encounter, "encounter_type", ""),
-                "outcome": getattr(_encounter, "outcome", "") or "",
-            },
-            component="confrontation",
-        )
     # Tag the TurnContext so build_narrator_prompt renders a multi-PC
     # declaration block instead of attributing every line to the dispatch
     # winner.
@@ -339,11 +240,6 @@ class PlayerActionHandler:
                 "session.message_rejected_unbound type=PLAYER_ACTION state=%s",
                 session._state.name,
             )
-            # Story 67-7 (AC5): surface to the GM panel so a genuine unbound
-            # guard is distinguishable from reconnect churn. Co-located with the
-            # session_unbound branch only — the Creating-state / data-missing
-            # rejection below is a different class and must not borrow this tag.
-            _emit_unbound_rejection_event("PLAYER_ACTION", session._state.name)
             return [
                 _error_msg(
                     "Cannot process PLAYER_ACTION: not connected",
@@ -382,7 +278,6 @@ class PlayerActionHandler:
             from sidequest.agents.aside_resolver import (
                 AsideReadView,
                 AsideResolver,
-                resolve_aside_on_narrator_cache,
             )
             from sidequest.agents.llm_factory import build_aside_llm
             from sidequest.protocol.messages import (
@@ -394,104 +289,61 @@ class PlayerActionHandler:
 
             sd_aside = session._session_data
             snap = sd_aside.snapshot
-            # Story 91-4: key the aside's LLM spend to the canonical
-            # session id (room slug first, sd.game_slug fallback — the same
-            # resolution the narrator's cost machinery uses) so it runs the
-            # ADR-134 detector and counts against the per-session cumulative
-            # ceiling. Both None should be unreachable for a connected
-            # player; fail loud rather than silently constructing an
-            # uncovered spender (No Silent Fallbacks).
-            if session._room is not None:
-                aside_session_id = session._room.slug
-            elif sd_aside.game_slug is not None:
-                aside_session_id = sd_aside.game_slug
-            else:
-                raise RuntimeError(
-                    "aside resolve fired without a bound session id (no room "
-                    "and no sd.game_slug) — refusing to construct an "
-                    "uncovered LLM caller (story 91-4, No Silent Fallbacks)."
+            # Mirror the normal-path guard (Reviewer RT1): an aside must
+            # degrade like a real action if acting-name resolution raises,
+            # not crash the handler.
+            try:
+                char_name = _resolve_acting_character_name(sd_aside, session._room)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "session.aside_acting_name_resolve_failed error=%s falling_back_to=%s",
+                    exc,
+                    sd_aside.player_name,
                 )
-            # Aside-rides-the-cache (playtest 2026-06-07, ADR-107 re-scope):
-            # prefer re-presenting the narrator's exact cached prompt prefix
-            # (stashed by the orchestrator every SDK turn) so the aside
-            # knows everything the narrator knows. Fall back to the legacy
-            # thin read-view when no SDK turn has run yet or the backend
-            # has no tool loop.
-            orch = sd_aside.orchestrator
-            stash = orch.aside_prompt_stash
-            cache_client = orch.aside_cache_client
+                char_name = sd_aside.player_name
+            core = next(
+                (c.core for c in snap.characters if c.core.name == char_name),
+                None,
+            )
+            character_summary = (
+                f"{core.name}: {core.description}" if core is not None else char_name
+            )
+            inventory: list[str] = []
+            if core is not None:
+                for item in core.inventory.items:
+                    name = item.get("name") if isinstance(item, dict) else None
+                    inventory.append(str(name) if name else str(item))
+            region = (
+                snap.party_location(perspective=char_name)
+                or snap.party_location()
+                or "(location unstated)"
+            )
+            confrontations = (
+                sd_aside.genre_pack.rules.confrontations if sd_aside.genre_pack.rules else []
+            )
+            rulebook = (
+                f"Genre {sd_aside.genre_slug}. Confrontations: "
+                + ", ".join(c.label for c in confrontations)
+                if confrontations
+                else f"Genre {sd_aside.genre_slug}."
+            )
+            recent = " ".join(e.content for e in snap.narrative_log[-4:] if e.content)
+            read_view = AsideReadView(
+                character_summary=character_summary,
+                region_summary=region,
+                inventory=inventory,
+                rulebook_summary=rulebook,
+                recent_narration=recent,
+            )
             with tracer().start_as_current_span(SPAN_ASIDE_RESOLVE) as span:
                 t0 = time.monotonic()
-                if stash is not None and cache_client is not None:
-                    res, cache_read_tokens = await resolve_aside_on_narrator_cache(
-                        client=cache_client,
-                        stash=stash,
-                        question=question,
-                        session_id=aside_session_id,
-                    )
-                    span.set_attribute("path", "narrator_cache")
-                    span.set_attribute("cache_hit", cache_read_tokens > 0)
-                    span.set_attribute("cache_read_tokens", cache_read_tokens)
-                    span.set_attribute("model", stash.model)
-                else:
-                    reason = "no_narrator_prompt_stash" if stash is None else "non_tooling_client"
-                    logger.info("aside.legacy_read_view reason=%s", reason)
-                    # Mirror the normal-path guard (Reviewer RT1): an aside
-                    # must degrade like a real action if acting-name
-                    # resolution raises, not crash the handler.
-                    try:
-                        char_name = _resolve_acting_character_name(sd_aside, session._room)
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning(
-                            "session.aside_acting_name_resolve_failed error=%s falling_back_to=%s",
-                            exc,
-                            sd_aside.player_name,
-                        )
-                        char_name = sd_aside.player_name
-                    core = next(
-                        (c.core for c in snap.characters if c.core.name == char_name),
-                        None,
-                    )
-                    character_summary = (
-                        f"{core.name}: {core.description}" if core is not None else char_name
-                    )
-                    inventory: list[str] = []
-                    if core is not None:
-                        for item in core.inventory.items:
-                            name = item.get("name") if isinstance(item, dict) else None
-                            inventory.append(str(name) if name else str(item))
-                    region = (
-                        snap.party_location(perspective=char_name)
-                        or snap.party_location()
-                        or "(location unstated)"
-                    )
-                    confrontations = (
-                        sd_aside.genre_pack.rules.confrontations
-                        if sd_aside.genre_pack.rules
-                        else []
-                    )
-                    rulebook = (
-                        f"Genre {sd_aside.genre_slug}. Confrontations: "
-                        + ", ".join(c.label for c in confrontations)
-                        if confrontations
-                        else f"Genre {sd_aside.genre_slug}."
-                    )
-                    recent = " ".join(e.content for e in snap.narrative_log[-4:] if e.content)
-                    read_view = AsideReadView(
-                        character_summary=character_summary,
-                        region_summary=region,
-                        inventory=inventory,
-                        rulebook_summary=rulebook,
-                        recent_narration=recent,
-                    )
-                    res = await AsideResolver(
-                        llm=build_aside_llm(session_id=aside_session_id)
-                    ).resolve(question=question, read_view=read_view)
-                    span.set_attribute("path", "legacy_read_view")
-                    span.set_attribute("model", "haiku")
+                res = await AsideResolver(llm=build_aside_llm()).resolve(
+                    question=question, read_view=read_view
+                )
                 span.set_attribute("asker_id", sd_aside.player_id or "")
                 span.set_attribute("outcome", res.outcome)
                 span.set_attribute("grounded_on", ",".join(res.grounded_on))
+                span.set_attribute("model", "haiku")
                 span.set_attribute("latency_ms", int((time.monotonic() - t0) * 1000))
             answer_msg = AsideAnswerMessage(
                 payload=AsideAnswerPayload(
@@ -570,135 +422,6 @@ class PlayerActionHandler:
                 sd.player_name,
             )
             acting_name = sd.player_name
-
-        # Incapacitation gate (sq-playtest 2026-06-07 barsoom-3, blocking): a PC
-        # the genre lethality policy ruled dead/dying must NOT keep submitting
-        # actions to the narrator. post_resolution_lethality stamped an
-        # ``incapacitating`` status on the downed PC; this gate is the durable
-        # lock. It runs BEFORE the TURN_STATUS{active} broadcast and the narrator
-        # dispatch so a dead seat consumes no turn and the band plays on (SOUL.md
-        # The Guitar Solo — only THIS seat locks; peers keep acting). We re-send
-        # the death surface so a reconnecting/confused client re-renders the
-        # banner, and emit the lie-detector span.
-        downed_core = next(
-            (c.core for c in sd.snapshot.characters if c.core.name == acting_name),
-            None,
-        )
-        downed_status = find_incapacitating_status(downed_core) if downed_core is not None else None
-        # Story 108-6 dying-window carve. A stabilizable window is incapacitating
-        # (the PC can't take normal actions) but the downed soloist may still ACT
-        # (free-text) to try to stabilize — and each submission spends a round on
-        # the engine-owned clock. Two outcomes on the player's own turn:
-        #   - deadline passed → tick the clock (the fatal final round — NOT a
-        #     stabilization), convert the window to terminal-dead and block
-        #     (AC4: stalling can't pause the clock), then fall through to the
-        #     existing terminal block below.
-        #   - still within the window → PERMIT the action and route it to the
-        #     narrator. The gate does NOT emit a tick here: it cannot know whether
-        #     the permitted action is a stabilization, and a hardcoded value would
-        #     contradict the stabilize tool's own tick/resolved spans (the
-        #     lie-detector must not assert what it can't observe). The tool emits
-        #     the honest tick when it adjudicates the attempt.
-        if (
-            downed_status is not None
-            and downed_core is not None
-            and is_dying_window_status(downed_status)
-        ):
-            from sidequest.game.status import Status, StatusSeverity
-            from sidequest.telemetry.spans.wn import (
-                dying_window_resolved_span,
-                dying_window_tick_span,
-            )
-
-            rounds_elapsed = max(
-                0, sd.snapshot.turn_manager.interaction - downed_status.created_turn
-            )
-            if _dying_window_expired(sd, downed_status):
-                # Resolve the slug honestly: a window only opens under a WN cfg, so
-                # the slug must be readable here. If it isn't (an inconsistent
-                # pack), do NOT mis-namespace under "wwn" — log loud and emit under
-                # an "unknown" sentinel so the GM panel isn't fed a false slug
-                # (slug-honesty / No Silent Fallbacks).
-                slug = _bound_wn_slug(sd)
-                if slug is None:
-                    logger.error(
-                        "dying_window.unknown_slug actor=%s — WN window expired but "
-                        "the bound ruleset slug is unreadable; emitting spans under "
-                        "'unknown' rather than a false 'wwn' namespace",
-                        acting_name,
-                    )
-                    slug = "unknown"
-                downed_core.statuses = [
-                    s for s in downed_core.statuses if not is_dying_window_status(s)
-                ]
-                terminal = Status(
-                    text="Downed — dead (mortally wounded)",
-                    severity=StatusSeverity.Scar,
-                    created_turn=downed_status.created_turn,
-                    created_in_encounter=downed_status.created_in_encounter,
-                    incapacitating=True,
-                )
-                downed_core.statuses.append(terminal)
-                dying_window_tick_span(
-                    ruleset=slug,
-                    actor=acting_name,
-                    rounds_elapsed=rounds_elapsed,
-                    difficulty=8 + rounds_elapsed,
-                    action_was_stabilization=False,
-                )
-                dying_window_resolved_span(
-                    ruleset=slug,
-                    actor=acting_name,
-                    outcome="died",
-                    final_rounds_elapsed=rounds_elapsed,
-                    resulting_status="terminal-dead",
-                )
-                downed_status = terminal  # fall through to the terminal block
-            else:
-                downed_status = None  # permit — route to the narrator
-        if downed_status is not None:
-            from sidequest.server.post_resolution_lethality import (
-                build_incapacitated_message,
-                verdict_from_status_text,
-            )
-            from sidequest.telemetry.spans.encounter import (
-                player_action_blocked_incapacitated_span,
-            )
-
-            verdict = verdict_from_status_text(downed_status.text)
-            with player_action_blocked_incapacitated_span(
-                character=acting_name,
-                verdict=verdict,
-                status_text=downed_status.text,
-            ):
-                pass
-            logger.info(
-                "session.player_action_blocked_incapacitated character=%s verdict=%s "
-                "status=%s slug=%s",
-                acting_name,
-                verdict,
-                downed_status.text,
-                session._session_data.game_slug,
-            )
-            _watcher_publish(
-                "state_transition",
-                {
-                    "field": "session.player_action_blocked_incapacitated",
-                    "character": acting_name,
-                    "verdict": verdict,
-                    "status_text": downed_status.text,
-                },
-                component="encounter",
-            )
-            return [
-                build_incapacitated_message(
-                    character_name=acting_name,
-                    verdict=verdict,
-                    status_text=downed_status.text,
-                    player_id=sd.player_id or "",
-                )
-            ]
-
         if session._room is not None and sd.player_name:
             try:
                 # Canonical roster on the wire — every recipient agrees on
@@ -739,13 +462,10 @@ class PlayerActionHandler:
 
         with timings.phase("lore_retrieval"):
             lore_context = await session._retrieve_lore_for_turn(sd, action)
-        with timings.phase("entity_retrieval"):
-            entity_retrieval = await session._retrieve_entities_for_turn(sd, action)
         with timings.phase("turn_context_build"):
             turn_context = _build_turn_context(
                 sd,
                 lore_context=lore_context,
-                entity_retrieval=entity_retrieval,
                 room=session._room,
             )
         # Attach the handler-entry timer so `_execute_narration_turn`
@@ -824,14 +544,17 @@ class PlayerActionHandler:
                     # an explicit all-submitted projection when
                     # barrier_fired so the UI sees the round's terminal
                     # state on this final broadcast.
-                    submitted_roster = build_turn_status_roster(
-                        snapshot, session._room.playing_player_ids()
-                    )
                     if barrier_fired:
-                        # Barrier fired → _submitted was cleared on the phase
-                        # transition; project the round's terminal all-submitted
-                        # state (shared with the on-connect seal reconcile).
-                        submitted_roster = project_all_submitted(submitted_roster)
+                        submitted_roster = [
+                            entry.model_copy(update={"status": "submitted"})
+                            for entry in build_turn_status_roster(
+                                snapshot, session._room.playing_player_ids()
+                            )
+                        ]
+                    else:
+                        submitted_roster = build_turn_status_roster(
+                            snapshot, session._room.playing_player_ids()
+                        )
                     submitted_msg = TurnStatusMessage(
                         payload=TurnStatusPayload(
                             player_name=NonBlankString(acting_name),

@@ -27,7 +27,6 @@ def _create_mock_genre_pack(
     cover_poi: str | None = None,
     *,
     cartography: bool | str = False,
-    draft: bool = False,
 ) -> None:
     """Write minimal pack.yaml + world/world.yaml under packs_dir.
 
@@ -76,8 +75,6 @@ def _create_mock_genre_pack(
     }
     if cover_poi is not None:
         world_yaml["cover_poi"] = cover_poi
-    if draft:
-        world_yaml["draft"] = True
     (world_dir / "world.yaml").write_text(yaml.dump(world_yaml), encoding="utf-8")
 
     if cartography:
@@ -87,7 +84,9 @@ def _create_mock_genre_pack(
         }
         if isinstance(cartography, str):
             cart_yaml["navigation_mode"] = cartography
-        (world_dir / "cartography.yaml").write_text(yaml.dump(cart_yaml), encoding="utf-8")
+        (world_dir / "cartography.yaml").write_text(
+            yaml.dump(cart_yaml), encoding="utf-8"
+        )
 
 
 def _make_app(tmp_path: Path) -> TestClient:
@@ -170,7 +169,9 @@ def test_list_genres_navigation_mode_defaults_region_with_cartography(tmp_path):
     """
     packs_dir = tmp_path / "genre_packs"
     packs_dir.mkdir()
-    _create_mock_genre_pack(packs_dir, "tea_and_murder", "glenross", cartography=True)
+    _create_mock_genre_pack(
+        packs_dir, "tea_and_murder", "glenross", cartography=True
+    )
     saves_dir = tmp_path / "saves"
     saves_dir.mkdir()
     app = create_app(genre_pack_search_paths=[packs_dir], save_dir=saves_dir)
@@ -220,30 +221,6 @@ def test_list_genres_skips_symlinked_world_aliases(tmp_path):
     worlds = client.get("/api/genres").json()["caverns_and_claudes"]["worlds"]
     slugs = [w["slug"] for w in worlds]
     assert slugs == ["dungeon_survivor"], f"symlinked alias must be skipped; got {slugs}"
-
-
-def test_list_genres_skips_draft_world(tmp_path):
-    """A world with ``draft: true`` in world.yaml must NOT be offered in the
-    lobby. The pack loader (``_load_single_world``) skips draft worlds at load
-    time, so a draft world the lobby DOES list cannot actually load its
-    content — the session falls back silently to genre/sibling-world defaults
-    (No-Silent-Fallbacks violation). The lobby must honor the same draft skip.
-    """
-    packs_dir = tmp_path / "genre_packs"
-    packs_dir.mkdir()
-    _create_mock_genre_pack(packs_dir, "mutant_wasteland", "flickering_reach")
-    _create_mock_genre_pack(packs_dir, "mutant_wasteland", "seaboard_of_saints", draft=True)
-
-    saves_dir = tmp_path / "saves"
-    saves_dir.mkdir()
-    app = create_app(
-        genre_pack_search_paths=[packs_dir],
-        save_dir=saves_dir,
-    )
-    client = TestClient(app)
-    worlds = client.get("/api/genres").json()["mutant_wasteland"]["worlds"]
-    slugs = [w["slug"] for w in worlds]
-    assert slugs == ["flickering_reach"], f"draft world must be skipped; got {slugs}"
 
 
 def _make_app_with_cover_poi(
@@ -361,234 +338,217 @@ def test_list_sessions_returns_empty(tmp_path):
 
 # ---------------------------------------------------------------------------
 # GET /api/debug/state — GM dashboard State tab
-#
-# ADR-115 D7: /api/debug/state now reads sessions + snapshots from Postgres
-# (PgForensicReader.list_saves + PgSaveRepository.load), not the SQLite
-# save.db walk. These tests seed a migrated PG pool and assert the projection
-# flows through the lifted endpoint. The empty-state assertion now lives in
-# tests/server/test_rest_pg_forensic.py (it needs an isolated migrated_db
-# pool — a bare TestClient would read whatever SIDEQUEST_DATABASE_URL points
-# at).
 # ---------------------------------------------------------------------------
 
 
-def _pg_app(monkeypatch, migrated_db: str, tmp_path) -> tuple:
-    """Bind the process-global pool to a migrated_db and return (client, pool)."""
-    from sidequest.game import db_pool
-
-    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
-    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
-    db_pool.close_pool()
-    pool = db_pool.get_pool()
+def test_debug_state_empty_when_no_save_dir(tmp_path):
+    """With no games/ subdir, the endpoint returns [] (not 404)."""
     client = _make_app(tmp_path)
-    return client, pool
+    resp = client.get("/api/debug/state")
+    assert resp.status_code == 200
+    assert resp.json() == []
 
 
-def test_debug_state_projects_saved_game(monkeypatch, migrated_db, tmp_path):
-    """A persisted GameSnapshot (in PG) shows up in the SessionStateView list."""
-    from sidequest.game import db_pool
+def test_debug_state_projects_saved_game(tmp_path):
+    """A persisted GameSnapshot shows up in the SessionStateView list."""
+    from datetime import date
+
+    from sidequest.game.game_slug import generate_slug
     from sidequest.game.npc_pool import NpcPoolMember
-    from sidequest.game.persistence import GameMode
-    from sidequest.game.pg import sessions as pg_sessions
-    from sidequest.game.pg.save_repository import PgSaveRepository
+    from sidequest.game.persistence import SqliteStore, db_path_for_slug
     from sidequest.game.session import GameSnapshot, TurnManager
 
-    client, pool = _pg_app(monkeypatch, migrated_db, tmp_path)
-    try:
-        slug = "dust-and-lead-2026-05-26"
-        pg_sessions.ensure_session(
-            pool, slug=slug, mode="solo", genre_slug="spaghetti_western", world_slug="dust_and_lead"
-        )
-        repo = PgSaveRepository.for_slug(
-            pool,
-            slug=slug,
-            mode=GameMode.SOLO,
-            genre_slug="spaghetti_western",
-            world_slug="dust_and_lead",
-        )
-        snap = GameSnapshot(
-            genre_slug="spaghetti_western",
-            world_slug="dust_and_lead",
-            discovered_regions=["Sangre River Ford", "Dust Town"],
-            npc_pool=[
-                NpcPoolMember(
-                    name="El Paso",
-                    pronouns="he/him",
-                    role="sheriff",
-                    drawn_from="world_authored",
-                )
-            ],
-            turn_manager=TurnManager(interaction=3),
-        )
-        repo.save(snap)
+    # _make_app sets save_dir = tmp_path / "saves"
+    client = _make_app(tmp_path)
+    save_dir = tmp_path / "saves"
+    slug = generate_slug(world_slug="dust_and_lead", today=date.today())
+    db = db_path_for_slug(save_dir, slug)
+    db.parent.mkdir(parents=True, exist_ok=True)
+    store = SqliteStore(db)
+    store.initialize()
+    # Story 45-52: NpcRegistryEntry / GameSnapshot.npc_registry were dropped.
+    # The /api/debug/state projection reads from ``snap.npc_pool`` (and
+    # ``snap.npcs``) — surface El Paso in the pool directly. The legacy
+    # ``npc_registry`` wire field name is preserved on the projection side
+    # (rest.py) for dashboard back-compat; the in-memory snapshot stores
+    # the cast member in ``npc_pool``.
+    snap = GameSnapshot(
+        genre_slug="spaghetti_western",
+        world_slug="dust_and_lead",
+        discovered_regions=["Sangre River Ford", "Dust Town"],
+        npc_pool=[
+            NpcPoolMember(
+                name="El Paso",
+                pronouns="he/him",
+                role="sheriff",
+                drawn_from="world_authored",
+            )
+        ],
+        turn_manager=TurnManager(interaction=3),
+    )
+    store.save(snap)
+    store.close()
 
-        resp = client.get("/api/debug/state")
-        assert resp.status_code == 200
-        body = resp.json()
-        assert isinstance(body, list)
-        view = next(v for v in body if v["session_key"] == slug)
-        assert view["genre_slug"] == "spaghetti_western"
-        assert view["world_slug"] == "dust_and_lead"
-        assert view["current_location"] == ""
-        assert "Sangre River Ford" in view["discovered_regions"]
-        assert any(entry["name"] == "El Paso" for entry in view["npc_registry"]), (
-            f"El Paso missing from /api/debug/state projection: {view['npc_registry']!r}"
-        )
-        assert view["player_count"] == 0
-    finally:
-        db_pool.close_pool()
+    resp = client.get("/api/debug/state")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body, list)
+    assert len(body) == 1
+    view = body[0]
+    assert view["session_key"] == slug
+    assert view["genre_slug"] == "spaghetti_western"
+    assert view["world_slug"] == "dust_and_lead"
+    # Wave 2B: pre-chargen snapshot has no per-character location, so the
+    # party-frame projection is empty (no consensus).
+    assert view["current_location"] == ""
+    assert "Sangre River Ford" in view["discovered_regions"]
+    assert any(entry["name"] == "El Paso" for entry in view["npc_registry"]), (
+        f"El Paso missing from /api/debug/state projection: {view['npc_registry']!r}"
+    )
+    assert view["player_count"] == 0
 
 
-def test_debug_state_with_character_does_not_500(monkeypatch, migrated_db, tmp_path):
-    """A saved snapshot containing a Character must not 500 (Combatant-method
-    resolution regression — playtest 2026-04-23), now through the PG read."""
-    from sidequest.game import db_pool
+def test_debug_state_with_character_does_not_500(tmp_path):
+    """Regression for playtest 2026-04-23: a saved snapshot containing a
+    Character must not throw 500 when the dashboard polls /api/debug/state.
+
+    Character.name and Character.level are Combatant-equivalent methods (Rust
+    port), not attributes. rest.py used to do ``int(getattr(char, "level", 1))``
+    which gave it the bound method and crashed with
+    ``TypeError: int() argument must be a string ... not 'method'``.
+
+    This test creates a snapshot with a real Character and asserts the endpoint
+    returns 200 with the resolved name/level — covering both the call gate and
+    the wire path the previous test_debug_state_projects_saved_game (which had
+    no characters in its snapshot) never exercised.
+    """
+    from datetime import date
+
     from sidequest.game.character import Character
     from sidequest.game.creature_core import CreatureCore, Inventory
-    from sidequest.game.persistence import GameMode
-    from sidequest.game.pg import sessions as pg_sessions
-    from sidequest.game.pg.save_repository import PgSaveRepository
+    from sidequest.game.game_slug import generate_slug
+    from sidequest.game.persistence import SqliteStore, db_path_for_slug
     from sidequest.game.session import GameSnapshot, TurnManager
 
-    client, pool = _pg_app(monkeypatch, migrated_db, tmp_path)
-    try:
-        slug = "dust-and-lead-char-2026-05-26"
-        pg_sessions.ensure_session(
-            pool, slug=slug, mode="solo", genre_slug="spaghetti_western", world_slug="dust_and_lead"
-        )
-        repo = PgSaveRepository.for_slug(
-            pool,
-            slug=slug,
-            mode=GameMode.SOLO,
-            genre_slug="spaghetti_western",
-            world_slug="dust_and_lead",
-        )
-        char = Character(
-            core=CreatureCore(
-                name="El Paso",
-                description="A weathered gunslinger",
-                personality="quiet",
-                inventory=Inventory(),
-                level=4,
-                xp=37,
-            ),
-            char_class="Gunslinger",
-            race="Human",
-            backstory="Rode in from the dust",
-        )
+    client = _make_app(tmp_path)
+    save_dir = tmp_path / "saves"
+    slug = generate_slug(world_slug="dust_and_lead", today=date.today())
+    db = db_path_for_slug(save_dir, slug)
+    db.parent.mkdir(parents=True, exist_ok=True)
+    store = SqliteStore(db)
+    store.initialize()
+    char = Character(
+        core=CreatureCore(
+            name="El Paso",
+            description="A weathered gunslinger",
+            personality="quiet",
+            inventory=Inventory(),
+            level=4,
+            xp=37,
+        ),
+        char_class="Gunslinger",
+        race="Human",
+        backstory="Rode in from the dust",
+    )
+    snap = GameSnapshot(
+        genre_slug="spaghetti_western",
+        world_slug="dust_and_lead",
+        characters=[char],
+        turn_manager=TurnManager(interaction=3),
+    )
+    snap.character_locations["El Paso"] = "Sangre River Ford"
+    store.save(snap)
+    store.close()
+
+    resp = client.get("/api/debug/state")
+    assert resp.status_code == 200, f"500 regression — body: {resp.text}"
+    body = resp.json()
+    assert len(body) == 1
+    view = body[0]
+    assert view["player_count"] == 1
+    player = view["players"][0]
+    # Methods must be CALLED, not stringified as "<bound method ...>"
+    assert player["character_name"] == "El Paso"
+    assert player["character_level"] == 4
+
+
+def test_debug_state_sorts_newest_first_and_filters_by_session_key(tmp_path):
+    """Regression for playtest 2026-04-24: /api/debug/state returned sessions
+    in alphabetical (slug) order, so the dashboard's ``debugState[0]`` pick
+    landed on the oldest save instead of the active one.
+
+    Two saves are written with staggered mtimes; the newer one must appear
+    first, and ``?session_key=<slug>`` must filter to exactly one entry.
+    """
+    import os
+    import time as _time
+    from datetime import date as _date
+
+    from sidequest.game.game_slug import generate_slug
+    from sidequest.game.persistence import SqliteStore, db_path_for_slug
+    from sidequest.game.session import GameSnapshot, TurnManager
+
+    client = _make_app(tmp_path)
+    save_dir = tmp_path / "saves"
+
+    def _write_snapshot(world_slug: str, day: _date, location: str) -> str:
+        slug = generate_slug(world_slug=world_slug, today=day)
+        db = db_path_for_slug(save_dir, slug)
+        db.parent.mkdir(parents=True, exist_ok=True)
+        store = SqliteStore(db)
+        store.initialize()
         snap = GameSnapshot(
             genre_slug="spaghetti_western",
-            world_slug="dust_and_lead",
-            characters=[char],
-            turn_manager=TurnManager(interaction=3),
+            world_slug=world_slug,
+            location=location,
+            turn_manager=TurnManager(interaction=0),
         )
-        snap.character_locations["El Paso"] = "Sangre River Ford"
-        repo.save(snap)
+        store.save(snap)
+        store.close()
+        return slug
 
-        resp = client.get(f"/api/debug/state?session_key={slug}")
-        assert resp.status_code == 200, f"500 regression — body: {resp.text}"
-        body = resp.json()
-        assert len(body) == 1
-        view = body[0]
-        assert view["player_count"] == 1
-        player = view["players"][0]
-        # Methods must be CALLED, not stringified as "<bound method ...>"
-        assert player["character_name"] == "El Paso"
-        assert player["character_level"] == 4
-    finally:
-        db_pool.close_pool()
+    # Older save — touch mtime well in the past so sort order is
+    # unambiguous across filesystems with coarse mtime resolution.
+    old_slug = _write_snapshot("ghost_town", _date(2026, 4, 22), "Graveyard")
+    old_db = db_path_for_slug(save_dir, old_slug)
+    past_ts = _time.time() - 3600
+    os.utime(old_db, (past_ts, past_ts))
 
+    # Newer save — leave its mtime at "now".
+    new_slug = _write_snapshot(
+        "flickering_reach",
+        _date(2026, 4, 24),
+        "The Filtration Warren",
+    )
 
-def test_debug_state_sorts_newest_first_and_filters_by_session_key(
-    monkeypatch, migrated_db, tmp_path
-):
-    """/api/debug/state sorts newest-first by last_activity_ts and filters by
-    session_key (playtest 2026-04-24 default-[0]-pick regression). Now backed
-    by PgForensicReader.list_saves' last_played DESC ordering rather than
-    SQLite save-file mtime.
-    """
-    import time as _time
+    resp = client.get("/api/debug/state")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [v["session_key"] for v in body] == [new_slug, old_slug], (
+        "debug_state must sort newest-mtime first so the dashboard's "
+        "default [0] pick lands on the active session"
+    )
+    # last_activity_ts must be present and strictly ordered.
+    assert body[0]["last_activity_ts"] > body[1]["last_activity_ts"]
 
-    from sidequest.game import db_pool
-    from sidequest.game.persistence import GameMode
-    from sidequest.game.pg import sessions as pg_sessions
-    from sidequest.game.pg.save_repository import PgSaveRepository
-    from sidequest.game.session import GameSnapshot, TurnManager
+    # session_key filter narrows to exactly one entry.
+    filtered = client.get(f"/api/debug/state?session_key={old_slug}").json()
+    assert len(filtered) == 1
+    assert filtered[0]["session_key"] == old_slug
 
-    client, pool = _pg_app(monkeypatch, migrated_db, tmp_path)
-    try:
-
-        def _seed(slug: str, world_slug: str, location: str) -> None:
-            pg_sessions.ensure_session(
-                pool,
-                slug=slug,
-                mode="solo",
-                genre_slug="spaghetti_western",
-                world_slug=world_slug,
-            )
-            repo = PgSaveRepository.for_slug(
-                pool,
-                slug=slug,
-                mode=GameMode.SOLO,
-                genre_slug="spaghetti_western",
-                world_slug=world_slug,
-            )
-            repo.save(
-                GameSnapshot(
-                    genre_slug="spaghetti_western",
-                    world_slug=world_slug,
-                    location=location,
-                    turn_manager=TurnManager(interaction=0),
-                )
-            )
-
-        old_slug = "ghost-town-2026-04-22"
-        new_slug = "flickering-reach-2026-04-24"
-        _seed(old_slug, "ghost_town", "Graveyard")
-        # ensure_session sets last_played on each call; the second seed's
-        # last_played is strictly later than the first.
-        _time.sleep(0.01)
-        _seed(new_slug, "flickering_reach", "The Filtration Warren")
-
-        resp = client.get("/api/debug/state")
-        assert resp.status_code == 200
-        body = resp.json()
-        keys = [v["session_key"] for v in body]
-        # newest-first: the later-seeded session leads.
-        assert keys.index(new_slug) < keys.index(old_slug), (
-            "debug_state must sort newest-last_played first so the dashboard's "
-            f"default [0] pick lands on the active session; got {keys}"
-        )
-
-        # session_key filter narrows to exactly one entry.
-        filtered = client.get(f"/api/debug/state?session_key={old_slug}").json()
-        assert len(filtered) == 1
-        assert filtered[0]["session_key"] == old_slug
-
-        # Unknown session_key returns []; no 404.
-        missing = client.get("/api/debug/state?session_key=does-not-exist")
-        assert missing.status_code == 200
-        assert missing.json() == []
-    finally:
-        db_pool.close_pool()
+    # Unknown session_key returns []; no 404.
+    missing = client.get("/api/debug/state?session_key=does-not-exist")
+    assert missing.status_code == 200
+    assert missing.json() == []
 
 
-def test_cors_headers_present_for_dashboard(monkeypatch, migrated_db, tmp_path):
+def test_cors_headers_present_for_dashboard(tmp_path):
     """Dev UI on :5173 must receive CORS headers so the dashboard's
-    cross-origin fetch('/api/debug/state') polls don't spam the console.
-
-    ADR-115 D7: /api/debug/state reads the process-global PG pool, so this
-    test binds a migrated_db pool (an empty session list still returns 200
-    with CORS headers attached by middleware)."""
-    from sidequest.game import db_pool
-
-    client, _pool = _pg_app(monkeypatch, migrated_db, tmp_path)
-    try:
-        resp = client.get(
-            "/api/debug/state",
-            headers={"Origin": "http://localhost:5173"},
-        )
-        assert resp.status_code == 200
-        assert resp.headers.get("access-control-allow-origin") == "http://localhost:5173"
-    finally:
-        db_pool.close_pool()
+    cross-origin fetch('/api/debug/state') polls don't spam the console."""
+    client = _make_app(tmp_path)
+    resp = client.get(
+        "/api/debug/state",
+        headers={"Origin": "http://localhost:5173"},
+    )
+    assert resp.status_code == 200
+    assert resp.headers.get("access-control-allow-origin") == "http://localhost:5173"

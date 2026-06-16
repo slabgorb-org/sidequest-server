@@ -16,20 +16,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field, field_validator
 
 from sidequest.game.creature_core import CreatureCore
-from sidequest.protocol.models import (
-    AbilityDefinition,
-    AdvancementDelta,
-    AffinityTierUp,
-    CreationAnswer,
-    FactCategory,
-)
-
-__all__ = [
-    "AffinityState",
-    "Character",
-    "CreationAnswer",
-    "KnownFact",
-]
+from sidequest.protocol.models import AbilityDefinition, FactCategory
 
 
 class KnownFact(BaseModel):
@@ -109,30 +96,11 @@ class Character(BaseModel):
     # Abilities (P1-required — narrator uses genre_description for context)
     abilities: list[AbilityDefinition] = Field(default_factory=list)
 
-    # WWN Skills/Foci substrate (ADR-143 Task 7): skill name → level mapping and
-    # list of focus ids. Defaulted so all existing Character construction is
-    # unaffected; populated by the chargen builder in Task 10.
-    skills: dict[str, int] = Field(default_factory=dict)
-    foci: list[str] = Field(default_factory=list)
-
     # Character knowledge (P1-required — narrator uses known_facts for continuity)
     known_facts: list[KnownFact] = Field(default_factory=list)
 
     # P6-deferred: affinity tier progression (advancement system, Epic F8)
     affinities: list[AffinityState] = Field(default_factory=list)
-
-    # ADR-021 track 1: the most recent milestone→level-up delta, set by
-    # ``apply_level_ups`` each turn so the player-facing PartyMember can show
-    # it. Transient (``exclude=True``) — a per-turn notification, never
-    # persisted into the save (it would otherwise re-surface stale on reload).
-    last_advancement: AdvancementDelta | None = Field(default=None, exclude=True)
-
-    # ADR-021 track 2: affinity tier promotions from this turn, set by
-    # ``apply_affinity_tier_ups`` so the player-facing PartyMember can show them.
-    # A list — several affinities can advance in one turn. Transient
-    # (``exclude=True``) — a per-turn notification, never persisted (it would
-    # otherwise re-surface stale on reload).
-    last_affinity_tier_ups: list[AffinityTierUp] = Field(default_factory=list, exclude=True)
 
     # P1-required: determines narrator behaviour (player vs enemy framing)
     is_friendly: bool = True
@@ -147,24 +115,6 @@ class Character(BaseModel):
     # chassis-voice block).
     background: str = ""
     drive: str = ""
-
-    # Story 93-2: durable chargen provenance — one entry per ANSWERED scene
-    # (the player's verbatim freeform text or chosen option label), in
-    # scene-walk order. Populated by builder.build(); the 93-1 confirm seam
-    # marks the entries whose text fed the archetype inference. Persisted
-    # with the save (the inferred marker cannot be recomputed on load).
-    # Defaults to [] so pre-93-2 saves still validate.
-    creation_answers: list[CreationAnswer] = Field(default_factory=list)
-
-    # Display-only flavor labels for the player-facing sheet (Diamonds-and-
-    # Coal: flavor on the surface, archetype underneath). When chargen used a
-    # CHOICE whose label differs from the collapsed mechanical archetype, these
-    # carry the chosen flavor ("Country Veterinary Surgeon" / "The Village
-    # Itself") so the live CharacterPanel shows it instead of the raw slug
-    # (race/char_class). Empty when the label IS the archetype. The mechanical
-    # ``race``/``char_class`` are unaffected — loadout/genre systems read those.
-    origin_label: str = ""
-    calling_label: str = ""
     first_name: str = ""
     last_name: str = ""
     nickname: str = ""
@@ -174,12 +124,6 @@ class Character(BaseModel):
     # rooms; rendered on the Ship tab. Stays None until the narrator
     # sets it; the renderer falls back to a chassis-default room.
     current_room: str | None = None
-
-    # Player-chosen avatar portrait slug (Epic 66), matching the picker
-    # entry's `id` (e.g. "picker_hegemonic_officer_f01") and the rendered
-    # PNG filename. None when the player skipped the picker or the world
-    # ships no sample portraits. Cosmetic only.
-    portrait_ref: str | None = None
 
     @field_validator("backstory")
     @classmethod

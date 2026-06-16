@@ -43,7 +43,6 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 from opentelemetry import trace as otel_trace
@@ -55,8 +54,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 
 from sidequest.game.character import Character, KnownFact
 from sidequest.game.creature_core import CreatureCore, Inventory
-from sidequest.game.persistence import GameMode
-from sidequest.game.repository import SaveRepository
+from sidequest.game.persistence import GameMode, SqliteStore
 from sidequest.game.session import GameSnapshot
 from sidequest.protocol.enums import MessageType
 from sidequest.protocol.messages import (
@@ -113,7 +111,7 @@ def _bind_seated_room(
         snapshot.characters.append(char)
     snapshot.player_seats = {pid: ch.core.name for pid, ch in seats.items()}
 
-    store = MagicMock(spec=SaveRepository)
+    store = SqliteStore(tmp_path / "journal.db")
     room = SessionRoom(slug="journal-test", mode=GameMode.SOLO)
     room.bind_world(snapshot=snapshot, store=store)
     handler._room = room
@@ -430,7 +428,7 @@ async def test_seat_points_to_missing_character_returns_error(tmp_path: Path) ->
     snapshot.player_seats = {"P1": "Rux"}
     # No characters in the list — broken state.
 
-    store = MagicMock(spec=SaveRepository)
+    store = SqliteStore(tmp_path / "broken.db")
     room = SessionRoom(slug="broken", mode=GameMode.SOLO)
     room.bind_world(snapshot=snapshot, store=store)
     handler._room = room

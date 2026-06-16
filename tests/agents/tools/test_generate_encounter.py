@@ -25,18 +25,17 @@ from sidequest.agents.tool_registry import (
 )
 from sidequest.agents.tooling_protocol import ToolUseBlock
 from sidequest.agents.tools import generate_encounter as _generate_encounter_module  # noqa: F401
+from sidequest.game.persistence import SqliteStore
 
 # ---------------------------------------------------------------------------
 # Builders
 # ---------------------------------------------------------------------------
 
 
-def _store():
-    from unittest.mock import MagicMock
-
-    from sidequest.game.repository import SaveRepository
-
-    return MagicMock(spec=SaveRepository)
+def _store() -> SqliteStore:
+    s = SqliteStore.open_in_memory()
+    s.initialize()
+    return s
 
 
 def _make_ctx() -> ToolContext:
@@ -45,7 +44,7 @@ def _make_ctx() -> ToolContext:
         session_id="s",
         perspective_pc="Alice",
         turn_number=1,
-        repository=_store(),
+        store=_store(),
         otel_span=MagicMock(),
         perception_filter=NarratorPerceptionFilter(),
     )

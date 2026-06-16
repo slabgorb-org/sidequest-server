@@ -32,6 +32,7 @@ from sidequest.agents.tool_registry import (
 )
 from sidequest.agents.tooling_protocol import ToolUseBlock
 from sidequest.agents.tools import query_magic_state as _query_magic_state_module  # noqa: F401
+from sidequest.game.persistence import SqliteStore
 from sidequest.game.session import GameSnapshot
 from sidequest.game.turn import TurnManager
 from sidequest.magic.models import (
@@ -89,14 +90,16 @@ def _build_snapshot(*, magic_state: MagicState | None = None) -> GameSnapshot:
     )
 
 
-def _store_with(snapshot: GameSnapshot):
-    from tests.agents.tools.conftest import pg_store_with
-
-    return pg_store_with(snapshot)
+def _store_with(snapshot: GameSnapshot) -> SqliteStore:
+    store = SqliteStore.open_in_memory()
+    store.initialize()
+    store.init_session(genre_slug=snapshot.genre_slug, world_slug=snapshot.world_slug)
+    store.save(snapshot)
+    return store
 
 
 def _make_ctx(
-    store,
+    store: SqliteStore,
     *,
     perspective_pc: str | None = "Alice",
 ) -> ToolContext:
@@ -105,7 +108,7 @@ def _make_ctx(
         session_id="s",
         perspective_pc=perspective_pc,
         turn_number=3,
-        repository=store,
+        store=store,
         otel_span=MagicMock(),
         perception_filter=NarratorPerceptionFilter(),
     )
@@ -162,7 +165,7 @@ async def test_no_magic_state_records_otel_flag() -> None:
         session_id="s",
         perspective_pc="Alice",
         turn_number=1,
-        repository=store,
+        store=store,
         otel_span=span,
         perception_filter=NarratorPerceptionFilter(),
     )
@@ -294,7 +297,7 @@ async def test_other_pc_query_hides_mana_remaining_in_otel() -> None:
         session_id="s",
         perspective_pc="Alice",
         turn_number=1,
-        repository=store,
+        store=store,
         otel_span=span,
         perception_filter=NarratorPerceptionFilter(),
     )
@@ -367,9 +370,8 @@ async def test_empty_character_id_rejected_by_args_model() -> None:
 
 
 async def test_no_active_session_returns_fatal_error() -> None:
-    from tests.agents.tools.conftest import pg_empty_store
-
-    store = pg_empty_store()
+    store = SqliteStore.open_in_memory()
+    store.initialize()
     # No init_session/save → load() returns None.
     ctx = _make_ctx(store, perspective_pc="Alice")
 

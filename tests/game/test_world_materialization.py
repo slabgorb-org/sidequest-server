@@ -280,8 +280,7 @@ class TestWorldBuilderBuild:
             )
             .build()
         )
-        # Story 77-2: quest_log values are QuestEntry now — compare statuses.
-        assert {k: e.status for k, e in snap.quest_log.items()} == {
+        assert snap.quest_log == {
             "q1": "complete",  # updated by Early
             "q2": "in_progress",
             "q3": "assigned",

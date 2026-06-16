@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Save Forensics — SideQuest</title>
+<style>
+  :root { --bg:#0e1116; --line:#2b313a; --txt:#d6deeb;
+          --stored:#3fb950; --derived:#d29922; --absent:#6e7681; --acc:#58a6ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:13px/1.5 ui-monospace,Menlo,monospace; background:var(--bg); color:var(--txt); }
+  header { padding:10px 16px; border-bottom:1px solid var(--line); display:flex; gap:14px; align-items:baseline; }
+  header h1 { font-size:15px; margin:0; font-weight:600; }
+  .sub { color:var(--absent); }
+  .legend { margin-left:auto; }
+  .legend span { margin-right:14px; }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:5px; vertical-align:middle; }
+  .layout { display:flex; height:calc(100vh - 47px); }
+  aside { width:240px; border-right:1px solid var(--line); overflow:auto; }
+  aside .save { padding:8px 12px; border-bottom:1px solid var(--line); cursor:pointer; }
+  aside .save:hover { background:#1c2230; }
+  aside .save.sel { background:#1f6feb33; border-left:3px solid var(--acc); }
+  main { flex:1; overflow:auto; padding:0; }
+  /* P0.1 — no panel fills/borders/radius. A section is a quiet label + one rule. */
+  section { padding:14px 18px; border-bottom:1px solid var(--line); }
+  .lbl { font-size:11px; text-transform:lowercase; letter-spacing:.08em; color:var(--absent); margin:0 0 8px; }
+  pre { white-space:pre-wrap; word-break:break-word; margin:3px 0; }
+  .tier-stored { color:var(--stored); }
+  .tier-derived { color:var(--derived); }
+  .tier-absent  { color:var(--absent); font-style:italic; }
+  .tier-mechanical { color:var(--derived); }
+  .warn { color:#f85149; }
+  .seqs { color:var(--absent); font-size:11px; }
+  /* macro strip */
+  #strip { width:100%; display:block; }
+  #strip rect.r { cursor:pointer; }
+  #strip rect.r:hover { fill:var(--acc); }
+  #strip rect.r.sel { stroke:var(--acc); stroke-width:1.5; }
+  .axis { fill:var(--absent); font-size:10px; }
+  /* P0.3 — the comparison: two aligned, like-formatted columns, adjacent */
+  .cmp { display:grid; grid-template-columns:1fr 1fr; gap:0 28px; }
+  .cmp h3 { font-size:11px; margin:0 0 6px; letter-spacing:.05em; }
+  .cmp .d h3 { color:var(--derived); } .cmp .s h3 { color:var(--stored); }
+  .kv { display:grid; grid-template-columns:130px 1fr; gap:2px 10px; align-items:baseline; }
+  .kv .k { color:var(--absent); }
+  .ok { color:var(--stored); } .div { color:var(--derived); }
+  /* P0.4 — evidence: collapsed one-liners, native disclosure, zero JS */
+  details { border-top:1px solid var(--line); }
+  details > summary { cursor:pointer; padding:7px 0; color:var(--txt); list-style:none; }
+  details > summary::-webkit-details-marker { display:none; }
+  details > summary::before { content:"▸ "; color:var(--absent); }
+  details[open] > summary::before { content:"▾ "; }
+  details > summary .meta { color:var(--absent); margin-left:8px; }
+  .ev-body { padding:4px 0 10px 14px; }
+  .tel-fields { margin:0; }
+  table { width:100%; border-collapse:collapse; }
+  td,th { border-bottom:1px solid var(--line); padding:4px 6px; text-align:left; vertical-align:top; }
+  th { color:var(--absent); font-weight:600; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Save Forensics</h1>
+  <span class="sub">read-only post-mortem · sibling of the OTEL dashboard</span>
+  <span class="legend">
+    <span><i class="dot" style="background:var(--derived)"></i>derived (narrator believed)</span>
+    <span><i class="dot" style="background:var(--stored)"></i>stored (ground truth)</span>
+    <span><i class="dot" style="background:var(--absent)"></i>absent</span>
+  </span>
+</header>
+<div class="layout">
+  <aside id="rail"><div class="save sub" style="padding:12px">Loading saves…</div></aside>
+  <main id="main"><section><p class="sub">Pick a save on the left.</p></section></main>
+</div>
+<script>
+const rail = document.getElementById('rail');
+const main = document.getElementById('main');
+let curSlug = null;
+let curTimeline = [];
+let curRound = null;   // P2.2 — selected round, drives ←/→ keyboard scrub
+let saves = [];
+// mechStateCache: round -> state string ('absent'|'populated'|'static'|…)
+// populated on column-click as the per-round mechanical bundle is fetched.
+// The strip mechanical row re-renders each time a new column is visited.
+const mechStateCache = new Map();
+// factCountCache: round -> cumulative-derived KnownFacts count, populated on
+// column-click exactly like mechStateCache (same R8 no-extra-fetch contract —
+// the timeline endpoint carries no per-round fact counts). The P2.1 flatline
+// annotation reads this, so it sharpens as the GM scrubs the game.
+const factCountCache = new Map();
+
+const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const j = o => esc(JSON.stringify(o, null, 2));
+const SVGNS = 'http://www.w3.org/2000/svg';
+
+async function getJSON(u){ const r = await fetch(u); if(!r.ok) throw new Error(u+' '+r.status); return r.json(); }
+
+async function loadSaves(){
+  let fetched;
+  try { fetched = await getJSON('/api/debug/saves'); }
+  catch(e){ rail.innerHTML = '<div class="save warn">'+esc(e.message)+'</div>'; return; }
+  saves = fetched;
+  if(!saves.length){ rail.innerHTML = '<div class="save sub">No saves found.</div>'; return; }
+  rail.innerHTML = '';
+  for(const s of saves){
+    const d = document.createElement('div');
+    d.className = 'save'; d.dataset.slug = s.slug;
+    d.innerHTML = '<b>'+esc(s.slug)+'</b><br><span class="sub">'+
+      esc(s.genre)+' / '+esc(s.world)+'</span>';
+    d.onclick = () => selectSave(s.slug, d);
+    rail.appendChild(d);
+  }
+}
+
+async function selectSave(slug, el){
+  curSlug = slug;
+  document.querySelectorAll('.save').forEach(n => n.classList.remove('sel'));
+  el.classList.add('sel');
+  main.innerHTML = '<section><p class="sub">Loading timeline…</p></section>';
+  let tl;
+  try { tl = await getJSON('/api/debug/save/'+encodeURIComponent(slug)+'/timeline'); }
+  catch(e){ main.innerHTML = '<section><p class="warn">'+esc(e.message)+'</p></section>'; return; }
+  if(!Array.isArray(tl) || !tl.length){
+    main.innerHTML = '<section><p class="sub">No narrative rounds in this save.</p></section>'; return; }
+  curTimeline = tl;
+  curRound = null;
+  mechStateCache.clear();  // reset per-round caches when a new save is selected
+  factCountCache.clear();
+  const sv = saves.find(s => s.slug === slug);
+  main.innerHTML =
+    '<section><p class="lbl">macro — '+esc(slug)+' · '+esc(tl.length)+
+      ' rounds · '+esc(sv && sv.telemetry_rows != null ? sv.telemetry_rows : 0)+
+      ' telemetry · '+
+      esc(sv && sv.mechanical_rows != null ? sv.mechanical_rows : 0)+
+      ' mechanical · click a column</p><svg id="strip"></svg>'+
+      '<div id="axis" class="sub" style="font-size:11px;margin-top:4px"></div></section>'+
+    '<div id="drill"><section><p class="sub">Pick a round above.</p></section></div>';
+  renderStrip(tl);
+}
+
+// P2.1 — find the first round that opens a ≥5-round stretch where cumulative
+// KnownFacts never grow ("narrator stopped grounding here"). Reads only the
+// rounds the GM has visited (factCountCache); honest gaps in the cache break a
+// run rather than guessing across them. Returns {round, len} or null.
+function flatlineSpan(tl){
+  let best = null;            // {round (start of the flat run), len}
+  let runLen = 0;            // rounds in the current flat run (incl. anchor)
+  let startRound = null;     // round that anchors the current flat run
+  let prevCount = null, prevRound = null;
+  for(const t of tl){
+    const c = factCountCache.get(t.round);
+    if(c == null){           // unvisited round — can't assert flat; break the run
+      prevCount = null; prevRound = null; runLen = 0; startRound = null; continue;
+    }
+    if(prevCount != null && c === prevCount){
+      if(runLen === 0){ runLen = 2; startRound = prevRound; }  // anchor + this round
+      else runLen++;
+      if(runLen >= 5 && (!best || runLen > best.len)) best = {round: startRound, len: runLen};
+    } else {
+      runLen = 0; startRound = null;
+    }
+    prevCount = c; prevRound = t.round;
+  }
+  return best;
+}
+
+// P0.2 — the whole game as one small-multiple strip, replacing the 117-row
+// scroll list. event-density per round + clickable round axis. (The
+// cumulative-KnownFacts curve is P1.1 — needs the per-round fold; documented.)
+function renderStrip(tl){
+  const svg = document.getElementById('strip');
+  const W = svg.clientWidth || svg.parentNode.clientWidth || 900;
+  const H = 70, PAD = 6, n = tl.length;
+  const bw = Math.max(1, (W - PAD*2) / n);
+  const counts = tl.map(t => Object.values(t.event_kind_counts||{})
+    .reduce((a,b)=>a+(+b||0), 0));
+  const max = Math.max(1, ...counts);
+  svg.setAttribute('viewBox', '0 0 '+W+' '+H);
+  svg.setAttribute('height', H);
+  while(svg.firstChild) svg.removeChild(svg.firstChild);
+  tl.forEach((t, i) => {
+    const c = counts[i];
+    const h = c === 0 ? 2 : Math.round((H - 16) * c / max) + 2;
+    const x = PAD + i*bw;
+    const rect = document.createElementNS(SVGNS, 'rect');
+    rect.setAttribute('class', 'r');
+    rect.setAttribute('x', x.toFixed(2));
+    rect.setAttribute('y', (H - 12 - h).toFixed(2));
+    rect.setAttribute('width', Math.max(0.5, bw - 0.5).toFixed(2));
+    rect.setAttribute('height', h);
+    rect.setAttribute('fill', c === 0 ? 'var(--absent)' : '#3a4a63');
+    rect.dataset.round = t.round;
+    // P2.3 — native <title> hover, parity with the dashboard's flame-bar
+    // title= convention (no floating JS tooltip layer). Carries the same
+    // sparkline datum the row encodes plus the cached cumulative-facts count.
+    const fc = factCountCache.get(t.round);
+    const tip = document.createElementNS(SVGNS, 'title');
+    tip.textContent = 'Round '+t.round+' · seq '+(t.seq_start??'–')+'–'+
+      (t.seq_end??'–')+' · '+(Object.entries(t.event_kind_counts||{})
+      .map(([k,v])=>k+'×'+v).join(' ') || 'no events')+
+      ' · facts known '+(fc == null ? '? (click to load)' : fc);
+    rect.appendChild(tip);
+    rect.addEventListener('click', () => selectTurn(t.round));
+    svg.appendChild(rect);
+  });
+  // mechanical lane: thin second row (≤8px) at y=H-8, one rect per round.
+  // Source: mechStateCache populated on column-click (binary present/absent
+  // until visited; tri-state once fetched). No new fetch — R8 decision.
+  tl.forEach((t, i) => {
+    const state = mechStateCache.get(t.round);
+    const fill = !state || state === 'absent'
+      ? 'var(--absent)'
+      : 'var(--derived)';
+    const x = PAD + i*bw;
+    const mr = document.createElementNS(SVGNS, 'rect');
+    mr.setAttribute('class', 'mech-lane');
+    mr.setAttribute('x', x.toFixed(2));
+    mr.setAttribute('y', H - 8);
+    mr.setAttribute('width', Math.max(0.5, bw - 0.5).toFixed(2));
+    mr.setAttribute('height', 6);
+    mr.setAttribute('fill', fill);
+    mr.dataset.round = t.round;
+    const mtip = document.createElementNS(SVGNS, 'title');
+    mtip.textContent = 'Round '+t.round+' mechanical · '+
+      (state == null ? 'not yet visited' : state);
+    mr.appendChild(mtip);
+    svg.appendChild(mr);
+  });
+  // P2.1 — annotate the round that opens a ≥5-round cumulative-facts flatline.
+  // Honest: only over the visited span (factCountCache); the marker appears
+  // once the GM has scrubbed enough adjacent rounds to prove the plateau.
+  const fl = flatlineSpan(tl);
+  if(fl != null){
+    const idx = tl.findIndex(t => t.round === fl.round);
+    if(idx >= 0){
+      const x = PAD + idx*bw;
+      const mark = document.createElementNS(SVGNS, 'line');
+      mark.setAttribute('x1', x.toFixed(2)); mark.setAttribute('x2', x.toFixed(2));
+      mark.setAttribute('y1', '0'); mark.setAttribute('y2', (H - 12).toFixed(2));
+      mark.setAttribute('stroke', 'var(--absent)');
+      mark.setAttribute('stroke-dasharray', '2 2');
+      const mtip = document.createElementNS(SVGNS, 'title');
+      mtip.textContent = 'narrator stopped grounding here — cumulative facts '+
+        'flat for '+fl.len+' rounds from R'+fl.round;
+      mark.appendChild(mtip);
+      svg.appendChild(mark);
+    }
+  }
+  // sparse round axis: first · mid · last
+  const ax = document.getElementById('axis');
+  const f = tl[0].round, m = tl[Math.floor(n/2)].round, l = tl[n-1].round;
+  ax.textContent = 'R'+f+'  …  R'+m+'  …  R'+l +
+    (fl != null ? '   ⚠ facts flatline from R'+fl.round+' ('+fl.len+' rounds)' : '');
+}
+
+function markSel(round){
+  document.querySelectorAll('#strip rect').forEach(r =>
+    r.classList.toggle('sel', +r.dataset.round === +round));
+}
+
+// flatten the stored snapshot to the fields a GM audits — never a 20KB dump
+function storedRows(snap){
+  if(!snap || typeof snap !== 'object') return [['snapshot','— unavailable']];
+  if(snap.error) return [['snapshot', '⚠ '+snap.error]];
+  const rows = [];
+  const tm = snap.turn_manager || {};
+  rows.push(['round', tm.round!=null ? String(tm.round) : '—']);
+  rows.push(['region', snap.current_region || '—']);
+  rows.push(['player_dead', String(!!snap.player_dead)]);
+  const seats = snap.player_seats || {};
+  rows.push(['seats', Object.keys(seats).length ? Object.keys(seats).join(', ') : '—']);
+  const locs = snap.character_locations || {};
+  for(const [who, where] of Object.entries(locs)) rows.push(['loc · '+who, where]);
+  for(const ch of (snap.characters || [])){
+    const co = ch.core || {};
+    const inv = (co.inventory && co.inventory.items) || [];
+    rows.push(['pc · '+(co.name||'?'),
+      'L'+(co.level??'?')+' · xp '+(co.xp??'?')+' · '+inv.length+' items']);
+  }
+  const tr = snap.active_tropes || [];
+  if(tr.length) rows.push(['active tropes',
+    tr.map(t => (t.id||'?')+'('+(t.status||'?')+')').join(', ')]);
+  return rows;
+}
+
+// P1.3 — best-effort divergence between what the narrator BELIEVED (derived
+// KnownFacts) and the stored ground-truth snapshot. Derived and stored share
+// no join key, so alignment is by semantic category only — substring overlap,
+// case-folded. We never fabricate a join: a missing signal on either side is
+// reported as 'unknown', not as a match or a divergence. Returns one tag row
+// {label, derived, stored, status} where status ∈ ok|diverged|unknown.
+function divergeRow(label, derivedVals, storedVals){
+  const d = (derivedVals||[]).map(s => String(s||'').trim()).filter(Boolean);
+  const s = (storedVals||[]).map(v => String(v||'').trim()).filter(Boolean);
+  const dTxt = d.length ? d.join(', ') : '—';
+  const sTxt = s.length ? s.join(', ') : '—';
+  if(!d.length || !s.length) return {label, derived:dTxt, stored:sTxt, status:'unknown'};
+  const lc = a => a.map(x => x.toLowerCase());
+  const dl = lc(d), sl = lc(s);
+  const overlap = dl.some(x => sl.some(y => x.includes(y) || y.includes(x)));
+  return {label, derived:dTxt, stored:sTxt, status: overlap ? 'ok' : 'diverged'};
+}
+
+function divergeTag(status){
+  if(status === 'ok') return '<span class="ok">✓</span>';
+  if(status === 'diverged') return '<span class="warn">⚠ diverged</span>';
+  return '<span class="tier-absent">· no shared signal</span>';
+}
+
+async function selectTurn(round){
+  curRound = +round;   // P2.2 — anchor for ←/→ keyboard scrub
+  markSel(round);
+  const drill = document.getElementById('drill');
+  drill.innerHTML = '<section><p class="sub">Loading round '+esc(round)+'…</p></section>';
+  let b;
+  try { b = await getJSON('/api/debug/save/'+encodeURIComponent(curSlug)+
+    '/turn/'+encodeURIComponent(round)); }
+  catch(e){ drill.innerHTML = '<section><p class="warn">'+esc(e.message)+'</p></section>'; return; }
+  let snap = null;
+  try { snap = await getJSON('/api/debug/save/'+
+    encodeURIComponent(curSlug)+'/snapshot'); } catch(e){ snap = {error:e.message}; }
+
+  // ---- DERIVED summary (KnownFacts the narrator had by this round) ----
+  const derEntries = Object.entries(b.derived || {});
+
+  // cache the tri-state (mech lane) + cumulative-fact count (P2.1 flatline /
+  // P2.3 tooltip) and re-render the strip so both reflect this visit
+  const mechState = (b.mechanical && b.mechanical.state) || 'absent';
+  mechStateCache.set(round, mechState);
+  factCountCache.set(+round, derEntries.length);
+  if(curTimeline.length) renderStrip(curTimeline);
+
+  const cats = {};
+  for(const [,v] of derEntries){
+    const c = (v.value && v.value.category) || '—';
+    cats[c] = (cats[c]||0) + 1;
+  }
+  const catLine = Object.entries(cats).sort((a,b)=>b[1]-a[1])
+    .map(([c,n]) => esc(c)+' '+n).join(' · ') || '—';
+  const unp = (b.unparseable_seqs||[]).length
+    ? '<div class="warn">⚠ unparseable event seqs: '+
+      b.unparseable_seqs.map(esc).join(', ')+'</div>' : '';
+
+  const derCol =
+    '<div class="kv">'+
+    '<span class="k">facts known</span><span class="tier-derived">'+esc(derEntries.length)+'</span>'+
+    '<span class="k">by category</span><span>'+catLine+'</span>'+
+    '<span class="k">integrity</span><span>'+(
+      (b.unparseable_seqs||[]).length
+        ? '<span class="warn">'+(b.unparseable_seqs.length)+' unparseable</span>'
+        : '<span class="ok">clean</span>')+'</span>'+
+    '</div>';
+
+  // ---- RECORDED THIS ROUND (per-round, varies). Split-party honest:
+  // scrapbook is ONE scene/round (the illustration's setting, NOT "where
+  // the party is" — a split party has no single location). The real
+  // per-round multi-location signal is the Place-category KnownFacts the
+  // narrator GROUNDED this round (provenance seq within the round's
+  // range) — that lists every place touched this round, 1 or many.
+  // Per-PC standing location is terminal-only → terminal-snapshot evidence. ----
+  const sb = b.scrapbook || [];
+  const scenes = sb.map(s => (s.scene_title||'?')+' ('+(s.scene_type||'?')+
+    ') @ '+(s.location||'?')+' ['+(s.render_status||'?')+']');
+  const evSeqs = (b.events||[]).map(e => +e.seq).filter(Number.isFinite);
+  const loSeq = evSeqs.length ? Math.min(...evSeqs) : null;
+  const hiSeq = evSeqs.length ? Math.max(...evSeqs) : null;
+  const placesThisRound = [];
+  if(loSeq != null){
+    for(const [,v] of derEntries){
+      if(v.value && v.value.category === 'Place'){
+        const ss = (v.source_seqs||[]).map(Number);
+        if(ss.some(x => x >= loSeq && x <= hiSeq)) placesThisRound.push(v.value.summary);
+      }
+    }
+  }
+  const authors = [...new Set((b.narrative||[]).map(n => n.author).filter(Boolean))];
+  const evKinds = {};
+  for(const e of (b.events||[])) evKinds[e.kind] = (evKinds[e.kind]||0)+1;
+  const evLine = Object.entries(evKinds).map(([k,n]) => k+'×'+n).join(' ') || '—';
+  const recRows = [
+    ['places grounded (R'+round+')', placesThisRound.length
+      ? placesThisRound.join('  ·  ')
+      : '— no new place grounded this round'],
+    ['scene (one per round)', scenes.length ? scenes.join('  ·  ') : '— none'],
+    ['narrators', authors.length ? authors.join(', ') : '—'],
+    ['events', evLine],
+  ];
+  const recCol = '<div class="kv">'+ recRows.map(([k,v]) =>
+    '<span class="k">'+esc(k)+'</span><span class="tier-stored">'+esc(v)+'</span>').join('') +'</div>';
+
+  // ---- P1.3 divergence: derived belief vs stored snapshot, by category ----
+  // location: places the narrator grounded this round vs the snapshot's
+  // character_locations values. party: stored PC/character names (from
+  // character_locations keys + player_seats) vs the same, against derived
+  // Person-category facts the narrator knew. Best-effort, no fabricated join.
+  const snapLocs = (snap && snap.character_locations) || {};
+  const storedLocVals = Object.values(snapLocs);
+  const storedParty = [
+    ...Object.keys(snapLocs),
+    ...Object.keys((snap && snap.player_seats) || {}),
+    ...((snap && snap.characters) || []).map(c => (c.core && c.core.name) || c.name),
+  ].filter(Boolean);
+  const derivedPersons = derEntries
+    .filter(([,v]) => v.value && v.value.category === 'Person')
+    .map(([,v]) => v.value.summary);
+  const divRows = [
+    divergeRow('location', placesThisRound, storedLocVals),
+    divergeRow('party', derivedPersons, storedParty),
+  ];
+  const divBlock = (snap && !snap.error)
+    ? '<div class="kv" style="margin-top:8px">'+ divRows.map(r =>
+        '<span class="k">'+esc(r.label)+' '+divergeTag(r.status)+'</span>'+
+        '<span><span class="tier-derived">'+esc(r.derived)+'</span>'+
+        '<span class="tier-absent"> vs </span>'+
+        '<span class="tier-stored">'+esc(r.stored)+'</span></span>').join('') +
+      '</div>'
+    : '<div class="kv" style="margin-top:8px"><span class="k">divergence</span>'+
+      '<span class="tier-absent">— snapshot unavailable</span></div>';
+
+  // ---- evidence (collapsed) ----
+  const narr = (b.narrative||[]).map(nn =>
+    '<pre><b>'+esc(nn.author)+':</b> '+esc(nn.content)+'</pre>').join('')
+    || '<span class="tier-absent">— no narrative this round</span>';
+
+  const evs = (b.events||[]).map(e =>
+    '<pre>#'+esc(e.seq)+' '+esc(e.kind)+'\n'+j(e.payload)+'</pre>').join('')
+    || '<span class="tier-absent">— no events this round</span>';
+
+  const ledger = derEntries.length
+    ? '<table><tr><th>fact_id</th><th>category</th><th>summary</th><th>provenance</th></tr>'+
+      derEntries.map(([k,v]) => '<tr><td class="tier-derived">'+esc(k)+'</td><td>'+
+        esc(v.value && v.value.category)+'</td><td>'+esc(v.value && v.value.summary)+
+        '</td><td class="seqs">seq '+(v.source_seqs||[]).map(esc).join(', ')+
+        '</td></tr>').join('')+'</table>'
+    : '<span class="tier-absent">— no event carried any fact through this turn</span>';
+
+  const proj = (b.projection||[]).map(p =>
+    '<tr><td>'+esc(p.event_seq)+'</td><td>'+esc(p.player_id)+'</td>'+
+    '<td class="'+(p.include?'ok':'tier-absent')+'">'+(p.include?'shown':'hidden')+'</td>'+
+    '<td><pre>'+j(p.payload)+'</pre></td></tr>').join('')
+    || '<tr><td colspan="4" class="tier-absent">— no projection rows</td></tr>';
+
+  const scrap = (b.scrapbook||[]).map(s =>
+    '<pre><b>'+esc(s.scene_title)+'</b> ('+esc(s.scene_type)+' @ '+esc(s.location)+
+    ') ['+esc(s.render_status)+']\n'+esc(s.narrative_excerpt)+'</pre>').join('')
+    || '<span class="tier-absent">— no scrapbook entry</span>';
+
+  const evCount = (b.events||[]).length, scCount = (b.scrapbook||[]).length;
+
+  const tel = (b.telemetry) || {rows:[],by_component:{},total:0,unparseable_seqs:[]};
+  const telBody = tel.total
+    ? Object.keys(tel.by_component).sort().map(comp => {
+        const ets = tel.by_component[comp];
+        const head = '<div class="seqs">'+esc(comp)+' — '+
+          Object.keys(ets).sort().map(et => esc(et)+'×'+esc(ets[et])).join(', ')+
+          '</div>';
+        const lines = tel.rows.filter(r => r.component === comp).map(r =>
+          '<tr><td class="tier-derived">'+esc(r.component)+'</td><td>'+
+          esc(r.event_type)+'</td><td><pre class="tel-fields">'+j(r.fields)+
+          '</pre></td></tr>').join('');
+        return head+'<table><tr><th>component</th><th>event_type</th>'+
+          '<th>fields</th></tr>'+lines+'</table>';
+      }).join('') +
+      (tel.unparseable_seqs.length
+        ? '<div class="tier-absent">— '+esc(tel.unparseable_seqs.length)+
+          ' unparseable telemetry row(s) skipped (seq '+
+          tel.unparseable_seqs.map(esc).join(', ')+')</div>'
+        : '')
+    : '<span class="tier-absent">— no decision telemetry (save predates the substrate)</span>';
+
+  const mech = (b.mechanical) || {state:'absent',pcs:[],trope:null,unparseable_seqs:[]};
+  const mechRow = pc => {
+    if (pc.kind === 'baseline') {
+      const a = pc.absolute || {};
+      return '<tr><td class="tier-mechanical">'+esc(pc.character_name)+
+        ' (seat '+esc(pc.seat)+')</td><td>baseline</td><td><pre '+
+        'class="tel-fields">'+j(a)+'</pre></td></tr>';
+    }
+    if (pc.kind === 'static') {
+      return '<tr><td class="tier-mechanical">'+esc(pc.character_name)+
+        '</td><td colspan="2"><span class="tier-absent">· no mechanical change</span></td></tr>';
+    }
+    const ds = (pc.deltas||[]).map(d =>
+      esc(d[0])+': '+esc(d[1])).join('<br>');
+    return '<tr><td class="tier-mechanical">'+esc(pc.character_name)+
+      '</td><td>moved</td><td>'+ds+'</td></tr>';
+  };
+  const mechBody = (mech.state === 'absent')
+    ? '<span class="tier-absent">— no mechanical census (save predates Phase 2 coverage)</span>'
+    : '<table><tr><th>pc</th><th>state</th><th>change</th></tr>'+
+      (mech.pcs||[]).map(mechRow).join('')+'</table>'+
+      (mech.trope
+        ? '<div class="seqs">trope: '+esc(mech.trope.summary)+
+          ' (since-meaningful '+esc(mech.trope.turns_since_meaningful ?? '?')+
+          ', beats '+esc(mech.trope.total_beats_fired ?? '?')+')</div>'
+        : '')+
+      ((mech.unparseable_seqs||[]).length
+        ? '<div class="tier-absent">— '+
+          esc(mech.unparseable_seqs.length)+
+          ' unparseable census row(s) skipped (seq '+
+          mech.unparseable_seqs.map(esc).join(', ')+')</div>'
+        : '');
+
+  drill.innerHTML =
+    '<section><p class="lbl">comparison · round '+esc(round)+
+      ' — what the narrator had established, vs what was recorded this round'+
+      ' (SideQuest stores no per-round snapshot — see terminal snapshot below)</p>'+ unp +
+      '<div class="cmp"><div class="d"><h3>DERIVED — narrator believed (by R'+esc(round)+
+        ')</h3>'+derCol+'</div>'+
+      '<div class="s"><h3>RECORDED THIS ROUND</h3>'+recCol+'</div></div>'+
+      '<p class="lbl" style="margin-top:12px">divergence · derived belief vs stored '+
+        'snapshot (semantic, best-effort — no shared join key)</p>'+ divBlock +
+      '</section>'+
+    '<section><p class="lbl">evidence</p>'+
+      '<details><summary>narrative<span class="meta">round '+esc(round)+
+        '</span></summary><div class="ev-body">'+narr+'</div></details>'+
+      '<details><summary>event stream (verbatim)<span class="meta">'+esc(evCount)+
+        ' events</span></summary><div class="ev-body">'+evs+'</div></details>'+
+      '<details><summary>KnownFacts ledger<span class="meta">'+esc(derEntries.length)+
+        ' facts</span></summary><div class="ev-body">'+ledger+'</div></details>'+
+      '<details><summary>per-player projection lens<span class="meta">'+
+        esc((b.projection||[]).length)+' rows</span></summary><div class="ev-body">'+
+        '<table><tr><th>seq</th><th>player</th><th>visibility</th><th>projected payload</th></tr>'+
+        proj+'</table></div></details>'+
+      '<details><summary>scrapbook<span class="meta">'+esc(scCount)+
+        ' entries</span></summary><div class="ev-body">'+scrap+'</div></details>'+
+      '<details><summary>decision telemetry (this round)<span class="meta">'+
+        esc(tel.total)+' signals</span></summary><div class="ev-body">'+
+        telBody+'</div></details>'+
+      '<details><summary>mechanical state (this round)<span class="meta">'+
+        esc((mech.pcs||[]).length)+' PCs · '+esc(mech.state)+
+        '</span></summary><div class="ev-body">'+mechBody+
+        '</div></details>'+
+      '<details><summary>terminal snapshot<span class="meta">round '+
+        esc((snap && snap.turn_manager && snap.turn_manager.round) ?? '?')+
+        ' · the ONLY stored snapshot — identical on every round, NOT this round’s state'+
+        '</span></summary><div class="ev-body"><div class="kv">'+
+        storedRows(snap).map(([k,v]) => '<span class="k">'+esc(k)+
+          '</span><span class="tier-stored">'+esc(v)+'</span>').join('')+
+        '</div><details><summary>raw JSON</summary><div class="ev-body">'+
+        '<pre class="tier-stored">'+j(snap)+'</pre></div></details></div></details>'+
+    '</section>';
+}
+
+// P2.2 — ←/→ scrub between rounds, matching a GM stepping through the game.
+// Drives the same selectTurn path a strip-column click uses. Ignored while
+// typing in a field and when no round is selected yet.
+document.addEventListener('keydown', e => {
+  if(e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+  const t = e.target;
+  if(t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+  if(!curTimeline.length) return;
+  let idx = curTimeline.findIndex(x => +x.round === curRound);
+  if(idx < 0) idx = (e.key === 'ArrowRight') ? -1 : curTimeline.length;  // first/last step
+  const next = idx + (e.key === 'ArrowRight' ? 1 : -1);
+  if(next < 0 || next >= curTimeline.length) return;
+  e.preventDefault();
+  selectTurn(curTimeline[next].round);
+});
+
+loadSaves();
+</script>
+</body>
+</html>

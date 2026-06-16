@@ -37,7 +37,7 @@ def test_unreachable_kind_is_rejected() -> None:
               - kind: TURN_STATUS
                 redact_fields:
                   - field: anything
-                    unless: is_self()
+                    unless: is_gm()
                     mask: null
             """
         )
@@ -51,7 +51,7 @@ def test_unknown_field_path_is_rejected() -> None:
               - kind: NARRATION
                 redact_fields:
                   - field: nonexistent_field
-                    unless: is_self()
+                    unless: is_gm()
                     mask: null
             """
         )
@@ -79,7 +79,7 @@ def test_type_mismatched_mask_is_rejected() -> None:
               - kind: NARRATION
                 redact_fields:
                   - field: text
-                    unless: is_self()
+                    unless: is_gm()
                     mask: []
             """
         )
@@ -93,7 +93,7 @@ def test_conflicting_redactions_on_same_field_rejected() -> None:
               - kind: NARRATION
                 redact_fields:
                   - field: text
-                    unless: is_self()
+                    unless: is_gm()
                     mask: "**"
               - kind: NARRATION
                 redact_fields:
@@ -125,7 +125,7 @@ def test_valid_rules_pass() -> None:
           - kind: NARRATION
             redact_fields:
               - field: text
-                unless: is_self()
+                unless: is_gm()
                 mask: null
         """
     )

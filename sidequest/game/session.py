@@ -24,17 +24,11 @@ from sidequest.game.creature_core import (
     Inventory,
     hp_pool_from_hp,
 )
-from sidequest.game.disposition import (
-    DISPOSITION_LOG_CAP,
-    PATCH_BEAT_REASON,
-    Disposition,
-    DispositionBeat,
-)
+from sidequest.game.disposition import Disposition
 from sidequest.game.encounter import StructuredEncounter
 from sidequest.game.history_chapter import HistoryChapter
 from sidequest.game.lore_store import LoreStore
 from sidequest.game.npc_pool import NpcPoolMember
-from sidequest.game.political_state import PoliticalState
 from sidequest.game.resolution_signal import ResolutionSignal
 from sidequest.game.resource_pool import (
     NotVoluntary,
@@ -49,13 +43,9 @@ from sidequest.game.resource_pool import (
 from sidequest.game.scenario_state import ScenarioState
 from sidequest.game.trope_time_skip import TimeSkipBeatEvent
 from sidequest.game.turn import TurnManager
-from sidequest.game.wwn_magic import WwnCastLogEntry
-from sidequest.genre.models.narrative import QuestSeed
 from sidequest.genre.models.rules import ResourceDeclaration
 from sidequest.magic.state import MagicState
-from sidequest.mutation.state import MutationState, MutationUseLogEntry
 from sidequest.orbital.course import PlottedCourse
-from sidequest.protocol.enums import NarratorVerbosity, NarratorVocabulary
 
 # ---------------------------------------------------------------------------
 # NarrativeEntry — narrative log entries
@@ -141,6 +131,7 @@ class Npc(BaseModel):
     core: CreatureCore
 
     # NPC-specific fields (P1-required: narrator uses name, personality, disposition)
+    voice_id: int | None = None
     # ``disposition`` is a ``Disposition`` wrapper (Story 50-10) — exposes
     # ``.value`` (clamped int) and ``.attitude()`` (Attitude enum). The
     # Pydantic schema hook on Disposition coerces raw int construction
@@ -158,22 +149,6 @@ class Npc(BaseModel):
     # lie-detector signal: per-session counts of ``None`` measure how often
     # the narrator invents off-pool.
     pool_origin: str | None = None
-    # sq-playtest 2026-06-07 (perseus double-mint): the narrator's ORIGINAL
-    # invented name when the ADR-091 culture namer rerouted it — carried
-    # through pool→Npc promotion so the original→mint binding survives and a
-    # later re-narration of the original ("Varra") reconciles to this NPC
-    # instead of minting a duplicate. ``None`` when the name was never
-    # rerouted.
-    invented_from: str | None = None
-    # Provenance marker (story 72-3): ``True`` when this NPC was authored by
-    # the Monster Manual seeder (ADR-059), ``False`` for narrator-invented
-    # NPCs. Lives alongside ``pool_origin`` but answers a different question —
-    # ``pool_origin`` records *which pool member* an NPC was promoted from;
-    # ``manual_origin`` records *whether the Manual authored it at all*.
-    # Carried from ``NpcPatch`` through both materialization legs and is
-    # monotonic on merge (MM authorship wins; never cleared by a later
-    # narrator patch).
-    manual_origin: bool = False
     # ``last_seen_location`` is the location string from the most recent
     # narration that mentioned this NPC. Distinct from ``location`` (current
     # scene location, set when actively framed) and ``current_room`` (chassis
@@ -189,13 +164,6 @@ class Npc(BaseModel):
     build: str | None = None
     height: str | None = None
     distinguishing_features: list[str] = Field(default_factory=list)
-    # Aliases / epithets the narrator has used for this NPC (Story 84-2, WI-5,
-    # ADR-118 §A4). Feeds the DOMINANT ``mention`` pertinence signal (84-1) so a
-    # player reference by epithet ("the old man") resolves to the canonical NPC.
-    # Accreted on promotion via ``alias_accretion.accrete_npc_aliases``. Rides the
-    # GameSnapshot JSON blob (model_dump_json → game_state.snapshot_json) — NO
-    # migration; ``default_factory=list`` means pre-84-2 saves (no key) load to [].
-    aliases: list[str] = Field(default_factory=list)
 
     # P5-deferred: OCEAN personality (story 10-1, scenario system)
     ocean: dict | None = None
@@ -205,18 +173,9 @@ class Npc(BaseModel):
     # Gossip + accusation logic defer to a later slice; the data model
     # and mutation surface are live.
     belief_state: BeliefState = Field(default_factory=BeliefState)
-    # Disposition beat-log (ADR-136): bounded ring buffer of the delta + reason
-    # behind each disposition shift, appended via record_disposition_beat at
-    # every mutation site. Trend is derived from this, not stored.
-    disposition_log: list[DispositionBeat] = Field(default_factory=list)
     # P2-deferred: ResolutionTier (NPC enrichment system)
     resolution_tier: str = "spawn"
     non_transactional_interactions: int = 0
-    # Ping-pong 2026-06-07 ("turn-1 double-write"): last turn a development
-    # tick was applied. Two _apply_npc_mentions passes in one turn (e.g. the
-    # blackthorn double-apply) must not double-count interest — the per-call
-    # ``developed_this_turn`` set cannot see across calls. 0 = never developed.
-    last_development_turn: int = 0
     # P2-deferred: archetype resolution fields
     jungian_id: str | None = None
     rpg_role_id: str | None = None
@@ -240,55 +199,8 @@ class Npc(BaseModel):
     morale: str | None = None
     """B/X morale descriptor. ``None`` for non-creature NPCs."""
 
-    # 108-2 (MINTING-MAJOR persist): ``True`` only for a combat opponent the
-    # seater had to FABRICATE — a router-named free-string adversary with no
-    # backing roster/bestiary entry (the "Arena Opponent" / "Hold-Dead" stubs).
-    # A fabricated stub is a transient combat actor, NOT durable world canon: it
-    # is reaped together with its resolved encounter (``reap_resolved_encounter_husk``)
-    # so the narrator can never re-reference a dead nameless placeholder as a
-    # living NPC on later turns. Bound creatures (``creature_id`` set) and
-    # narrator-declared NPCs leave this ``False`` and persist normally.
-    ephemeral: bool = False
-    """``True`` when this NPC is a fabricated combat stub to be reaped post-encounter."""
-
     def name(self) -> str:
         return self.core.name
-
-    def record_disposition_beat(
-        self,
-        *,
-        turn: int,
-        delta: int,
-        reason: str,
-        location: str | None,
-    ) -> None:
-        """Append a disposition beat and trim to the cap.
-
-        Zero-delta shifts earn no beat — a relationship beat is the *why* a
-        standing moved, and nothing moved. Emits ``relationship.beat_recorded``
-        so the GM panel can verify the history is engine-written, not narrator-
-        improvised (ADR-136 / CLAUDE.md OTEL principle).
-        """
-        if delta == 0:
-            return
-        from sidequest.telemetry.spans import SPAN_RELATIONSHIP_BEAT_RECORDED, Span
-
-        self.disposition_log.append(
-            DispositionBeat(turn=turn, delta=delta, reason=reason, location=location)
-        )
-        if len(self.disposition_log) > DISPOSITION_LOG_CAP:
-            del self.disposition_log[: len(self.disposition_log) - DISPOSITION_LOG_CAP]
-        with Span.open(
-            SPAN_RELATIONSHIP_BEAT_RECORDED,
-            {
-                "npc_name": self.core.name,
-                "delta": int(delta),
-                "reason": reason,
-                "turn": int(turn),
-                "log_size": len(self.disposition_log),
-            },
-        ):
-            pass
 
 
 class Companion(BaseModel):
@@ -417,15 +329,6 @@ class NpcPatch(BaseModel):
     morale: str | None = None
     """B/X morale descriptor (e.g. ``"cowardly"``, ``"steady"``)."""
 
-    # Provenance (story 72-3). ``True`` when this patch was authored by the
-    # Monster Manual seeder (ADR-059) — set by ``_human_patch`` /
-    # ``_creature_patch_from_enemy`` in ``monster_manual_inject.py``. The
-    # narrator path leaves it ``False``. A binary authorship predicate
-    # (orthogonal to ``creature_id``/``is_creature``, which only distinguish
-    # a Manual *creature* from a Manual *human*).
-    manual_origin: bool = False
-    """``True`` if this patch originates from the Monster Manual seam."""
-
     @field_validator("name")
     @classmethod
     def name_non_blank(cls, v: str) -> str:
@@ -451,81 +354,6 @@ class DiscoveredFact(BaseModel):
     fact: dict  # KnownFact as dict — avoid circular import
 
 
-# Guardrail length for ``active_stakes`` so runaway growth does not pollute the
-# next narrator's state_summary prompt (~1024 chars soft cap). Canonical home is
-# this pure-data module (Story 77-2): the set_stakes tool reuses it without
-# importing the heavy narration_apply module, which would form an import cycle
-# (tools -> narration_apply -> session_helpers -> orchestrator -> tools).
-# narration_apply re-exports it for backward compatibility.
-_ACTIVE_STAKES_GUARDRAIL = 1024
-
-
-# Max number of quests in quest_log. A campaign spine plus sub-quests stays
-# well under this; the cap exists purely to bound the Postgres state-bloat
-# vector (32 small entries ~= 16 KB). Story 77-2. Story 117-3 (ADR-146 §3)
-# promoted it from a private literal in ``record_quest.py`` to this shared
-# constant so BOTH mint paths (``record_quest`` and the authored-seed
-# ``quest_offer``) honour the same cap and cannot drift.
-QUEST_LOG_CARDINALITY_CAP = 32
-
-
-class QuestEntry(BaseModel):
-    """A structured campaign-spine quest (ADR-137 / Story 77-2).
-
-    Replaces the pre-77-2 ``quest_log: dict[str, str]`` (id -> status-string)
-    with id -> structured entry: title + objective + status + optional anchor.
-    Legacy string values (from pre-77-2 saves, the 77-1 seed, and the trope
-    handshake) are coerced into a
-    QuestEntry carrying that string as its ``status`` by ``_coerce_quest_log``,
-    wired as a ``mode="before"`` validator on every field typed
-    ``dict[str, QuestEntry]`` — so old saves load instead of failing loud.
-    """
-
-    model_config = {"extra": "ignore"}
-
-    title: str = ""
-    objective: str = ""
-    status: str = "active"
-    anchor_id: str | None = None
-
-
-def _coerce_quest_log(value: object) -> object:
-    """Coerce a quest_log mapping's values to QuestEntry-validatable shapes.
-
-    Backward-compat for the type widening (Story 77-2): a legacy ``str`` value
-    becomes ``QuestEntry(status=<str>)`` (preserving the only datum the old
-    shape carried); QuestEntry instances and plain dicts pass through for
-    pydantic to validate. Non-dict input passes through untouched so pydantic
-    raises its normal error.
-    """
-    if not isinstance(value, dict):
-        return value
-    out: dict[object, object] = {}
-    for key, val in value.items():
-        out[key] = QuestEntry(status=val) if isinstance(val, str) else val
-    return out
-
-
-def upsert_quest_status(quest_log: dict[str, QuestEntry], quest_id: str, status: str) -> None:
-    """Set an existing quest's status in place, or mint a status-only QuestEntry.
-
-    The status-only upsert idiom shared by every status-string writer under
-    the widened ``quest_log`` type (Story 77-2): the trope-resolution handshake,
-    world-materialization chapter quests, and — after 77-4 retired the
-    ``quest_updates`` lane (ADR-137 AC-3) — the narration-apply auto-forward
-    guard that catches any narrator payload still carrying a legacy
-    ``quest_updates`` key. Centralised so the widened-type contract (never
-    assign a bare ``str`` into ``quest_log``) lives in one place.
-    ``record_quest`` does NOT use this — it writes full title+objective
-    entries, not status-only.
-    """
-    existing = quest_log.get(quest_id)
-    if existing is not None:
-        existing.status = status
-    else:
-        quest_log[quest_id] = QuestEntry(status=status)
-
-
 class WorldStatePatch(BaseModel):
     """Patch for world-level state (location, atmosphere, quests, regions).
 
@@ -538,18 +366,8 @@ class WorldStatePatch(BaseModel):
     location: str | None = None
     time_of_day: str | None = None
     atmosphere: str | None = None
-    # Story 77-2: widened from dict[str, str] to structured QuestEntry. The
-    # legacy ``quest_updates`` status-only lane was retired in 77-4 (ADR-137
-    # AC-3) — record_quest update-mode is the typed home; a narrator payload
-    # still carrying ``quest_updates`` is rejected loudly by ``extra="forbid"``
-    # and auto-forwarded by the narration-apply guard, never coerced here.
-    quest_log: dict[str, QuestEntry] | None = None
-
-    @field_validator("quest_log", mode="before")
-    @classmethod
-    def _migrate_quest_log(cls, v: object) -> object:
-        return _coerce_quest_log(v)
-
+    quest_log: dict[str, str] | None = None
+    quest_updates: dict[str, str] | None = None
     notes: list[str] | None = None
     current_region: str | None = None
     # Movement subsystem §Q2 — per-PC region delta {player_name: region_id}.
@@ -568,45 +386,6 @@ class WorldStatePatch(BaseModel):
     active_stakes: str | None = None
     lore_established: list[str] | None = None
     discovered_facts: list[DiscoveredFact] | None = None
-    # Story 77-3 (ADR-137): promoted to a first-class patch field so a narrator
-    # world-patch can flow quest anchors into ``snapshot.quest_anchors`` (until
-    # now only the ``record_quest`` tool mutated the snapshot directly). The
-    # typed ``list[str]`` + ``extra="forbid"`` rejects malformed payloads loudly
-    # (No Silent Fallbacks). ``None`` means "no change"; the apply path UNIONs
-    # set lists into the snapshot (order-preserving dedup), never replaces — a
-    # replace would clobber the seeded campaign spine.
-    quest_anchors: list[str] | None = None
-
-
-class RegionTransition(BaseModel):
-    """One turn-stamped per-PC relocation receipt — Story 59-30 / ADR-113.
-
-    The durable provenance artifact the ``movement`` engagement witness reads
-    to answer "did the router-dispatched move actually relocate this PC this
-    turn?". Mirrors the political ``BeliefLedgerEntry`` ledger: stamped on
-    EVERY relocation seam so the witness is correct on every world type.
-
-    There is no single relocation choke point — region-mode worlds bypass
-    ``apply_world_patch`` — so this is written at TWO sites:
-      - ``via="world_patch"``   — ``GameSnapshot._apply_world_patch_inner``
-        ``pc_region`` genuine-change block (the two procedural relocation
-        paths both route through ``apply_world_patch(pc_region=...)``).
-      - ``via="narration_apply"`` — the region-mode advance in
-        ``narration_apply`` (oz/wonderland/gulliver relocate here, NOT through
-        ``apply_world_patch``).
-
-    ``pc_name`` is the CHARACTER-NAME key (the same identifier ``pc_regions``
-    uses), NOT the raw ``player_id`` — the witness resolves player_id →
-    character name via ``player_seats`` before keying this ledger.
-    """
-
-    model_config = {"extra": "ignore"}
-
-    turn: int
-    pc_name: str
-    from_region: str | None = None
-    to_region: str
-    via: str
 
 
 # ---------------------------------------------------------------------------
@@ -825,37 +604,9 @@ class GameSnapshot(BaseModel):
     # ``location`` field removed; use ``party_location(...)`` accessor
     # or ``character_locations[name]`` for the per-PC source of truth.
     time_of_day: str = ""
-    # Story 77-2 (ADR-137): widened from dict[str, str] to structured
-    # QuestEntry. Legacy string values from pre-77-2 saves are coerced on load
-    # by ``_migrate_quest_log`` (No Silent Fallbacks: old saves migrate, never
-    # fail loud).
-    quest_log: dict[str, QuestEntry] = Field(default_factory=dict)
-
-    @field_validator("quest_log", mode="before")
-    @classmethod
-    def _migrate_quest_log(cls, v: object) -> object:
-        return _coerce_quest_log(v)
-
-    # Story 117-3 (ADR-146): authored quest offers stashed at chargen-complete
-    # from the resolved Opening's ``tone.quest_seed``, keyed on ``quest_id``.
-    # Bait, not yet a quest — minting waits for the router to classify
-    # acceptance (``quest_offer`` subsystem). Persisted snapshot state (not the
-    # ephemeral _SessionData directive) so a pending offer survives resume; the
-    # offer is consumed (popped) on accept/decline. ``extra: ignore`` →
-    # pre-117-3 saves load with this empty.
-    pending_quest_offers: dict[str, QuestSeed] = Field(default_factory=dict)
-
+    quest_log: dict[str, str] = Field(default_factory=dict)
     notes: list[str] = Field(default_factory=list)
     narrative_log: list[NarrativeEntry] = Field(default_factory=list)
-
-    # Story 82-2 (ADR-049): player-chosen narrator tuning, persisted so the
-    # choice survives slug-resume. ``None`` means the player never chose — the
-    # turn-context builder falls back to ``default_for_player_count`` rather
-    # than a hardcoded literal. Mirrored onto ``_SessionData.narrator_*`` at
-    # connect/resume for the per-turn read. ``extra: ignore`` means pre-82-2
-    # saves load with these as None.
-    narrator_verbosity: NarratorVerbosity | None = None
-    narrator_vocabulary: NarratorVocabulary | None = None
 
     # StructuredEncounter (ADR-033 confrontation engine) — typed in story 42-1.
     encounter: StructuredEncounter | None = None
@@ -874,18 +625,6 @@ class GameSnapshot(BaseModel):
     # ghosts of expired ones, both persisted via snapshot_json (ADR-023).
     active_seeds: list[SeedState] = Field(default_factory=list)
     seed_ghosts: list[SeedGhost] = Field(default_factory=list)
-
-    # Story 77-7 (ADR-024/025/128) — engine lull-escalation. When the game
-    # lulls (TensionTracker boring_streak >= the genre's escalation_streak),
-    # ``apply_lull_escalation`` fires a seed and stores its narrative_hint here
-    # as the concrete escalation directive for the NEXT turn; ``_build_turn_context``
-    # consumes + clears it, overriding the generic escalation_beat (sibling of
-    # ``next_turn_directives``' populate-then-consume discipline).
-    # ``last_lull_fire_turn`` enforces the ADR-128 FIRE_COOLDOWN_TURNS governor
-    # (never fire two turns running) and is persisted so a resume re-fires
-    # identically. ``extra: ignore`` → pre-77-7 saves load with these as None.
-    pending_escalation_directive: str | None = None
-    last_lull_fire_turn: int | None = None
 
     # Story 50-4 — in-game day counter and time-skip beat summary.
     # ``days_elapsed`` is monotonic, advances by clamp(days_advanced, 0, 14)
@@ -1001,13 +740,6 @@ class GameSnapshot(BaseModel):
     # slice — the runtime holder is live now.
     scenario_state: ScenarioState | None = None
 
-    # Political substrate (wry_whimsy, Plan 2). Hydrated at chargen-confirm
-    # when the active world declares premises/blocs (spec 2026-06-02); None
-    # when the world ships no political layer — a valid authoring choice, the
-    # precondition-gate signal that makes witnessed_act inert. Old saves
-    # deserialize to None (model_config extra="ignore").
-    political_state: PoliticalState | None = None
-
     # P3-deferred: room-graph navigation (story 19-2)
     discovered_rooms: list[str] = Field(default_factory=list)
 
@@ -1045,23 +777,6 @@ class GameSnapshot(BaseModel):
     # ``current_region`` (No Silent Fallbacks).
     pc_regions: dict[str, str] = Field(default_factory=dict)
 
-    # Story 59-30 — turn-stamped per-PC relocation ledger (the artifact the
-    # ``movement`` engagement witness reads). Mirrors ``political_state.ledger``
-    # but flat on the snapshot because movement is UNIVERSAL (every world has
-    # it), so a world-conditional sub-state container buys nothing. Written on
-    # both relocation seams (``apply_world_patch`` Site A and ``narration_apply``
-    # Site B); a durable GM-panel/forensics artifact (ADR-124).
-    region_transitions: list[RegionTransition] = Field(default_factory=list)
-
-    # Story 102-3 — turn-stamped WN cast receipts (the artifact the
-    # ``magic_working`` engagement witness reads on WN worlds, where magic
-    # lives on ``core.spellcasting`` instead of the ADR-126 ``magic_state``
-    # plugin ledger). Same shape rationale as ``region_transitions`` above:
-    # flat on the snapshot, written by the free-play cast handler on every
-    # ``resolve_spellcast`` invocation (cast AND refused — a refusal is
-    # engagement). A durable GM-panel/forensics artifact (ADR-124).
-    wwn_spell_cast_log: list[WwnCastLogEntry] = Field(default_factory=list)
-
     # Combat state (P1-required: permadeath / death detection)
     player_dead: bool = False
 
@@ -1076,18 +791,6 @@ class GameSnapshot(BaseModel):
     # Magic system state (Coyote Star iteration 2). None on saves that
     # predate magic or on worlds without a magic config.
     magic_state: MagicState | None = None
-
-    # AWN mutation state (Plan 2). None on saves that predate mutations or
-    # on packs without a mutations.yaml catalog.
-    mutation_state: MutationState | None = None
-
-    # Story 102-7 — turn-stamped mutation-use receipts (the artifact the
-    # ``magic_working`` engagement witness reads on AWN worlds, where the
-    # pack's magic IS the mutation system). The ``wwn_spell_cast_log``
-    # mirror: written by the free-play mutation handler on every
-    # ``use_mutation`` resolution (applied AND refused — a refusal is
-    # engagement). A durable GM-panel/forensics artifact (ADR-124).
-    mutation_use_log: list[MutationUseLogEntry] = Field(default_factory=list)
 
     # Phase 5 (Story 47-3): outbound magic-confrontation dispatch queue.
     # Populated by ``narration_apply.apply_magic_working`` (one entry per
@@ -1481,11 +1184,6 @@ class GameSnapshot(BaseModel):
                 "field_count": sum(
                     1 for f in patch.model_fields_set if getattr(patch, f, None) is not None
                 ),
-                # Story 77-3 (AC5): explicit boolean so the GM panel never has to
-                # guess whether a patch touched the quest spine. True iff the
-                # patch carries quest_anchors (incl. an empty-list no-op union);
-                # False when the field is untouched (None).
-                "world.patch.quest_anchors_present": patch.quest_anchors is not None,
             },
         ):
             self._apply_world_patch_inner(patch)
@@ -1513,16 +1211,8 @@ class GameSnapshot(BaseModel):
             self.atmosphere = patch.atmosphere
         if patch.quest_log is not None:
             self.quest_log = patch.quest_log
-        if patch.quest_anchors is not None:
-            # Story 77-3 (ADR-137): order-preserving dedup UNION, not replace.
-            # A narrator world-patch must never clobber the seeded campaign
-            # spine, so new anchors append after existing ones and duplicates
-            # are skipped — matching the only other two writers
-            # (quest_seed.py:85, record_quest.py:122/154). An empty patch list
-            # is therefore a no-op union (no "clear" semantic).
-            for anchor in patch.quest_anchors:
-                if anchor not in self.quest_anchors:
-                    self.quest_anchors.append(anchor)
+        if patch.quest_updates is not None:
+            self.quest_log.update(patch.quest_updates)
         if patch.notes is not None:
             self.notes = patch.notes
         if patch.pc_region is not None:
@@ -1540,49 +1230,12 @@ class GameSnapshot(BaseModel):
                 prev = self.pc_regions.get(pc_name)
                 self.pc_regions[pc_name] = to_region
                 if to_region and to_region != prev:
-                    # Story 59-30 — Site A: stamp the per-PC relocation receipt
-                    # the movement engagement witness reads. Inside the
-                    # genuine-change gate, so a no-op re-patch does not pollute
-                    # the ledger. ``via="world_patch"`` covers both procedural
-                    # relocation paths (surface-descent + normal resolve).
-                    self.region_transitions.append(
-                        RegionTransition(
-                            turn=self.turn_manager.interaction,
-                            pc_name=pc_name,
-                            from_region=prev or None,
-                            to_region=to_region,
-                            via="world_patch",
-                        )
-                    )
                     notify_region_transition(
                         self,
                         pc_name=pc_name,
                         from_region=prev or None,
                         to_region=to_region,
                     )
-            # Anchor sync (sq-playtest 2026-06-12, beneath_sunden split-brain):
-            # when the crossing leaves the seated party in CONSENSUS on a
-            # region, advance the singular ``current_region`` anchor to it.
-            # ``pc_regions`` stays the per-PC truth and ``region_for`` still
-            # never falls back to the anchor — this is the REVERSE edge: the
-            # anchor follows the party. Without it the per-turn region
-            # projection (which takes ``current_region`` by contract) reads
-            # the stale surface region forever while the PCs stand inside the
-            # dungeon graph, starving the narrator of the generated room
-            # manifest. Split party → no consensus → anchor stays put (the
-            # spawn/teleport anchor semantics are preserved).
-            from sidequest.telemetry.spans import SPAN_REGION_ANCHOR_SYNCED, Span
-
-            consensus = self.region_for()
-            if consensus and consensus != self.current_region:
-                with Span.open(
-                    SPAN_REGION_ANCHOR_SYNCED,
-                    {
-                        "from_region": self.current_region or "",
-                        "to_region": consensus,
-                    },
-                ):
-                    self.current_region = consensus
         if patch.current_region is not None:
             # The party-level spawn/teleport ANCHOR (ADR-011 WorldStatePatch
             # apply). Retained for the seed/spawn-anchor + scripted-teleport
@@ -1773,16 +1426,6 @@ class GameSnapshot(BaseModel):
                             },
                         ):
                             pass
-                        # ADR-136: persist the shift. Patch deltas carry no
-                        # narrator reason; use the neutral label. Effective delta
-                        # (after - before) respects the ±100 clamp so a clamped
-                        # no-op records nothing.
-                        npc.record_disposition_beat(
-                            turn=self.turn_manager.interaction,
-                            delta=after - before,
-                            reason=PATCH_BEAT_REASON,
-                            location=self.party_location(),
-                        )
         if patch.npcs_present is not None:
             for npc_patch in patch.npcs_present:
                 existing = next((n for n in self.npcs if n.core.name == npc_patch.name), None)
@@ -1853,45 +1496,7 @@ class GameSnapshot(BaseModel):
         if patch.morale is not None:
             npc.morale = patch.morale
         if patch.hp is not None:
-            # BUG 2b (eh-opp-damage): a re-injected creature patch must NOT heal an
-            # NPC that is already taking damage. The per-turn Monster-Manual inject
-            # re-emits each Available creature with its content ``hp`` claim EVERY
-            # combat turn; the old code reset ``npc.core.hp`` to a FULL pool here, so
-            # an opponent damaged to 2/8 (or killed at 0/8) sprang back to 8/8 on the
-            # next turn — combat could be neither won nor lost. Re-seed the pool
-            # CEILING from the claim (content may legitimately re-state max), but
-            # PRESERVE the live ``current`` (clamped to the new max). A genuinely new
-            # creature still gets a full pool via ``_npc_from_patch`` (the spawn leg,
-            # untouched). Emit the GM-panel lie-detector span so a re-inject that
-            # keeps the damaged HP is observable (its ABSENCE on a combat turn would
-            # signal a regression back to silent healing).
-            new_max = max(1, int(patch.hp))
-            preserved_current = min(npc.core.hp.current, new_max)
-            npc.core.hp.max = new_max
-            npc.core.hp.base_max = new_max
-            npc.core.hp.current = preserved_current
-            from sidequest.telemetry.spans import Span
-            from sidequest.telemetry.spans.monster_manual import (
-                SPAN_MONSTER_MANUAL_HP_PRESERVED,
-            )
-
-            with Span.open(
-                SPAN_MONSTER_MANUAL_HP_PRESERVED,
-                {
-                    "npc_name": npc.core.name,
-                    "preserved_current": preserved_current,
-                    "patch_hp": int(patch.hp),
-                    "new_max": new_max,
-                    "manual_origin": npc.manual_origin or patch.manual_origin,
-                },
-            ):
-                pass
-
-        # Provenance (story 72-3): monotonic — an authored Monster Manual
-        # patch records manual-origin on the surviving record (E2 forward),
-        # and a later narrator patch (manual_origin=False) must NOT clear an
-        # existing marker (E2 reverse). Logical OR satisfies both.
-        npc.manual_origin = npc.manual_origin or patch.manual_origin
+            npc.core.hp = _hp_pool_from_hp(patch.hp)
 
     def _npc_from_patch(self, patch: NpcPatch) -> Npc:
         # Creature signal: presence of any creature-shape field flags this
@@ -1915,7 +1520,7 @@ class GameSnapshot(BaseModel):
             statuses=[],
             hp=hp_pool,
         )
-        npc = Npc(
+        return Npc(
             core=core,
             pronouns=patch.pronouns,
             appearance=patch.appearance,
@@ -1930,27 +1535,7 @@ class GameSnapshot(BaseModel):
             threat_level=patch.threat_level,
             abilities=list(patch.abilities) if patch.abilities is not None else [],
             morale=patch.morale,
-            # Provenance (story 72-3): carry the Manual-authorship marker onto
-            # the fresh Npc. Narrator patches leave it False.
-            manual_origin=patch.manual_origin,
         )
-        # Story 72-5: record the spawn-time disposition default so the GM
-        # panel can verify a person spawned neutral (0) and a creature
-        # spawned hostile (-20) — the disposition no longer "materializes
-        # from nowhere". NpcPatch carries no disposition field, so this seam
-        # is always a default (never narrator-explicit).
-        from sidequest.telemetry.spans import npc_spawn_disposition_span
-
-        with npc_spawn_disposition_span(
-            npc_name=npc.core.name,
-            disposition=int(npc.disposition),
-            manual_origin=npc.manual_origin,
-            provenance="default_creature_hostile" if is_creature else "default_neutral",
-            is_creature=is_creature,
-            pool_origin=None,
-        ):
-            pass
-        return npc
 
     def lowest_friendly_hp_ratio(self) -> float:
         """Lowest edge fraction among friendly characters. Returns 1.0 if none."""

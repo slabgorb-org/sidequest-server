@@ -13,10 +13,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, model_validator
 
 from sidequest.game.encounter_tag import EncounterTag
-from sidequest.game.fate_sheet import Aspect
-from sidequest.game.table.types import TableState
 from sidequest.game.taunt import TauntState
-from sidequest.protocol.models import EncounterLocationOverlay, InitiativeEntry
+from sidequest.protocol.models import EncounterLocationOverlay
 
 
 class RigType(StrEnum):
@@ -127,64 +125,6 @@ class EncounterActor(BaseModel):
     per_actor_state: dict[str, Any] = Field(default_factory=dict)
 
 
-class WnSealedCommit(BaseModel):
-    """One sealed Main Action in a WN round (story 102-4).
-
-    The WN turn model is blind commitment, initiative-ordered resolution:
-    a player's DICE_THROW resolves its to-hit at commit time but the beat
-    does NOT apply until every seated player-side participant has committed
-    and the round walk reaches the actor's initiative slot. ``outcome``
-    carries the commit-time RollOutcome value (string form — the enum lives
-    in the protocol layer); ``target`` pins the premise (the opponent the
-    action was aimed at) so the walk can detect a dead premise without
-    auto-retargeting (SOUL: The Test).
-    """
-
-    model_config = {"extra": "forbid"}
-
-    actor: str
-    beat_id: str
-    outcome: str
-    target: str | None = None
-    spell_id: str | None = None
-
-
-FateAction = Literal["overcome", "create_advantage", "attack"]
-"""The three proactive Fate Core actions committable in an exchange (ADR-144 F1c).
-Defend is reactive (engine-rolled), never committed; there is no ``full_defense``
-(not a Fate SRD action)."""
-
-
-class FateSealedCommit(BaseModel):
-    """One sealed Fate action in an exchange (ADR-144 F1c).
-
-    Mirrors :class:`WnSealedCommit` one tier over. A proactive Fate action seals
-    here until every seated PC has committed; ``run_fate_exchange`` consumes and
-    clears the ledger. The attacker's 4dF roll is resolved AT COMMIT TIME (like
-    the WN to-hit): ``ladder_total`` = 4dF + skill + invoke bonus, ``dice`` the
-    raw faces. The reactive defense roll happens at the actor's slot.
-
-    ``action`` is one of the three proactive Fate actions; ``defend`` is
-    reactive (the engine rolls it for an attack's target) and is never a
-    committed value. There is no ``full_defense`` action — not in the Fate SRD.
-    Opposition is ACTIVE when ``target`` is set (the engine rolls that actor's
-    defense) or PASSIVE when ``difficulty`` is set (a set number on the ladder).
-    ``aspect_text`` carries the situation aspect a create-advantage means to
-    place.
-    """
-
-    model_config = {"extra": "forbid"}
-
-    actor: str
-    action: FateAction
-    skill: str
-    target: str | None = None
-    difficulty: int = 0
-    ladder_total: int = 0
-    dice: tuple[int, int, int, int] = (0, 0, 0, 0)
-    aspect_text: str = ""
-
-
 class EncounterMetric(BaseModel):
     """Ascending dial. ``current`` advances toward ``threshold``; the side
     that reaches ``threshold`` first triggers resolution.
@@ -209,51 +149,12 @@ class StructuredEncounter(BaseModel):
     model_config = {"extra": "forbid"}
 
     encounter_type: str
-    # "dial_threshold" (default) | "hp_depletion". Stamped from ConfrontationDef.win_condition
-    # at init (encounter_lifecycle). String-literal (NOT the WinCondition enum) to avoid a
-    # game->genre.models import cycle; the Literal still rejects typos at validation time.
-    win_condition: Literal["dial_threshold", "hp_depletion", "table_showdown"] = "dial_threshold"
-    # Confrontation category ("combat" | "social" | "movement" | "hacking" | ...),
-    # stamped from ConfrontationDef.category at init (encounter_lifecycle), sibling
-    # to win_condition. Lets the engine answer "is this confrontation MOBILE?" — a
-    # chase/escape (category="movement") moves WITH the party, so a scene/location
-    # change CONTINUES it rather than abandoning it — without re-threading the
-    # GenrePack into narration_apply. Empty string for legacy saves predating this
-    # field and direct-construction tests that don't set it; callers that need the
-    # category for those fall back to a pack lookup (narration_apply._encounter_is_mobile).
-    category: str = ""
-    # Free-for-all N-seat table (poker / auction). None for every non-table
-    # confrontation — the dual dials go unused for table types; the resolver
-    # reads table_state, not the metrics. See
-    # docs/superpowers/specs/2026-05-29-free-for-all-n-seat-table-design.md.
-    table_state: TableState | None = None
     player_metric: EncounterMetric
     opponent_metric: EncounterMetric
     beat: int = 0
     structured_phase: EncounterPhase | None = None
     secondary_stats: SecondaryStats | None = None
     actors: list[EncounterActor] = Field(default_factory=list)
-    initiative: list[InitiativeEntry] = Field(default_factory=list)
-    """SWN P4: 1d8+DEX resolution order, rolled once at instantiation. Empty for
-    rulesets with no ordering (native) and non-combat encounters."""
-    wn_commits: list[WnSealedCommit] = Field(default_factory=list)
-    """Story 102-4: the WN sealed-commit ledger for the CURRENT round. Player-side
-    Main Actions seal here until every live seated participant has committed; the
-    round walk consumes and clears it. Always empty for native/dial encounters and
-    between WN rounds."""
-    fate_commits: list[FateSealedCommit] = Field(default_factory=list)
-    """ADR-144 F1c: the Fate sealed-commit ledger for the CURRENT exchange.
-    Proactive actions seal here until every live seated PC has committed; the
-    exchange walk consumes and clears it. Always empty for native/WN encounters
-    and between Fate exchanges (sibling to ``wn_commits``)."""
-    situation_aspects: list[Aspect] = Field(default_factory=list)
-    """ADR-144 F1c: scene-scoped Fate aspects placed by create-advantage (and
-    boosts from ties). Distinct from character/consequence aspects, which live on
-    the actor's FateSheet. Cleared on scene end (F2/F3 lifecycle)."""
-    zones: list[str] = Field(default_factory=list)
-    """ADR-144 F1c: named Fate zones for this scene (reuses the encounter as the
-    spatial notion — design §4.2 / open-Q3). An actor's current zone lives in
-    ``EncounterActor.per_actor_state['zone']``. Empty for non-Fate encounters."""
     tags: list[EncounterTag] = Field(default_factory=list)
     outcome: str | None = None
     resolved: bool = False
@@ -282,14 +183,6 @@ class StructuredEncounter(BaseModel):
     # without a None guard. See sidequest/game/taunt.py and spec §8.
     taunt: TauntState = Field(default_factory=TauntState)
 
-    # Story 73-4 — player-facing beat-kind impact descriptor, keyed by actor
-    # side ("player"/"opponent"). apply_beat stamps the serialized BeatImpact for
-    # the acting side each beat; per-side so an opposed_check opponent beat can't
-    # clobber the player's readout. build_confrontation_payload surfaces the
-    # player-side entry so a no-dial-move CritSuccess reads as intended (clean
-    # exit, by design) instead of a bare 0. Ephemeral (rebuilt each beat).
-    last_beat_impacts: dict[str, dict[str, Any]] = Field(default_factory=dict)
-
     # Story 54-7 / ADR-109: per-encounter location overlay. When set,
     # bound_room_id names the region/room whose manifest and prose the
     # overlay contributes to. Read-time merge in
@@ -297,13 +190,6 @@ class StructuredEncounter(BaseModel):
     # on top of the authored base; base never mutates. None for
     # encounters that have nothing to add to the room description.
     location_overlay: EncounterLocationOverlay | None = None
-
-    # net_run (CWN hacking) only — the named security tier this run targets,
-    # stamped at instantiation from the dispatch param or the pack's
-    # cwn.hacking.default_tier. The effective DC at resolution time is
-    # cwn.hacking.security_tiers[security_tier] + alert escalation. None for
-    # every non-hacking confrontation.
-    security_tier: str | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -333,64 +219,3 @@ class StructuredEncounter(BaseModel):
         self.resolved = True
         self.structured_phase = EncounterPhase.Resolution
         self.outcome = f"resolved_by_trope:{trope_id}"
-
-    def dial_threshold_outcome(self) -> str | None:
-        """Return the victory outcome if a dial-threshold win condition is
-        already met, else ``None``.
-
-        Mirrors the canonical crossing check in
-        ``sidequest.game.beat_kinds.apply_beat`` (player dial first, then
-        opponent — "first crossing wins") so a met threshold resolves
-        consistently whether it was crossed via a beat OR via a non-beat
-        momentum path (sq-playtest 2026-06-02 wry_whimsy/oz: an escape dial
-        reached 8/8 with ``total_beats_fired == 0``, so apply_beat's check
-        never ran and the encounter stayed unresolved). Only ``dial_threshold``
-        encounters resolve here — ``hp_depletion`` and ``table_showdown`` have
-        their own resolution channels and return ``None``.
-        """
-        if self.win_condition != "dial_threshold":
-            return None
-        if self.player_metric.current >= self.player_metric.threshold:
-            return "player_victory"
-        if self.opponent_metric.current >= self.opponent_metric.threshold:
-            return "opponent_victory"
-        return None
-
-    def opponent_yield_outcome(self) -> str | None:
-        """Return ``"opponent_yielded"`` if the OPPONENT side has yielded, else
-        ``None``.
-
-        Story 59-32 normalized this to the **mechanical-truth** label
-        ``"opponent_yielded"`` (was the credit label ``"player_victory"``): each
-        producer emits mechanical truth and the shared ``is_player_victory()``
-        classifier owns the credit mapping (``opponent_yielded`` → victory).
-        Consumer-safe — production consumers None-check the return only
-        (``narration_apply.py:2824,4615``); ``enc.outcome`` is set independently
-        by ``_resolve_opponent_yield``.
-
-        Sibling to ``dial_threshold_outcome`` (Story 59-31): a yielded opponent
-        is a player VICTORY, distinct from a dial win, from the player-side
-        ``yielded`` (a loss), and from ``abandoned_on_location_change`` (a
-        genuine walk-away). The engine confirms the yield from existing actor /
-        disposition state the narrator already sets — it is engine-checked, not
-        pure-LLM-compliance (CLAUDE.md: the GM panel is the lie detector).
-
-        An opponent has yielded iff there ARE opponent-side actors (ADR-116 — a
-        confrontation requires an Other) AND either every opponent actor is
-        ``withdrawn`` OR ``opponents_disposition`` is a yield disposition
-        (``surrendered`` / ``routed``, set by the B/X morale path without
-        necessarily flipping each actor's ``withdrawn``). Unlike
-        ``dial_threshold_outcome`` this is NOT gated to ``dial_threshold`` — a
-        monster surrendering mid-combat is just as much a player victory.
-
-        A PLAYER-side withdrawal never triggers this (that is the player-side
-        ``yielded`` loss path) — this checks ``side == "opponent"`` only.
-        """
-        opponents = [a for a in self.actors if a.side == "opponent"]
-        if not opponents:
-            return None
-        all_withdrawn = all(a.withdrawn for a in opponents)
-        disposition_yield = self.opponents_disposition in ("surrendered", "routed")
-        if all_withdrawn or disposition_yield:
-            return "opponent_yielded"
-        return None

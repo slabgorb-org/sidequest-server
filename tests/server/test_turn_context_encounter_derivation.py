@@ -25,9 +25,7 @@ def sd_factory():
             player_name="Rux",
             player_id="p1",
             snapshot=snap,
-            repository=MagicMock(),  # not exercised in this test
-            dungeon_repository=MagicMock(),
-            telemetry_sink=MagicMock(),
+            store=MagicMock(),  # not exercised in this test
             genre_pack=pack,
             orchestrator=MagicMock(),
         )

@@ -20,7 +20,7 @@ Behaviour
    the call (the engine's own OTEL span carries ``duplicate=True`` but
    does not surface a "transition" enum — we compute it here for the
    GM-panel attr).
-3. Persists the snapshot via ``ctx.repository.save``.
+3. Persists the snapshot via ``ctx.store.save``.
 
 evidence_text
 ~~~~~~~~~~~~~
@@ -100,7 +100,7 @@ class AdvanceSceneClueArgs(BaseModel):
     category=ToolCategory.WRITE,
 )
 async def advance_scene_clue(args: AdvanceSceneClueArgs, ctx: ToolContext) -> ToolResult:
-    session = ctx.repository.load()
+    session = ctx.store.load()
     if session is None:
         return ToolResult.error("no active session", recoverable=False)
 
@@ -130,7 +130,7 @@ async def advance_scene_clue(args: AdvanceSceneClueArgs, ctx: ToolContext) -> To
             recoverable=True,
         )
 
-    ctx.repository.save(snapshot)
+    ctx.store.save(snapshot)
 
     transition = "duplicate" if was_already_discovered else "discovered"
     ctx.otel_span.set_attribute("tool.clue.id", args.clue_id)

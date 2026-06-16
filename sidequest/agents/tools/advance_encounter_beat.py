@@ -83,7 +83,7 @@ class AdvanceEncounterBeatArgs(BaseModel):
     category=ToolCategory.WRITE,
 )
 async def advance_encounter_beat(args: AdvanceEncounterBeatArgs, ctx: ToolContext) -> ToolResult:
-    session = ctx.repository.load()
+    session = ctx.store.load()
     if session is None:
         return ToolResult.error("no active session", recoverable=False)
 
@@ -102,15 +102,11 @@ async def advance_encounter_beat(args: AdvanceEncounterBeatArgs, ctx: ToolContex
         encounter.beat = beat_from + 1
     beat_to = encounter.beat
 
-    ctx.repository.save(snapshot)
+    ctx.store.save(snapshot)
 
     ctx.otel_span.set_attribute("tool.encounter.beat_from", beat_from)
     ctx.otel_span.set_attribute("tool.encounter.beat_to", beat_to)
     ctx.otel_span.set_attribute("tool.encounter.reason", args.reason)
-    # Story 71-28: surface encounter context so SPAN_ROUTES[tool.write.
-    # advance_encounter_beat] can emit a typed state_transition the GM panel
-    # reads (the value is already in scope — also returned in the payload).
-    ctx.otel_span.set_attribute("tool.encounter.encounter_type", encounter.encounter_type)
 
     return ToolResult.ok(
         {

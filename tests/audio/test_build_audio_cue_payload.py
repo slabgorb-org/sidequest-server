@@ -158,29 +158,6 @@ def test_genre_slug_local_mode_falls_back_to_static_mount(
     assert payload.music_track == "/genre/spaghetti_western/audio/music/tension/a.ogg"
 
 
-def test_genre_slug_shared_assets_path_drops_slug(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A backend-relative path under the shared assets/ bucket resolves to
-    genre_packs/assets/... with NO pack slug — the same rule the genre
-    loader uses (Task: shared classical_pd bucket). This is the wiring test
-    proving audio_cue's _maybe_prefix now defers to resolve_audio_relpath."""
-    monkeypatch.delenv("SIDEQUEST_ASSET_BASE_URL", raising=False)
-    resolved = tmp_path / "assets" / "audio" / "classical_pd" / "Satie - Gymnopedie No.1.ogg"
-    resolved.parent.mkdir(parents=True)
-    resolved.touch()
-    backend = _StubBackend(tmp_path, {("music", "tension"): resolved})
-    cue = AudioCue(lane=AudioLane.MUSIC, mood=MoodCategory.TENSION, intensity=0.6)
-
-    payload = build_audio_cue_payload([cue], audio_backend=backend, genre_slug="wry_whimsy")
-
-    assert payload.music_track == (
-        "https://cdn.slabgorb.com/genre_packs/assets/audio/classical_pd/"
-        "Satie - Gymnopedie No.1.ogg"
-    )
-    assert "/genre_packs/wry_whimsy/assets/" not in payload.music_track
-
-
 def test_absolute_url_music_track_passes_through(tmp_path: Path) -> None:
     """A pre-prefixed or external URL must not be double-prefixed."""
     resolved = tmp_path / "https:" / "cdn.example.com" / "track.ogg"

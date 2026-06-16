@@ -22,45 +22,11 @@ All models inherit `ProtocolBase`:
 
 from __future__ import annotations
 
-import json
-import logging
-import re
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import Field, model_validator
 
 from sidequest.protocol.base import ProtocolBase
-
-logger = logging.getLogger(__name__)
-
-# Recovery scrape for a ``confidence_global`` value swallowed into a stringified
-# per_player/cross_player blob (see DispatchPackage._coerce_stringified_lists).
-# Tolerant of the messy separators Haiku produces — clean ``": 0.72"`` and the
-# mangled ``">0.92"`` both seen live (sq-playtest 2026-06-14). Anchored on the
-# unique ``confidence_global`` token so it never matches a per-dispatch
-# ``confidence`` field. The value is a 0.0–1.0 confidence (leading digit 0 or 1).
-_CONFIDENCE_GLOBAL_RE = re.compile(r'confidence_global["\s:>=]*([01](?:\.[0-9]+)?)')
-
-
-def _recover_leading_json_array(value: str) -> list | None:
-    """Parse a leading JSON array out of a string that carries trailing junk.
-
-    The model sometimes stringifies ``per_player``/``cross_player`` AND mashes a
-    sibling field (the required ``confidence_global``) into the same string, so
-    the whole value is not valid JSON (``json.loads`` fails) but the leading
-    array is well-formed. ``raw_decode`` parses the first well-formed value and
-    ignores the trailing remainder; return the list when that value is a list,
-    else ``None`` (caller leaves the string for pydantic to reject loudly — No
-    Silent Fallbacks).
-    """
-    s = value.lstrip()
-    if not s.startswith("["):
-        return None
-    try:
-        obj, _end = json.JSONDecoder().raw_decode(s)
-    except ValueError:
-        return None
-    return obj if isinstance(obj, list) else None
 
 # ---------------------------------------------------------------------------
 # Visibility
@@ -128,21 +94,6 @@ class SubsystemDispatch(ProtocolBase):
     )
     idempotency_key: str
     visibility: VisibilityTag
-    # ADR-113 confidence gate (Story 71-16). Required — no silent default: the
-    # Intent Router scores how certain it is that THIS specific mechanical
-    # engagement is what the player intended. ``run_dispatch_bank`` engages the
-    # subsystem engine only when ``confidence >= threshold`` (per-subsystem,
-    # default 0.6); below threshold the dispatch degrades to a narrator hint
-    # rather than firing the engine. A defaulted score would let a router bug
-    # silently engage or gate an engine on a fabricated value.
-    confidence: float = Field(
-        ge=0.0,
-        le=1.0,
-        description=(
-            "Per-dispatch engagement confidence (0.0-1.0) from the Intent Router. "
-            "Gated against the per-subsystem threshold in run_dispatch_bank."
-        ),
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -218,29 +169,9 @@ class CrossAction(ProtocolBase):
 
     @model_validator(mode="after")
     def _witnesses_include_participants(self) -> CrossAction:
-        """Normalize: every participant in a cross-player interaction also
-        witnesses it. Union missing participants into ``witnesses`` rather
-        than rejecting.
-
-        Previously this REJECTED when ``participants ⊄ witnesses``, which
-        sank the entire ``DispatchPackage`` on every shared-target MP turn
-        (playtest 2026-05-27, coyote_star turns 3/4/5: both PCs engage the
-        same NPC → the router emits ``participants=[acting_pc, npc]`` with
-        ``witnesses`` omitting the other PC → validation error → the Intent
-        Router retries, fails again, and degrades to ``dispatch_package=None``
-        — the whole mechanical spine goes dark while narration still reads
-        fine, the classic Illusionism the OTEL panel exists to catch).
-
-        Auto-unioning is semantically correct (you cannot hide an interaction
-        from someone who is in it) and cannot breach the ADR-104/105
-        perception firewall — it only ever ADDS a participant to the set of
-        those who perceive their own interaction, never removes a witness.
-        Participant order is preserved; ``witnesses`` already-present entries
-        are not duplicated.
-        """
-        missing = [p for p in self.participants if p not in self.witnesses]
+        missing = set(self.participants) - set(self.witnesses)
         if missing:
-            self.witnesses = [*self.witnesses, *missing]
+            raise ValueError(f"witnesses must include all participants; missing={sorted(missing)}")
         return self
 
 
@@ -261,75 +192,6 @@ class DispatchPackage(ProtocolBase):
     # Intent Router producer raises ``IntentRouterFailure`` on retry-fail
     # instead of returning a degraded shape; downstream consumers no longer
     # branch on a "degraded" flag.
-
-    @model_validator(mode="before")
-    @classmethod
-    def _coerce_stringified_lists(cls, data: Any) -> Any:
-        """Coerce JSON-encoded-string list fields back into lists.
-
-        Known Haiku tool-use failure mode (sq-playtest 2026-06-07, 5×
-        ``schema_invalid`` across spaghetti_western + heavy_metal, one fully
-        crunch-dropped turn): the model emits ``per_player`` /
-        ``cross_player`` as a JSON-*encoded string* (``'[{"player_id": ...'``)
-        instead of a list. The content is well-formed — only the encoding is
-        wrong — so rejecting it costs a retry (and on a double miss, the
-        whole turn's mechanical spine). Parse the string; if it yields a
-        list, take it (same normalize-don't-reject doctrine as
-        ``CrossAction._witnesses_include_participants``).
-
-        Swallowed-sibling variant (sq-playtest 2026-06-14, heavy_metal/barsoom
-        phantom-wound CRITICAL): the model stringifies the array AND mashes the
-        required sibling ``confidence_global`` field into the SAME string, so
-        the value is the array plus trailing junk and plain ``json.loads``
-        fails. Left unrepaired this dropped the whole DispatchPackage on the
-        arena-entry turn — the confrontation never dispatched and the narrator
-        improvised a sword wound with no encounter, dice, or HP delta. Parse the
-        leading array via ``raw_decode`` and recover the swallowed
-        ``confidence_global`` so the dispatch survives.
-
-        Anything else — unparseable, or parses to a non-list — is left as-is
-        for pydantic to reject loudly (No Silent Fallbacks).
-        """
-        if not isinstance(data, dict):
-            return data
-        for field in ("per_player", "cross_player"):
-            value = data.get(field)
-            if not isinstance(value, str):
-                continue
-            try:
-                parsed = json.loads(value)
-            except ValueError:
-                parsed = None
-            if isinstance(parsed, list):
-                logger.info(
-                    "dispatch_package.coerced_stringified_list field=%s items=%d",
-                    field,
-                    len(parsed),
-                )
-                data[field] = parsed
-                continue
-            if parsed is not None:
-                # Parsed cleanly but to a non-list (dict/scalar) — not our
-                # failure mode; leave it for pydantic to reject loudly.
-                continue
-            # json.loads failed: try the swallowed-sibling repair.
-            items = _recover_leading_json_array(value)
-            if items is None:
-                continue  # genuinely unparseable — pydantic rejects loudly
-            data[field] = items
-            recovered: list[str] = []
-            if "confidence_global" not in data:
-                match = _CONFIDENCE_GLOBAL_RE.search(value)
-                if match:
-                    data["confidence_global"] = float(match.group(1))
-                    recovered.append("confidence_global")
-            logger.info(
-                "dispatch_package.repaired_stringified_list field=%s items=%d recovered=%s",
-                field,
-                len(items),
-                ",".join(recovered) or "(none)",
-            )
-        return data
 
     @model_validator(mode="after")
     def _unique_idempotency_keys(self) -> DispatchPackage:

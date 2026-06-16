@@ -1,8 +1,0 @@
-# Deliberately malformed YAML for Story 65-11 AC1 (fail loud, not silent).
-# Unterminated flow mapping -> yaml.YAMLError on parse. Loading this for the
-# Map section must surface as a loud HTTP 500, never a silently map-less page.
-world_name: Map Malformed Fixture
-starting_region: harbor_light
-navigation_mode: region
-regions:
-  harbor_light: {name: Harbor Light, summary: x, description: y, adjacent: [

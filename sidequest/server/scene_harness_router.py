@@ -9,8 +9,8 @@ Wires together the existing pieces:
 
 * :func:`sidequest.game.scene_harness.hydrate_fixture` — YAML → GameSnapshot
 * :func:`sidequest.game.game_slug.generate_slug` — mints a fresh slug
-* :func:`sidequest.server.session_state._build_pg_repos_for_slug` — registers
-  the Postgres session and yields the PgSaveRepository (ADR-115 F1)
+* :class:`sidequest.game.persistence.SqliteStore` — persists the snapshot
+* :func:`sidequest.game.persistence.upsert_game` — registers the games row
 * :func:`sidequest.telemetry.watcher_hub.publish_event` — emits OTEL spans
   for the GM panel (CLAUDE.md OTEL Observability Principle)
 
@@ -19,7 +19,7 @@ Span vocabulary (asserted by ``tests/server/test_scene_harness.py``):
 * ``scene_harness.intent.load`` — fixture name + slug, fires before hydration
 * ``scene_harness.hydrate.ok`` — field counts (npcs, characters) on success
 * ``scene_harness.hydrate.error`` — fixture name + error class on failure
-* ``scene_harness.persist.ok`` — slug + PG session_id after commit
+* ``scene_harness.persist.ok`` — slug + save path after commit
 """
 
 from __future__ import annotations
@@ -31,11 +31,13 @@ from pathlib import Path
 
 import yaml
 from fastapi import APIRouter, HTTPException, Request
-from psycopg_pool import ConnectionPool
 
 from sidequest.game.game_slug import generate_slug
 from sidequest.game.persistence import (
     GameMode,
+    SqliteStore,
+    db_path_for_slug,
+    upsert_game,
 )
 from sidequest.game.scene_harness import (
     FixtureNotFoundError,
@@ -54,6 +56,7 @@ def create_scene_harness_router() -> APIRouter:
 
     Handlers pull config from ``request.app.state``:
 
+    * ``save_dir`` — SQLite root, set by ``create_app``.
     * ``fixtures_dir`` — directory containing fixture YAMLs, set by
       ``create_app`` from ``SIDEQUEST_FIXTURES_DIR`` (with a cwd-relative
       fallback to ``scenarios/fixtures``).
@@ -63,6 +66,7 @@ def create_scene_harness_router() -> APIRouter:
 
     @router.post("/dev/scene/{name}")
     async def load_scene(name: str, request: Request) -> dict[str, str]:
+        save_dir: Path = request.app.state.save_dir
         fixtures_dir: Path = request.app.state.fixtures_dir
         today_fn = getattr(request.app.state, "today_fn", _date_cls.today)
 
@@ -140,35 +144,31 @@ def create_scene_harness_router() -> APIRouter:
             today=today_fn(),
             mode=GameMode.SOLO,
         )
-        # ADR-115 F1: Postgres is the sole save backend. Register the
-        # session and persist the hydrated snapshot to PG so the connect
-        # handler resumes from this slug; the legacy SQLite save.db write was
-        # retired.
-        from sidequest.game import db_pool as _db_pool
-        from sidequest.server.session_state import _build_pg_repos_for_slug
-
-        _pool = _db_pool.get_pool()
-
         # Disambiguate against same-day-same-world collisions so two
         # scene-harness loads in one session don't overwrite each other.
-        slug = _disambiguate(_pool, slug)
+        slug = _disambiguate(save_dir, slug)
 
-        repository, _dungeon, _sink = _build_pg_repos_for_slug(
-            _pool,
+        db = db_path_for_slug(save_dir, slug)
+        db.parent.mkdir(parents=True, exist_ok=True)
+
+        store = SqliteStore(db)
+        store.initialize()
+        store.init_session(snapshot.genre_slug, snapshot.world_slug)
+        store.save(snapshot)
+        upsert_game(
+            store,
             slug=slug,
-            mode="solo",
+            mode=GameMode.SOLO,
             genre_slug=snapshot.genre_slug,
             world_slug=snapshot.world_slug,
         )
-        repository.init_session()
-        repository.save(snapshot)
 
         _hub.publish_event(
             "scene_harness.persist.ok",
             {
                 "fixture_name": name,
                 "game_slug": slug,
-                "session_id": repository.session_id,
+                "save_path": str(db),
             },
             component="scene_harness",
         )
@@ -192,14 +192,12 @@ def create_scene_harness_router() -> APIRouter:
                     continue
                 if not isinstance(raw, dict) or "genre" not in raw or "world" not in raw:
                     continue
-                results.append(
-                    {
-                        "name": stem,
-                        "genre": raw["genre"],
-                        "world": raw["world"],
-                        "description": raw.get("description"),
-                    }
-                )
+                results.append({
+                    "name": stem,
+                    "genre": raw["genre"],
+                    "world": raw["world"],
+                    "description": raw.get("description"),
+                })
 
         _hub.publish_event(
             "scene_harness.list",
@@ -214,29 +212,27 @@ def create_scene_harness_router() -> APIRouter:
 _MAX_DISAMBIGUATE_ATTEMPTS = 1000
 
 
-def _disambiguate(pool: ConnectionPool, base_slug: str) -> str:
-    """Pick the next free slug by appending ``-2``, ``-3``... (ADR-115 F1).
+def _disambiguate(save_dir: Path, base_slug: str) -> str:
+    """Pick the next free slug under ``save_dir`` by appending ``-2``, ``-3``...
 
     Same-day same-world scene loads must not silently overwrite each
     other; the scene harness is for iteration and devs reload the
-    same fixture many times in a session. Collisions are resolved against
-    the Postgres ``sessions`` table (the SQLite save tree was retired).
+    same fixture many times in a session.
 
     Bounded at :data:`_MAX_DISAMBIGUATE_ATTEMPTS` so a pathological save
-    history fails loudly per CLAUDE.md "No Silent Fallbacks" rather than
-    spinning an unbounded scan.
+    directory (or a misconfigured tests that points the harness at a
+    populated production save tree) fails loudly per CLAUDE.md
+    "No Silent Fallbacks" rather than spinning an O(n) filesystem scan.
     """
-    from sidequest.game.pg import sessions as _pg_sessions
-
     candidate = base_slug
     n = 1
-    while _pg_sessions.resolve_session_id(pool, slug=candidate) is not None:
+    while db_path_for_slug(save_dir, candidate).exists():
         n += 1
         if n > _MAX_DISAMBIGUATE_ATTEMPTS:
             raise RuntimeError(
                 f"scene_harness._disambiguate: {n - 1} consecutive same-day same-world "
-                f"sessions already exist for base_slug={base_slug!r}. "
-                "Either prune old scene-harness sessions or rename the fixture."
+                f"saves already exist under {save_dir!s} for base_slug={base_slug!r}. "
+                "Either prune old scene-harness saves or rename the fixture."
             )
         candidate = f"{base_slug}-{n}"
     return candidate

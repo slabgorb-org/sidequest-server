@@ -30,7 +30,6 @@ def _d(key: str, visible_to, *, redact: bool = False) -> SubsystemDispatch:
         subsystem="stealth_roll_check",
         params={},
         idempotency_key=key,
-        confidence=1.0,
         visibility=_viz(visible_to, redact=redact),
     )
 

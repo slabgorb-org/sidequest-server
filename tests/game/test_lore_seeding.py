@@ -1,15 +1,20 @@
 """Tests for ``sidequest.game.lore_seeding`` — Story 2.3 Slice F.
 
 Covers ``seed_lore_from_char_creation`` fragment shape + id format
-(Rust parity) and ``seed_lore_from_world`` against a real loaded pack.
-The genre-pack seeder was removed in story 74-4 (lore is world-only,
-epic 74), so there is no genre-tier seed left to exercise here.
+(Rust parity) and ``seed_lore_from_genre_pack`` against a real loaded
+pack — no synthetic GenrePack fixtures, since the aggregate root is
+wide and the seeding helpers only read ``pack.lore``.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
 from sidequest.game.lore_seeding import (
     seed_lore_from_char_creation,
+    seed_lore_from_genre_pack,
     seed_lore_from_world,
 )
 from sidequest.game.lore_store import (
@@ -17,11 +22,15 @@ from sidequest.game.lore_store import (
     LoreSource,
     LoreStore,
 )
+from sidequest.genre.loader import load_genre_pack
 from sidequest.genre.models.character import (
     CharCreationChoice,
     CharCreationScene,
     MechanicalEffects,
 )
+from sidequest.genre.models.pack import GenrePack
+
+CONTENT_ROOT = Path(__file__).resolve().parents[3] / "sidequest-content" / "genre_packs"
 
 
 def _choice(label: str, description: str) -> CharCreationChoice:
@@ -121,68 +130,119 @@ class TestSeedFromCharCreation:
 
 
 # ---------------------------------------------------------------------------
+# seed_lore_from_genre_pack — real caverns pack
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def caverns_pack() -> GenrePack:
+    path = CONTENT_ROOT / "caverns_and_claudes"
+    if not path.is_dir():
+        pytest.skip(f"content pack not found at {path}")
+    return load_genre_pack(path)
+
+
+class TestSeedFromGenrePack:
+    def test_adds_history_geography_cosmology_and_factions(self, caverns_pack: GenrePack) -> None:
+        store = LoreStore()
+        added = seed_lore_from_genre_pack(store, caverns_pack)
+        # caverns has non-empty history/geography/cosmology + multiple factions.
+        assert added >= 3
+        assert "lore_genre_history" in store.fragments
+        assert "lore_genre_geography" in store.fragments
+        assert "lore_genre_cosmology" in store.fragments
+
+    def test_cosmology_bucketed_as_history(self, caverns_pack: GenrePack) -> None:
+        store = LoreStore()
+        seed_lore_from_genre_pack(store, caverns_pack)
+        cosmology = store.fragments["lore_genre_cosmology"]
+        # Rust bucket cosmology → History (seeding.rs line 47).
+        assert cosmology.category == LoreCategory.History
+
+    def test_faction_fragment_carries_name_metadata(self, caverns_pack: GenrePack) -> None:
+        store = LoreStore()
+        seed_lore_from_genre_pack(store, caverns_pack)
+        faction_frags = store.query_by_category(LoreCategory.Faction)
+        if not faction_frags:
+            pytest.skip("pack has no factions")
+        frag = faction_frags[0]
+        assert "faction_name" in frag.metadata
+        assert frag.metadata["faction_name"]
+
+    def test_idempotent_second_call_adds_nothing(self, caverns_pack: GenrePack) -> None:
+        store = LoreStore()
+        first = seed_lore_from_genre_pack(store, caverns_pack)
+        second = seed_lore_from_genre_pack(store, caverns_pack)
+        assert first > 0
+        assert second == 0
+
+
+# ---------------------------------------------------------------------------
 # seed_lore_from_world — pingpong 2026-04-30 (lore RAG returns empty)
-#
-# These exercise the world-scoped seeder against SYNTHETIC ``WorldLore``
-# (story 74-5: no real-pack coupling). A world's ``lore.yaml`` is flavor and
-# lives at the world tier (epic 74); the seeding LOGIC is genre-agnostic, so
-# an in-test ``WorldLore`` is the correct fixture — the same pattern the two
-# tests below (``..._slug_does_not_break_id`` / ``_idempotent_...``) already
-# use. Synthetic lore makes every assertion deterministic — no skip-guards on
-# "did the real pack happen to populate this field?".
 # ---------------------------------------------------------------------------
 
 
 class TestSeedFromWorld:
-    """The world's ``lore.yaml`` carries history/geography/cosmology/factions
-    distinct from any other world in the genre. These tests exercise the
-    world-scoped variant of the seeder added by pingpong 2026-04-30 against a
-    synthetic world so the fragment-id scoping and metadata contracts are
-    pinned independent of shipping content."""
+    """The world's ``lore.yaml`` overrides genre defaults for a specific
+    world (e.g. ``coyote_star`` has its own history/geography distinct
+    from ``space_opera``'s genre-level lore). These tests exercise the
+    world-scoped variant of the seeder added by pingpong 2026-04-30."""
 
-    @staticmethod
-    def _world_lore():
-        # All four seedable fields populated (history + geography + cosmology +
-        # one faction) so the seeder yields exactly four world-scoped fragments
-        # and every one of its field branches is exercised at the unit level.
-        from sidequest.genre.models.lore import Faction, WorldLore
-
-        return WorldLore(
-            world_name="The Flickering Reach",
-            history="Three wounds define the Reach; the black glass plain still hums.",
-            geography="A continental interior scarred by a black glass plain and bone-wind canyons.",
-            cosmology="The Drifters hear the Long Signal in the static of pre-war machines.",
-            factions=[
-                Faction(name="The Dome Syndicate", summary="water cartel", description="x"),
-            ],
-        )
-
-    def test_world_lore_seeded_with_world_scoped_ids(self) -> None:
-        world_slug = "flickering_reach"
+    def test_world_lore_seeded_with_world_scoped_ids(self, caverns_pack: GenrePack) -> None:
+        worlds = caverns_pack.worlds
+        if not worlds:
+            pytest.skip("caverns pack has no worlds — cannot exercise world seed")
+        world_slug, world = next(iter(worlds.items()))
         store = LoreStore()
-        added = seed_lore_from_world(store, self._world_lore(), world_slug)
-        # history + geography + cosmology + one faction → four fragments.
-        assert added == 4
-        # EVERY id must be world-scoped so a future world swap doesn't leak the
-        # prior world's lore into the new world's RAG queries. `all`, not `any`:
-        # the assertion message is universal, so one correctly-scoped id is not
-        # enough — a single mis-scoped fragment must fail this test.
-        assert all(fid.startswith(f"lore_world_{world_slug}_") for fid in store.fragments), (
+        added = seed_lore_from_world(store, world.lore, world_slug)
+        # Worlds have at minimum a history string in shipping content.
+        if added == 0:
+            pytest.skip(f"world {world_slug!r} has no populated lore fields")
+        # Ids must be world-scoped so a future world swap doesn't leak
+        # the prior world's lore into the new world's RAG queries.
+        assert any(fid.startswith(f"lore_world_{world_slug}_") for fid in store.fragments), (
             f"World seeder must scope fragment ids by world_slug "
             f"({world_slug!r}); got: {list(store.fragments)}"
         )
 
-    def test_world_lore_carries_world_slug_metadata(self) -> None:
-        world_slug = "flickering_reach"
+    def test_world_lore_carries_world_slug_metadata(self, caverns_pack: GenrePack) -> None:
+        worlds = caverns_pack.worlds
+        if not worlds:
+            pytest.skip("caverns pack has no worlds")
+        world_slug, world = next(iter(worlds.items()))
         store = LoreStore()
-        added = seed_lore_from_world(store, self._world_lore(), world_slug)
-        assert added == 4
+        added = seed_lore_from_world(store, world.lore, world_slug)
+        if added == 0:
+            pytest.skip(f"world {world_slug!r} has no populated lore fields")
         for frag in store.fragments.values():
             assert frag.metadata.get("world_slug") == world_slug, (
                 "Every world-seeded fragment must carry world_slug metadata "
                 "so future cross-world queries can filter by world without "
                 "re-parsing the fragment id."
             )
+
+    def test_world_seed_does_not_collide_with_genre_seed(self, caverns_pack: GenrePack) -> None:
+        """Wiring contract: in production both seeders run against the
+        same store. The genre seeder uses ``lore_genre_*`` ids; the
+        world seeder uses ``lore_world_<slug>_*``. They must NOT
+        collide on shared topics like 'history' — pre-fix the bug
+        report would suggest both were silent, but a future regression
+        could collide ids and silently drop world lore as a duplicate.
+        """
+        worlds = caverns_pack.worlds
+        if not worlds:
+            pytest.skip("caverns pack has no worlds")
+        world_slug, world = next(iter(worlds.items()))
+        store = LoreStore()
+        genre_added = seed_lore_from_genre_pack(store, caverns_pack)
+        world_added = seed_lore_from_world(store, world.lore, world_slug)
+        # If world has ANY populated field, total must equal sum (no
+        # silent dedup against the genre layer).
+        assert genre_added >= 1
+        assert len(store) == genre_added + world_added, (
+            "Genre and world seed ids must not collide — len(store) must "
+            "equal the sum of fragments_added across both seeders."
+        )
 
     def test_unicode_or_uppercase_world_slug_does_not_break_id(self) -> None:
         from sidequest.genre.models.lore import Faction, WorldLore
@@ -221,27 +281,42 @@ class TestSeedFromWorld:
 # ---------------------------------------------------------------------------
 
 
-def test_websocket_session_handler_imports_world_seeder() -> None:
+def test_websocket_session_handler_imports_genre_and_world_seeders() -> None:
     """Production wiring guard: the chargen-confirmation hook in
-    ``chargen_mixin.py`` must reach the world-lore seeder. This is a
-    reflection-based import-contract test (the legitimate exception to the
-    no-source-text-wiring rule) — if a future refactor removes the wiring,
-    this fails before runtime ever encounters a session with empty lore
-    (the pingpong 2026-04-30 symptom).
+    ``websocket_session_handler.py`` must reach the genre+world seeders.
+    This is a static-import contract test — if a future refactor removes
+    the wiring, this fails before runtime ever encounters a session with
+    empty lore (the pingpong 2026-04-30 symptom).
 
-    Epic 74: lore is world-only. The fresh chargen path AND the slug-resume
-    connect path both go through the single shared ``seed_world_lore`` helper
-    (DRY), which seeds WORLD lore only — genre lore is no longer seeded. The
-    behavioural guarantee (``genre_added == 0``, world lore present) is pinned
-    by ``test_genre_flavor_world_tier.py::test_ac3_genre_lore_no_longer_seeded``
-    and the resume-reseed tests; this test guards only the import wiring.
+    Post slug-resume re-seed fix: the fresh chargen path no longer calls
+    ``seed_lore_from_genre_pack``/``seed_lore_from_world`` inline — both
+    the fresh path AND the slug-resume connect path now go through the
+    single shared ``seed_world_lore`` helper (DRY). The wiring guarantee
+    is therefore: the handler imports ``seed_world_lore`` (which itself
+    fans out to the genre + world seeders).
     """
-    import sidequest.server.websocket_handlers.chargen_mixin as wsh
+    import sidequest.server.websocket_session_handler as wsh
 
     assert hasattr(wsh, "seed_world_lore"), (
-        "chargen_mixin must import seed_world_lore — the shared world-lore "
-        "seeding helper the chargen-confirm path uses to seed the lore corpus "
-        "into the per-session lore store. The helper backs BOTH the fresh and "
-        "the slug-resume paths so a resumed save's query_lore no longer "
-        "returns hit_count=0."
+        "websocket_session_handler must import seed_world_lore — the "
+        "shared genre+world seeding helper the chargen-confirm path uses "
+        "to seed the lore corpus into the per-session lore store. Pre-fix "
+        "the genre/world seeding was inline; the helper now backs BOTH "
+        "the fresh and the slug-resume paths so a resumed save's "
+        "query_lore no longer returns hit_count=0."
+    )
+    # The shared helper must itself fan out to the genre + world
+    # seeders — guards against a refactor that hollows seed_world_lore.
+    import inspect
+
+    from sidequest.game import lore_seeding
+
+    src = inspect.getsource(lore_seeding.seed_world_lore)
+    assert "seed_lore_from_genre_pack" in src, (
+        "seed_world_lore must call seed_lore_from_genre_pack so the genre "
+        "lore corpus reaches the per-session store"
+    )
+    assert "seed_lore_from_world" in src, (
+        "seed_world_lore must call seed_lore_from_world so world-level "
+        "history/geography overrides reach the narrator's RAG retrieval"
     )

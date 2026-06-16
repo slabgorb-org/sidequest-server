@@ -380,61 +380,6 @@ def test_ensure_initial_draw_still_works_after_engagement_addition():
     )
 
 
-def test_ensure_initial_draw_empty_deck_is_a_loud_noop(caplog):
-    """sq-playtest 2026-06-07 (77-7 forensics, split item c): a session whose
-    seed source authors NO seeds silently armed a lull-escalation engine with
-    an empty deck — ``fired=False reason=none_available`` every turn,
-    invisible until forensics. Per No Silent Fallbacks the bootstrap no-op
-    must be LOUD: a WARNING naming the genre/world, once at session bootstrap
-    (the span half is pinned in tests/telemetry/test_lull_escalation_span.py)."""
-    import logging
-
-    from sidequest.game.seed_tick import ensure_initial_draw
-
-    snap = GameSnapshot(genre_slug="space_opera", world_slug="perseus_cloud")
-    with caplog.at_level(logging.WARNING):
-        ensure_initial_draw(snap, _Pack([]), session_id="session-empty", now_turn=0)
-
-    assert snap.active_seeds == []
-    warned = [r for r in caplog.records if "seed.deck_empty" in r.getMessage()]
-    assert warned, (
-        "an empty seed deck at bootstrap must WARN — a lull-escalation engine "
-        "with no ammunition is a configuration smell, not a silent no-op"
-    )
-    assert "space_opera" in warned[0].getMessage()
-
-
-def test_ensure_initial_draw_empty_deck_signals_once_per_session(caplog):
-    """The empty-deck signal must latch per session: an empty deck never
-    populates active_seeds/seed_ghosts, so ``ensure_initial_draw`` re-enters
-    the empty branch EVERY turn — without the ``_deck_empty_signaled`` latch
-    the warning (and span) would fire once per turn, all session long. A
-    different session must still fire its own signal."""
-    import logging
-
-    from sidequest.game import seed_tick
-    from sidequest.game.seed_tick import ensure_initial_draw
-
-    seed_tick._deck_empty_signaled.clear()
-    snap = GameSnapshot(genre_slug="space_opera", world_slug="perseus_cloud")
-    with caplog.at_level(logging.WARNING):
-        ensure_initial_draw(snap, _Pack([]), session_id="session-once", now_turn=0)
-        ensure_initial_draw(snap, _Pack([]), session_id="session-once", now_turn=1)
-
-    warned = [r for r in caplog.records if "seed.deck_empty" in r.getMessage()]
-    assert len(warned) == 1, (
-        f"empty-deck signal must latch once per session, got {len(warned)} warnings"
-    )
-
-    caplog.clear()
-    other = GameSnapshot(genre_slug="space_opera", world_slug="perseus_cloud")
-    with caplog.at_level(logging.WARNING):
-        ensure_initial_draw(other, _Pack([]), session_id="session-other", now_turn=0)
-
-    warned = [r for r in caplog.records if "seed.deck_empty" in r.getMessage()]
-    assert len(warned) == 1, "a DIFFERENT session must still fire its own signal"
-
-
 def test_tick_seeds_still_works_after_engagement_addition():
     """Regression: tick_seeds (22-3) must still function correctly after
     draw_engaged_seed is added to seed_tick.py."""

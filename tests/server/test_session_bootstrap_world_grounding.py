@@ -44,6 +44,9 @@ from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore, Inventory
 from sidequest.game.persistence import (
     GameMode,
+    SqliteStore,
+    db_path_for_slug,
+    upsert_game,
 )
 from sidequest.game.session import GameSnapshot
 from sidequest.protocol import GameMessage
@@ -82,19 +85,16 @@ def _clone_test_genre(tmp_path: Path, slug: str) -> Path:
 @pytest.fixture
 def grounded_pack(tmp_path: Path) -> tuple[Path, str]:
     """Clone test_genre into tmp + drop in real tea_and_murder/glenross
-    grounding YAMLs (world-level weather.yaml + demographics + calendar).
-    Returns (search_paths_root, genre_slug).
-
-    Epic 74: weather is WORLD-tier flavor — weather.yaml lives under
-    worlds/<world>/, not the pack root."""
+    grounding YAMLs (pack-level weather.yaml + world-level demographics +
+    calendar). Returns (search_paths_root, genre_slug)."""
     slug = "grounded_pack"
     pack_dir = _clone_test_genre(tmp_path, slug)
 
     real_pack = CONTENT_GENRE_PACKS / "tea_and_murder"
     real_world = real_pack / "worlds" / "glenross"
 
+    shutil.copy(real_pack / "weather.yaml", pack_dir / "weather.yaml")
     world_dir = pack_dir / "worlds" / _WORLD
-    shutil.copy(real_pack / "weather.yaml", world_dir / "weather.yaml")
     shutil.copy(real_world / "demographics.yaml", world_dir / "demographics.yaml")
     shutil.copy(real_world / "calendar.yaml", world_dir / "calendar.yaml")
 
@@ -112,43 +112,12 @@ def bare_pack(tmp_path: Path) -> tuple[Path, str]:
 
 
 @pytest.fixture
-def draft_world_pack(tmp_path: Path) -> tuple[Path, str]:
-    """A clone of test_genre with a SECOND world marked ``draft: true``.
-
-    flickering_reach stays loadable (so ``genre_pack.worlds`` is non-empty),
-    and a sibling ``seaboard_of_saints`` carries ``draft: true`` — the loader
-    excludes it from the pack, so a session bound to it cannot load its
-    content and would silently fall back to genre/sibling defaults
-    (playtest 2026-06-11, the No-Silent-Fallbacks bug this test pins)."""
-    slug = "draft_world_pack"
-    pack_dir = _clone_test_genre(tmp_path, slug)
-    draft_world_dir = pack_dir / "worlds" / "seaboard_of_saints"
-    draft_world_dir.mkdir(parents=True, exist_ok=True)
-    (draft_world_dir / "world.yaml").write_text(
-        yaml.dump(
-            {
-                "name": "Seaboard of Saints",
-                "slug": "seaboard_of_saints",
-                "description": "A drowned coast of salt-cured relics.",
-                "starting_location": "the tide market",
-                "draft": True,
-            },
-            default_flow_style=False,
-            sort_keys=False,
-        ),
-        encoding="utf-8",
-    )
-    return tmp_path, slug
-
-
-@pytest.fixture
 def malformed_weather_pack(tmp_path: Path) -> tuple[Path, str]:
     """A clone of test_genre with a syntactically invalid weather.yaml.
-    AC8: bootstrap must fail loud. Epic 74: weather is world-tier, so the
-    malformed file lives under worlds/<world>/."""
+    AC8: bootstrap must fail loud."""
     slug = "malformed_weather_pack"
     pack_dir = _clone_test_genre(tmp_path, slug)
-    (pack_dir / "worlds" / _WORLD / "weather.yaml").write_text(
+    (pack_dir / "weather.yaml").write_text(
         "climate_zones: { unterminated mapping\n",
         encoding="utf-8",
     )
@@ -163,45 +132,20 @@ def malformed_weather_pack(tmp_path: Path) -> tuple[Path, str]:
 _SLUG = "world-grounding-bootstrap-fixture"
 
 
-@pytest.fixture(autouse=True)
-def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
-    """Point the process-global pool at a per-worker throwaway PG database.
-
-    Under ADR-115 D2 the slug-connect path resolves the authoritative game
-    row and snapshot from Postgres via ``db_pool.get_pool()`` (resolving
-    SIDEQUEST_DATABASE_URL), reading the SQLite save_dir db only for the
-    bootstrap genre/world/mode. The shared ``sidequest_test`` db otherwise
-    accumulates rows across tests — a fixed-slug connect then loads a prior
-    test's genre_slug / characters. Bind the pool to the migrated throwaway
-    db so each test seeds and connects against one isolated database.
-    """
-    import psycopg
-
-    from sidequest.game import db_pool
-
-    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
-    # migrated_db is session-scoped (shared per xdist worker); TRUNCATE the
-    # per-test state so a sibling test's fixed-slug row can't be resumed here.
-    with psycopg.connect(plain, autocommit=True) as conn:
-        rows = conn.execute(
-            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
-            "AND tablename <> 'alembic_version'"
-        ).fetchall()
-        if rows:
-            names = ", ".join(f'"{r[0]}"' for r in rows)
-            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
-    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
-    db_pool.close_pool()
-    yield
-    db_pool.close_pool()
-
-
 def _seed_solo_save(save_dir: Path, genre_slug: str) -> None:
-    """Register a SOLO session in Postgres carrying one Character so the
-    slug-connect branch goes straight to Playing (skipping chargen).
-
-    ADR-115 F1: the connect path loads the authoritative snapshot + bootstrap
-    row from Postgres (the SQLite save layer was retired)."""
+    """Seed a SOLO game row + a saved snapshot carrying one Character so
+    the slug-connect branch goes straight to Playing (skipping chargen)."""
+    db = db_path_for_slug(save_dir, _SLUG)
+    db.parent.mkdir(parents=True, exist_ok=True)
+    store = SqliteStore(db)
+    store.initialize()
+    upsert_game(
+        store,
+        slug=_SLUG,
+        mode=GameMode.SOLO,
+        genre_slug=genre_slug,
+        world_slug=_WORLD,
+    )
     core = CreatureCore(
         name="Thorn",
         description="A wandering investigator",
@@ -216,20 +160,9 @@ def _seed_solo_save(save_dir: Path, genre_slug: str) -> None:
     )
     snap = GameSnapshot(genre_slug=genre_slug, world_slug=_WORLD)
     snap.characters = [char]
-
-    # ADR-115 D2: mirror the snapshot into the PG store the connect path
-    # actually loads from so has_character=True → Playing (skips chargen).
-    from sidequest.game import db_pool
-    from sidequest.server.session_state import _build_pg_repos_for_slug
-
-    repo, _dungeon, _sink = _build_pg_repos_for_slug(
-        db_pool.get_pool(),
-        slug=_SLUG,
-        mode=str(GameMode.SOLO),
-        genre_slug=genre_slug,
-        world_slug=_WORLD,
-    )
-    repo.save(snap)
+    store.init_session(genre_slug, _WORLD)
+    store.save(snap)
+    store.close()
 
 
 def _build_handler(
@@ -375,7 +308,7 @@ async def test_get_world_grounding_returns_grounded_payload_through_dispatch(
         session_id=tc.session_id or "test",
         perspective_pc=tc.character_name,
         turn_number=tc.turn_number,
-        repository=sd.repository,
+        store=sd.store,
         otel_span=MagicMock(),
         perception_filter=NarratorPerceptionFilter(),
         weather_state=tc.weather_state,
@@ -514,81 +447,4 @@ async def test_bootstrap_fails_loud_on_malformed_pack_weather_yaml(
             "connect: has_character=True alongside no fatal error. The "
             "loader silently fell back to no-weather, exactly the silent-"
             "fallback class of bug AC8 forbids."
-        )
-
-
-def _seed_solo_save_for_world(save_dir: Path, genre_slug: str, world_slug: str) -> None:
-    """Like ``_seed_solo_save`` but binds the session row + snapshot to an
-    arbitrary ``world_slug`` (used to seed a save pointed at a draft world)."""
-    core = CreatureCore(
-        name="Thorn",
-        description="A wandering investigator",
-        personality="Curious",
-        inventory=Inventory(),
-    )
-    char = Character(core=core, char_class="Fighter", race="Human", backstory="A wanderer.")
-    snap = GameSnapshot(genre_slug=genre_slug, world_slug=world_slug)
-    snap.characters = [char]
-
-    from sidequest.game import db_pool
-    from sidequest.server.session_state import _build_pg_repos_for_slug
-
-    repo, _dungeon, _sink = _build_pg_repos_for_slug(
-        db_pool.get_pool(),
-        slug=_SLUG,
-        mode=str(GameMode.SOLO),
-        genre_slug=genre_slug,
-        world_slug=world_slug,
-    )
-    repo.save(snap)
-
-
-@pytest.mark.asyncio
-async def test_bootstrap_fails_loud_on_draft_world(
-    draft_world_pack: tuple[Path, str],
-    tmp_path: Path,
-) -> None:
-    """No-Silent-Fallbacks (playtest 2026-06-11): a session bound to a world
-    that is NOT in the loaded pack — because it is ``draft: true`` — MUST fail
-    loud at connect, not run with empty overrides that silently serve
-    genre/sibling-world defaults under the draft world's name.
-
-    The genre pack still has a loadable world (flickering_reach), so this is
-    specifically the "requested world absent from a non-empty pack" case, not
-    a worldless genre."""
-    search_root, genre_slug = draft_world_pack
-    save_dir = tmp_path / "saves"
-    save_dir.mkdir()
-    _seed_solo_save_for_world(save_dir, genre_slug, "seaboard_of_saints")
-
-    handler, _queue = _build_handler(save_dir, search_root)
-
-    raised: Exception | None = None
-    out: list[Any] = []
-    try:
-        out = list(await handler.handle_message(_connect_msg()))
-    except Exception as exc:  # noqa: BLE001 — fail-loud surface check
-        raised = exc
-
-    if raised is not None:
-        return
-
-    error_msgs = [m for m in out if getattr(m, "type", None) == MessageType.ERROR]
-    assert error_msgs, (
-        "a draft world (absent from the loaded pack) connected silently with "
-        "no ERROR message and no exception — the exact genre/sibling-world "
-        "silent fallback CLAUDE.md forbids."
-    )
-
-    connected_events = [
-        m
-        for m in out
-        if getattr(m, "type", None) == MessageType.SESSION_EVENT
-        and getattr(m.payload, "event", "") == "connected"
-    ]
-    if connected_events:
-        has_character = getattr(connected_events[0].payload, "has_character", None)
-        assert has_character is not True, (
-            "draft world produced a normal Playing-state connect alongside no "
-            "fatal error — silent fallback to genre/sibling defaults."
         )

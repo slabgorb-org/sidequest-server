@@ -24,7 +24,6 @@ async def test_distinctive_detail_emits_single_narrator_directive():
         params={"target": "npc:goblin_2", "hint": "broken tooth"},
         depends_on=[],
         idempotency_key="idem:a",
-        confidence=1.0,
         visibility=_tag_all(),
     )
     out = await run_distinctive_detail(dispatch)
@@ -51,7 +50,6 @@ async def test_distinctive_detail_degrades_to_noop_on_missing_target():
         params={"hint": "broken tooth"},  # missing target
         depends_on=[],
         idempotency_key="idem:b",
-        confidence=1.0,
         visibility=_tag_all(),
     )
     out = await run_distinctive_detail(dispatch)
@@ -67,7 +65,6 @@ async def test_distinctive_detail_degrades_to_noop_on_missing_hint():
         params={"target": "npc:goblin_2"},  # missing hint
         depends_on=[],
         idempotency_key="idem:c",
-        confidence=1.0,
         visibility=_tag_all(),
     )
     out = await run_distinctive_detail(dispatch)

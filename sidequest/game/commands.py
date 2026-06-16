@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from sidequest.game.session import GameSnapshot, QuestEntry, WorldStatePatch
+    from sidequest.game.session import GameSnapshot, WorldStatePatch
 
 
 # ---------------------------------------------------------------------------
@@ -201,35 +201,27 @@ class QuestsCommand(CommandHandler):
         completed = []
         failed = []
 
-        # Story 77-2: quest_log values are structured QuestEntry now. Classify
-        # on the status field; display the quest's objective when it carries
-        # one, else the raw status.
-        for name, entry in state.quest_log.items():
-            if entry.status.startswith("completed"):
-                completed.append((name, entry))
-            elif entry.status.startswith("failed"):
-                failed.append((name, entry))
+        for name, status in state.quest_log.items():
+            if status.startswith("completed"):
+                completed.append((name, status))
+            elif status.startswith("failed"):
+                failed.append((name, status))
             else:
-                active.append((name, entry))
-
-        def _line(name: str, entry: QuestEntry) -> str:
-            label = entry.title or name
-            detail = entry.objective or entry.status
-            return f"  {label} — {detail}\n"
+                active.append((name, status))
 
         output = ""
         if active:
             output += "ACTIVE QUESTS:\n"
-            for name, entry in active:
-                output += _line(name, entry)
+            for name, status in active:
+                output += f"  {name} — {status}\n"
         if completed:
             output += "\nCOMPLETED:\n"
-            for name, entry in completed:
-                output += _line(name, entry)
+            for name, status in completed:
+                output += f"  {name} — {status}\n"
         if failed:
             output += "\nFAILED:\n"
-            for name, entry in failed:
-                output += _line(name, entry)
+            for name, status in failed:
+                output += f"  {name} — {status}\n"
 
         return DisplayResult(output)
 

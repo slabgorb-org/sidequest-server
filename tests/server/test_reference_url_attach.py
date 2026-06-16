@@ -237,16 +237,6 @@ def test_party_member_from_character_attaches_class_reference_url() -> None:
     genre_pack = MagicMock()
     genre_pack.classes = [class_def]
     genre_pack.inventory = None
-    # Epic 94: resolve_inventory traverses pack.worlds world-first; stub empty so
-    # the MagicMock pack falls through to the (None) genre-tier inventory.
-    genre_pack.worlds = {}
-    # Story 68-1: party_member_from_character now reads the genre survivability
-    # label; pin it to None on the synthetic pack so PartyMember validates.
-    genre_pack.rules.survivability_pool_label = None
-    # Story 82-8: party_member_from_character now resolves wealth tiers; pin an
-    # empty ladder on the synthetic pack so it short-circuits to no wealth
-    # label (a MagicMock ladder would make the resolver's fallback misfire).
-    genre_pack.progression.wealth_tiers = []
 
     snapshot = GameSnapshot(
         genre_slug="tea_and_murder",
@@ -261,9 +251,7 @@ def test_party_member_from_character_attaches_class_reference_url() -> None:
         player_name="Keith",
         player_id="p1",
         snapshot=snapshot,
-        repository=MagicMock(),
-        dungeon_repository=MagicMock(),
-        telemetry_sink=MagicMock(),
+        store=MagicMock(),
         genre_pack=genre_pack,
         orchestrator=MagicMock(),
         mode=GameMode.SOLO,
@@ -313,16 +301,6 @@ def test_party_member_from_character_skips_url_when_class_not_in_pack() -> None:
     genre_pack = MagicMock()
     genre_pack.classes = []
     genre_pack.inventory = None
-    # Epic 94: resolve_inventory traverses pack.worlds world-first; stub empty so
-    # the MagicMock pack falls through to the (None) genre-tier inventory.
-    genre_pack.worlds = {}
-    # Story 68-1: party_member_from_character now reads the genre survivability
-    # label; pin it to None on the synthetic pack so PartyMember validates.
-    genre_pack.rules.survivability_pool_label = None
-    # Story 82-8: party_member_from_character now resolves wealth tiers; pin an
-    # empty ladder on the synthetic pack so it short-circuits to no wealth
-    # label (a MagicMock ladder would make the resolver's fallback misfire).
-    genre_pack.progression.wealth_tiers = []
 
     snapshot = GameSnapshot(
         genre_slug="tea_and_murder",
@@ -337,9 +315,7 @@ def test_party_member_from_character_skips_url_when_class_not_in_pack() -> None:
         player_name="Keith",
         player_id="p1",
         snapshot=snapshot,
-        repository=MagicMock(),
-        dungeon_repository=MagicMock(),
-        telemetry_sink=MagicMock(),
+        store=MagicMock(),
         genre_pack=genre_pack,
         orchestrator=MagicMock(),
         mode=GameMode.SOLO,
@@ -492,9 +468,7 @@ def test_journal_request_handler_attaches_reference_url_for_lore_match() -> None
         player_name="Keith",
         player_id="p1",
         snapshot=snapshot,
-        repository=MagicMock(),
-        dungeon_repository=MagicMock(),
-        telemetry_sink=MagicMock(),
+        store=MagicMock(),
         genre_pack=genre_pack,
         orchestrator=MagicMock(),
         mode=GameMode.SOLO,
@@ -593,9 +567,7 @@ def test_journal_request_handler_no_url_for_person_fact() -> None:
         player_name="Keith",
         player_id="p1",
         snapshot=snapshot,
-        repository=MagicMock(),
-        dungeon_repository=MagicMock(),
-        telemetry_sink=MagicMock(),
+        store=MagicMock(),
         genre_pack=genre_pack,
         orchestrator=MagicMock(),
         mode=GameMode.SOLO,

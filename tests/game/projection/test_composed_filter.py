@@ -13,8 +13,27 @@ from sidequest.game.projection.view import SessionGameStateView
 
 def _view() -> SessionGameStateView:
     return SessionGameStateView(
+        gm_player_id="gm",
         player_id_to_character={"alice": "alice_char", "bob": "bob_char"},
     )
+
+
+def test_gm_invariant_short_circuits_genre_rules() -> None:
+    rules = load_rules_from_yaml_str(
+        """
+        rules:
+          - kind: NARRATION
+            redact_fields:
+              - field: text
+                unless: is_self(text)
+                mask: "**"
+        """
+    )
+    filt = ComposedFilter(rules=rules)
+    env = MessageEnvelope(kind="NARRATION", payload_json='{"text":"hi"}', origin_seq=1)
+    dec = filt.project(envelope=env, view=_view(), player_id="gm")
+    assert dec.include is True
+    assert json.loads(dec.payload_json) == {"text": "hi"}
 
 
 def test_unknown_kind_falls_through_to_pass_through() -> None:
@@ -33,7 +52,7 @@ def test_genre_rule_applies_when_no_invariant_fires() -> None:
               - kind: NARRATION
                 redact_fields:
                   - field: text
-                    unless: is_self(text)
+                    unless: is_gm()
                     mask: "**"
             """
         )

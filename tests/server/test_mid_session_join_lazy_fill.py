@@ -2,58 +2,26 @@
 
 from __future__ import annotations
 
-import pytest
+from pathlib import Path
 
 from sidequest.game.event_log import EventLog
+from sidequest.game.persistence import SqliteStore
 from sidequest.game.projection.cache import ProjectionCache
 from sidequest.game.projection.cache_fill import lazy_fill
 from sidequest.game.projection.composed import ComposedFilter
 from sidequest.game.projection.view import SessionGameStateView
 from sidequest.game.projection_filter import FilterDecision
+from sidequest.game.sqlite_repository import SqliteSaveRepository
 
 
-@pytest.fixture
-def pg_repo(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
-    """A real PgSaveRepository on a per-worker throwaway PG db (ADR-115 F1).
-
-    TRUNCATE … RESTART IDENTITY per test means each test sees event seqs
-    starting at 1, matching the prior per-file in-memory SqliteStore.
-    """
-    import psycopg
-
-    from sidequest.game import db_pool
-    from sidequest.server.session_state import _build_pg_repos_for_slug
-
-    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
-    with psycopg.connect(plain, autocommit=True) as conn:
-        rows = conn.execute(
-            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
-            "AND tablename <> 'alembic_version'"
-        ).fetchall()
-        if rows:
-            names = ", ".join(f'"{r[0]}"' for r in rows)
-            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
-    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
-    db_pool.close_pool()
-    repo, _dungeon, _sink = _build_pg_repos_for_slug(
-        db_pool.get_pool(),
-        slug="lazy-fill",
-        mode="solo",
-        genre_slug="test_genre",
-        world_slug="test_world",
-    )
-    try:
-        yield repo
-    finally:
-        db_pool.close_pool()
-
-
-def test_lazy_fill_populates_cache_for_new_player(pg_repo) -> None:
-    repo = pg_repo
+def test_lazy_fill_populates_cache_for_new_player(tmp_path: Path) -> None:
+    store = SqliteStore(tmp_path / "s.db")
+    repo = SqliteSaveRepository(store)
     log = EventLog(repo)
     cache = ProjectionCache(repo)
     filt = ComposedFilter.with_no_genre_rules()
     view = SessionGameStateView(
+        gm_player_id="gm",
         player_id_to_character={"alice": "alice_char"},
     )
 
@@ -73,12 +41,14 @@ def test_lazy_fill_populates_cache_for_new_player(pg_repo) -> None:
     assert [r.event_seq for r in rows] == [1, 2]
 
 
-def test_lazy_fill_skips_already_cached_events(pg_repo) -> None:
-    repo = pg_repo
+def test_lazy_fill_skips_already_cached_events(tmp_path: Path) -> None:
+    store = SqliteStore(tmp_path / "s.db")
+    repo = SqliteSaveRepository(store)
     log = EventLog(repo)
     cache = ProjectionCache(repo)
     filt = ComposedFilter.with_no_genre_rules()
     view = SessionGameStateView(
+        gm_player_id="gm",
         player_id_to_character={"alice": "alice_char"},
     )
 

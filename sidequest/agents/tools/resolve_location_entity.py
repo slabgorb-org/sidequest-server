@@ -139,7 +139,10 @@ async def resolve_location_entity(args: ResolveLocationEntityArgs, ctx: ToolCont
         )
 
     resolution = resolve(
-        store=ctx.repository,
+        store=ctx.store,
+        # v1: single save per session; multi-save scoping arrives if and
+        # when the save-id surface formalises.
+        save_id="default",
         region_id=args.region_id,
         authored_entities=authored,
         label=args.label,

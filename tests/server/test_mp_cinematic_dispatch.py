@@ -150,7 +150,6 @@ async def test_first_of_two_players_buffers_and_returns_empty(
     msg = PlayerActionMessage(
         payload=PlayerActionPayload(
             action=NonBlankString.model_validate("I prepare for the dungeon"),
-            round=0,
         ),
         player_id="p1",
     )
@@ -206,7 +205,6 @@ async def test_two_players_combine_into_one_narrator_dispatch(
     msg1 = PlayerActionMessage(
         payload=PlayerActionPayload(
             action=NonBlankString.model_validate("I prepare for the dungeon"),
-            round=0,
         ),
         player_id="p1",
     )
@@ -218,7 +216,6 @@ async def test_two_players_combine_into_one_narrator_dispatch(
     msg2 = PlayerActionMessage(
         payload=PlayerActionPayload(
             action=NonBlankString.model_validate("I get my pole"),
-            round=0,
         ),
         player_id="p2",
     )
@@ -271,7 +268,6 @@ async def test_mp_round_advances_interaction_exactly_once(
     msg1 = PlayerActionMessage(
         payload=PlayerActionPayload(
             action=NonBlankString.model_validate("I prepare for the dungeon"),
-            round=0,
         ),
         player_id="p1",
     )
@@ -280,7 +276,6 @@ async def test_mp_round_advances_interaction_exactly_once(
     msg2 = PlayerActionMessage(
         payload=PlayerActionPayload(
             action=NonBlankString.model_validate("I get my pole"),
-            round=0,
         ),
         player_id="p2",
     )
@@ -322,7 +317,6 @@ async def test_solo_room_dispatches_immediately_no_buffering_observable(
     msg = PlayerActionMessage(
         payload=PlayerActionPayload(
             action=NonBlankString.model_validate("I look around"),
-            round=0,
         ),
         player_id="p1",
     )
@@ -375,14 +369,12 @@ async def test_concurrent_submissions_dispatch_exactly_once(
     msg1 = PlayerActionMessage(
         payload=PlayerActionPayload(
             action=NonBlankString.model_validate("I prepare for the dungeon"),
-            round=0,
         ),
         player_id="p1",
     )
     msg2 = PlayerActionMessage(
         payload=PlayerActionPayload(
             action=NonBlankString.model_validate("I get my pole"),
-            round=0,
         ),
         player_id="p2",
     )
@@ -476,7 +468,6 @@ async def test_otel_events_emitted_on_barrier_fire_and_dispatch(
         msg1 = PlayerActionMessage(
             payload=PlayerActionPayload(
                 action=NonBlankString.model_validate("I prepare for the dungeon"),
-                round=0,
             ),
             player_id="p1",
         )
@@ -485,7 +476,6 @@ async def test_otel_events_emitted_on_barrier_fire_and_dispatch(
         msg2 = PlayerActionMessage(
             payload=PlayerActionPayload(
                 action=NonBlankString.model_validate("I get my pole"),
-                round=0,
             ),
             player_id="p2",
         )
@@ -499,81 +489,6 @@ async def test_otel_events_emitted_on_barrier_fire_and_dispatch(
     # Each fires exactly once for this round.
     assert event_names.count("mp.barrier_fired") == 1
     assert event_names.count("mp.round_dispatched") == 1
-
-
-@pytest.mark.asyncio
-async def test_resolved_encounter_suppresses_initiative_and_emits_lie_detector(
-    session_handler_factory,
-) -> None:
-    """#177 defect (b): a resolved encounter still lingering in
-    ``snapshot.encounter`` with a populated initiative list must NOT stamp the
-    ``[INITIATIVE ORDER]`` scaffold onto the narrator turn, and the decline is
-    surfaced via ``initiative_preamble_suppressed`` so the GM panel can verify
-    the scaffold stopped firing post-resolution (CLAUDE.md OTEL principle)."""
-    from sidequest.game.encounter import EncounterMetric, StructuredEncounter
-    from sidequest.protocol.models import InitiativeEntry
-
-    handler1, sd1, room = session_handler_factory(
-        slug="test-resolved-initiative",
-        mode=GameMode.MULTIPLAYER,
-        seat_players=[("p1", "Gladstone"), ("p2", "Zanzibar Jones")],
-        active_player=("p1", "Gladstone"),
-    )
-    handler2, sd2, _ = session_handler_factory(
-        slug="test-resolved-initiative",
-        mode=GameMode.MULTIPLAYER,
-        seat_players=[("p1", "Gladstone"), ("p2", "Zanzibar Jones")],
-        active_player=("p2", "Zanzibar Jones"),
-        existing_room=room,
-    )
-
-    # The fight ended (a kill set resolved=True) but the encounter object
-    # lingers in the snapshot with its initiative list intact.
-    room.snapshot.encounter = StructuredEncounter(
-        encounter_type="firefight",
-        player_metric=EncounterMetric(name="hp", current=3, starting=3, threshold=1),
-        opponent_metric=EncounterMetric(name="hp", current=0, starting=3, threshold=1),
-        initiative=[InitiativeEntry(token_id="Gladstone", value=7)],
-        resolved=True,
-        outcome="player_victory",
-    )
-
-    captured_actions: list[str] = []
-
-    async def fake_execute(sd, action, turn_context):
-        captured_actions.append(action)
-        return []
-
-    handler1._execute_narration_turn = fake_execute  # type: ignore[method-assign]
-    handler2._execute_narration_turn = fake_execute  # type: ignore[method-assign]
-
-    with patch("sidequest.handlers.player_action._watcher_publish") as wp:
-        await handler1._handle_player_action(
-            PlayerActionMessage(
-                payload=PlayerActionPayload(
-                    action=NonBlankString.model_validate("I loot the body"),
-                    round=0,
-                ),
-                player_id="p1",
-            )
-        )
-        await handler2._handle_player_action(
-            PlayerActionMessage(
-                payload=PlayerActionPayload(
-                    action=NonBlankString.model_validate("I keep watch"),
-                    round=0,
-                ),
-                player_id="p2",
-            )
-        )
-
-    event_names = [call.args[0] for call in wp.call_args_list]
-    assert "initiative_preamble_suppressed" in event_names
-    # The scaffold never reached the narrator input.
-    assert captured_actions, "dispatch should have fired"
-    assert all("INITIATIVE ORDER" not in a for a in captured_actions), (
-        f"resolved encounter must not stamp the initiative scaffold; got {captured_actions!r}"
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -617,14 +532,12 @@ async def test_dispatch_fires_in_round_two_after_round_one_completes(
     msg1a = PlayerActionMessage(
         payload=PlayerActionPayload(
             action=NonBlankString.model_validate("Round 1 — Gladstone"),
-            round=0,
         ),
         player_id="p1",
     )
     msg1b = PlayerActionMessage(
         payload=PlayerActionPayload(
             action=NonBlankString.model_validate("Round 1 — Zanzibar"),
-            round=0,
         ),
         player_id="p2",
     )
@@ -638,14 +551,12 @@ async def test_dispatch_fires_in_round_two_after_round_one_completes(
     msg2a = PlayerActionMessage(
         payload=PlayerActionPayload(
             action=NonBlankString.model_validate("Round 2 — Gladstone"),
-            round=0,
         ),
         player_id="p1",
     )
     msg2b = PlayerActionMessage(
         payload=PlayerActionPayload(
             action=NonBlankString.model_validate("Round 2 — Zanzibar"),
-            round=0,
         ),
         player_id="p2",
     )

@@ -5,20 +5,18 @@ the Rust prototype `sidequest-api` per ADR-082 (2026-04-19).
 
 ## CRITICAL: Personal Project
 
-This is a personal project under the `slabgorb-org` GitHub organization.
+This is a personal project under the `slabgorb` GitHub account.
 - **No Jira integration.** Never create, reference, or interact with Jira tickets.
 - **No 1898 org.** Nothing goes to the work GitHub org. Ever.
-- All live repos are under `github.com/slabgorb-org/` (use `gh ... -R slabgorb-org/<repo>`). The historical Rust prototype `sidequest-api` remains under `github.com/slabgorb/`.
+- All repos live under `github.com/slabgorb/`.
 
 ## SideQuest System Overview
 
-Six repos compose the SideQuest stack:
+Four repos compose the SideQuest stack:
 - **sidequest-server** *(this repo)* — Python/FastAPI game engine and WebSocket API on port 8765
 - **sidequest-ui** — React/TypeScript game client (Vite, port 5173)
 - **sidequest-daemon** — Python media services (Z-Image image gen, ACE-Step music)
 - **sidequest-content** — Genre packs (YAML configs, audio, images, world data)
-- **sidequest-composer** — Standalone CLI: public-domain notation → rights-free audio (offline; not wired into the runtime)
-- **sidequest-understudy** — Naive simulated-player playtest client (bots join real sessions through the UI)
 
 Orchestrator repo (`orc-quest`, also cloned as `oq-1` / `oq-2`) coordinates sprint tracking, docs, ADRs, and cross-repo scripts.
 
@@ -150,27 +148,9 @@ The package layout mirrors the prior Rust crate layout 1:1 (load-bearing per ADR
 sidequest/
 ├── protocol/         # GameMessage discriminated union, typed payloads
 ├── server/           # FastAPI app, WebSocket, dispatch, sessions, watcher
-│                     #   intent_router_pass.py — execute_intent_router_pre_narrator_pass
-│                     #   (called from websocket_session_handler.py before the narrator)
 ├── handlers/         # Per-message-type dispatch handlers
 ├── agents/           # Anthropic SDK narrator (default) + claude -p/Ollama opt-in backends
-│                     #   intent_router.py — IntentRouter (pre-narrator Haiku-via-SDK pass →
-│                     #     DispatchPackage); subsystems/ — dispatch handlers + run_dispatch_bank;
-│                     #   dispatch_engagement_watcher.py — post-narration lie-detector
-│                     #     (emits dispatch_engagement.{subsystem}.mismatch OTEL spans)
 ├── game/             # ~70 modules — state, combat, chase, NPCs, OCEAN, lore, etc.
-│                     #   pg/ — Postgres repositories (PgSaveRepository, PgDungeonRepository,
-│                     #     PgTelemetrySink, PgForensicReader + events/snapshot/narrative/
-│                     #     scrapbook/asset_ledger/promotions/sessions sub-stores)
-│                     #   db_config.py, db_pool.py — connection config + psycopg_pool
-│                     #   importer.py — read-only legacy SQLite→Postgres importer
-│                     #   ruleset/ — pluggable SRD ruleset modules (registry.py, base.py
-│                     #     RulesetModule ABC, native.py default; without_number.py parent
-│                     #     with swn/awn/cwn/wwn siblings — ADR-142/143)
-│                     #   creature_core.py — HpPool ablative HP on CreatureCore (Character + Npc)
-├── dungeon/          # Runtime procedural Jaquaysed megadungeon — frontier hooks,
-│                     #   lookahead, materializer, region projection (ADR-106)
-├── mutation/         # AWN mutation system — acquire/use ops, stocks, chargen integration (ADR-102)
 ├── genre/            # YAML loader, layered genre/world pack models
 ├── audio/            # Music + SFX coordination
 ├── media/            # Image generation orchestration
@@ -194,62 +174,6 @@ sidequest.server
   └── sidequest.protocol
 ```
 
-### Persistence (ADR-115, complete)
-
-Saves and all session-scoped state live in a single PostgreSQL database, reached
-through `sidequest/game/pg/` (`PgSaveRepository`, `PgDungeonRepository`,
-`PgTelemetrySink`, `PgForensicReader`, plus events/snapshot/narrative/scrapbook/
-asset_ledger/promotions/sessions sub-stores). Connections come from
-`db_config.py` + `db_pool.py` (psycopg3 + `psycopg_pool`); per-session row locks
-serialize writes. DDL is owned entirely by Alembic (`alembic.ini`,
-`alembic/versions/0001_initial_unified_schema.py`,
-`0002_asset_ledger.py`) — do not hand-write `CREATE TABLE`. `SIDEQUEST_DATABASE_URL`
-is **required** with no silent default (fail-loud per the No Silent Fallbacks rule).
-The legacy SQLite write layer has been **deleted**; SQLite survives only as a
-read-only import *source* via `sidequest/game/importer.py`.
-
-### Pluggable rulesets (ADR-033/-114/-117/-142/-143)
-
-`sidequest/game/ruleset/` holds pluggable SRD ruleset modules behind the
-`RulesetModule` ABC (`base.py`), resolved through `registry.py` (ADR-117). A pack
-binds one via `ruleset:` in its `rules.yaml`; an unknown name raises
-`UnknownRulesetError` (fail loud). Modules: `native.py` (the dial/confrontation
-engine, ADR-033 — default) plus a **Without Number family** — `without_number.py`
-(the honest shared base extracted per ADR-142) with `swn.py` (Stars), `wwn.py`
-(Worlds), `cwn.py` (Cities), and `awn.py` (the AWN mutation variant) as siblings.
-Live bindings: SWN→space_opera, WWN→elemental_harmony + heavy_metal/barsoom +
-caverns_and_claudes/beneath_sunden, CWN→neon_dystopia, AWN→mutant_wasteland.
-
-Ablative HP (`creature_core.py`) layers `HpPool` (`current`/`max`/`base_max`)
-onto `CreatureCore`, shared by `Character` and `Npc`: damage flows through the
-strike channel, 0 HP triggers the `hp_depletion` win condition, and each delta
-emits a `state_patch_hp` OTEL span.
-
-**Doctrine (ADR-143, ruled 2026-06-14 — see SOUL.md "Bind the Ruleset, Don't
-Balance It"):** when a pack binds a Without Number ruleset, that ruleset's engine
-**replaces** the native combat engine for what it covers — it is not layered on
-top and tuned to fit. The native beat/dial scaffolding is *removed* from a
-Without-Number combat path, not balanced against it. **ADR-114/-143 are partial**
-— the WN-owns-the-round work (de-nativizing combat under a WN binding, the
-dying/down window, solo-actuator) is in flight (epic 108).
-
-### Intent Router (ADR-113, live/partial)
-
-`IntentRouter` (`sidequest/agents/intent_router.py`) is a pre-narrator
-Haiku-via-SDK pass that decomposes each player action into a `DispatchPackage`.
-`execute_intent_router_pre_narrator_pass` (`sidequest/server/intent_router_pass.py`)
-runs it from `websocket_session_handler.py` *before* the narrator so the
-mechanical engines engage first, then `run_dispatch_bank`
-(`sidequest/agents/subsystems/`) fires the matching dispatch handlers
-(confrontation, magic_working, scenario_clue, npc_agency, distinctive_detail_hint,
-reflect_absence, movement). After narration, `dispatch_engagement_watcher.py`
-acts as a lie-detector, emitting `dispatch_engagement.{subsystem}.mismatch` OTEL
-spans when prose claims a subsystem fired but the engine never engaged.
-**Honesty caveat:** the spine is **structurally live but operationally under
-validation** — per-dispatch confidence scoring and threshold-gating are *not*
-implemented (every dispatch in the package fires), and playtest validation (59-8)
-is still backlog.
-
 ## Key ADRs for this repo
 
 | Domain | ADRs |
@@ -257,13 +181,13 @@ is still backlog.
 | Core architecture | **101 (Anthropic SDK as narrator backend — supersedes 001)**, 001 (Claude CLI only — *superseded by 101*), 002 (SOUL principles), 005 (background-first), 006 (graceful degradation) |
 | Genre packs | 003 (pack architecture), 004 (lazy binding) |
 | Prompt engineering | 008 (three-tier taxonomy), 009 (attention-aware zones), 066 (persistent Opus sessions, Full/Delta tier — *superseded by 098*) |
-| Agent system | 011 (JSON patches), 012 (session mgmt), 057 (narrator-crunch separation), 059 (monster manual server-side pregen), 067 (unified narrator agent — supersedes 010), **098 (stateless narrator turns — supersedes 066)**, **102 (tool-use protocol for structured output — supersedes 039)**, 113 (intent router — mechanical-engagement spine, *live/partial*) |
+| Agent system | 011 (JSON patches), 012 (session mgmt), 057 (narrator-crunch separation), 059 (monster manual server-side pregen), 067 (unified narrator agent — supersedes 010), **098 (stateless narrator turns — supersedes 066)**, **102 (tool-use protocol for structured output — supersedes 039)** |
 | Characters | 007 (unified model), 014 (diamonds/coal), 015 (builder FSM), 016 (three-mode chargen), 080 (unified narrative weight) |
-| Encounters | 033 (confrontation engine — `ruleset/native.py`), 077 (dogfight subsystem), 078 (edge/composure combat), 093 (confrontation difficulty calibration), 114 (ablative HP substrate — `creature_core.py`, *partial*), 116 (a confrontation requires an Other), 117 (pluggable ruleset module system — the `RulesetModule` seam), 139 (confrontation integrity invariants — *partial*), **142 (Without Number core extraction — `without_number.py` base + reparented siblings, *partial*)**, **143 (WN combat owns the WN round — bind, don't balance; *partial*)** |
+| Encounters | 033 (confrontation engine), 077 (dogfight subsystem), 078 (edge/composure combat), 093 (confrontation difficulty calibration) |
 | World / NPCs | 018 (trope engine), 020 (NPC disposition), 022 (world maturity), 042 (OCEAN evolution), 055 (room graph navigation), 091 (culture-corpus Markov naming) |
 | Progression | 021 (four-track), 052 (narrative axis), 081 (advancement effect variants — deferred), 095 (class mechanical surface) |
 | Narrative pacing | 024 (dual-track tension), 025 (pacing detection), 050 (image pacing throttle), 051 (two-tier turn counter — see DRIFT) |
-| Session persistence | 023 (state + recap), **115 (persistence substrate migration — SQLite-per-session → PostgreSQL, complete)** |
+| Session persistence | 023 (state + recap) |
 | Protocol | 026 (client state mirror), 027 (reactive state messaging), 074 (dice resolution protocol), 076 (narration protocol collapse post-TTS) |
 | Multiplayer | 028 (perception rewriter — *superseded by 104*), 036 (multiplayer turn coordination), 037 (shared/per-player state split), 053 (scenario system), 104 (perception filtering at the tool layer), 105 (broadcast-layer perception firewall) |
 | Transport / IPC | 035 (Unix socket IPC for Python sidecar), 038 (WebSocket transport), 046 (GPU memory budget), 047 (prompt injection sanitization) |
@@ -279,15 +203,10 @@ For the full ADR index see `orc-quest/docs/adr/README.md`. Drift notes: `orc-que
 
 ## Save files
 
-Saves live in a single PostgreSQL database (ADR-115), one `sessions` row per
-genre/world session keyed by `session_slug` — not per-file SQLite, and not in
-the repo. Connect via `SIDEQUEST_DATABASE_URL` (`SIDEQUEST_TEST_DATABASE_URL`
-for tests); provision locally with `just pg-up`. The SQLite-per-session store
-(`SqliteStore`/`SAVE_WRITE_LOCK`/WAL tuning) is retired; SQLite survives only as
-a read-only import *source* via `python -m sidequest.game.importer`
-(`sidequest/game/importer.py`). See
-`orc-quest/.pennyfarthing/guides/save-management.md`. Saves are durable by
-default — never reap save-referenced artifacts (portraits, audio) on a timer.
+SQLite databases at `~/.sidequest/saves/<genre>_<world>.db`, one per session.
+Not in the repo. See `orc-quest/.pennyfarthing/guides/save-management.md` for
+cleanup, inspection, and migration. Saves are durable by default — never reap
+save-referenced artifacts (portraits, audio) on a timer.
 
 ## Spoiler Protection
 
@@ -296,7 +215,7 @@ default — never reap save-referenced artifacts (portraits, audio) on a timer.
 
 ## Git Workflow
 
-- Branch strategy: github-flow (`develop` is the single integration branch; no develop→main promotion)
+- Branch strategy: gitflow
 - Default branch: develop
 - Feature branches: `feat/{description}`
 - PRs target: develop

@@ -265,12 +265,12 @@ async def test_cleanup_does_not_close_room_owned_store(tmp_path):
     """
     from unittest.mock import AsyncMock, MagicMock
 
-    from sidequest.game.repository import SaveRepository
+    from sidequest.game.persistence import SqliteStore
     from sidequest.server.session_handler import WebSocketSessionHandler, _SessionData
 
     handler = WebSocketSessionHandler(save_dir=tmp_path)
     snap = _fresh_snapshot()
-    store = MagicMock(spec=SaveRepository)
+    store = SqliteStore.open_in_memory()
 
     room = SessionRoom(slug="slug-cleanup", mode=GameMode.SOLO)
     room.bind_world(snapshot=snap, store=store)
@@ -281,9 +281,7 @@ async def test_cleanup_does_not_close_room_owned_store(tmp_path):
         player_name="Rux",
         player_id="player-1",
         snapshot=snap,
-        repository=store,  # same store reference the room holds
-        dungeon_repository=MagicMock(),
-        telemetry_sink=MagicMock(),
+        store=store,  # same store reference the room holds
         genre_pack=MagicMock(),
         orchestrator=MagicMock(run_narration_turn=AsyncMock()),
     )
@@ -292,11 +290,12 @@ async def test_cleanup_does_not_close_room_owned_store(tmp_path):
 
     await handler.cleanup()
 
-    # The room owns the store lifecycle — per-session cleanup must NOT close
-    # a room-bound repository (else room.save() on a sibling connection fails).
+    # The underlying SQLite connection must still be open — the room
+    # owns the lifecycle, not the per-session cleanup.
     assert room.store is store, "room.store reference must not be None'd by cleanup"
-    store.close.assert_not_called()
-    room.save()  # routes to the (still-open) repository
+    # Operating on the store after cleanup must succeed. If cleanup
+    # closed the connection, ``room.save()`` raises sqlite3.ProgrammingError.
+    room.save()  # must not raise
 
 
 @pytest.mark.asyncio
@@ -309,20 +308,18 @@ async def test_cleanup_closes_per_session_store_when_no_room(tmp_path):
     """
     from unittest.mock import AsyncMock, MagicMock
 
-    from sidequest.game.repository import SaveRepository
+    from sidequest.game.persistence import SqliteStore
     from sidequest.server.session_handler import WebSocketSessionHandler, _SessionData
 
     handler = WebSocketSessionHandler(save_dir=tmp_path)
-    store = MagicMock(spec=SaveRepository)
+    store = SqliteStore.open_in_memory()
     sd = _SessionData(
         genre_slug="caverns_and_claudes",
         world_slug="mawdeep",
         player_name="Rux",
         player_id="player-1",
         snapshot=_fresh_snapshot(),
-        repository=store,
-        dungeon_repository=MagicMock(),
-        telemetry_sink=MagicMock(),
+        store=store,
         genre_pack=MagicMock(),
         orchestrator=MagicMock(run_narration_turn=AsyncMock()),
     )
@@ -331,9 +328,12 @@ async def test_cleanup_closes_per_session_store_when_no_room(tmp_path):
 
     await handler.cleanup()
 
-    # The store WAS closed — the non-slug path owns its own repository
-    # lifecycle and cleanup() closes it.
-    store.close.assert_called_once()
+    # The store WAS closed — non-slug path owns its own store. Operating
+    # on it now should raise.
+    import sqlite3
+
+    with pytest.raises(sqlite3.ProgrammingError):
+        store.save(_fresh_snapshot())
 
 
 # ---------------------------------------------------------------------------

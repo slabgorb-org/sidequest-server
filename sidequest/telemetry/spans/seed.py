@@ -51,29 +51,9 @@ SPAN_ROUTES[SPAN_SEED_FIRED] = SpanRoute(
     },
 )
 
-# sq-playtest 2026-06-07 (77-7 forensics, split item c): a session whose seed
-# source authored NO seeds armed the lull-escalation engine with an empty deck
-# — fired=False reason=none_available every turn, invisible until forensics.
-# Emitted ONCE at session bootstrap when ensure_initial_draw finds no seeds
-# (No Silent Fallbacks: a loud configuration smell, not a silent no-op).
-SPAN_SEED_DECK_EMPTY = "seed.deck_empty"
-SPAN_ROUTES[SPAN_SEED_DECK_EMPTY] = SpanRoute(
-    event_type="state_transition",
-    component="seeds",
-    extract=lambda span: {
-        "field": "seed_deck",
-        "op": "deck_empty",
-        "session_slug": (span.attributes or {}).get("session_slug", ""),
-        "genre_slug": (span.attributes or {}).get("genre_slug", ""),
-        "world_slug": (span.attributes or {}).get("world_slug", ""),
-        "severity": "warning",
-    },
-)
-
 FLAT_ONLY_SPANS.add(SPAN_SEED_PROMOTED)
 
 __all__ = [
-    "SPAN_SEED_DECK_EMPTY",
     "SPAN_SEED_DRAWN",
     "SPAN_SEED_EXPIRED",
     "SPAN_SEED_FIRED",

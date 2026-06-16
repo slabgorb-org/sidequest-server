@@ -38,8 +38,8 @@ def _minimal_pack(root: Path) -> Path:
     """Create a minimal genre-pack directory at ``root`` that satisfies ALL
     required files and dirs from the real pack_schema.yaml.
 
-    Required files (17):
-        pack.yaml, theme.yaml, archetypes.yaml, tropes.yaml,
+    Required files (18):
+        pack.yaml, theme.yaml, archetypes.yaml, tropes.yaml, lore.yaml,
         visual_style.yaml, audio.yaml, rules.yaml, cultures.yaml,
         char_creation.yaml, inventory.yaml, lethality_policy.yaml,
         power_tiers.yaml, progression.yaml, prompts.yaml, axes.yaml,
@@ -54,8 +54,7 @@ def _minimal_pack(root: Path) -> Path:
         "theme.yaml",
         "archetypes.yaml",
         "tropes.yaml",
-        # lore.yaml is forbidden at the genre tier (epic-74 story 74-3) — do NOT
-        # create one here or the validator flags it.
+        "lore.yaml",
         "visual_style.yaml",
         "audio.yaml",
         "rules.yaml",
@@ -120,13 +119,6 @@ def _minimal_world(world_dir: Path) -> Path:
         fpath.touch()
     for dname in required_dirs:
         (world_dir / dname).mkdir(parents=True, exist_ok=True)
-    # World lore must seed a non-empty LoreStore (epic-74 story 74-3): an empty
-    # touch fails the validator's seedable-lore rule, so write minimal seedable
-    # content instead.
-    (world_dir / "lore.yaml").write_text(
-        "world_name: Test World\nhistory: A minimal but seedable world history.\n",
-        encoding="utf-8",
-    )
     return world_dir
 
 
@@ -262,67 +254,6 @@ class TestPresenceGate:
         assert errors == [], f"Expected no errors for draft world, got: {errors}"
         # Should have warnings about missing files
         assert len(warnings) > 0, "Expected warnings for missing world files in draft world"
-
-    def test_genre_cultures_yaml_is_optional(self, tmp_path: Path) -> None:
-        """A genre pack missing cultures.yaml passes (epic-74: cultures live in worlds).
-
-        Mirrors space_opera, whose genre cultures.yaml was deliberately deleted.
-        """
-        pack_dir = tmp_path / "my_pack"
-        pack_dir.mkdir()
-        _minimal_pack(pack_dir)
-        (pack_dir / "cultures.yaml").unlink()  # delete the genre-tier cultures.yaml
-
-        errors, _warnings = validate_pack_structure(pack_dir, schema_path_real)
-
-        assert not any("cultures.yaml" in e for e in errors), (
-            f"genre cultures.yaml must be optional; got: {errors}"
-        )
-
-    def test_incomplete_waiver_demotes_named_missing_file_to_warning(self, tmp_path: Path) -> None:
-        """A NON-draft world may waive a specific loader-optional required artifact.
-
-        ``incomplete_files`` in world.yaml demotes ONLY the named missing file to
-        a loud WAIVED warning (live-but-incomplete world, e.g. an imported
-        campaign skeleton whose canon must not be fabricated). A different missing
-        required file that is NOT waived still hard-errors.
-        """
-        pack_dir = tmp_path / "my_pack"
-        pack_dir.mkdir()
-        _minimal_pack(pack_dir)
-
-        world_dir = pack_dir / "worlds" / "live_incomplete"
-        _minimal_world(world_dir)
-        # Make it live (non-draft) and waive tropes.yaml + the legends dir, then
-        # actually remove those artifacts so the waiver has something to absorb.
-        (world_dir / "world.yaml").write_text(
-            "draft: false\nincomplete_files:\n  - tropes.yaml\nincomplete_dirs:\n  - legends\n",
-            encoding="utf-8",
-        )
-        (world_dir / "tropes.yaml").unlink()
-        (world_dir / "legends").rmdir()
-        # A non-waived required file is removed too — this MUST still error.
-        (world_dir / "portrait_manifest.yaml").unlink()
-
-        errors, warnings = validate_pack_structure(pack_dir, schema_path_real)
-
-        # Waived artifacts: no error, but a loud WAIVED warning each.
-        assert not any("tropes.yaml" in e for e in errors), (
-            f"waived tropes.yaml should not error; got: {errors}"
-        )
-        assert not any("'legends'" in e for e in errors), (
-            f"waived legends dir should not error; got: {errors}"
-        )
-        assert any("WAIVED" in w and "tropes.yaml" in w for w in warnings), (
-            f"expected a loud WAIVED warning for tropes.yaml; got: {warnings}"
-        )
-        assert any("WAIVED" in w and "legends" in w for w in warnings), (
-            f"expected a loud WAIVED warning for legends dir; got: {warnings}"
-        )
-        # Non-waived missing required file still hard-errors (waiver is scoped).
-        assert any("portrait_manifest.yaml" in e for e in errors), (
-            f"non-waived missing portrait_manifest.yaml must still error; got: {errors}"
-        )
 
 
 # ---------------------------------------------------------------------------

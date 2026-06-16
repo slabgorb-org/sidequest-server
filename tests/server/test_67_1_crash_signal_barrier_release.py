@@ -170,7 +170,6 @@ async def test_crash_signal_releases_barrier_and_dispatches_remaining(
     submit = PlayerActionMessage(
         payload=PlayerActionPayload(
             action=NonBlankString.model_validate("I bar the door"),
-            round=0,
         ),
         player_id="p1",
     )
@@ -253,7 +252,7 @@ async def test_crash_release_in_three_player_room_then_remaining_submit_fires(
     # p1 submits — 1 of 3, barrier waits.
     r1 = await handler1._handle_player_action(
         PlayerActionMessage(
-            payload=PlayerActionPayload(action=NonBlankString.model_validate("I take point"), round=0),
+            payload=PlayerActionPayload(action=NonBlankString.model_validate("I take point")),
             player_id="p1",
         )
     )
@@ -270,7 +269,7 @@ async def test_crash_release_in_three_player_room_then_remaining_submit_fires(
     # p3 submits — {p1, p3} now satisfies the crash-reduced denominator (2).
     await handler3._handle_player_action(
         PlayerActionMessage(
-            payload=PlayerActionPayload(action=NonBlankString.model_validate("I cover the rear"), round=0),
+            payload=PlayerActionPayload(action=NonBlankString.model_validate("I cover the rear")),
             player_id="p3",
         )
     )
@@ -319,7 +318,7 @@ async def test_crash_signal_attribution_binds_to_sender_not_spoofed_player_id(
     # p1 submits — barrier waits on p2.
     await handler1._handle_player_action(
         PlayerActionMessage(
-            payload=PlayerActionPayload(action=NonBlankString.model_validate("I submit"), round=0),
+            payload=PlayerActionPayload(action=NonBlankString.model_validate("I submit")),
             player_id="p1",
         )
     )
@@ -366,7 +365,7 @@ async def test_crash_release_emits_otel_spans(session_handler_factory) -> None:
 
     await handler._handle_player_action(
         PlayerActionMessage(
-            payload=PlayerActionPayload(action=NonBlankString.model_validate("I wait"), round=0),
+            payload=PlayerActionPayload(action=NonBlankString.model_validate("I wait")),
             player_id="p1",
         )
     )
@@ -426,7 +425,6 @@ async def test_barrier_does_not_release_without_a_crash_signal(
         PlayerActionMessage(
             payload=PlayerActionPayload(
                 action=NonBlankString.model_validate("I scan the room"),
-                round=0,
             ),
             player_id="p1",
         )
@@ -474,7 +472,7 @@ async def test_crash_signal_for_already_submitted_player_is_noop(
 
     await handler._handle_player_action(
         PlayerActionMessage(
-            payload=PlayerActionPayload(action=NonBlankString.model_validate("I submit first"), round=0),
+            payload=PlayerActionPayload(action=NonBlankString.model_validate("I submit first")),
             player_id="p1",
         )
     )
@@ -570,7 +568,6 @@ async def test_crash_release_dispatch_excludes_crashed_players_content(
         PlayerActionMessage(
             payload=PlayerActionPayload(
                 action=NonBlankString.model_validate("I light the lantern"),
-                round=0,
             ),
             player_id="p1",
         )

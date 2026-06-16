@@ -2,12 +2,10 @@
 
 Port of the scenario-initialization block in
 ``sidequest-api/crates/sidequest-server/src/dispatch/connect.rs``
-(lines ~1948-2023). World-aware since Story 71-32: the scenario is
-selected from the ACTIVE world (``pack.worlds[world_slug].scenarios``),
-not pack-level ``GenrePack.scenarios`` — pick the first one (future:
-player/DM selection), bind it to a :class:`ScenarioState`, and seed
-every matching in-snapshot NPC's :class:`BeliefState` from the pack's
-``initial_beliefs``.
+(lines ~1948-2023). When the genre pack declares at least one
+scenario, pick the first one (future: player/DM selection), bind it
+to a :class:`ScenarioState`, and seed every matching in-snapshot NPC's
+:class:`BeliefState` from the pack's ``initial_beliefs``.
 
 The Rust implementation also stashes the pack clone on the
 shared-session holder (``active_scenario``) for cross-player pressure-
@@ -15,12 +13,10 @@ event / scene-budget visibility. Python's single-player Phase 1 has no
 shared-session analog yet, so this port returns the bound pack to the
 caller, which stashes it on the connection-scoped ``_SessionData``.
 
-Decisions are observable (No Silent Fallbacks + OTEL Observability):
+Failure modes are loud:
 
-- Active world declares no scenarios, or ``world_slug`` is unknown →
-  return ``None`` and emit a ``scenario.bind_skipped`` span event
-  (with ``reason``) + log. There is NO fallback to pack-level
-  ``GenrePack.scenarios``; an empty world is a valid authored state.
+- No scenarios in pack → return ``None`` silently (pack isn't using
+  the system; not a misconfiguration).
 - ``ScenarioPack`` present but malformed → the pydantic model raises
   at pack-load time; binding is a downstream no-op.
 """
@@ -54,7 +50,7 @@ def bind_scenario(
     world_slug: str,
     rng: random.Random | None = None,
 ) -> tuple[str, ScenarioPack] | None:
-    """Bind the active world's first scenario to ``snapshot``.
+    """Bind the first scenario in ``pack`` to ``snapshot``.
 
     Mutates ``snapshot`` in place: sets ``snapshot.scenario_state`` and
     seeds matching NPCs' ``belief_state`` with facts/suspicions from
@@ -62,47 +58,18 @@ def bind_scenario(
 
     Returns ``(scenario_id, scenario_pack)`` so the caller can stash
     the chosen pack on its session-scoped state (Rust's
-    ``shared_session.active_scenario`` analog).
-
-    World-aware (Story 71-32): the scenario is selected from
-    ``pack.worlds[world_slug].scenarios`` — only the *active* world's
-    scenarios are eligible. Returns ``None`` (emitting a
-    ``scenario.bind_skipped`` event) when the active world declares no
-    scenarios, or when ``world_slug`` is not a world in ``pack``. There is
-    NO silent fallback to pack-level ``GenrePack.scenarios``: a world with
-    no mystery is a valid authored state, not a misconfiguration.
+    ``shared_session.active_scenario`` analog). Returns ``None`` when
+    the pack declares no scenarios.
 
     ``rng`` is forwarded to :meth:`ScenarioState.from_genre_pack` for
     deterministic guilty-NPC selection in tests.
     """
-    world = pack.worlds.get(world_slug)
-    world_scenarios = world.scenarios if world is not None else {}
-    if not world_scenarios:
-        # Explicit absence — this world binds no scenario. Emit the decision
-        # so the GM panel can tell "no mystery here" from a silently-improvised
-        # one (OTEL Observability Principle). NO pack-level fallback.
-        reason = "unknown_world" if world is None else "no_world_scenario"
-        span = trace.get_current_span()
-        span.add_event(
-            "scenario.bind_skipped",
-            {
-                "event": "scenario_bind_skipped",
-                "genre": genre_slug,
-                "world": world_slug,
-                "reason": reason,
-            },
-        )
-        logger.info(
-            "scenario.bind_skipped genre=%s world=%s reason=%s",
-            genre_slug,
-            world_slug,
-            reason,
-        )
+    if not pack.scenarios:
         return None
 
-    # Pick the first scenario in the active world (dict insertion order is
-    # deterministic in Python 3.7+; for now "first" = YAML load order).
-    scenario_id, scenario_pack = next(iter(world_scenarios.items()))
+    # Pick the first scenario (dict insertion order is deterministic
+    # in Python 3.7+; for now "first" = YAML load order).
+    scenario_id, scenario_pack = next(iter(pack.scenarios.items()))
 
     scenario_state = ScenarioState.from_genre_pack(scenario_pack, rng=rng)
 

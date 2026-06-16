@@ -31,9 +31,8 @@ from sidequest.agents.tools.resolve_location_entity import (
     ResolveLocationEntityArgs,
     resolve_location_entity,
 )
+from sidequest.game.persistence import SqliteStore
 from sidequest.protocol.models import LocationEntity, LocationEntityBinding
-
-from .conftest import make_mock_repository
 
 
 @pytest.fixture
@@ -68,8 +67,10 @@ def _build_ctx(
     world_id: str = "glenross",
     turn_number: int = 3,
 ) -> ToolContext:
-    """Mirror the fixture in ``test_resolve_location_entity.py`` — mock
-    SaveRepository (PG interface) + a stubbed GenrePack carrying the entity list."""
+    """Mirror the fixture in ``test_resolve_location_entity.py`` — real
+    SqliteStore + a stubbed GenrePack carrying the entity list."""
+    store = SqliteStore(tmp_path / "save.db")
+
     region = MagicMock()
     region.entities = entities if entities is not None else _authored()
     cartography = MagicMock()
@@ -84,7 +85,7 @@ def _build_ctx(
         session_id="test-session",
         perspective_pc=None,
         turn_number=turn_number,
-        repository=make_mock_repository(),
+        store=store,
         otel_span=MagicMock(),
         perception_filter=NarratorPerceptionFilter(),
         genre_pack=genre_pack,

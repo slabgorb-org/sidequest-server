@@ -105,22 +105,14 @@ def test_npc_pool_member_name_is_required() -> None:
 
 def test_npc_pool_member_rejects_extra_fields() -> None:
     """Schema discipline: ``extra='forbid'`` so pool members can't grow
-    silent state.
-
-    Story 97-1 amendment: the original example field was
-    ``last_seen_location`` — chosen when ALL stateful tracking belonged on
-    ``Npc``. 97-1 (approved 2026-06-07) deliberately moved scene-presence +
-    engagement tracking to the pool tier (``last_seen_turn`` /
-    ``last_seen_location`` / ``non_transactional_interactions`` /
-    ``last_development_turn``), so the probe now uses a genuinely unknown
-    field. The ``extra='forbid'`` discipline itself is unchanged."""
+    silent state. Stateful tracking belongs on ``Npc``, not the pool."""
     with pytest.raises(ValidationError) as exc:
         NpcPoolMember(
             name="X",
             drawn_from="legacy_registry",
-            definitely_not_a_pool_field="Tavern",  # type: ignore[call-arg]
+            last_seen_location="Tavern",  # type: ignore[call-arg]
         )
-    assert "extra" in str(exc.value).lower() or "definitely_not_a_pool_field" in str(exc.value)
+    assert "extra" in str(exc.value).lower() or "last_seen_location" in str(exc.value)
 
 
 # ---------------------------------------------------------------------------

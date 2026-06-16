@@ -24,10 +24,15 @@ import pytest
 
 from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore, Inventory
+from sidequest.game.event_log import EventLog
 from sidequest.game.persistence import (
     GameMode,
+    SqliteStore,
+    db_path_for_slug,
+    upsert_game,
 )
 from sidequest.game.session import GameSnapshot
+from sidequest.game.sqlite_repository import SqliteSaveRepository
 from sidequest.protocol import GameMessage
 from sidequest.protocol.enums import MessageType
 from sidequest.server.session_handler import WebSocketSessionHandler
@@ -40,71 +45,18 @@ _SLUG_RESUME = "scrapbook-resume-fixture"
 _FIXTURE_PACKS = Path(__file__).resolve().parents[1] / "fixtures" / "packs"
 
 
-@pytest.fixture(autouse=True)
-def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
-    """Bind the process pool to a per-worker throwaway PG db, clean per test.
-
-    ADR-115 D2: a live turn persists scrapbook rows + the SCRAPBOOK_ENTRY
-    journal event to Postgres (via the slug-bound PgSaveRepository), NOT the
-    seeded SQLite save.db. The slug-connect path also loads the authoritative
-    snapshot/characters from PG, so the seed and the connect handler must share
-    one isolated database. Mirrors test_turn_telemetry_wiring._pg_isolation.
-    """
-    import psycopg
-
-    from sidequest.game import db_pool
-
-    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
-    with psycopg.connect(plain, autocommit=True) as conn:
-        rows = conn.execute(
-            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
-            "AND tablename <> 'alembic_version'"
-        ).fetchall()
-        if rows:
-            names = ", ".join(f'"{r[0]}"' for r in rows)
-            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
-    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
-    db_pool.close_pool()
-    yield
-    db_pool.close_pool()
-
-
-def _pg_repo_for_slug(slug: str):
-    """Return the slug-bound PgSaveRepository — the store the live turn wrote
-    scrapbook rows + the SCRAPBOOK_ENTRY journal event to (ADR-115 D2)."""
-    from sidequest.game import db_pool
-    from sidequest.server.session_state import _build_pg_repos_for_slug
-
-    repo, _dungeon, _sink = _build_pg_repos_for_slug(
-        db_pool.get_pool(),
+def _seed_with_character(tmp_path: Path, slug: str) -> None:
+    db = db_path_for_slug(tmp_path, slug)
+    db.parent.mkdir(parents=True, exist_ok=True)
+    store = SqliteStore(db)
+    store.initialize()
+    upsert_game(
+        store,
         slug=slug,
-        mode=str(GameMode.SOLO),
+        mode=GameMode.SOLO,
         genre_slug=_GENRE,
         world_slug=_WORLD,
     )
-    return repo
-
-
-def _pg_scrapbook_rows(slug: str) -> list[tuple]:
-    """Read scrapbook_entries for ``slug``'s session straight from PG.
-
-    Returns (turn_id, location, narrative_excerpt, scene_title, scene_type,
-    render_status) tuples, ordered by insertion. The per-worker db is
-    TRUNCATEd per test by _pg_isolation, so only this turn's rows are present.
-    """
-    from sidequest.game import db_pool
-
-    repo = _pg_repo_for_slug(slug)
-    with db_pool.get_pool().connection() as conn:
-        return conn.execute(
-            "SELECT turn_id, location, narrative_excerpt, scene_title, "
-            "scene_type, render_status FROM scrapbook_entries "
-            "WHERE session_id = %s ORDER BY id",
-            (repo.session_id,),
-        ).fetchall()
-
-
-def _seed_with_character(tmp_path: Path, slug: str) -> None:
     core = CreatureCore(
         name="Thorn",
         description="A wandering fighter",
@@ -119,9 +71,9 @@ def _seed_with_character(tmp_path: Path, slug: str) -> None:
     )
     snap = GameSnapshot(genre_slug=_GENRE, world_slug=_WORLD)
     snap.characters = [char]
-    # Mirror the snapshot (+ character) into PG so the slug-connect path sees
-    # has_character=True and resumes into Playing for the PLAYER_ACTION below.
-    _pg_repo_for_slug(slug).save(snap)
+    store.init_session(_GENRE, _WORLD)
+    store.save(snap)
+    store.close()
 
 
 def _fake_narration_result():
@@ -196,30 +148,36 @@ async def test_scrapbook_entry_persists_and_journals(tmp_path: Path) -> None:
             {
                 "type": "PLAYER_ACTION",
                 "player_id": "alice",
-                "payload": {"action": "I look around the dungeon.", "round": 1},
+                "payload": {"action": "I look around the dungeon."},
             }
         )
         await handler.handle_message(action)
 
-    # ADR-115 D2: the live turn persists the scrapbook row + SCRAPBOOK_ENTRY
-    # journal event to Postgres (the slug-bound PgSaveRepository), not the
-    # seeded SQLite save.db. Read the authoritative PG store.
-    # 1. scrapbook_entries row landed.
-    rows = _pg_scrapbook_rows(_SLUG)
-    assert rows, "expected at least one row in scrapbook_entries"
-    turn_id, location, excerpt, scene_title, scene_type, _render = rows[0]
-    assert isinstance(turn_id, int)
-    assert location, "scrapbook entry missing location"
-    assert "dungeon" in excerpt.lower() or "altar" in excerpt.lower(), (
-        f"excerpt did not echo narrator prose: {excerpt!r}"
-    )
-    assert scene_type == "scene_illustration"
-    assert scene_title and "altar" in scene_title.lower()
+    db = db_path_for_slug(tmp_path, _SLUG)
+    store = SqliteStore(db)
+    store.initialize()
+    try:
+        # 1. scrapbook_entries row landed.
+        rows = store._conn.execute(
+            "SELECT turn_id, location, narrative_excerpt, scene_title, scene_type "
+            "FROM scrapbook_entries"
+        ).fetchall()
+        assert rows, "expected at least one row in scrapbook_entries"
+        turn_id, location, excerpt, scene_title, scene_type = rows[0]
+        assert isinstance(turn_id, int)
+        assert location, "scrapbook entry missing location"
+        assert "dungeon" in excerpt.lower() or "altar" in excerpt.lower(), (
+            f"excerpt did not echo narrator prose: {excerpt!r}"
+        )
+        assert scene_type == "scene_illustration"
+        assert scene_title and "altar" in scene_title.lower()
 
-    # 2. SCRAPBOOK_ENTRY row in events journal.
-    events = _pg_repo_for_slug(_SLUG).read_events_since(since_seq=0)
-    kinds = [e.kind for e in events]
-    assert "SCRAPBOOK_ENTRY" in kinds, f"expected SCRAPBOOK_ENTRY in event journal; got {kinds}"
+        # 2. SCRAPBOOK_ENTRY row in events journal.
+        events = EventLog(SqliteSaveRepository(store)).read_since(since_seq=0)
+        kinds = [e.kind for e in events]
+        assert "SCRAPBOOK_ENTRY" in kinds, f"expected SCRAPBOOK_ENTRY in event journal; got {kinds}"
+    finally:
+        store.close()
 
 
 @pytest.mark.asyncio
@@ -264,7 +222,7 @@ async def test_reconnecting_client_replays_prior_scrapbook_entry(
             {
                 "type": "PLAYER_ACTION",
                 "player_id": "alice",
-                "payload": {"action": "I look around the dungeon.", "round": 1},
+                "payload": {"action": "I look around the dungeon."},
             }
         )
         await handler_a.handle_message(action)
@@ -381,7 +339,7 @@ async def test_scrapbook_render_status_skipped_policy_for_banter_turn(
             {
                 "type": "PLAYER_ACTION",
                 "player_id": "alice",
-                "payload": {"action": "I take a moment to breathe.", "round": 1},
+                "payload": {"action": "I take a moment to breathe."},
             }
         )
         await handler.handle_message(action)
@@ -392,35 +350,39 @@ async def test_scrapbook_render_status_skipped_policy_for_banter_turn(
     # reconnecting clients replay. Mirroring the existing test's pattern
     # (test_scrapbook_entry_persists_and_journals) keeps assertion shape
     # consistent and avoids depending on action-handler outbound flow.
-    # ADR-115 D2: read the persisted row + journal event from PG (the live
-    # turn's authoritative store), not the seeded SQLite save.db.
-    rows = _pg_scrapbook_rows(_SLUG_RENDER_STATUS_BANTER)
-    assert rows, (
-        "banter turn must still persist a scrapbook_entries row — the "
-        "story remembers the turn even when no image was rendered"
-    )
-    actual = rows[0][5]  # render_status column
-    assert actual == "skipped_policy", (
-        f"banter turn render_status={actual!r} "
-        "(expected 'skipped_policy') — the UI cannot distinguish this "
-        "from a daemon failure without the discriminator"
-    )
+    db = db_path_for_slug(tmp_path, _SLUG_RENDER_STATUS_BANTER)
+    store = SqliteStore(db)
+    store.initialize()
+    try:
+        rows = store._conn.execute("SELECT render_status FROM scrapbook_entries").fetchall()
+        assert rows, (
+            "banter turn must still persist a scrapbook_entries row — the "
+            "story remembers the turn even when no image was rendered"
+        )
+        actual = rows[0][0]
+        assert actual == "skipped_policy", (
+            f"banter turn render_status={actual!r} "
+            "(expected 'skipped_policy') — the UI cannot distinguish this "
+            "from a daemon failure without the discriminator"
+        )
 
-    # And the journaled event carries the same field on its payload —
-    # this is what reconnects replay to the gallery.
-    events = _pg_repo_for_slug(_SLUG_RENDER_STATUS_BANTER).read_events_since(since_seq=0)
-    scrapbook_events = [e for e in events if e.kind == "SCRAPBOOK_ENTRY"]
-    assert scrapbook_events, (
-        "SCRAPBOOK_ENTRY missing from event journal — gallery won't see this turn on reconnect"
-    )
-    # The journal stores payloads as JSON strings — assert the field
-    # is present and carries the correct value in whatever shape the
-    # journal stores. ``payload_json`` is the canonical column.
-    payload_repr = scrapbook_events[0].payload_json
-    assert "render_status" in payload_repr, (
-        f"render_status missing from journaled SCRAPBOOK_ENTRY payload: {payload_repr[:200]}"
-    )
-    assert "skipped_policy" in payload_repr
+        # And the journaled event carries the same field on its payload —
+        # this is what reconnects replay to the gallery.
+        events = EventLog(SqliteSaveRepository(store)).read_since(since_seq=0)
+        scrapbook_events = [e for e in events if e.kind == "SCRAPBOOK_ENTRY"]
+        assert scrapbook_events, (
+            "SCRAPBOOK_ENTRY missing from event journal — gallery won't see this turn on reconnect"
+        )
+        # The journal stores payloads as JSON strings — assert the field
+        # is present and carries the correct value in whatever shape the
+        # journal stores. ``payload_json`` is the canonical column.
+        payload_repr = scrapbook_events[0].payload_json
+        assert "render_status" in payload_repr, (
+            f"render_status missing from journaled SCRAPBOOK_ENTRY payload: {payload_repr[:200]}"
+        )
+        assert "skipped_policy" in payload_repr
+    finally:
+        store.close()
 
 
 @pytest.mark.asyncio
@@ -472,7 +434,7 @@ async def test_scrapbook_render_status_rendered_for_eligible_turn(
             {
                 "type": "PLAYER_ACTION",
                 "player_id": "alice",
-                "payload": {"action": "I greet the caretaker.", "round": 1},
+                "payload": {"action": "I greet the caretaker."},
             }
         )
         await handler.handle_message(action)
@@ -480,17 +442,21 @@ async def test_scrapbook_render_status_rendered_for_eligible_turn(
     # Read render_status from the persisted row — same reasoning as the
     # banter test above (mirrors test_scrapbook_entry_persists_and_journals
     # so we test the journal-side wire, not the action-handler outbound).
-    # ADR-115 D2: read render_status from the persisted PG row — same
-    # reasoning as the banter test above (the live turn writes to PG).
-    rows = _pg_scrapbook_rows(_SLUG_RENDER_STATUS_RENDERED)
-    assert rows, "expected a row in scrapbook_entries"
-    # Acceptable terminal values for an eligible turn whose async
-    # image has not yet arrived: "rendered" (policy dispatched) or
-    # "failed" (daemon refused at the gate). NOT "skipped_policy"
-    # — the eligible NPC intro must NOT be classified as banter.
-    actual = rows[0][5]  # render_status column
-    assert actual in {"rendered", "failed"}, (
-        f"eligible (NPC intro) turn render_status={actual!r} — must be "
-        "'rendered' (policy dispatched) or 'failed' (daemon gate "
-        "refused), never 'skipped_policy'"
-    )
+    db = db_path_for_slug(tmp_path, _SLUG_RENDER_STATUS_RENDERED)
+    store = SqliteStore(db)
+    store.initialize()
+    try:
+        rows = store._conn.execute("SELECT render_status FROM scrapbook_entries").fetchall()
+        assert rows, "expected a row in scrapbook_entries"
+        # Acceptable terminal values for an eligible turn whose async
+        # image has not yet arrived: "rendered" (policy dispatched) or
+        # "failed" (daemon refused at the gate). NOT "skipped_policy"
+        # — the eligible NPC intro must NOT be classified as banter.
+        actual = rows[0][0]
+        assert actual in {"rendered", "failed"}, (
+            f"eligible (NPC intro) turn render_status={actual!r} — must be "
+            "'rendered' (policy dispatched) or 'failed' (daemon gate "
+            "refused), never 'skipped_policy'"
+        )
+    finally:
+        store.close()

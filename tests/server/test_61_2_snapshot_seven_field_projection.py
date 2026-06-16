@@ -234,9 +234,7 @@ def _build_sd(snapshot: GameSnapshot, *, player_name: str = "Alice") -> _Session
         player_name=player_name,
         player_id=f"player:{player_name.lower()}",
         snapshot=snapshot,
-        repository=MagicMock(),
-        dungeon_repository=MagicMock(),
-        telemetry_sink=MagicMock(),
+        store=MagicMock(),
         genre_pack=pack,
         orchestrator=MagicMock(),
     )

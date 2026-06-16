@@ -26,15 +26,6 @@ def test_create_app_uses_build_llm_client_by_default(monkeypatch):
     """
     monkeypatch.delenv("SIDEQUEST_LLM_BACKEND", raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    # The factory-resolution assertion needs an AnthropicSdkClient instance,
-    # not a live SDK: shadow the 93-1 hermeticity guard (which raises) with
-    # an inert object so construction succeeds without touching the real
-    # AsyncAnthropic (the client resolves the SDK late-bound through
-    # ``llm_factory.build_async_anthropic`` — the single construction site).
-    monkeypatch.setattr(
-        "sidequest.agents.llm_factory.build_async_anthropic",
-        lambda: object(),
-    )
     app = create_app()
     from sidequest.agents.anthropic_sdk_client import AnthropicSdkClient
 
@@ -132,29 +123,6 @@ def test_validator_starts_with_app() -> None:
         assert validator.is_running()
     # On exit, the TestClient's shutdown lifespan triggers shutdown.
     assert not validator.is_running()
-
-
-def test_db_pool_opens_and_closes_with_app() -> None:
-    """ADR-115 F2: create_app() registers startup/shutdown hooks that open the
-    Postgres pool at boot (fail-loud connectivity — the pool is ready before the
-    first request instead of lazily on first use) and close/discard it on
-    shutdown. Without this the pool opens lazily and a dead PG only surfaces on
-    the first save mid-session, and the pool is never cleanly drained.
-    """
-    from sidequest.game import db_pool
-
-    db_pool.close_pool()  # deterministic start: no live pool
-    app = create_app()
-    with TestClient(app):
-        assert db_pool._POOL is not None, (
-            "startup hook did not open the PG pool — _open_db_pool wiring in app.py did not run"
-        )
-        assert not db_pool._POOL.closed, "pool should be open after startup"
-    # On TestClient exit the shutdown hook runs — pool must be closed + discarded.
-    assert db_pool._POOL is None, (
-        "shutdown hook did not close/discard the PG pool — _close_db_pool "
-        "wiring in app.py did not run"
-    )
 
 
 def test_heartbeat_listener_starts_with_app() -> None:

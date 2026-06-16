@@ -6,54 +6,30 @@ Port of sidequest-api/crates/sidequest-server/src/dispatch/
 
 from __future__ import annotations
 
-import logging
-import random as _random
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
-if TYPE_CHECKING:
-    from sidequest.agents.orchestrator import NpcMention
-    from sidequest.game.ruleset.base import RulesetModule
-
-from sidequest.game.disposition import Attitude
 from sidequest.game.encounter import (
     ActorSide,
     EncounterActor,
-    EncounterMetric,
     EncounterPhase,
     StructuredEncounter,
 )
 from sidequest.game.lore_store import LoreStore
 from sidequest.game.resource_pool import ResourceThreshold
-from sidequest.game.ruleset.registry import get_ruleset_module
-from sidequest.game.session import GameSnapshot, Npc
-from sidequest.game.table.types import TablePot, TableSeat, TableState
+from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.pack import GenrePack
-from sidequest.genre.models.progression import (
-    ProgressionConfig,
-    resolve_affinity_tier,
-    resolve_level,
-)
-from sidequest.genre.models.rules import ConfrontationDef, ResolutionMode, WinCondition
-from sidequest.protocol.models import AdvancementDelta as LevelUp
-from sidequest.protocol.models import AffinityTierUp
+from sidequest.genre.models.rules import ResolutionMode
 from sidequest.server.dispatch.confrontation import find_confrontation_def
 from sidequest.server.dispatch.sealed_letter import ROLE_BLUE, ROLE_RED
 from sidequest.telemetry.spans import (
     encounter_confrontation_initiated_span,
     encounter_no_opponent_available_span,
-    encounter_opponent_minted_stub_span,
-    encounter_opponent_resolved_from_roster_span,
-    encounter_opponent_toothless_span,
     encounter_resolved_span,
     encounter_sealed_letter_arity_rejected_span,
     npc_edge_published_span,
     participant_joined_span,
-    table_dealt_span,
-    table_seat_seeded_span,
 )
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
-
-_log = logging.getLogger(__name__)
 
 _VALID_SIDES = ("player", "opponent", "neutral")
 
@@ -111,387 +87,6 @@ def _validate_side(actor_name: str, declared: str) -> ActorSide:
     raise ValueError(f"actor {actor_name!r} declared_side={declared!r} not in {_VALID_SIDES}")
 
 
-def reap_resolved_encounter_husk(
-    snapshot: GameSnapshot, *, is_dice_replay: bool, turn: int
-) -> bool:
-    """Clear a resolved encounter left lingering in ``snapshot.encounter``.
-
-    A confrontation that resolved on a PRIOR turn persists on the snapshot as a
-    zeroed husk, and the narrator can then layer a fresh fight on the corpse —
-    the phantom-wound CRITICAL (sq-playtest 2026-06-14, heavy_metal/barsoom): a
-    stale resolved arena bout sat in state for turns while a new "fight" was
-    narrated with no live encounter, no dice, no HP delta.
-
-    Reaped ONLY on a genuine new player turn (``is_dice_replay=False``). The
-    dice-resolution replay re-entry (``suppress_intent_router=True``) narrates a
-    JUST-resolved encounter within the SAME logical turn and must keep it — so
-    that path never reaps. A live (unresolved) encounter is never touched: only
-    ``encounter.resolved`` husks are cleared, so a fight in progress is safe.
-
-    Returns ``True`` when a husk was cleared. Emits an ``encounter`` state
-    transition (``op=husk_reaped``) so the GM panel can confirm the cleanup
-    fired (CLAUDE.md OTEL principle).
-    """
-    enc = snapshot.encounter
-    if is_dice_replay or enc is None or not enc.resolved:
-        return False
-
-    # 108-2 (MINTING-MAJOR persist): a FABRICATED combat stub (ephemeral, no
-    # backing roster/bestiary entry — the "Arena Opponent" / "Hold-Dead" stubs)
-    # must not survive its fight as durable canon the narrator can re-reference
-    # as a living NPC on later turns (snapshot showed it lingering at hp 0/10,
-    # `npc.referenced match=npcs_hit` turns 7-8). Reap any ephemeral opponent of
-    # the resolved encounter together with the husk. Bound creatures
-    # (``creature_id`` set, ephemeral=False) and narrator-declared NPCs are NEVER
-    # touched — only engine-fabricated stubs are quarantined.
-    opponent_names = {a.name for a in enc.actors if a.side == "opponent"}
-    reaped_stubs = [
-        npc.core.name
-        for npc in snapshot.npcs
-        if npc.ephemeral and npc.core.name in opponent_names
-    ]
-    if reaped_stubs:
-        snapshot.npcs[:] = [
-            npc
-            for npc in snapshot.npcs
-            if not (npc.ephemeral and npc.core.name in opponent_names)
-        ]
-        for stub_name in reaped_stubs:
-            _watcher_publish(
-                "state_transition",
-                {
-                    "field": "npcs",
-                    "op": "ephemeral_stub_reaped",
-                    "npc_name": stub_name,
-                    "encounter_type": enc.encounter_type,
-                    "turn": str(turn),
-                    "source": "turn_start",
-                },
-                component="encounter",
-            )
-            _log.info(
-                "encounter.ephemeral_stub_reaped npc=%s type=%s turn=%s "
-                "(fabricated combat stub removed with its resolved encounter so it "
-                "cannot persist as canon)",
-                stub_name,
-                enc.encounter_type,
-                turn,
-            )
-
-    snapshot.encounter = None
-    _watcher_publish(
-        "state_transition",
-        {
-            "field": "encounter",
-            "op": "husk_reaped",
-            "encounter_type": enc.encounter_type,
-            "outcome": enc.outcome or "",
-            "turn": str(turn),
-            "source": "turn_start",
-        },
-        component="encounter",
-    )
-    _log.info(
-        "encounter.husk_reaped type=%s outcome=%s turn=%s "
-        "(resolved encounter cleared at turn start so no fight layers on the corpse)",
-        enc.encounter_type,
-        enc.outcome,
-        turn,
-    )
-    return True
-
-
-def _stamp_encounter_presence(npc, *, turn: int, location: str | None) -> None:
-    """Story 72-8: refresh recency on an NPC that is PRESENT in an encounter.
-
-    ``Npc.last_seen_turn`` / ``last_seen_location`` were stamped only on the
-    prose-mention path (``narration_apply._apply_npc_mentions`` → ``npcs_hit``).
-    An NPC physically seated as an encounter opponent — HP/dial mutated round
-    over round — went un-stamped when the narrator didn't also name it in that
-    turn's ``npcs_present`` prose, so the engine treated an actively-fought
-    combatant as "not recently seen". Presence is a stronger continuity signal
-    than a prose name-drop; this seam closes the gap (precondition for 72-6's
-    LRU/last-seen prune, which would otherwise mis-evict an on-board NPC).
-
-    Mirrors the prose path's write discipline exactly: ``last_seen_turn`` always
-    advances to the current turn; ``last_seen_location`` is overwritten ONLY when
-    a location actually resolved (No Silent Fallbacks — never stamp a bogus
-    location when ``party_location`` returned ``None``).
-    """
-    npc.last_seen_turn = turn
-    if location:
-        npc.last_seen_location = location
-
-
-def _opponent_reprisal_damage_resolvable(cdef, opponent_core) -> bool:
-    """BUG 1 (eh-opp-damage): can the seated opponent's reprisal resolve ANY
-    damage spec? Mirrors the reprisal damage-resolution priority in
-    ``dispatch.dice._resolve_opponent_reprisal`` so the at-seat detector agrees
-    with the runtime path EXACTLY (no drift):
-
-    1. ``cdef.opponent_damage`` — the authored enemy weapon (space_opera's fix).
-    2. The opponent's STRIKE beat ``damage_override`` — a natural-attack spec on
-       the beat the reprisal reuses (first ``damage_channel == "strike"`` beat).
-    3. The opponent core's inventory weapon — an item dict carrying a ``damage``
-       field (``resolve_damage_spec_from_beat_and_actor`` priority 2).
-
-    Catalog-id weapon resolution (priority 3 of the runtime resolver) is NOT
-    re-checked here: a seeded/materialized mook carries no catalog-id inventory,
-    and threading the pack catalog into the seating seam to cover a case the
-    seeded opponent never has would over-couple the detector. The conservative
-    bias is correct — a false "toothless" flag is a visible nudge to author
-    ``opponent_damage``, never a silent miss.
-    """
-    if getattr(cdef, "opponent_damage", None) is not None:
-        return True
-    strike_beat = next(
-        (
-            b
-            for b in (getattr(cdef, "beats", None) or [])
-            if str(getattr(b, "damage_channel", "none") or "none") == "strike"
-        ),
-        None,
-    )
-    if strike_beat is not None and getattr(strike_beat, "damage_override", None) is not None:
-        return True
-    if opponent_core is not None:
-        inv = getattr(opponent_core, "inventory", None)
-        for item_dict in getattr(inv, "items", []) or []:
-            if isinstance(item_dict, dict) and item_dict.get("damage") is not None:
-                return True
-    return False
-
-
-def _seed_combat_hp_depletion_to_npcs(
-    *,
-    snapshot: GameSnapshot,
-    actors: list[EncounterActor],
-    cdef,
-    turn: int,
-    source: str,
-    acting_character_name: str,
-) -> None:
-    """Seed opponent ``Npc.core`` HP + AC from content for hp_depletion combats.
-
-    Task 9 (space_opera → SWN binding): under ``win_condition: hp_depletion``
-    there is no dial — combat resolves when the opponent's ``core.hp.current``
-    reaches 0 and the SWN attack rolls against ``core.armor_class``. Both must
-    be content-authored on the per-confrontation ``opponent_default_stats``
-    block via the reserved ``hp`` / ``armor_class`` keys (see
-    ``ConfrontationDef.opponent_hp`` / ``opponent_armor_class``).
-
-    For each opponent-side ``EncounterActor`` we seed the backing
-    ``Npc.core.hp`` pool (via ``hp_pool_from_hp``) and ``core.armor_class``
-    from the content values. CRITICAL (item 3 / CLAUDE.md "no half-wiring"):
-    if no backing ``Npc`` exists for an opponent name (a router-named
-    opponent that was never materialized into ``snapshot.npcs``), we CREATE
-    one here so the opponent core is reachable via
-    ``snapshot.find_creature_core(name)`` — without it the hp_depletion
-    resolution path (``apply_beat`` reads the opponent via the edge_resolver
-    and resolves at ``core.hp.current <= 0``) could never fire and the SWN
-    attack would have no AC to roll against.
-
-    Contract enforced at LOAD time (Task 1): the ``ConfrontationDef`` validator
-    requires ``hp`` / ``armor_class`` / ``dexterity`` under
-    ``opponent_default_stats`` for any combat hp_depletion confrontation that
-    loads, so ``opponent_hp`` / ``opponent_armor_class`` are guaranteed present
-    here — no runtime fail-loud needed at this seam.
-    """
-    from sidequest.game.creature_core import CreatureCore, Inventory, hp_pool_from_hp
-    from sidequest.game.session import Npc
-
-    hp = cdef.opponent_hp
-    ac = cdef.opponent_armor_class
-
-    # Story 72-8: resolve the acting character's location ONCE (same accessor the
-    # prose path and ``_npc_fallback_at_location`` use) — every opponent seated in
-    # this encounter shares the acting frame's location. ``None`` when the seat has
-    # no resolved location; we then stamp only the turn, never a bogus location.
-    actor_loc = snapshot.party_location(perspective=acting_character_name)
-
-    by_name = {npc.core.name: npc for npc in snapshot.npcs}
-    for actor in actors:
-        if actor.side != "opponent":
-            continue
-        npc = by_name.get(actor.name)
-        created = npc is None
-        if created:
-            # Item 3 wiring: no backing Npc.core for this opponent. Create
-            # one seeded with the content stats so find_creature_core can
-            # reach it and hp_depletion can resolve. The flavor fields are
-            # placeholders (the narrator owns prose); the mechanical surface
-            # (hp pool, AC) is the load-bearing part.
-            #
-            # 108-2 (MINTING-MAJOR): reaching here means the opponent name
-            # resolved to NEITHER a bound roster entry NOR a co-located statted
-            # adversary (the materialized-threat resolution upstream already
-            # tried). This is a genuine fabrication — a router-named free string
-            # with no backing (the "Arena Opponent" / "Hold-Dead" stubs). Mark it
-            # ``ephemeral`` so it is reaped with its resolved encounter and never
-            # persists as durable canon, and fire the loud lie-detector span so
-            # the GM panel sees the fabrication + the content gap (No Silent
-            # Fallbacks).
-            core = CreatureCore(
-                name=actor.name,
-                description="Combat opponent",
-                personality="Adversary",
-                inventory=Inventory(),
-                hp=hp_pool_from_hp(hp),
-                armor_class=ac,
-            )
-            npc = Npc(core=core, ephemeral=True)
-            snapshot.npcs.append(npc)
-            with encounter_opponent_minted_stub_span(
-                confrontation_type=str(getattr(cdef, "confrontation_type", "") or ""),
-                opponent=actor.name,
-                hp=int(hp),
-                armor_class=int(ac),
-                reason=(
-                    "router-named opponent has no backing roster/bestiary entry "
-                    "and no co-located bound adversary to resolve to — fabricated "
-                    "an ephemeral stub (author the encounter's adversary)"
-                ),
-            ):
-                pass
-        elif npc.creature_id is not None:
-            # 108-2: a BOUND, statted bestiary creature (resolved upstream or
-            # named directly). Its authored HP pool IS the WWN-balanced math the
-            # ruleset binding exists to inherit (SOUL "Bind the Ruleset, Don't
-            # Balance It") — the confrontation's generic ``opponent_default_stats``
-            # must NOT clobber it. Reset only ``current`` to the creature's OWN
-            # max (combat-start full) and keep its own AC.
-            npc.core.hp.current = npc.core.hp.max
-        else:
-            # Overwrite branch: a narrator-declared NPC with no real stats. Reset
-            # its pool to FULL from the content default at combat START. This is a
-            # start-of-fight assumption — a re-entry would heal the opponent, but
-            # the ADR-116 no-reopen flow (an encounter resolves and is not
-            # re-instantiated) prevents that.
-            npc.core.hp = hp_pool_from_hp(hp)
-            npc.core.armor_class = ac
-        # Story 72-8: presence stamp — this opponent is on the board this turn.
-        _stamp_encounter_presence(npc, turn=turn, location=actor_loc)
-        # OTEL doctrine: distinguish the CREATE branch (a narrator-improv /
-        # router-named opponent materialized fresh — the GM panel must see
-        # this as an NPC-materialization event) from the OVERWRITE branch.
-        # The stamped recency rides on the existing edge-published span so the
-        # GM panel can confirm presence-stamping fired without a new span family.
-        with npc_edge_published_span(
-            npc_name=actor.name,
-            current=npc.core.hp.current,
-            max=npc.core.hp.max,
-            source=source,
-            turn_number=turn,
-            created=created,
-            seed_source="opponent_default_stats",
-            last_seen_turn=npc.last_seen_turn,
-            last_seen_location=npc.last_seen_location or "",
-        ):
-            pass
-        # BUG 1 (eh-opp-damage): flag a TOOTHLESS Other at INSTANTIATION. If this
-        # seated opponent has no resolvable reprisal damage source, every enemy
-        # reprisal will land for 0 HP (the player is invulnerable — playtest
-        # elemental_harmony/burning_peace). Surface it here, at seating, so the GM
-        # panel catches it immediately instead of only via the per-turn
-        # ``dice.opponent_reprisal_damage_spec_missing`` warning six rounds deep.
-        if not _opponent_reprisal_damage_resolvable(cdef, npc.core):
-            with encounter_opponent_toothless_span(
-                confrontation_type=str(getattr(cdef, "confrontation_type", "") or ""),
-                opponent=actor.name,
-                rationale=(
-                    "hp_depletion combat seated this opponent with no resolvable "
-                    "reprisal damage source: cdef.opponent_damage is unset, no "
-                    "strike beat carries damage_override, and the opponent core "
-                    "has no inventory weapon with a damage spec — author "
-                    "opponent_damage under the confrontation (No Silent Fallbacks)"
-                ),
-            ):
-                pass
-
-
-def _roll_and_persist_initiative(
-    *,
-    snapshot: GameSnapshot,
-    enc: StructuredEncounter,
-    actors: list[EncounterActor],
-    cdef,
-    pack: GenrePack,
-) -> None:
-    """SWN P4: roll 1d8+DEX once for player+opponent actors, persist on the
-    encounter, emit the polygraph span. No-op for rulesets with no ordering.
-
-    DEX is resolved at THIS seam because CreatureCore/Npc carry no ability
-    scores: PCs from Character.stats[attribute_map['DEXTERITY']], opponents
-    from the content `dexterity` reserved key (guaranteed present by the
-    ConfrontationDef load-time validator). Fail loud on a missing PC score.
-    """
-    import random
-
-    from sidequest.game.ruleset import get_ruleset_module
-    from sidequest.telemetry.spans.encounter import encounter_initiative_rolled_span
-
-    cfg = pack.rules.ruleset_config()
-    if cfg is None:
-        return  # non-SWN ruleset: no ordering (native returns None anyway)
-
-    dex_key = cfg.attribute_map.get("DEXTERITY")
-    if dex_key is None:
-        raise ValueError(
-            "ruleset 'swn' but attribute_map has no DEXTERITY entry — "
-            "RulesConfig validator should have caught this"
-        )
-
-    char_by_name = {c.core.name: c for c in snapshot.characters}
-    actor_dex_scores: dict[str, int] = {}
-    for actor in actors:
-        if actor.side == "opponent":
-            dex = cdef.opponent_dexterity
-            if dex is None:
-                raise ValueError(
-                    f"opponent '{actor.name}' has no dexterity in "
-                    f"opponent_default_stats for '{cdef.confrontation_type}' — "
-                    "the load-time validator should have required it"
-                )
-            actor_dex_scores[actor.name] = int(dex)
-        elif actor.side == "player":
-            ch = char_by_name.get(actor.name)
-            if ch is None:
-                # Story 59-35: a FRIENDLY NPC ally seated side="player" carries
-                # no SWN ability scores (CreatureCore has none) — it does not
-                # roll its own initiative; it acts on narrator beats like an
-                # opponent NPC. Skip it here. A player-side actor that is NEITHER
-                # a Character NOR a roster Npc is a real name-skew defect — fail
-                # loud (No Silent Fallbacks), preserving the original guard for
-                # genuine PCs.
-                if any(n.core.name == actor.name for n in snapshot.npcs):
-                    continue
-                raise ValueError(
-                    f"player actor '{actor.name}' not found among snapshot.characters "
-                    "— cannot resolve DEX for initiative (no silent fallback)"
-                )
-            score = ch.stats.get(dex_key)
-            if score is None:
-                raise ValueError(
-                    f"player '{actor.name}' stat block has no '{dex_key}' "
-                    f"(DEXTERITY flavor) — cannot roll initiative (stats={sorted(ch.stats)})"
-                )
-            actor_dex_scores[actor.name] = int(score)
-        # neutral actors do not act -> excluded from initiative.
-
-    ruleset = get_ruleset_module(pack.rules.ruleset)
-    entries = ruleset.roll_initiative(actor_dex_scores=actor_dex_scores, rng=random.Random())
-    if not entries:
-        return
-    enc.initiative = entries
-    order_str = ", ".join(f"{e.token_id}({e.value})" for e in entries)
-    with encounter_initiative_rolled_span(
-        encounter_type=enc.encounter_type,
-        initiative_order=order_str,
-        source="instantiate",
-    ):
-        pass
-
-
 def _publish_combat_edge_to_npcs(
     *,
     snapshot: GameSnapshot,
@@ -499,14 +94,12 @@ def _publish_combat_edge_to_npcs(
     opponent_metric,
     turn: int,
     source: str,
-    acting_character_name: str,
 ) -> None:
     """Story 45-21 / 45-52: publish dial-derived edge onto opponent ``Npc``s.
 
-    DIAL-THRESHOLD path only. For each opponent-side ``EncounterActor``
-    whose ``name`` matches an ``Npc`` in ``snapshot.npcs``, overwrite the
-    npc's ``core.hp`` pool using the opponent dial as the canonical pool
-    size:
+    For each opponent-side ``EncounterActor`` whose ``name`` matches an
+    ``Npc`` in ``snapshot.npcs``, overwrite the npc's ``core.hp`` pool
+    using the opponent dial as the canonical pool size:
 
         max     = opponent_metric.threshold
         current = max(1, threshold - current)
@@ -515,11 +108,6 @@ def _publish_combat_edge_to_npcs(
     the opponent loses (= defeated). Inverting it into a descending HP
     view gives narrator / GM panel a consistent "current > 0 = alive"
     read while keeping the dial as the single source of truth.
-
-    hp_depletion combats (no dial) are handled by
-    ``_seed_combat_hp_depletion_to_npcs`` instead — this function is the
-    legacy dial-derived path preserved for ``win_condition: dial_threshold``
-    packs (do not regress them).
 
     Renamed from ``_publish_combat_stats_to_registry`` in story 45-52 —
     the legacy ``npc_registry`` is gone; per ADR-114 (HP restored) and
@@ -547,10 +135,6 @@ def _publish_combat_edge_to_npcs(
     # at the dial cap still publishes a representable pool.
     hp_current = max(1, threshold - current_dial)
 
-    # Story 72-8: resolve the acting character's location ONCE (see the
-    # hp_depletion sibling) — shared by every opponent seated this turn.
-    actor_loc = snapshot.party_location(perspective=acting_character_name)
-
     by_name = {npc.core.name: npc for npc in snapshot.npcs}
     for actor in actors:
         if actor.side != "opponent":
@@ -561,16 +145,12 @@ def _publish_combat_edge_to_npcs(
         npc.core.hp.max = hp_max
         npc.core.hp.base_max = hp_max
         npc.core.hp.current = hp_current
-        # Story 72-8: presence stamp — this opponent is on the board this turn.
-        _stamp_encounter_presence(npc, turn=turn, location=actor_loc)
         with npc_edge_published_span(
             npc_name=actor.name,
             current=hp_current,
             max=hp_max,
             source=source,
             turn_number=turn,
-            last_seen_turn=npc.last_seen_turn,
-            last_seen_location=npc.last_seen_location or "",
         ):
             pass
 
@@ -584,80 +164,9 @@ def _publish_combat_edge_to_npcs(
 # tea_and_murder) so we don't regress a parley shape.
 _ADVERSARIAL_CATEGORIES = frozenset({"combat", "movement"})
 
-# Story 59-17: role tokens that mark a same-location NPC as a genuine
-# adversary for sealed-letter (1v1) candidate sourcing. ``npc_role_id`` is a
-# free-form string, so this is a conservative allowlist — combined with the
-# hostile-disposition signal in ``_npc_is_adversary`` it covers (a) explicitly
-# hostile-tagged NPCs and (b) bestiary-materialized creatures (disposition
-# default -20). Anything else (a deck-crew bystander, a merchant, an ally,
-# a None role with neutral disposition) is NOT a duel candidate.
-_ADVERSARIAL_ROLE_IDS = frozenset(
-    {"hostile", "enemy", "opponent", "adversary", "rival", "antagonist"}
-)
-
-# Story 59-23 (#C3): ship-scale confrontations whose Other is a SHIP, never a
-# person standing in the room. For these the person-location fallback
-# (``_npc_fallback_at_location``) must NOT source opponents — it would conscript
-# the player's own crew (who share the bridge) as the enemy hull. The Other must
-# arrive as a materialized/named threat (ADR-116); absent one, the No-Opponent
-# guard fails loud. Personal combat / brawls / chases are unaffected — they
-# legitimately seat people in the room (story 59-13's chase dial depends on it).
-_SHIP_SCALE_CONFRONTATION_TYPES = frozenset({"ship_combat"})
-
 
 def _is_adversarial(category: str) -> bool:
     return category in _ADVERSARIAL_CATEGORIES
-
-
-def _requires_opponent(cdef) -> bool:
-    """True when this confrontation MUST seat an opponent-side Other.
-
-    Two sources of the requirement:
-
-    1. Adversarial category (``combat`` / ``movement``) — ADR-116's staged
-       rollout, unchanged.
-    2. ``resolution_mode: opposed_check`` — an opposed check resolves by
-       rolling BOTH sides' d20+modifier each beat (``narration_apply.
-       _resolve_opposed_check_branch``). That branch finds the opposing
-       roller via ``actor.side == "opponent"`` and hard-fails if none is
-       seated, so the Other MUST be opponent-side regardless of category.
-       This is the precise completion of ADR-116's social deferral
-       (playtest 59-8, Keith's "dice-driven" call): we don't make *all*
-       ``social`` adversarial — only the ones that actually roll an
-       opposed check need (and get) a metric-bearing Other. A social
-       ``beat_selection`` parley still seats its NPC as ``neutral``.
-    """
-    if _is_adversarial(cdef.category):
-        return True
-    return cdef.resolution_mode == ResolutionMode.opposed_check
-
-
-def _npc_is_adversary(npc: Npc) -> bool:
-    """Sealed-letter duel candidacy: does this same-location NPC read as the Other?
-
-    A sealed-letter encounter (commit-reveal duel) seats exactly one
-    opponent. When the router supplies no explicit ``npcs_present`` (Story
-    59-17), the opponent is sourced from ``snapshot.npcs`` at the player's
-    location — but a 1v1 duel must NOT conscript a bystander who merely
-    happens to share the room (Story 45-33; ADR-116 "an Other", not "any
-    warm body"). An NPC qualifies only if it reads as an adversary:
-
-    - ``disposition.attitude() == HOSTILE`` — the production signal for
-      bestiary-materialized creatures (disposition default -20), and for any
-      NPC the disposition engine has turned hostile through play; OR
-    - ``npc_role_id`` is an explicit adversarial token (``_ADVERSARIAL_ROLE_IDS``).
-
-    Neutral disposition + non-adversarial/None role ⇒ NOT an adversary. The
-    caller then sees zero candidates and the sealed-letter arity validator
-    raises loudly ("got 0 npcs_present") rather than silently seating the
-    bystander (CLAUDE.md No Silent Fallbacks). This is deliberately
-    conservative: when hostility is ambiguous, refuse the duel — never
-    substitute a wrong Other.
-    """
-    if npc.disposition.attitude() == Attitude.HOSTILE:
-        return True
-    role = (npc.npc_role_id or "").strip().lower()
-    return role in _ADVERSARIAL_ROLE_IDS
 
 
 def _npc_fallback_at_location(
@@ -665,7 +174,6 @@ def _npc_fallback_at_location(
     *,
     adversarial: bool,
     acting_character_name: str | None = None,
-    adversary_only: bool = False,
 ) -> tuple[list, bool]:
     """Synthesise NpcMention entries from snapshot.npcs at the player's location.
 
@@ -694,20 +202,6 @@ def _npc_fallback_at_location(
     ``npcs_present`` mention. ``snapshot.npcs`` carries both narrator-declared
     NPCs and bestiary mobs (``creature_id`` set); both are seatable here.
 
-    Story 59-17: ``adversary_only`` (sealed-letter 1v1 sourcing) additionally
-    filters candidates through ``_npc_is_adversary`` so a same-location
-    bystander is never promoted into a duel. The non-sealed path leaves this
-    False — a brawl/chase pulls in every location NPC as an opponent (story
-    59-13's chase dial depends on it).
-
-    Story 59-35: when ``adversarial`` is True the opponent fallback ALSO skips
-    ``Attitude.FRIENDLY`` NPCs — a co-located companion fights at the player's
-    side (``_friendly_fallback_at_location`` seats it ``side="player"``), it is
-    never conscripted as the Other. So the ``adversary_only=False`` contract is
-    "every HOSTILE/NEUTRAL location NPC" (no longer literally *every* NPC). The
-    chase-dial guarantee holds for hostile/neutral pursuers; only friendlies are
-    diverted to the friendly-seater.
-
     Returns ``(mentions, location_available)`` so the caller can decorate
     the empty-result span: ``location_available=False`` means the player
     had no resolved location (silent-failure detector — story 45-52,
@@ -727,20 +221,6 @@ def _npc_fallback_at_location(
     for npc in snapshot.npcs:
         if npc.last_seen_location != location:
             continue
-        # Story 59-17: sealed-letter sourcing seats only genuine adversaries —
-        # a neutral-disposition bystander sharing the room is not the Other.
-        if adversary_only and not _npc_is_adversary(npc):
-            continue
-        # Story 59-35: an adversarial (opponent-sourcing) fallback must NOT
-        # conscript a FRIENDLY ally as the enemy — a co-located companion fights
-        # at the player's side (``_friendly_fallback_at_location`` seats it
-        # side="player"), never as the Other. Hostile/neutral NPCs are still
-        # seated as opponents. (``adversary_only`` already excludes friendlies
-        # via ``_npc_is_adversary``; this covers the general brawl/chase
-        # opponent fallback where every same-location NPC was otherwise pulled
-        # in as an opponent.)
-        if adversarial and npc.disposition.attitude() == Attitude.FRIENDLY:
-            continue
         fallback.append(
             NpcMention(
                 name=npc.core.name,
@@ -753,301 +233,6 @@ def _npc_fallback_at_location(
     return fallback, True
 
 
-def _resolve_opponent_from_roster(
-    snapshot: GameSnapshot,
-    *,
-    threat_name: str,
-    acting_character_name: str | None,
-) -> Npc | None:
-    """108-2: reconcile a router-named free-string opponent to a bound, statted
-    adversary present in the scene BEFORE the seater fabricates a stub.
-
-    The intent router names the adversary as a free string
-    (``confrontation params["opponent"]``); when that string matches no roster
-    ``Npc`` the seater used to fabricate a generic HP-10 placeholder (the
-    "Hold-Dead, Still at the Shift" / "Arena Opponent" stubs) while the
-    narrator's own prose referenced a BOUND bestiary creature ("Molgrath the
-    Eyeless", HP 24) — a player-visible identity split (prose name ≠ combat-panel
-    name) and a discard of the WWN-balanced Monster-Manual stats (107-2 /
-    ADR-059). The narrator knows the roster; the seater didn't consult it.
-
-    Returns the co-located bound creature to seat in the router name's place, or
-    ``None`` to leave the router name as-is — either because it already matches a
-    roster entry (seat it directly; the seater dedups) or because no co-located
-    bound adversary exists (the truly-novel fight: the seater mints a loud,
-    ephemeral stub downstream).
-
-    A candidate is a ``creature_id``-statted, adversarial (``_npc_is_adversary``),
-    non-friendly NPC at the acting PC's resolved location — the same room signal
-    (``last_seen_location`` / ``location``) ``_npc_fallback_at_location`` and the
-    Monster-Manual injector use. Region-wide sourcing is deliberately NOT done:
-    NPCs carry no region key, so a broader scan could conscript a creature from
-    an unrelated room — the exact over-reach ADR-116 guards against.
-    """
-    # An exact roster match means the router named a real NPC — seat it directly
-    # (the seater's dedup reuses it). Resolution is only for unbacked inventions.
-    if any(n.core.name == threat_name for n in snapshot.npcs):
-        return None
-    location = snapshot.party_location(perspective=acting_character_name)
-    if not location:
-        return None
-    candidates = [
-        n
-        for n in snapshot.npcs
-        if n.creature_id is not None
-        and (n.last_seen_location == location or n.location == location)
-        and _npc_is_adversary(n)
-        and n.disposition.attitude() != Attitude.FRIENDLY
-    ]
-    if not candidates:
-        return None
-    # Deterministic pick: most recently in scene, then highest threat, then name.
-    candidates.sort(
-        key=lambda n: (n.last_seen_turn, n.threat_level or 0, n.core.name),
-        reverse=True,
-    )
-    return candidates[0]
-
-
-def _friendly_fallback_at_location(
-    snapshot: GameSnapshot,
-    *,
-    acting_character_name: str | None = None,
-) -> list[NpcMention]:
-    """Story 59-35: source scene-present FRIENDLY NPCs as side="player" allies.
-
-    The friendly half of ADR-116 seating — symmetric to
-    ``_npc_fallback_at_location``, and the engine enactment of the SOUL "Guitar
-    Solo" principle: an allied NPC at the player's side FIGHTS, it is never a
-    silent spectator. Scans ``snapshot.npcs`` for NPCs at the acting PC's
-    location whose ``disposition.attitude()`` is ``Attitude.FRIENDLY`` and
-    returns an ``NpcMention`` per ally with ``side="player"``.
-
-    Differs from the opponent fallback in two deliberate ways:
-
-    1. **Additive, not empty-gated.** The opponent fallback fires only when
-       ``npcs_present`` is empty; this runs regardless — an ally fights
-       alongside the PC whether or not the narrator named the enemy. The caller
-       keeps these mentions OUT of the ``npcs_present`` list the no-opponent
-       guard inspects, so a friendly ally never satisfies "a confrontation
-       requires an Other" (ADR-116 invariant unchanged).
-    2. **Disposition is the sole gate.** Only ``Attitude.FRIENDLY`` qualifies;
-       hostile/neutral NPCs are seated (if at all) by the opponent fallback /
-       explicit ``npcs_present``. Mirrors the location filter (same
-       ``last_seen_location`` as the acting PC) so an ally last seen elsewhere
-       is not pulled in.
-
-    Returns ``[]`` when the acting PC has no resolved location (No Silent
-    Fallbacks — never seat an ally against a bogus location).
-    """
-    from sidequest.agents.orchestrator import NpcMention
-
-    location = snapshot.party_location(perspective=acting_character_name)
-    if not location:
-        return []
-    allies: list[NpcMention] = []
-    for npc in snapshot.npcs:
-        if npc.last_seen_location != location:
-            continue
-        if npc.disposition.attitude() != Attitude.FRIENDLY:
-            continue
-        allies.append(
-            NpcMention(
-                name=npc.core.name,
-                pronouns=npc.pronouns or "",
-                role=npc.npc_role_id or "",
-                appearance=npc.appearance or "",
-                side="player",
-            )
-        )
-    return allies
-
-
-def _build_table_seat_seeds(
-    *,
-    player_names: list[str],
-    npc_names: list[str],
-    snapshot: GameSnapshot,
-) -> dict[str, dict]:
-    """Derive per-seat private_state seeds from real actor sheets.
-
-    Stat mappings (documented):
-    - PC ``perception`` ← WIS modifier: (WIS - 10) // 2.
-      Perception/notice is WIS-flavored in the native ruleset (see
-      native.py stat_modifier pattern). The modifier scale (~-1..+5) is
-      correct for the d20 opposed check in engine.py (``rng.randint(1,20)
-      + perception``).
-    - PC ``concealment`` ← DEX modifier: (DEX - 10) // 2.
-      Concealing a cheat is a sleight-of-hand action; DEX is the
-      canonical sleight stat. Same modifier scale as perception.
-    - NPC ``ocean`` ← npc.ocean (dict with at least ``neuroticism`` key,
-      or empty dict when None). Fed directly into the OCEAN policy knobs.
-    - NPC ``disposition`` ← mapped from npc.disposition.attitude():
-      Disposition.HOSTILE → "larcenous" (hostile NPC at a table is the
-      closest real-data approximation to "inclined to cheat"); FRIENDLY
-      and NEUTRAL both map to "neutral" (no cheat tendency). The policy
-      checks ``disposition == "larcenous"``; this mapping is the
-      reconciliation between the engine vocabulary and ADR-020's
-      three-tier attitude model.
-
-    Missing actor: empty seed + warning log (no crash). An NPC with no
-    backing Npc record (``snapshot.npcs`` lookup miss) gets empty seed;
-    the engine's .get(..., default) fallbacks apply and crunch degrades
-    gracefully for that seat only.
-    """
-
-    def _stat_mod(score: int) -> int:
-        return (score - 10) // 2  # native ruleset modifier formula
-
-    def _score(stats: dict[str, int], stat_key_upper: str, stat_key_lower: str) -> int | None:
-        # Membership check, NOT `.get() or`: a legitimate score of 0 is a
-        # valid stat (modifier -5) and must NOT be treated as absent.
-        if stat_key_upper in stats:
-            return stats[stat_key_upper]
-        if stat_key_lower in stats:
-            return stats[stat_key_lower]
-        return None
-
-    by_char_name = {c.core.name: c for c in snapshot.characters}
-    by_npc_name = {n.core.name: n for n in snapshot.npcs}
-
-    seeds: dict[str, dict] = {}
-
-    for name in player_names:
-        char = by_char_name.get(name)
-        if char is None:
-            _log.warning(
-                "table seat seed: PC %r not found in snapshot.characters — "
-                "seeding empty (no stat mods applied); this is a character-name "
-                "skew and should be investigated",
-                name,
-            )
-            seeds[name] = {}
-            continue
-        stats = char.stats
-        wis = _score(stats, "WIS", "wis")
-        dex = _score(stats, "DEX", "dex")
-        # An actor genuinely lacking the stat gets a 0 modifier (no bonus) —
-        # documented, not silent: the seat still seeds, just with no edge.
-        perception = _stat_mod(wis) if wis is not None else 0
-        concealment = _stat_mod(dex) if dex is not None else 0
-        seeds[name] = {"perception": perception, "concealment": concealment}
-
-    for name in npc_names:
-        npc = by_npc_name.get(name)
-        if npc is None:
-            _log.warning(
-                "table seat seed: NPC %r not found in snapshot.npcs — "
-                "seeding empty (no OCEAN/disposition applied)",
-                name,
-            )
-            seeds[name] = {}
-            continue
-        ocean: dict = dict(npc.ocean) if npc.ocean else {}
-        attitude = npc.disposition.attitude()
-        # Disposition vocabulary reconciliation: the engine's _choose_beat
-        # checks disposition == "larcenous". ADR-020 only gives three bands
-        # (friendly/neutral/hostile). Map HOSTILE → "larcenous" because a
-        # hostile NPC at a table is the real-data signal for cheat-inclined
-        # behaviour. FRIENDLY and NEUTRAL map to "neutral" (no cheat branch).
-        disposition_str = "larcenous" if attitude == Attitude.HOSTILE else "neutral"
-        seeds[name] = {"ocean": ocean, "disposition": disposition_str}
-
-    return seeds
-
-
-def instantiate_table_encounter(
-    *,
-    cdef: ConfrontationDef,
-    player_names: list[str],
-    npc_names: list[str],
-    stake_kind: str,
-    stake_descriptor: str,
-    seed: int,
-    ruleset_slug: str = "native",
-    seat_seeds: dict[str, dict] | None = None,
-) -> StructuredEncounter:
-    """Build + deal a table_resolution StructuredEncounter.
-
-    Seats every PC then every NPC (≥2 total or TableNeedsOthersError via
-    deal_table), populates each private_state via the kind's deal(), seeds the
-    pot from antes, and stamps win_condition=table_showdown. The dual dials are
-    inert placeholders (same as the hp_depletion path). Emits table.dealt.
-
-    ``seat_seeds`` is a dict keyed by party_name → seed dict to MERGE into each
-    seat's private_state BEFORE deal() runs. Keys set here (perception,
-    concealment, ocean, disposition) are NOT overwritten by deal() — deal only
-    sets its own keys (cards/strength/cheat_trace for poker; valuation/max_bid
-    for auction). This is the integration seam that bridges real actor stats
-    (Character.stats, Npc.ocean/disposition) into the crunch layer. The trigger
-    branch (``instantiate_encounter_from_trigger``) builds seat_seeds from the
-    real snapshot; direct-call tests may pass them explicitly.
-    """
-    resolved_seeds: dict[str, dict] = seat_seeds or {}
-    parties = [(name, True) for name in player_names] + [(name, False) for name in npc_names]
-    seats: list[TableSeat] = []
-    actors: list[EncounterActor] = []
-    for idx, (party_name, is_pc) in enumerate(parties, start=1):
-        seat_id = f"seat_{idx}"
-        pre_seed = dict(resolved_seeds.get(party_name, {}))
-        seats.append(
-            TableSeat(
-                seat_id=seat_id,
-                party_name=party_name,
-                is_pc=is_pc,
-                status="active",
-                private_state=pre_seed,
-            )
-        )
-        if pre_seed:
-            with table_seat_seeded_span(
-                seat_id=seat_id,
-                party_name=party_name,
-                is_pc=is_pc,
-                keys_seeded=",".join(sorted(pre_seed.keys())),
-            ):
-                pass
-        # every seat is its own party; side is cosmetic for table types
-        actors.append(
-            EncounterActor(
-                name=party_name,
-                role=seat_id,
-                side="player" if is_pc else "opponent",
-            )
-        )
-
-    table_state = TableState(
-        game_kind=cdef.table_game or "",
-        seats=seats,
-        pot=TablePot(
-            stake_kind=stake_kind,
-            stake_descriptor=stake_descriptor,
-            contributions={s.seat_id: 0 for s in seats},
-        ),
-        order=[s.seat_id for s in seats],
-        dealer_seat=seats[0].seat_id if seats else "",
-        max_decision_points=cdef.max_decision_points,
-    )
-
-    module = get_ruleset_module(ruleset_slug)
-    # Wrap the deal in the span so it captures the work and still emits even if
-    # the deal raises (TableNeedsOthersError on <2). All attrs are known up front.
-    with table_dealt_span(
-        seat_count=len(seats), game_kind=table_state.game_kind, stake_kind=stake_kind
-    ):
-        module.deal_table(table_state, rng=_random.Random(seed))
-
-    return StructuredEncounter(
-        encounter_type=cdef.confrontation_type,
-        win_condition=cdef.win_condition.value,
-        category=cdef.category,
-        player_metric=EncounterMetric(name="table_player_inert", threshold=1),
-        opponent_metric=EncounterMetric(name="table_opponent_inert", threshold=1),
-        actors=actors,
-        table_state=table_state,
-    )
-
-
 def instantiate_encounter_from_trigger(
     *,
     snapshot: GameSnapshot,
@@ -1057,8 +242,6 @@ def instantiate_encounter_from_trigger(
     npcs_present: list,
     genre_slug: str | None,
     additional_player_names: list[str] | None = None,
-    security_tier: str | None = None,
-    materialized_threat: NpcMention | None = None,
 ) -> StructuredEncounter | None:
     """Create a StructuredEncounter when the narrator emits ``confrontation=T``.
 
@@ -1100,29 +283,9 @@ def instantiate_encounter_from_trigger(
     ``snapshot.genre_slug``).
     """
     from sidequest.game.encounter import EncounterMetric
-    from sidequest.genre.models.rules import MetricDef
 
     current = snapshot.encounter
     if current is not None and not current.resolved:
-        return None
-
-    # Story 73-5: suppress the re-fired ``encounter.confrontation_initiated``
-    # span on a confrontation's RESOLUTION turn. When the prior encounter is
-    # resolved but is STILL the same ``encounter_type`` sitting on the snapshot
-    # (the just-resolved confrontation hasn't been torn down yet), a re-dispatch
-    # this turn is the same confrontation resolving — not a new one. The router
-    # re-emits ``confrontation`` for the same type on the resolution turn
-    # (e.g. social_duel concede), and the unguarded path below would rebuild a
-    # fresh encounter and re-fire the cosmetic "initiated" span, showing the GM
-    # panel a fresh confrontation on a turn that is actually resolving.
-    #
-    # Return None (the same no-op contract as the active-encounter branch
-    # above) so no new encounter is built and no span fires. A GENUINELY new
-    # confrontation only reaches here once the resolved encounter is torn down
-    # (``snapshot.encounter is None`` ⇒ the first branch's guard passes), or
-    # when it is a DIFFERENT ``encounter_type`` (a resolved fight replaced by a
-    # distinct confrontation) — both still fire the span below.
-    if current is not None and current.resolved and current.encounter_type == encounter_type:
         return None
 
     defs = pack.rules.confrontations if pack.rules else []
@@ -1130,93 +293,12 @@ def instantiate_encounter_from_trigger(
     if cdef is None:
         raise ValueError(f"unknown encounter_type {encounter_type!r} — not in pack confrontations")
 
-    # Free-for-all N-seat table resolution — exclusive of the dial/sealed-letter
-    # paths. Seated every PC + every NPC as TableSeats; deals hands; stamps
-    # win_condition=table_showdown. The dual dials are inert placeholders.
-    if cdef.resolution_mode == ResolutionMode.table_resolution:
-        additional = additional_player_names or []
-        table_location_available = True
-        npc_names_list = [getattr(n, "name", None) or str(n) for n in npcs_present]
-        if not npc_names_list:
-            # location fallback for table seats — adversary_only=False because
-            # gamblers/auction participants need not be hostile.
-            fallback, table_location_available = _npc_fallback_at_location(
-                snapshot,
-                adversarial=False,
-                acting_character_name=player_name,
-            )
-            npc_names_list = [getattr(n, "name", None) or str(n) for n in fallback]
-        # No table-mates after sourcing (explicit + fallback both empty) — a
-        # one-seat hand is not a confrontation (ADR-116, generalized by
-        # TableNeedsOthersError). Mirror the adversarial guard: surface the
-        # lie-detector signal via OTEL and DECLINE the encounter (return None,
-        # "caller leaves the current encounter alone") rather than letting
-        # deal_table raise TableNeedsOthersError and 500 the turn —
-        # confrontation.py only catches NoOpponentAvailableError.
-        total_parties = 1 + len(additional) + len(npc_names_list)
-        if total_parties < 2:
-            with encounter_no_opponent_available_span(
-                encounter_type=encounter_type,
-                genre_slug=genre_slug or "",
-                player_name=player_name,
-                category=cdef.category,
-                location_available=table_location_available,
-            ):
-                pass
-            return None
-        # stake_kind defaults to "money" for MVP; Task 16 will add content-declared
-        # stake blocks. stake_descriptor is the confrontation label.
-        all_player_names = [player_name, *additional]
-        seat_seeds = _build_table_seat_seeds(
-            player_names=all_player_names,
-            npc_names=npc_names_list,
-            snapshot=snapshot,
-        )
-        enc = instantiate_table_encounter(
-            cdef=cdef,
-            player_names=all_player_names,
-            npc_names=npc_names_list,
-            stake_kind="money",
-            stake_descriptor=cdef.label,
-            seed=snapshot.turn_manager.interaction,
-            ruleset_slug=pack.rules.ruleset if pack and pack.rules else "native",
-            seat_seeds=seat_seeds,
-        )
-        snapshot.encounter = enc
-        return enc
-
     # Story 45-18: NPC fallback when narrator's npcs_present is empty.
-    #
-    # Story 59-17: sealed-letter encounters (commit-reveal duels) now ALSO
-    # consult the location fallback. The production confrontation seam is
-    # router-driven (Story 59-4 / ADR-113) and the pre-narrator pass
-    # dispatches with a hardcoded ``npcs_present=[]``
-    # (``intent_router_pass.py`` line 167) — it has no explicit actor
-    # mentions to hand the subsystem. Before this story the fallback was
-    # skipped for sealed-letter, so a dogfight could NEVER instantiate via
-    # the live router even when the enemy pilot was right there in the scene
-    # (ADR-116: "a confrontation requires an Other" — the Other existed but
-    # was never seated).
-    #
-    # The leak this MUST avoid (Story 45-33): a 1v1 duel must not conscript a
-    # neutral bystander who merely shares the room — that would pass the
-    # arity check (count == 1) and silently seat the wrong Other. The arity
-    # validator alone is NOT sufficient: it catches 0 and >1, but a lone
-    # bystander (count == 1) sails through. So sealed-letter sourcing passes
-    # ``adversary_only=True``, which filters candidates through
-    # ``_npc_is_adversary`` (hostile disposition OR an adversarial role
-    # token). A lone bystander ⇒ 0 candidates ⇒ the arity validator raises
-    # loudly ("got 0 npcs_present"); a lone adversary ⇒ 1 ⇒ seated as blue.
-    #
-    # Rejected (Story 59-17 Architect consult): keying solely on
-    # ``Disposition.attitude() == HOSTILE``. A narrator-declared opponent can
-    # carry the DEFAULT (neutral) disposition, so disposition ALONE would
-    # reject a real opponent — hence the role-token OR-branch in
-    # ``_npc_is_adversary``. Category (``_is_adversarial``) is necessary but
-    # not sufficient: it is encounter-level and cannot tell a pilot from a
-    # bartender. The combined disposition-OR-role predicate is the
-    # discriminator both Story 45-33 (bystander ⇒ skip) and Story 59-17
-    # (hostile ⇒ seat) require.
+    # Sealed-letter encounters (commit-reveal duels) require exactly one
+    # opponent passed explicitly — the fallback would leak any bystander
+    # NPC at the location into the duel, so only the legacy path uses the
+    # fallback. The sealed-letter validator below still raises if
+    # npcs_present is wrong.
     #
     # Story 45-52: ``location_available`` discriminates "empty location"
     # from "no location at all" — both produce an empty fallback, but only
@@ -1224,63 +306,13 @@ def instantiate_encounter_from_trigger(
     # ``encounter.no_opponent_available`` span below.
     location_available = True
     seating_source = "router_named"
-    if materialized_threat is not None:
-        # Story 59-23 (#C3 / ADR-116): the narrator/router named a threat that is
-        # not an existing NPC entity. Seat THAT as the Other — never the location
-        # fallback (which sources the player's own crew). The backing
-        # CreatureCore (hull HP / AC) is created downstream by
-        # ``_seed_combat_hp_depletion_to_npcs`` (Task 9) for the opponent actor
-        # lacking an Npc. ``materialized`` distinguishes this seat from a
-        # router-named or location-fallback one on the participant.joined span.
-        #
-        # 108-2: the router names the adversary as a FREE STRING. Before seating
-        # (and persisting) an invention, reconcile it to a bound, statted
-        # adversary present in the scene (ADR-059 Monster-Manual / ADR-116 the
-        # Other). The narrator's prose already fights the bound creature; only
-        # the router's separate call invented the placeholder name (the
-        # Molgrath-vs-Hold-Dead split). When it resolves, seat the bound creature
-        # — its WWN-statted HP reaches the fight instead of an HP-10 stub.
-        resolved_opponent = _resolve_opponent_from_roster(
-            snapshot,
-            threat_name=materialized_threat.name,
-            acting_character_name=player_name,
-        )
-        if resolved_opponent is not None:
-            from sidequest.agents.orchestrator import NpcMention as _NpcMention
-
-            with encounter_opponent_resolved_from_roster_span(
-                router_name=materialized_threat.name,
-                bound_name=resolved_opponent.core.name,
-                creature_id=resolved_opponent.creature_id or "",
-                match_scope="room",
-            ):
-                pass
-            materialized_threat = _NpcMention(
-                name=resolved_opponent.core.name,
-                pronouns=resolved_opponent.pronouns or "",
-                role=resolved_opponent.npc_role_id or "hostile",
-                appearance=resolved_opponent.appearance or "",
-                side="opponent",
-            )
-            seating_source = "roster_resolved"
-        else:
-            seating_source = "materialized"
-        npcs_present = [materialized_threat]
-    elif not npcs_present and cdef.confrontation_type not in _SHIP_SCALE_CONFRONTATION_TYPES:
+    if not npcs_present and cdef.resolution_mode != ResolutionMode.sealed_letter_lookup:
         seating_source = "location_fallback"
         npcs_present, location_available = _npc_fallback_at_location(
             snapshot,
-            # opposed_check social confrontations (e.g. social_duel) need the
-            # Other seated opponent-side so its dial can advance on its own
-            # roll — _requires_opponent folds that in alongside the adversarial
-            # categories (playtest 59-8).
-            adversarial=_requires_opponent(cdef),
+            adversarial=_is_adversarial(cdef.category),
             acting_character_name=player_name,
-            adversary_only=cdef.resolution_mode == ResolutionMode.sealed_letter_lookup,
         )
-    # else (ship-scale + no materialized threat): leave npcs_present empty so the
-    # No-Opponent guard below fails loud — a ship fight needs an enemy ship, and
-    # the player's own crew (who share the bridge) are never it.
 
     # Story 45-33 / ADR-116: adversarial empty+empty guard (CLAUDE.md "No
     # Silent Fallbacks"). If narrator's ``npcs_present`` was empty AND
@@ -1297,13 +329,10 @@ def instantiate_encounter_from_trigger(
     # PLAYER, never "no opponent". A chase requires a pursuer; a one-sided
     # chase is not a confrontation — it's narration ("race against time"),
     # which the dispatch handler renders as prose when this raises. ``social``
-    # / ``pre_combat`` (beat_selection) remain exempt from the category guard
-    # (staged rollout — see ``_ADVERSARIAL_CATEGORIES``), BUT an opposed_check
-    # confrontation of ANY category needs an Other to roll against — a duel of
-    # wits with nobody on the other side cannot resolve — so _requires_opponent
-    # folds opposed_check in here too (playtest 59-8).
+    # / ``pre_combat`` remain exempt for now (staged rollout — see
+    # ``_ADVERSARIAL_CATEGORIES``).
     if (
-        _requires_opponent(cdef)
+        _is_adversarial(cdef.category)
         and cdef.resolution_mode != ResolutionMode.sealed_letter_lookup
         and not npcs_present
     ):
@@ -1321,20 +350,6 @@ def instantiate_encounter_from_trigger(
             f"(player_name={player_name!r}, "
             f"location={snapshot.party_location(perspective=player_name)!r}, "
             f"location_available={location_available})"
-        )
-
-    # Story 59-35: source FRIENDLY allies for the combat-confrontation path.
-    # Computed AFTER the no-opponent guard and kept SEPARATE from npcs_present
-    # so an ally never counts toward "a confrontation requires an Other"
-    # (ADR-116 invariant). Seated only in the generic branch below — never for
-    # sealed-letter (strict 1v1 red/blue) or table_resolution (handled earlier).
-    # ``friendly_seated_names`` lets the participant.joined loop tag these seats
-    # source="friendly_fallback", distinct from PC seats (source="seat").
-    friendly_allies: list[NpcMention] = []
-    friendly_seated_names: set[str] = set()
-    if cdef.category == "combat" and cdef.resolution_mode != ResolutionMode.sealed_letter_lookup:
-        friendly_allies = _friendly_fallback_at_location(
-            snapshot, acting_character_name=player_name
         )
 
     with encounter_confrontation_initiated_span(
@@ -1386,28 +401,6 @@ def instantiate_encounter_from_trigger(
                     side=opponent_side,
                 ),
             ]
-            # Seed transient fighter-frame HP into each pilot's per_actor_state
-            # so the frame-HP resolver can read it during shot resolution and
-            # depletion checks. Fail loud if the dogfight cdef lacks the HP
-            # values — no silent default (CLAUDE.md no-silent-fallbacks).
-            from sidequest.game.dogfight_shot import seed_frame_hp
-
-            pc_frame_hp = cdef.player_hp
-            opp_frame_hp = cdef.opponent_hp
-            if pc_frame_hp is None or opp_frame_hp is None:
-                raise ValueError(
-                    f"dogfight ConfrontationDef {cdef.confrontation_type!r} missing "
-                    f"fighter-frame HP "
-                    f"(player_default_stats.hp={pc_frame_hp!r}, "
-                    f"opponent_default_stats.hp={opp_frame_hp!r})"
-                )
-            for actor in actors:
-                # side == "player" -> PC frame; otherwise the opponent
-                # (ArityError above guarantees exactly one NPC).
-                seed_frame_hp(
-                    actor,
-                    pc_frame_hp if actor.side == "player" else opp_frame_hp,
-                )
         else:
             role = "combatant" if cdef.category == "combat" else "participant"
             actors = [
@@ -1423,66 +416,18 @@ def instantiate_encounter_from_trigger(
                 side_raw = getattr(npc, "side", None) or "neutral"
                 side = _validate_side(npc_name, side_raw)
                 actors.append(EncounterActor(name=npc_name, role=role, side=side))
-            # Story 59-35: seat scene-present FRIENDLY allies as side="player"
-            # combatants (ADR-116 friendly half / SOUL Guitar Solo). Additive to
-            # the opponent path; dedup against already-seated names so an ally the
-            # narrator also named in npcs_present (or a PC) is not double-seated.
-            already_seated = {a.name for a in actors}
-            for ally in friendly_allies:
-                if ally.name in already_seated:
-                    continue
-                actors.append(EncounterActor(name=ally.name, role=role, side="player"))
-                already_seated.add(ally.name)
-                friendly_seated_names.add(ally.name)
 
         # ADR-116: membership entry is observable. Emit a participant.joined
         # span per seated actor carrying side + source so the GM panel can
         # answer "why is this pursuer here?" (router-named vs sourced from the
         # location roster). Point-in-time span; ``: pass`` like the other
         # guard spans above.
-        #
-        # Story 72-12 ("presence means presence"): seating an NPC IS presence,
-        # so stamp recency on every seated actor that resolves to a roster Npc —
-        # not only combat opponents. 72-8 stamped just the combat seams below
-        # (gated behind ``cdef.category == "combat"``), leaving non-combat
-        # participants (a social duellist, an ally joining a parley) un-stamped
-        # while demonstrably present. The stamp rides this same participant.joined
-        # span so the GM panel sees it alongside the seating event. Combat
-        # opponents are re-stamped by the 72-8 seams below with the SAME turn +
-        # location, so the value stays consistent (no double-advance).
-        _seat_turn = snapshot.turn_manager.interaction if hasattr(snapshot, "turn_manager") else 0
-        _seat_loc = snapshot.party_location(perspective=player_name)
-        _npc_by_name = {n.core.name: n for n in snapshot.npcs}
         for actor in actors:
-            _seated_npc = _npc_by_name.get(actor.name)
-            _stamp_attrs: dict[str, object] = {}
-            if _seated_npc is not None:
-                _stamp_encounter_presence(_seated_npc, turn=_seat_turn, location=_seat_loc)
-                _stamp_attrs = {
-                    "last_seen_turn": _seated_npc.last_seen_turn,
-                    "last_seen_location": _seated_npc.last_seen_location or "",
-                    # Story 59-35 (AC4): carry the seated NPC's disposition band so
-                    # the GM panel can prove WHY the engine seated it — a
-                    # friendly_fallback seat reads disposition_attitude="friendly",
-                    # confirming the seat was disposition-driven, not narrator improv.
-                    "disposition_attitude": _seated_npc.disposition.attitude().value,
-                }
-            # Story 59-35: a FRIENDLY ally seated by the friendly-seater carries
-            # source="friendly_fallback" (the GM-panel lie-detector proving the
-            # ENGINE seated the ally, not the narrator inventing one), distinct
-            # from a PC seat (source="seat") and an opponent (seating_source).
-            if actor.name in friendly_seated_names:
-                _join_source = "friendly_fallback"
-            elif actor.side == "player":
-                _join_source = "seat"
-            else:
-                _join_source = seating_source
             with participant_joined_span(
                 encounter_type=encounter_type,
                 name=actor.name,
                 side=actor.side,
-                source=_join_source,
-                **_stamp_attrs,
+                source="seat" if actor.side == "player" else seating_source,
             ):
                 pass
 
@@ -1512,49 +457,10 @@ def instantiate_encounter_from_trigger(
             ",".join(a.name for a in actors if a.side == "player"),
         )
 
-        # Synthesize inert metrics when a combat declares no dial (win_condition: hp_depletion).
-        # apply_beat gates its dial-resolution branches on win_condition, so these placeholders
-        # never gate resolution; the absurdly high threshold (1e6, never reached) is just
-        # belt-and-suspenders that keeps the ~9 live-metric readers safe.
         pm = cdef.player_metric
         om = cdef.opponent_metric
-        if pm is None and om is None:
-            # hp_depletion: no dial authored — synthesize inert placeholders.
-            pm = MetricDef(name="hp", starting=0, threshold=1_000_000)
-            om = MetricDef(name="hp", starting=0, threshold=1_000_000)
-        elif pm is None or om is None:
-            raise ValueError(
-                f"confrontation '{encounter_type}' has exactly one of "
-                "player_metric/opponent_metric; provide both (dial_threshold) or "
-                "neither (hp_depletion) — no silent discard"
-            )
-
-        # net_run (CWN hacking, spec 2026-05-29): resolve the security tier the
-        # run targets. The "Other" is the alert dial, not an NPC, so this is the
-        # only adversary metadata net_run needs. Non-hacking confrontations
-        # leave security_tier=None.
-        stamped_security_tier: str | None = None
-        if cdef.category == "hacking":
-            from sidequest.genre.models.rules import CwnConfig
-
-            cfg = pack.rules.ruleset_config() if pack and pack.rules else None
-            if not isinstance(cfg, CwnConfig) or cfg.hacking is None:
-                raise ValueError(
-                    f"net_run confrontation {encounter_type!r} requires "
-                    "cwn.hacking config on the pack; none authored (No Silent "
-                    "Fallbacks)"
-                )
-            stamped_security_tier = security_tier or cfg.hacking.default_tier
-            if stamped_security_tier not in cfg.hacking.security_tiers:
-                raise ValueError(
-                    f"net_run security_tier {stamped_security_tier!r} is not in "
-                    f"cwn.hacking.security_tiers {sorted(cfg.hacking.security_tiers)}"
-                )
-
         enc = StructuredEncounter(
             encounter_type=encounter_type,
-            win_condition=cdef.win_condition.value,
-            category=cdef.category,
             player_metric=EncounterMetric(
                 name=pm.name,
                 current=pm.starting,
@@ -1575,7 +481,6 @@ def instantiate_encounter_from_trigger(
             resolved=False,
             mood_override=cdef.mood,
             narrator_hints=[],
-            security_tier=stamped_security_tier,
         )
         snapshot.encounter = enc
         _watcher_publish(
@@ -1610,36 +515,13 @@ def instantiate_encounter_from_trigger(
         # matching Npc. Non-combat encounters leave ``core.edge`` at its
         # standing value so the validator's dead-NPC check stays correct.
         if cdef.category == "combat":
-            turn_no = snapshot.turn_manager.interaction if hasattr(snapshot, "turn_manager") else 0
-            if cdef.win_condition == WinCondition.hp_depletion:
-                # Task 9: no dial — seed opponent core.hp + core.armor_class
-                # from content opponent_default_stats. Creates a backing Npc
-                # for any opponent lacking one so find_creature_core reaches
-                # it and the SWN attack/hp_depletion pipeline resolves.
-                _seed_combat_hp_depletion_to_npcs(
-                    snapshot=snapshot,
-                    actors=actors,
-                    cdef=cdef,
-                    turn=turn_no,
-                    source="encounter_handshake",
-                    acting_character_name=player_name,
-                )
-                _roll_and_persist_initiative(
-                    snapshot=snapshot,
-                    enc=enc,
-                    actors=actors,
-                    cdef=cdef,
-                    pack=pack,
-                )
-            else:
-                _publish_combat_edge_to_npcs(
-                    snapshot=snapshot,
-                    actors=actors,
-                    opponent_metric=enc.opponent_metric,
-                    turn=turn_no,
-                    source="encounter_handshake",
-                    acting_character_name=player_name,
-                )
+            _publish_combat_edge_to_npcs(
+                snapshot=snapshot,
+                actors=actors,
+                opponent_metric=enc.opponent_metric,
+                turn=snapshot.turn_manager.interaction if hasattr(snapshot, "turn_manager") else 0,
+                source="encounter_handshake",
+            )
         return enc
 
 
@@ -1694,25 +576,11 @@ def _is_combat_category(pack: GenrePack, encounter_type: str) -> bool:
     return False
 
 
-def award_turn_xp(
-    snapshot: GameSnapshot,
-    *,
-    in_combat: bool,
-    ruleset: RulesetModule | None = None,
-) -> None:
+def award_turn_xp(snapshot: GameSnapshot, *, in_combat: bool) -> None:
     """Award the per-turn XP tick to every seated PC (party-wide).
 
     25 XP when ``in_combat`` is True, 10 otherwise. No-op when the
     snapshot has no characters.
-
-    ``ruleset`` gates the native ADR-021 tick (sq-playtest 2026-06-13). When a
-    ruleset module is supplied and ``ruleset.awards_native_turn_xp`` is False —
-    the Without Number family (SWN/WWN/CWN/AWN), which uses small-integer
-    GM-awarded expedition XP, not an OSR-scale per-turn counter — this is a
-    loud no-op: no ``core.xp`` mutation, and a ``xp`` suppression span fires so
-    the GM panel proves the native tick was gated rather than silently dropped
-    (No Silent Fallbacks). ``None`` (the default for legacy/test callers that
-    pass no module) preserves the native tick.
 
     SideQuest MP is sealed-rounds (ADR-036): every seated PC submits an
     action each round and they resolve together — there is no single
@@ -1732,22 +600,6 @@ def award_turn_xp(
     starve XP (No Silent Fallbacks).
     """
     if not snapshot.characters:
-        return
-    if ruleset is not None and not ruleset.awards_native_turn_xp:
-        # WN-family binding: the native per-turn XP tick does not apply. Emit a
-        # loud suppression event (lie-detector) so the GM panel sees the gate
-        # fired — WN advancement is GM-awarded expedition XP, surfaced through
-        # its own path, not this native accumulator.
-        _watcher_publish(
-            "state_transition",
-            {
-                "field": "xp",
-                "op": "award_turn_xp_suppressed",
-                "ruleset": getattr(ruleset, "slug", ""),
-                "in_combat": in_combat,
-            },
-            component="progression",
-        )
         return
     delta = 25 if in_combat else 10
     seated = {name for name in snapshot.player_seats.values() if name}
@@ -1773,137 +625,6 @@ def award_turn_xp(
         },
         component="progression",
     )
-
-
-# ADR-021 track 1: accumulated ``core.xp`` (the live per-turn accumulator from
-# ``award_turn_xp``) is the progression measure — "wire up what exists" rather
-# than minting a parallel milestone counter. One milestone is worth this many
-# XP; ``milestones_per_level`` (authored 2–3 by the packs) then governs the
-# level ladder. award_turn_xp grants 10 (calm) / 25 (combat) per turn, so a
-# milestone is ~4–10 turns of play.
-_XP_PER_MILESTONE = 100
-
-
-def apply_level_ups(snapshot: GameSnapshot, progression: ProgressionConfig) -> list[LevelUp]:
-    """Drive milestone → level-up for every PC and emit OTEL on each crossing.
-
-    The missing consumer for ADR-021 track 1: ``award_turn_xp`` already
-    accumulates ``core.xp`` each turn and tags its emit ``component=progression``,
-    but nothing ever advanced the character from it. This runs immediately after
-    ``award_turn_xp`` in the turn pipeline, converts accumulated XP into
-    milestones, resolves the level via :func:`resolve_level`, and — on a real
-    crossing — bumps ``core.level``, publishes a ``progression.level_up``
-    ``state_transition`` watcher event (the GM-panel lie-detector, mirroring the
-    ``award_turn_xp`` progression emit), and records a player-facing
-    :class:`AdvancementDelta` on the character so PartyMember can show *what
-    changed and why* (mechanics-first).
-
-    Returns the list of crossings this turn (empty when nobody leveled). A pack
-    that doesn't author progression resolves every character to level 1, so the
-    loop is a clean no-op — No Silent Fallbacks, no phantom advancement.
-    """
-    crossings: list[LevelUp] = []
-    for character in snapshot.characters:
-        # Clear last turn's notification first: the delta is per-turn, so a
-        # character that doesn't cross this turn surfaces no advancement.
-        character.last_advancement = None
-
-        milestones_completed = max(0, character.core.xp) // _XP_PER_MILESTONE
-        new_level = resolve_level(milestones_completed, progression)
-        before = character.core.level
-        if new_level <= before:
-            continue
-
-        character.core.level = new_level
-        delta = LevelUp(
-            character_name=character.core.name,
-            before=before,
-            after=new_level,
-            driver="milestone",
-        )
-        character.last_advancement = delta
-        crossings.append(delta)
-        _watcher_publish(
-            "state_transition",
-            {
-                "field": "progression.level_up",
-                "character_name": character.core.name,
-                "before": before,
-                "after": new_level,
-                "driver": "milestone",
-            },
-            component="progression",
-        )
-    return crossings
-
-
-def apply_affinity_tier_ups(
-    snapshot: GameSnapshot, progression: ProgressionConfig
-) -> list[AffinityTierUp]:
-    """Drive affinity progress → tier promotion for every PC and emit OTEL on
-    each crossing (ADR-021 track 2).
-
-    The missing consumer for ADR-021 track 2: ``AffinityState`` (``tier`` /
-    ``progress``) and ``Affinity.tier_thresholds`` exist as live data, but
-    nothing ever advanced a character's affinity tier from accumulated progress.
-    This runs in the turn pipeline alongside :func:`apply_level_ups`, resolves
-    each affinity's tier via :func:`resolve_affinity_tier`, and — on a real
-    crossing — bumps ``AffinityState.tier``, publishes a
-    ``progression.affinity_tier_up`` ``state_transition`` watcher event (the
-    GM-panel lie-detector, mirroring the track-1 ``progression.level_up`` emit),
-    and records a player-facing :class:`AffinityTierUp` on the character so
-    PartyMember can show *which affinity advanced and why* (mechanics-first).
-
-    Each character's affinities are matched to the pack's authored ladders by
-    ``AffinityState.affinity_id == Affinity.name``. An affinity with no matching
-    authored ladder, or whose ladder declares no thresholds, is skipped — No
-    Silent Fallbacks, no phantom promotion against another affinity's ladder.
-
-    Returns the list of crossings this turn (empty when nobody advanced).
-    """
-    thresholds_by_name = {
-        affinity.name: affinity.tier_thresholds for affinity in progression.affinities
-    }
-    crossings: list[AffinityTierUp] = []
-    for character in snapshot.characters:
-        # Clear last turn's notifications first: the deltas are per-turn, so a
-        # character that doesn't advance this turn surfaces none.
-        character.last_affinity_tier_ups = []
-
-        for state in character.affinities:
-            thresholds = thresholds_by_name.get(state.affinity_id)
-            # No authored ladder for this affinity → nothing to climb.
-            if not thresholds:
-                continue
-
-            new_tier = resolve_affinity_tier(state.progress, thresholds)
-            before = state.tier
-            if new_tier <= before:
-                continue
-
-            state.tier = new_tier
-            delta = AffinityTierUp(
-                character_name=character.core.name,
-                affinity_id=state.affinity_id,
-                before=before,
-                after=new_tier,
-                driver="affinity",
-            )
-            character.last_affinity_tier_ups.append(delta)
-            crossings.append(delta)
-            _watcher_publish(
-                "state_transition",
-                {
-                    "field": "progression.affinity_tier_up",
-                    "character_name": character.core.name,
-                    "affinity_id": state.affinity_id,
-                    "before": before,
-                    "after": new_tier,
-                    "driver": "affinity",
-                },
-                component="progression",
-            )
-    return crossings
 
 
 def apply_resource_patches(

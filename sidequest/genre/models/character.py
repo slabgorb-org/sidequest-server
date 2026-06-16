@@ -39,25 +39,6 @@ class NpcArchetype(BaseModel):
     ocean: OceanProfile | None = None
     mindless: bool = False
     saves_as_class: str = "Fighter"
-    # When True, this archetype is a SPECIFIC named individual (a real or
-    # historical person — e.g. "Charles Taze Russell" — or a unique authored
-    # figure), present for flavor/authoring reference. It must never be drawn
-    # into a RANDOM spawn (encountergen enemies, namegen walk-ons): doing so
-    # produced the "charles taze russell, Jewish" combat NPC (2026-06-01
-    # playtest). Explicit ``--archetype`` requests may still target it. Opt-in;
-    # default archetypes remain freely spawnable.
-    named_individual: bool = False
-
-
-def spawnable_archetypes(archetypes: list[NpcArchetype]) -> list[NpcArchetype]:
-    """Archetypes eligible for RANDOM NPC/encounter generation.
-
-    Excludes :attr:`NpcArchetype.named_individual` templates — specific real
-    people / unique figures that must only be summoned by explicit request,
-    never by ``rng.choice``. Callers that random-pick should fail loud when
-    this returns empty rather than silently falling back to the full list.
-    """
-    return [a for a in archetypes if not a.named_individual]
 
 
 class IdentityCapture(BaseModel):
@@ -72,27 +53,6 @@ class IdentityCapture(BaseModel):
     pronouns_required: bool = True
     background_optional: bool = True
     description_optional: bool = True
-
-
-class OriginTraitDef(BaseModel):
-    """A world-authored origin trait granted by a chargen choice (story 89-5).
-
-    The dual-voice shape mirrors AbilityDefinition: the builder seeds it onto
-    Character.abilities with source=Race and emits the
-    ``chargen.origin_trait.applied`` OTEL event. This is the documented
-    world-tier crunch exception (Barsoom design D5/§9): the trait definition
-    lives in a WORLD's char_creation.yaml choice — never keyed off a race
-    string in engine code — and its mechanical halves ride pre-wired
-    consumers (``stat_bonuses`` → generate_stats; the ability → the
-    narrator/ability surface).
-    """
-
-    model_config = {"extra": "forbid"}
-
-    name: str
-    genre_description: str
-    mechanical_effect: str
-    involuntary: bool = False
 
 
 class MechanicalEffects(BaseModel):
@@ -116,21 +76,9 @@ class MechanicalEffects(BaseModel):
     rig_trait: str | None = None
     catch_phrase: str | None = Field(default=None, alias="catch", serialization_alias="catch")
     stat_bonuses: dict[str, int] = Field(default_factory=dict)
-    # WWN Skills/Foci substrate (ADR-143). A chargen scene may grant skill
-    # levels (skill name → level; accumulated higher-of, not additive) and/or
-    # select a focus. ``focus_id`` is a registry KEY (not a display name) that
-    # resolves against the pack's foci definitions when the grants are applied
-    # in build() (Task 9/10).
-    skill_grants: dict[str, int] = Field(default_factory=dict)
-    focus_id: str | None = None
     pronoun_hint: str | None = None
     stat_generation: str | None = None
     equipment_generation: str | None = None
-    # Interactive Fate chargen step (ADR-144 F4a2): a scene declaring one of
-    # "aspects" / "pyramid" / "stunts" renders the matching Fate input_type
-    # ("fate_aspects" / "fate_skill_pyramid" / "fate_stunts"). Same FILTER doctrine
-    # as stat_generation — a non-fate pack authors none, so no fate surface fires.
-    fate_chargen_step: str | None = None
     jungian_hint: str | None = None
     rpg_role_hint: str | None = None
     # spaghetti_western: chargen-choice-applied reputation tag
@@ -145,18 +93,6 @@ class MechanicalEffects(BaseModel):
     # Story-scene flags (the_story)
     identity_capture: IdentityCapture | None = None
     background_autogen_source: str | None = None
-
-    # World-tier origin trait (89-5): a chargen choice may grant a dual-voice
-    # Race-source ability (e.g. the Barsoom Earthman gravity boon). Authored
-    # in world char_creation.yaml; seeded by the builder with OTEL.
-    origin_trait: OriginTraitDef | None = None
-
-    # Stock chargen step (103-2, build plan §D-B): a choice on the stock
-    # scene records the picked stock; a choice on a Saint-branch scene
-    # records the Saint (103-1's deferred selection surface). The builder
-    # accumulates both for the chargen-confirm mutation init.
-    stock_id: str | None = None
-    saint_id: str | None = None
 
     model_config = {"extra": "forbid", "populate_by_name": True}
 
@@ -177,54 +113,6 @@ class ClassMagicConfig(BaseModel):
     starting_known_spells: int
     save_dc_stat: str  # "INT" | "WIS" | "CHA"
     turn_undead: bool = False  # cleric-only class-special
-
-
-class WwnEffortSource(BaseModel):
-    """One WWN class-source contributing an Effort pool (SRD §1.4.4).
-
-    A magic-using class draws Effort from one or more named sources (High
-    Mage, Vowed, Elementalist, ...). Effort from one source cannot fuel
-    another, so each source seeds its own pool. The pool max at chargen is
-    ``effort_base + starting_skill_level + governing_attr_mod``.
-
-    Copy-not-share with the B/X ``ClassMagicConfig`` — the WWN economy
-    (Effort + casts/day) is a separate model, not the slot-table shape.
-    """
-
-    model_config = {"extra": "forbid"}
-
-    source: str  # "high_mage" | "vowed" | "elementalist" ...
-    governing_attr: str  # canonical WWN attr key, e.g. "WISDOM"
-    relevant_skill: str  # e.g. "Magic"
-    starting_skill_level: int  # chargen skill level for the Effort-max formula
-
-
-class WwnClassMagic(BaseModel):
-    """Per-class WWN magic data (Effort sources + spell economy tables).
-
-    Lives on the class def, consumed by ``seed_wwn_magic`` at chargen to
-    seed ``EffortPool``s and a ``SpellcastingState``. Copy-not-share with
-    the B/X ``ClassMagicConfig``: WWN does NOT use ``slots_by_class_level``.
-    The by-level dicts are str-keyed ("1".."10") because YAML/JSON flatten
-    int keys to strings. ``prepared_by_level`` is capacity metadata consumed
-    by the rest/prepare action (Plan 3).
-
-    ``starting_prepared`` is the chargen seed: a list of spell ids the class
-    prepares at character creation, before the first rest.  ``seed_wwn_magic``
-    seeds ``SpellcastingState.prepared`` from this list, capped at the level-1
-    prepared capacity (``prepared_by_level["1"]``).  When the key is absent no
-    truncation is applied.  Defaults to ``[]`` so non-spellcasting subclasses
-    and older packs that omit the field are unaffected.
-    """
-
-    model_config = {"extra": "forbid"}
-
-    effort_sources: list[WwnEffortSource] = Field(default_factory=list)  # one per class-source
-    casts_per_day_by_level: dict[str, int] = Field(default_factory=dict)  # "1": 1 ... "10": 6
-    max_spell_level_by_level: dict[str, int] = Field(default_factory=dict)
-    prepared_by_level: dict[str, int] = Field(default_factory=dict)
-    starting_prepared: list[str] = Field(default_factory=list)  # spell ids seeded at chargen
-    partial: bool = False  # Partial class: Effort -1, min 1
 
 
 class ClassAbilityDef(BaseModel):
@@ -275,64 +163,7 @@ class ClassDef(BaseModel):
     abilities: list[ClassAbilityDef] = Field(default_factory=list)
     magic_access: str | None = None
     magic_config: ClassMagicConfig | None = None
-    wwn_magic: WwnClassMagic | None = None
     saving_throws: SavingThrowsTable | None = None
-    # WWN Warrior-archetype marker (SRD §1.5.18). Task 11 sets warrior: true on
-    # the Guardian class YAML; the Killing Blow + Veteran's Luck dispatch seams
-    # gate on this flag. False by default so all existing non-wwn classes are
-    # unaffected without any YAML edits.
-    warrior: bool = False
-
-
-class Background(BaseModel):
-    """A WWN Background: grants a free skill + quick skills at chargen (SRD §1.3)."""
-
-    model_config = {"extra": "forbid"}
-
-    id: str
-    display_name: str
-    description: str = ""
-    free_skill: str | None = None
-    quick_skills: list[str] = Field(default_factory=list)
-
-
-class FocusLevel(BaseModel):
-    """One level of a Focus: skill grants + ability grants (SRD §1.5).
-
-    ``abilities`` uses :class:`ClassAbilityDef` (the same type as
-    :class:`ClassDef.abilities`) rather than the protocol
-    :class:`~sidequest.protocol.models.AbilityDefinition` because Focus
-    abilities are authored in YAML *without* a ``source`` discriminator —
-    ``ClassAbilityDef`` is precisely ``AbilityDefinition`` minus ``source``.
-    The chargen builder (Task 10) converts these to ``AbilityDefinition``,
-    stamping the source when seeding onto ``Character.abilities`` (there is no
-    ``AbilitySource.Focus`` value today — the enum is Race/Class/Item/Play —
-    so the builder stamps ``AbilitySource.Class``, matching how
-    ``ClassAbilityDef`` entries are seeded; a dedicated Focus source can be
-    added later if needed). Do NOT change this to ``AbilityDefinition`` here —
-    that conversion belongs in the builder, not the content model.
-    """
-
-    model_config = {"extra": "forbid"}
-
-    skills: dict[str, int] = Field(default_factory=dict)
-    abilities: list[ClassAbilityDef] = Field(default_factory=list)
-
-
-class Focus(BaseModel):
-    """A WWN Focus (feat-like talent), 1-2 levels.
-
-    WWN Foci have at most 2 levels; this model is intentionally permissive
-    (``levels`` is an unbounded list) — the loader/validator enforces the
-    1-2-level cap (Task 13), not the model.
-    """
-
-    model_config = {"extra": "forbid"}
-
-    id: str
-    display_name: str
-    description: str = ""
-    levels: list[FocusLevel] = Field(default_factory=list)
 
 
 class CharCreationChoice(BaseModel):
@@ -358,16 +189,6 @@ class CharCreationScene(BaseModel):
     allows_freeform: bool | None = None
     hook_prompt: str | None = None
     mechanical_effects: MechanicalEffects | None = None
-    # Stock branching (103-2): the scene is presented only when a prior
-    # choice carried a matching mechanical_effects.stock_id. The tag is a
-    # FILTER (no stock chosen -> tagged scenes skipped), never a demand
-    # that some stock exists — branching is authored data, not engine code.
-    requires_stock: str | None = None
-    # Stat-generation branching (103-3): same FILTER doctrine as
-    # requires_stock — the scene is presented only when a prior choice
-    # adopted a matching mechanical_effects.stat_generation (e.g. the
-    # "roll_the_bones" rolling surface). Default-mode walks skip it.
-    requires_stat_generation: str | None = None
 
 
 class BackstoryTables(BaseModel):
@@ -413,23 +234,6 @@ class BackstoryTables(BaseModel):
         return result.strip()
 
 
-class GuaranteedGrant(BaseModel):
-    """A starting item every character of a kit receives, independent of the
-    random slot rolls.
-
-    Story 106-4: lets a kit guarantee a baseline item (e.g. a heal potion) while
-    still rolling an *upside* — with probability ``upgrade_chance`` the granted
-    item is the better ``upgrade`` instead (upgrade-only: never worse, never
-    absent). General-purpose content primitive, not hardcoded to healing.
-    """
-
-    model_config = {"extra": "forbid"}
-
-    item: str
-    upgrade: str | None = None
-    upgrade_chance: float = 0.0  # 0.0..1.0; probability the grant is `upgrade`
-
-
 class EquipmentTables(BaseModel):
     """Random equipment generation tables loaded from equipment_tables.yaml.
 
@@ -437,10 +241,6 @@ class EquipmentTables(BaseModel):
     `equipment_generation: random_table`. `class_tables` is a per-class
     override consumed by `equipment_generation: class_kit`; the chosen
     class's `kit_table` id resolves to one of these blocks.
-
-    `guaranteed_grants` maps a kit id (the same key as `class_tables`, or
-    `"tables"` for the random_table flow) to items always granted on top of the
-    random rolls — see `GuaranteedGrant` (Story 106-4).
     """
 
     model_config = {"extra": "forbid"}
@@ -448,7 +248,6 @@ class EquipmentTables(BaseModel):
     tables: dict[str, list[str]] = Field(default_factory=dict)
     rolls_per_slot: dict[str, int] = Field(default_factory=dict)
     class_tables: dict[str, dict[str, list[str]]] = Field(default_factory=dict)
-    guaranteed_grants: dict[str, list[GuaranteedGrant]] = Field(default_factory=dict)
 
 
 class VisualStyle(BaseModel):
@@ -463,6 +262,7 @@ class VisualStyle(BaseModel):
     model_config = {"extra": "allow"}
 
     positive_suffix: str
+    negative_prompt: str
     preferred_model: str
     base_seed: int
     visual_tag_overrides: dict[str, str] = Field(default_factory=dict)

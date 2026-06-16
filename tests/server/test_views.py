@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import pytest
 
-from sidequest.foundation.asset_urls import resolve_asset_url
+from sidequest.server.asset_urls import resolve_asset_url
 
 
 def test_views_module_exposes_required_functions() -> None:

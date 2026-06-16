@@ -127,10 +127,7 @@ def test_genre_pack_exposes_lethality_policy():
     pack = load_genre_pack(CONTENT_GENRE_PACKS / "caverns_and_claudes")
     assert pack.lethality_policy is not None
     assert pack.lethality_policy.genre_key == "caverns_and_claudes"
-    # WWN port (2026-06-12): caverns is lethal_for_this_genre — permadeath,
-    # not the old comedic humiliated/no-permadeath baseline.
-    assert pack.lethality_policy.default_reversibility == "permanent"
-    assert pack.lethality_policy.verdicts_on_zero_hp.pc == "dead"
+    assert pack.lethality_policy.verdicts_on_zero_hp.pc == "humiliated"
 
 
 def test_load_genre_pack_wraps_malformed_lethality_policy_in_genre_load_error(tmp_path):

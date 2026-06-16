@@ -186,19 +186,26 @@ def test_frontier_crossing_promotes_region_to_active() -> None:
 # CLAUDE.md "Every Test Suite Needs a Wiring Test": this proves Task 7's
 # async look-ahead worker is invoked FROM Task 6's REAL production
 # region-transition producer (apply_world_patch → notify_region_transition),
-# NOT called directly by the test. Real PgDungeonRepository on a migrated
-# Postgres database, real materialize() pipeline through Tasks 1–6, real
-# frontier_hook producer. The ONLY mock is the claude -p curation subprocess.
+# NOT called directly by the test. Real DungeonStore on a real connection,
+# real materialize() pipeline through Tasks 1–6, real frontier_hook
+# producer. The ONLY mock is the claude -p curation subprocess.
 # ---------------------------------------------------------------------------
 
 
-async def _seed_expansion_one(dungeon_repository: Any) -> Any:
+def _mem_conn() -> Any:
+    import sqlite3
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+async def _seed_expansion_one(store: Any) -> Any:
     """Run the REAL five-stage coordinator for expansion 1 against a real
-    PgDungeonRepository so the repository carries a committed seed
-    (entrance, exp 0) + expansion 1's regions + REAL unexpanded frontier
-    edges rooted at exp001.r* (Task 6's commit derived them). Returns the
-    theme_id used so the caller can resolve the same palette for the
-    look-ahead expansion."""
+    DungeonStore so the store carries a committed seed (entrance, exp 0) +
+    expansion 1's regions + REAL unexpanded frontier edges rooted at
+    exp001.r* (Task 6's commit derived them). Returns the theme_id used so
+    the caller can resolve the same palette for the look-ahead expansion."""
     from tests.dungeon.test_materializer import (
         _commit_palette,
         _materialize_full,
@@ -208,28 +215,25 @@ async def _seed_expansion_one(dungeon_repository: Any) -> Any:
     theme_id = "lookahead_wire_crypt"
     palette = _commit_palette(theme_id)
     graph = _seed_graph_themed(theme_id)
-    await _materialize_full(graph=graph, palette=palette, dungeon_repository=dungeon_repository)
+    await _materialize_full(graph=graph, palette=palette, store=store)
     return theme_id, palette
 
 
-async def test_lookahead_worker_materializes_from_real_region_transition(
-    monkeypatch: pytest.MonkeyPatch,
-    migrated_db: str,
-) -> None:
+async def test_lookahead_worker_materializes_from_real_region_transition() -> None:
     """Drive the REAL production region-transition (a WorldStatePatch with
     ``current_region`` applied through ``GameSnapshot.apply_world_patch``,
     the exact code path the narrator/monster-manual-inject use) and assert
     Task 7's async look-ahead worker materialized the next expansion FROM
-    that path — observed via real committed repository state, NOT by the
-    test calling the worker/materialize directly.
+    that path — observed via real committed store state, NOT by the test
+    calling the worker/materialize directly.
 
     Teeth: with the worker NOT registered, crossing the frontier commits
     NO new expansion (the seam is wired-but-unconsumed). Not circular: the
     test never calls the worker or materialize() — it drives
-    apply_world_patch and inspects the real PgDungeonRepository."""
+    apply_world_patch and inspects the real DungeonStore."""
     from sidequest.dungeon.lookahead_worker import register_lookahead_worker
+    from sidequest.dungeon.persistence import DungeonStore
     from sidequest.game.session import GameSnapshot, WorldStatePatch
-    from tests.dungeon.conftest import build_pg_dungeon_repo
     from tests.dungeon.test_materializer import (
         _attach_pack,
         _real_cookbook_bundle,
@@ -237,10 +241,12 @@ async def test_lookahead_worker_materializes_from_real_region_transition(
     )
 
     # --- Teeth half: worker NOT registered → no look-ahead expansion. ---
-    _pool_a, repo_a, _sid_a = build_pg_dungeon_repo(monkeypatch, migrated_db)
-    _theme_a, _palette_a = await _seed_expansion_one(repo_a)
+    conn_a = _mem_conn()
+    store_a = DungeonStore(conn_a)
+    store_a.ensure_schema()
+    _theme_a, _palette_a = await _seed_expansion_one(store_a)
 
-    frontier_a = repo_a.load_frontier()
+    frontier_a = store_a.load_frontier()
     assert frontier_a, "expansion 1 commit did not derive any frontier edges"
     target_region = frontier_a[0].from_region_id  # a real exp001.r* region
 
@@ -248,7 +254,7 @@ async def test_lookahead_worker_materializes_from_real_region_transition(
     snap_a.current_region = "entrance"
     snap_a.apply_world_patch(WorldStatePatch(current_region=target_region))
     # No worker registered: only the original expansion 1 exists.
-    exp_ids_a = {n.expansion_id for n in repo_a.load_map(entrance_id="entrance").nodes.values()}
+    exp_ids_a = {n.expansion_id for n in store_a.load_map(entrance_id="entrance").nodes.values()}
     assert 2 not in exp_ids_a, (
         "a look-ahead expansion 2 was committed with NO worker registered "
         "— the wiring test is circular / the seam fires without a consumer"
@@ -256,14 +262,16 @@ async def test_lookahead_worker_materializes_from_real_region_transition(
 
     # --- Live half: worker registered → crossing the frontier
     #     materializes the next expansion FROM the real producer path. ---
-    _pool_b, repo_b, _sid_b = build_pg_dungeon_repo(monkeypatch, migrated_db)
-    _theme_b, palette_b = await _seed_expansion_one(repo_b)
+    conn_b = _mem_conn()
+    store_b = DungeonStore(conn_b)
+    store_b.ensure_schema()
+    _theme_b, palette_b = await _seed_expansion_one(store_b)
 
-    frontier_b = repo_b.load_frontier()
+    frontier_b = store_b.load_frontier()
     target_b = frontier_b[0].from_region_id
 
     obs = register_lookahead_worker(
-        persistence=repo_b,
+        persistence=store_b,
         bundle=_real_cookbook_bundle(),
         palette=palette_b,
         pack_tropes=_attach_pack("cave_in"),
@@ -288,7 +296,7 @@ async def test_lookahead_worker_materializes_from_real_region_transition(
     finally:
         obs.unregister()
 
-    exp_ids_b = {n.expansion_id for n in repo_b.load_map(entrance_id="entrance").nodes.values()}
+    exp_ids_b = {n.expansion_id for n in store_b.load_map(entrance_id="entrance").nodes.values()}
     assert 2 in exp_ids_b, (
         "the look-ahead worker did NOT materialize the next expansion from "
         "the real apply_world_patch region-transition path — Task 7's "
@@ -310,10 +318,7 @@ async def test_lookahead_worker_materializes_from_real_region_transition(
 # ---------------------------------------------------------------------------
 
 
-async def test_mask_emit_fires_from_real_materialize_pipeline(
-    monkeypatch: pytest.MonkeyPatch,
-    migrated_db: str,
-) -> None:
+async def test_mask_emit_fires_from_real_materialize_pipeline() -> None:
     """Drive the REAL materialize() coordinator (the same path the look-ahead
     worker uses) and assert that ``dungeon.materialize.mask`` spans were
     emitted during the run — proving the mask-emit step is wired INSIDE the
@@ -325,11 +330,11 @@ async def test_mask_emit_fires_from_real_materialize_pipeline(
     """
     import sidequest.telemetry.spans as _spans_module
     from sidequest.dungeon.materializer import materialize
+    from sidequest.dungeon.persistence import DungeonStore
     from sidequest.telemetry.spans import SPAN_ROUTES
     from sidequest.telemetry.spans.dungeon_materialize import (
         SPAN_DUNGEON_MATERIALIZE_MASK,
     )
-    from tests.dungeon.conftest import build_pg_dungeon_repo
     from tests.dungeon.test_materializer import (
         _attach_pack,
         _commit_palette,
@@ -341,7 +346,9 @@ async def test_mask_emit_fires_from_real_materialize_pipeline(
         _seed_graph_themed,
     )
 
-    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    conn = _mem_conn()
+    store = DungeonStore(conn)
+    store.ensure_schema()
 
     bundle = _real_cookbook_bundle()
     theme_id = "mask_wired_crypt"
@@ -358,7 +365,7 @@ async def test_mask_emit_fires_from_real_materialize_pipeline(
             graph=graph,
             bundle=bundle,
             palette=palette,
-            dungeon_repository=repo,
+            persistence=store,
             snapshot=_fresh_snapshot(),
             pack_tropes=_attach_pack("cave_in"),
             claude_client=_reflecting_sdk_client(),

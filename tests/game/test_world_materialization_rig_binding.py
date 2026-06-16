@@ -43,9 +43,6 @@ def _vessel_item_dict(
             "tier-1",
             f"composure:{composure}",
             f"composure_max:{composure_max}",
-            # 86-5: speed + mount_slots are now required (full stat block).
-            "speed:3",
-            "mount_slots:1",
         ],
     }
 

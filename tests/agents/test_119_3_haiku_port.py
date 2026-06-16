@@ -279,6 +279,81 @@ async def test_aside_uses_no_tools_at_max_turns_two(monkeypatch: pytest.MonkeyPa
     )
 
 
+# ===========================================================================
+# Regression: structured-extraction calls disable extended thinking so they
+# fit the mandatory max_turns=2 floor (the error_max_turns blocker, 2026-06-16).
+#
+# output_format is a synthetic ``StructuredOutput`` tool round-trip that already
+# consumes both mt=2 turns; the claude CLI defaults thinking ON, so a long think
+# pushes the finalize past 2 turns and the call fails error_max_turns
+# intermittently — which took the intent-router spine dark on the 119-3 port.
+# ===========================================================================
+
+
+@pytest.mark.parametrize("site", ["router", "classifier"])
+async def test_forced_extraction_sites_disable_thinking(
+    monkeypatch: pytest.MonkeyPatch, site: str
+) -> None:
+    """Every output_format site must build options with thinking disabled —
+    a structured classifier cannot afford a thinking turn at the mt=2 floor."""
+    from sidequest.agents import llm_factory
+
+    fake = _patch_query(monkeypatch, structured_output_stream({"intent": "attack"}))
+    builders = {
+        "router": llm_factory.build_intent_router_llm,
+        "classifier": llm_factory.build_unseeded_objective_classifier_llm,
+    }
+    adapter = builders[site](session_id=None)
+    await _drive_emit_tool(adapter, tool_schema=_TOOL_SCHEMA)
+
+    opts = fake.last_options
+    assert getattr(opts, "thinking", None) == {"type": "disabled"}, (
+        "output_format calls MUST disable thinking — the synthetic StructuredOutput "
+        "tool round-trip already costs both mt=2 turns, so a thinking pass blows the "
+        f"budget (error_max_turns); got thinking={getattr(opts, 'thinking', None)!r}"
+    )
+
+
+async def test_aside_leaves_thinking_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Non-structured callers (the aside, the narrator tool-loop) are untouched:
+    no output_format ⇒ thinking stays None (the CLI default applies)."""
+    from sidequest.agents import llm_factory
+
+    fake = _patch_query(monkeypatch, converged_text_stream(text="ok"))
+    adapter = llm_factory.build_aside_llm(session_id=None)
+    await adapter.complete(system="S", user="U")
+
+    assert getattr(fake.last_options, "thinking", "MISSING") is None, (
+        "a plain completion (no output_format) must NOT be forced to disabled-thinking — "
+        "the auto-disable is scoped to structured extraction only"
+    )
+
+
+def test_build_options_thinking_invariant(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Direct unit on the builder: output_format ⇒ thinking disabled by default;
+    no output_format ⇒ thinking None; an explicit thinking value always wins."""
+    from sidequest.agents.anthropic_sdk_client import build_agent_sdk_options
+
+    of = {"type": "json_schema", "schema": {"type": "object"}}
+
+    structured = build_agent_sdk_options(
+        model="m", system_prompt="s", max_turns=2, allowed_tools=[], output_format=of
+    )
+    assert structured.thinking == {"type": "disabled"}
+
+    plain = build_agent_sdk_options(model="m", system_prompt="s", max_turns=2)
+    assert plain.thinking is None
+
+    override = build_agent_sdk_options(
+        model="m",
+        system_prompt="s",
+        max_turns=2,
+        output_format=of,
+        thinking={"type": "enabled", "budget_tokens": 1024},
+    )
+    assert override.thinking == {"type": "enabled", "budget_tokens": 1024}
+
+
 @pytest.mark.parametrize("site", ["router", "classifier"])
 async def test_max_turns_one_fail_closed_shape_raises(
     monkeypatch: pytest.MonkeyPatch, site: str

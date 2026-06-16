@@ -721,31 +721,45 @@ def _validate_confrontation_beats(rules: RulesConfig) -> None:
 
 
 def _validate_genre_baseline_no_bespoke(ruleset: str, inventory: InventoryConfig | None) -> None:
-    """ADR-145 D3 (story 114-14) — a Without Number pack's genre-tier item catalog
-    must carry NO ``provenance.mode == "bespoke"`` item.
+    """ADR-145 D3 (story 114-14, broadened to verbatim-only by 120-3) — a Without
+    Number pack's genre-tier item catalog must be SRD-sourced: every item's
+    ``provenance.mode`` must be ``"verbatim"`` or ``"derived"``.
 
     The genre tier IS the SRD rulebook for a pack that binds an SRD ruleset, so its
-    baseline gear must come from that SRD; bespoke (invented) gear is a WORLD-tier
-    privilege. Native-ruleset packs are EXEMPT — their genre inventory is authored
-    content with no SRD to be verbatim from, so genre-tier bespoke there is
-    legitimate homebrew. Fails loud, naming every offending id (No Silent
-    Fallbacks). The stricter verbatim-only rule (which also rejects unprovenanced
-    genre items in caverns_and_claudes / road_warrior) is deferred to epic 120.
+    baseline gear must come from that SRD. Two kinds of item are rejected:
+      * ``bespoke`` (invented) gear — a WORLD-tier privilege (the original 114-14 rule);
+      * UNPROVENANCED items (no ``provenance`` block at all) — legacy gear that was
+        never SRD-sourced (the 120-3 broadening; caverns_and_claudes / road_warrior
+        were swept verbatim in 120-1 / 120-2, so no live WN pack trips this today).
+
+    Native-ruleset packs are EXEMPT — their genre inventory is authored content with
+    no SRD to be verbatim from, so unprovenanced/bespoke gear there is legitimate
+    homebrew. Fails loud, naming every offending id grouped by reason (No Silent
+    Fallbacks). The function name predates the broadening (the story extends it in
+    place); ``ship_weapons`` stay out of scope — only ``item_catalog`` is scanned.
     """
     if inventory is None or not _is_without_number(ruleset):
         return
-    offenders = sorted(
+    unprovenanced = sorted(item.id for item in inventory.item_catalog if item.provenance is None)
+    bespoke = sorted(
         item.id
         for item in inventory.item_catalog
         if item.provenance is not None and item.provenance.mode == "bespoke"
     )
-    if offenders:
-        raise PackError(
-            f"genre-tier baseline carries bespoke item(s) {offenders}: a {ruleset!r} "
-            "pack's genre catalog is the SRD rulebook — bespoke gear is a world-tier "
-            "privilege (ADR-145 D3). Move each to the world tier (worlds/<world>/"
-            "inventory.yaml) or SRD-source it verbatim at the genre tier."
-        )
+    if not unprovenanced and not bespoke:
+        return
+    problems: list[str] = []
+    if unprovenanced:
+        problems.append(f"unprovenanced item(s) {unprovenanced}")
+    if bespoke:
+        problems.append(f"bespoke item(s) {bespoke}")
+    raise PackError(
+        f"genre-tier baseline carries non-verbatim {' and '.join(problems)}: a "
+        f"{ruleset!r} pack's genre catalog is the SRD rulebook — every genre item must "
+        "be mode=verbatim (or derived) (ADR-145 D3). SRD-source each verbatim at the "
+        "genre tier, or move genuinely-unique gear to the world tier "
+        "(worlds/<world>/inventory.yaml)."
+    )
 
 
 def _validate_class_filter_refs(rules: RulesConfig, classes: list[ClassDef]) -> None:

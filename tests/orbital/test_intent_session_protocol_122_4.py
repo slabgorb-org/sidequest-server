@@ -204,9 +204,13 @@ def test_drill_in_on_standin_persists_scope(standin) -> None:
 def test_drill_out_reads_then_writes_scope_on_standin(standin) -> None:
     handle_orbital_intent(standin, _drill_in("red_prospect"))
     resp = handle_orbital_intent(standin, _drill_out())
-    # red_prospect's parent is coyote (the system primary)
+    # red_prospect's parent is coyote (the system primary). Behavior-preserving
+    # (epic-122): drill_out stores the parent's id verbatim — Scope(center_body_id
+    # ="coyote") — it does NOT normalize the primary to "<root>". The render still
+    # centers on coyote either way. The read+write proof is that orbital_scope was
+    # read (to find the parent) and written back on the stand-in.
     assert resp.scope_center == "coyote"
-    assert standin.orbital_scope.center_body_id == "<root>"
+    assert standin.orbital_scope.center_body_id == "coyote"
 
 
 def test_standin_conforms_to_runtime_protocol(standin) -> None:

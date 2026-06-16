@@ -31,6 +31,7 @@ class FateActionHandler:
         msg: GameMessage,
     ) -> list[object]:
         from sidequest.game.ruleset import get_ruleset_module
+        from sidequest.game.ruleset.fate import FateEconomyError
         from sidequest.server.dispatch.fate_conflict import (
             FateConflictError,
             dispatch_fate_action,
@@ -117,7 +118,14 @@ class FateActionHandler:
                 rng=random.Random(),  # fresh RNG; F2/F3 own real-roll seeding
                 round_number=snapshot.turn_manager.interaction,
             )
-        except FateConflictError as exc:
+        except (FateConflictError, FateEconomyError) as exc:
+            # Story 118-6 (Reviewer HIGH #2): FateEconomyError is a SIBLING of
+            # FateConflictError (both ValueError), not a subclass — so it must be
+            # named here explicitly. The conflict surface's Invoke affordance makes
+            # an unaffordable invoke reachable on a stale-FATE_STATE race (the economy
+            # is server-authoritative; the client's view can lag); without this the
+            # economy error escapes uncaught instead of returning the graceful typed
+            # rejection every other rejected Fate action already gets.
             logger.warning("fate.dispatch_error error=%s", exc)
             return [_error_msg(f"FATE_ACTION rejected: {exc}", code="fate_dispatch_error")]
 

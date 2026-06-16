@@ -757,9 +757,12 @@ def dispatch_fate_action(
         # ``payload.skill``, NOT the raw dice self-action path. The rider stays
         # mechanically inert: it is appended as a hint string and is never consulted
         # by ``resolve_action`` below (``test_player_action_is_mechanically_inert``).
-        encounter.narrator_hints.append(
-            f"{actor_name} (flourish): {sanitize_player_text(payload.player_action)}"
-        )
+        # Gate the append on the SANITIZED result, not the pre-sanitization strip:
+        # an all-injection rider (e.g. ``<system></system>``) sanitizes to "" and
+        # must NOT append a contentless "(flourish):" line (Reviewer 118-6 LOW).
+        sanitized_rider = sanitize_player_text(payload.player_action)
+        if sanitized_rider:
+            encounter.narrator_hints.append(f"{actor_name} (flourish): {sanitized_rider}")
 
     # Optional pre-roll invoke (+2 for 'bonus', a reroll for 'reroll' — F1b). The
     # KIND is the client's ``invoke_mode`` (Story 118-10): the dispatch threads the

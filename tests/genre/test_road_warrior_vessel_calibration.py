@@ -9,14 +9,15 @@ the calibration guard for that scope, loaded against the REAL road_warrior pack:
     monotonic across tiers and matching the canonical ``rig_composure_spec`` table
     in rules.yaml (composure_max 4/6/8/10/12, mount_slots 1/2/3/4/5).
   * AC1 — the mounted rig weapons get real CWN vehicle-weapon damage (the
-    "mount_slot → CWN weapon remap"). Today every ``mounted``+``rig`` weapon ships
-    ``damage: None`` (inventory.yaml comment: "Rig/mounted weapons ... stay
-    damage-less — rig combat is Plan 2"); Plan 5 gives them mechanical backing so
-    a gunner manning a mount slot rolls real damage instead of improvised prose.
+    "mount_slot → CWN weapon remap"). Before Plan 5 every ``mounted``+``rig``
+    weapon shipped ``damage: None`` (inventory.yaml comment: "Rig/mounted weapons
+    ... stay damage-less — rig combat is Plan 2"); Plan 5 gave them mechanical
+    backing so a gunner manning a mount slot rolls real damage instead of
+    improvised prose.
 
-RED until Dev (a) promotes speed/mount_slots to first-class parsed fields
-(see ``test_vessel_full_stat_blocks.py``) and (b) authors ``damage`` blocks on the
-mounted rig weapons in ``genre_packs/road_warrior/inventory.yaml``.
+GREEN as of 86-5 / 120-2: speed/mount_slots are first-class parsed fields
+(``vessel_tags.py``, cf. ``test_vessel_full_stat_blocks.py``) and every mounted rig
+weapon now lives in ``worlds/the_circuit/inventory.yaml`` with a CWN ``damage`` block.
 
 The damage assertions are deliberately *structural* — they require a well-formed
 ``damage`` block with NdM dice, never a specific die size. Per the design spec
@@ -92,8 +93,9 @@ def _load_typed():
 
 def test_every_vessel_item_parses_cleanly() -> None:
     """Every ``category: vessel`` item parses through the production parser with a
-    full stat block. RED until speed/mount_slots are first-class (the parser
-    contract this story introduces)."""
+    full stat block. GREEN: speed/mount_slots are first-class required fields in the
+    parser (Story 86-5) — a vessel missing either tag fails loud via
+    ``InvalidVesselTagsError``."""
     vessels = _vessel_dicts()
     assert len(vessels) >= 5, (
         f"road_warrior ships a 5-tier rig ladder; found {len(vessels)} vessel items"
@@ -192,7 +194,8 @@ def test_mounted_rig_weapons_carry_vehicle_damage() -> None:
     mount_slot → CWN weapon remap (AC1). A gunner manning a mount slot must roll
     real damage, not improvised prose. Structural only: asserts NdM dice exist,
     never a specific die size (faithful-port decision D4 leaves the numbers to
-    Keith). RED today — mounted weapons ship ``damage: None``."""
+    Keith). GREEN as of 86-5: every mounted rig weapon in the_circuit's inventory
+    carries a CWN ``damage`` block."""
     pack = _load_typed()
     undamaged = [
         w.id for w in _mounted_rig_weapons_typed(pack) if w.damage is None or not w.damage.dice
@@ -213,7 +216,7 @@ def test_starting_mounted_weapons_fit_in_starting_rig_slots() -> None:
 
     A loadout that over-fills the mount slots is an un-equippable content bug.
     Cross-references starting_equipment against the parsed mount_slots of the
-    granted rig — RED until mount_slots parses.
+    granted rig.
 
     Resolves against the MERGED genre+world catalog (``resolve_inventory(pack,
     "the_circuit")``), not the_circuit's world inventory alone. Post-120-2 the kits
@@ -237,6 +240,9 @@ def test_starting_mounted_weapons_fit_in_starting_rig_slots() -> None:
         )
         rig_ids = [i for i in item_ids if "vessel" in (catalog[i].tags or [])]
         assert len(rig_ids) == 1, f"{class_name} must start with exactly one rig; got {rig_ids}"
+        # parse_vessel_tags() takes a plain dict (it has an isinstance(item, dict)
+        # guard), so dump the typed CatalogItem to a dict. CatalogItem carries no
+        # field aliases, so id/tags survive model_dump() unchanged.
         slots = parse_vessel_tags(catalog[rig_ids[0]].model_dump()).mount_slots
         mounted = [
             i

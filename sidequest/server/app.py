@@ -313,9 +313,9 @@ def create_app(
     )
 
     # --- Chassis interior map (Ship tab) ---
-    from sidequest.interior.dispatch import interior_router
-
-    app.include_router(interior_router)
+    # The GET /api/chassis/{id}/interior endpoint lives on the REST router
+    # (sidequest.server.rest, registered above) per ADR-147 / story 122-3 —
+    # interior/ stays pure, the server tier owns the HTTP surface.
 
     # --- Static /genre/* mount — serve genre pack assets (POI images, portraits, etc.) ---
     # URL /genre/<genre>/worlds/<world>/assets/poi/<file> → first-matching genre_packs dir.

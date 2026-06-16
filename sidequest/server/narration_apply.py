@@ -4603,8 +4603,15 @@ def _apply_narration_result_to_snapshot(
                 "An item acquired during adventure."
             )
             category_raw = str(entry.get("category", "") or "").strip().lower()
+            # Story 114-13: accept the CWN/WN weapon categories (melee_weapon /
+            # ranged_weapon) alongside the legacy bespoke "weapon" so a
+            # narrator-granted CWN weapon stays a weapon instead of demoting to
+            # misc. The genre's bound ruleset, not this allowlist, owns the
+            # weapon taxonomy.
             allowed = {
                 "weapon",
+                "melee_weapon",
+                "ranged_weapon",
                 "armor",
                 "tool",
                 "consumable",
@@ -4613,6 +4620,23 @@ def _apply_narration_result_to_snapshot(
                 "misc",
             }
             category = category_raw if category_raw in allowed else "misc"
+            if category_raw and category != category_raw:
+                # No Silent Fallbacks + OTEL lie-detector (114-13): the narrator
+                # minted an off-taxonomy category. We coerce to "misc" rather than
+                # crash, but surface the coercion so the GM panel sees the narrator
+                # inventing a category instead of it vanishing silently.
+                _watcher_publish(
+                    "state_transition",
+                    {
+                        "field": "inventory",
+                        "op": "narrator_item_category_coerced",
+                        "item": name_val,
+                        "narrator_category": category_raw,
+                        "stored_category": category,
+                    },
+                    component="inventory",
+                    severity="warning",
+                )
             slug = name_val.lower().replace(" ", "_").replace("-", "_")
             return {
                 "id": f"narrator:{slug}",

@@ -5,10 +5,12 @@ ADR-145 D3: bespoke gear is a WORLD-tier privilege; a genre-tier baseline item w
 ruleset (the genre tier IS the SRD rulebook). This story adds a fail-loud loader
 check — no allow-list, no warning-and-continue (No Silent Fallbacks, claude.md).
 
-Scope of THIS validator (narrowed per Keith 2026-06-15): it rejects only *declared*
-bespoke (``mode == "bespoke"``). It does NOT require provenance *presence* and does
-NOT require *verbatim-only* — that stricter rule (which would also reject
-unprovenanced genre items in caverns_and_claudes / road_warrior) is **epic 120**.
+Scope of THESE tests: the *bespoke-rejection* subset of the validator. 114-14 shipped
+the narrow rule (reject only ``mode == "bespoke"``). 120-3 then UPGRADED the validator
+to the full ADR-145 D3 rule — 'WN-family genre baseline must be ``mode in {verbatim,
+derived}``', which ALSO rejects unprovenanced genre items. The tests below still hold
+(the verbatim-only rule subsumes no-bespoke), and the unprovenanced-rejection / error-
+message coverage lives in ``test_120_3_verbatim_only_genre_baseline_validator.py``.
 
 Gate: the rule applies to the Without Number family (``awn``/``cwn``/``wwn``/
 ``swn``). NATIVE-ruleset packs are EXEMPT — their genre inventory is authored

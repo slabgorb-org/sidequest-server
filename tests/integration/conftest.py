@@ -30,13 +30,59 @@ from tests._helpers.doubles import FakeSocket
 # de-duplicated in 73-11) and is inherited by tests/integration/ automatically —
 # no cross-module import needed. The fixtures below still live in
 # tests/server/conftest (a sibling dir, not a parent), so they are re-exported here.
+#
+# Hermeticity tripod (story 123-2): tests/integration/ is a SIBLING of
+# tests/server/, so it does NOT inherit the four AUTOUSE hermeticity legs that
+# tests/server/conftest defines. Re-exporting an autouse fixture's NAME into this
+# conftest re-registers it (with its autouse flag intact) for this directory tree —
+# so the same `from ... import` block that already pulls plain fixtures is also the
+# install point for the guards. Without this, resume-path integration tests reach the
+# LIVE Anthropic SDK (real 401/billing on any keyed machine). The catch-all
+# `_no_real_anthropic_sdk` leg is the floor requirement: any un-faked SDK
+# construction fails LOUD here instead of billing. Tests that install their own fakes
+# still shadow these guards via monkeypatch LIFO.
 from tests.server.conftest import (  # noqa: F401
+    _mock_claude_client,
+    _no_real_anthropic_sdk,
+    _stub_intent_router_factory,
+    _stub_unseeded_objective_classifier,
     encounter_dispatch_helper,
     otel_capture,
     session_fixture,
     store_bound_to_hub,
     synthetic_two_dial_pack,
 )
+
+
+@pytest.fixture(autouse=True)
+def _stub_dungeon_curate_client(monkeypatch):
+    """Autouse guard (story 123-2): stub the dungeon curate LLM client at the
+    ``session_integration`` import site.
+
+    The four re-exported tripod legs cover the narrator, intent-router,
+    objective-classifier, and catch-all SDK sites — but the procedural
+    megadungeon attach path (``beneath_sunden``, ADR-106) has its OWN
+    construction site: ``attach_dungeon_to_session`` calls
+    ``build_llm_client(purpose="tool")`` eagerly to thread a curate client into
+    ``materialize`` / ``register_lookahead_worker``. The ``caverns_and_claudes``
+    resume integration tests hit that path on reconnect, so without this leg the
+    catch-all ``_no_real_anthropic_sdk`` guard fires loud (correct — no billing —
+    but the test cannot complete).
+
+    ``tests/server/conftest`` does NOT make this autouse because the dungeon unit
+    tests in ``tests/dungeon/`` each install ``_reflecting_sdk_client`` themselves;
+    here we install it tree-wide so WS-driven integration tests that resume a
+    dungeon world are hermetic. We reuse that same reflecting fake (it parses the
+    curate prompt and echoes a well-formed verdict — never a network call). Patched
+    at ``session_integration``'s import-time binding, not the factory module. Tests
+    that want a different curate double install their own AFTER this (LIFO).
+    """
+    from tests.dungeon.test_materializer import _reflecting_sdk_client
+
+    monkeypatch.setattr(
+        "sidequest.dungeon.session_integration.build_llm_client",
+        _reflecting_sdk_client,
+    )
 
 
 async def watcher_setup(monkeypatch: pytest.MonkeyPatch, label: str) -> list[dict]:

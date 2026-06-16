@@ -121,26 +121,66 @@ class FateActionHandler:
             logger.warning("fate.dispatch_error error=%s", exc)
             return [_error_msg(f"FATE_ACTION rejected: {exc}", code="fate_dispatch_error")]
 
-        # F3c (ADR-144 / Story 118-3): surface the acting PC's own 4dF roll to the
-        # player. The roll's dice/tier/shifts are already on the
-        # ``fate.action_resolved`` span (the GM-panel polygraph); this broadcasts
-        # the same result to the table so the player SEES the faces + ladder +
-        # shift + tier. A concession is pre-roll (action_roll is None) → nothing
-        # to show.
+        # F3g (ADR-144 / Story 118-7): BROADCAST the acting PC's own 4dF roll to
+        # the whole table so every seat SEES the faces + ladder + shift + tier
+        # (SOUL "The Guitar Solo": the soloist's roll is visible to the band — not
+        # just the socket that sent the action). The roll's dice/tier/shifts are
+        # already on the ``fate.action_resolved`` span (the GM-panel polygraph);
+        # this is the player-facing surface, attributed to the acting PC. A
+        # concession is pre-roll (action_roll is None) → nothing to show.
         if result.action_roll is not None:
             from sidequest.game.ruleset.fate_projection import build_fate_roll_payload
             from sidequest.protocol.messages import FateRollMessage
 
             payload_out = build_fate_roll_payload(result.action_roll)
+            roll_msg = FateRollMessage(payload=payload_out, player_id=acting_player_id)
+            room = sd._room
+            if room is None:
+                # Playing state always has a room (slug-connect sets it); a None
+                # here is a programming error, not a path to silently drop the
+                # roll (CLAUDE.md No Silent Fallbacks).
+                logger.error(
+                    "fate.roll.broadcast_no_room actor=%s — roll not delivered",
+                    character.core.name,
+                )
+                return []
+            # Fan out to EVERY seat including the actor (exclude_socket_id=None),
+            # mirroring the DICE_RESULT broadcast (websocket_session_handler.py).
+            # Because the actor is reached by the broadcast, the handler must NOT
+            # also return the message — that would double-deliver to the sender.
+            delivered = room.broadcast(roll_msg, exclude_socket_id=None)
             logger.info(
-                "fate.roll.emitted actor=%s dice=%s ladder=%d shifts=%d tier=%s",
+                "fate.roll.broadcast actor=%s player_id=%s recipients=%d "
+                "dice=%s ladder=%d shifts=%d tier=%s",
                 character.core.name,
+                acting_player_id,
+                len(delivered),
                 payload_out.dice,
                 payload_out.ladder_total,
                 payload_out.shifts,
                 payload_out.tier,
             )
-            return [FateRollMessage(payload=payload_out)]
+            # OTEL lie-detector (CLAUDE.md OTEL Observability Principle): record
+            # the broadcast emit + recipient count so the GM panel can verify the
+            # roll actually reached the table, not just that prose claims a roll.
+            from sidequest.telemetry.watcher_hub import publish_event
+
+            publish_event(
+                "state_transition",
+                {
+                    "field": "fate_roll",
+                    "op": "broadcast_emitted",
+                    "player_id": acting_player_id,
+                    "actor": character.core.name,
+                    "recipients": len(delivered),
+                    "tier": payload_out.tier,
+                    "ladder_total": payload_out.ladder_total,
+                    "shifts": payload_out.shifts,
+                },
+                component="fate",
+                severity="info",
+            )
+            return []
         return []
 
 

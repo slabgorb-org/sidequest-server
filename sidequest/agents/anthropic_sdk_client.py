@@ -90,6 +90,18 @@ _ABSOLUTE_INPUT_TOKENS_FLOOR = cost_safety._ABSOLUTE_INPUT_TOKENS_FLOOR
 _SESSION_COST_CEILING_USD = cost_safety._SESSION_COST_CEILING_USD
 
 
+# Story 119-4 — honest OTEL labels for the subscription transport.
+# ``auth_path='subscription'`` affirms a successful inference drew the free Max
+# subscription pool (AC2 — the GM/cost-panel lie detector). ``cost_basis=
+# 'notional'`` marks every cost figure as token×PAYG-rate NOTIONAL, not real
+# billed dollars (AC4 — the bill is $0 under subscription auth, so the $10
+# ceiling is a notional-shape signal). The auth-failure event makes an
+# expired/absent login VISIBLE to the panel before the loud raise (AC1').
+_AUTH_PATH_SUBSCRIPTION = "subscription"
+_COST_BASIS_NOTIONAL = "notional"
+_AUTH_UNAVAILABLE_EVENT = "narrator.auth_unavailable"
+
+
 class AnthropicSdkClientError(LlmClientError):
     """Base error from AnthropicSdkClient."""
 
@@ -103,9 +115,14 @@ class AgentSdkAuthUnavailable(AnthropicSdkClientError):
 
     Raised when a PAYG credential (``ANTHROPIC_API_KEY`` /
     ``ANTHROPIC_AUTH_TOKEN``) is SET on the SDK path — a set key silently
-    re-routes to the metered API-platform ledger (the 119-1 NO-GO) — OR when a
-    query fails because the subscription login is absent. There is NO PAYG
-    fallback on this transport: the failure surfaces as a loud raise, never a
+    re-routes to the metered API-platform ledger (the 119-1 NO-GO) — OR when the
+    transport query fails: either a terminal ``is_error`` ResultMessage, or a
+    *raised* query at the transport boundary (an absent/expired login is how
+    OQ-5 surfaces, though a genuine transport fault is indistinguishable there —
+    so the message names both causes and the chained cause carries the truth).
+    A non-auth error from our OWN message processing is NOT mapped here; it
+    propagates raw (Story 119-4 Reviewer round 2). There is NO PAYG fallback on
+    this transport: the failure surfaces as a loud raise, never a
     degraded-but-successful result (No Silent Fallbacks).
     """
 
@@ -410,7 +427,43 @@ class AnthropicSdkClient:
         last_model = model
         result_msg: Any = None
         with llm_request_span(model=model) as span:
-            async for message in query(prompt=prompt, options=options):
+            # Story 119-4 (Reviewer round 2 — the [HIGH] mislabel fix): drive the
+            # async iterator by hand so the auth-mapping catch wraps ONLY the
+            # transport boundary (``anext`` — the SDK producing the next message).
+            # An absent/expired subscription login surfaces HERE as a raised query
+            # (OQ-5), so a transport-boundary failure maps to the typed auth error
+            # and fires the GM-panel event. Our OWN message processing runs OUTSIDE
+            # that catch: a parse bug there propagates RAW, never relabeled as an
+            # auth failure on the lie-detector panel (the panel exists to END
+            # winging it — it must not assert a diagnosis it cannot support).
+            message_stream = aiter(query(prompt=prompt, options=options))
+            while True:
+                try:
+                    message = await anext(message_stream)
+                except StopAsyncIteration:
+                    break
+                except AgentSdkAuthUnavailable:
+                    # Already the typed, GM-panel-visible auth error — as-is.
+                    raise
+                except Exception as exc:
+                    # The transport boundary failed: an absent/expired subscription
+                    # login OR a genuine transport fault — we cannot disambiguate
+                    # at the boundary. Map to the typed auth error and emit the
+                    # GM-panel event BEFORE the loud raise, but the headline does
+                    # NOT assert auth as the SOLE cause (the chained cause/detail
+                    # carries the truth), so a transport fault is never reported as
+                    # a confirmed login expiry (No Silent Fallbacks).
+                    self._emit_auth_unavailable(
+                        reason="query_raised", model=model, caller=caller, detail=str(exc)
+                    )
+                    raise AgentSdkAuthUnavailable(
+                        "claude-agent-sdk query failed "
+                        f"({type(exc).__name__}: {exc}) — subscription login "
+                        "absent/expired or a transport error; no PAYG fallback "
+                        "(No Silent Fallbacks)."
+                    ) from exc
+                # --- message processing (OURS, not the transport's): exceptions
+                # here propagate raw and are NEVER coerced into the auth signal ---
                 if _is_agent_result_message(message):
                     result_msg = message
                     continue
@@ -465,6 +518,12 @@ class AnthropicSdkClient:
                 cached_input_write_tokens=cache_write,
                 model=last_model,
             )
+            # Story 119-4 (AC3'): the agent SDK's own per-call spend view. The
+            # claude-agent-sdk subprocess does NOT expose the anthropic-ratelimit-*
+            # headers (the raw-SDK signal is unreachable here), so ResultMessage.
+            # total_cost_usd is the only transport-reported figure — surface it
+            # distinct from our notional cost so a non-zero value flags a PAYG leak.
+            sdk_reported_cost_usd = getattr(result_msg, "total_cost_usd", None)
             span.set_attributes(
                 {
                     "llm.caller": caller,
@@ -473,6 +532,9 @@ class AnthropicSdkClient:
                     "llm.cached_input_read_tokens": cache_read,
                     "llm.cached_input_write_tokens": cache_write,
                     "llm.cost_usd": cost,
+                    # Story 119-4 (AC2): affirm this inference drew the free
+                    # subscription pool — the GM/cost-panel lie detector.
+                    "llm.auth_path": _AUTH_PATH_SUBSCRIPTION,
                 }
             )
             subtype = getattr(result_msg, "subtype", None)
@@ -498,6 +560,12 @@ class AnthropicSdkClient:
                     "model": last_model,
                     "cache_read_tokens": cache_read,
                     "cache_write_tokens": cache_write,
+                    # Story 119-4: AC2 affirmative free-pool tag, AC4 notional
+                    # cost-basis (token×PAYG-rate, not a real bill), AC3' the
+                    # transport's own reported spend (PAYG-leak tell).
+                    "auth_path": _AUTH_PATH_SUBSCRIPTION,
+                    "cost_basis": _COST_BASIS_NOTIONAL,
+                    "sdk_reported_cost_usd": sdk_reported_cost_usd,
                 },
                 component="narrator.sdk",
                 severity="info",
@@ -537,6 +605,13 @@ class AnthropicSdkClient:
                 )
             # An auth/credit/transport failure surfaces as is_error — raise, never
             # return a degraded-success result that masks the missing credential.
+            # Story 119-4 (AC1'): announce it to the GM panel before the raise.
+            self._emit_auth_unavailable(
+                reason="is_error",
+                model=last_model,
+                caller=caller,
+                detail=f"subtype={getattr(result_msg, 'subtype', None)!r}",
+            )
             raise AgentSdkAuthUnavailable(
                 "claude-agent-sdk query failed (is_error, "
                 f"subtype={getattr(result_msg, 'subtype', None)!r}) — subscription "
@@ -825,6 +900,47 @@ class AnthropicSdkClient:
             ceiling_usd=self.session_cost_ceiling_usd,
         )
 
+    def _emit_auth_unavailable(
+        self,
+        *,
+        reason: str,
+        model: str,
+        caller: str,
+        detail: str,
+    ) -> None:
+        """Story 119-4 (AC1'): announce a subscription-auth failure to the GM
+        panel BEFORE the loud raise.
+
+        Fires from the two transport auth-failure surfaces only: ``reason=
+        "is_error"`` (a terminal ``is_error`` ResultMessage) and ``reason=
+        "query_raised"`` (the transport boundary raised — an absent/expired login
+        or a transport fault). It does NOT fire for a tool-loop ``error_max_turns``
+        (a convergence failure, raised earlier) or for a non-auth error in our own
+        message processing (which propagates raw). An expired/absent OAuth login
+        must be VISIBLE to the cost panel (the lie detector), not just a stack
+        trace in the logs — so the operator can tell "the narrator fell over
+        because the login expired" from any other server error. There is no PAYG
+        fallback; this event always precedes a raise.
+        """
+        logger.error(
+            "narrator.auth_unavailable reason=%s model=%s caller=%s detail=%s",
+            reason,
+            model,
+            caller,
+            detail,
+        )
+        _watcher_publish_event(
+            _AUTH_UNAVAILABLE_EVENT,
+            {
+                "reason": reason,
+                "model": model,
+                "caller": caller,
+                "detail": detail,
+            },
+            component="narrator.sdk",
+            severity="error",
+        )
+
     def _emit_cost_running_total(
         self,
         *,
@@ -849,6 +965,9 @@ class AnthropicSdkClient:
                 "ceiling_usd": ceiling,
                 "fraction_used": fraction_used,
                 "model": model,
+                # Story 119-4 (AC4): the "X / $10" denominator is NOTIONAL
+                # (token×PAYG-rate) under subscription auth, not real dollars.
+                "cost_basis": _COST_BASIS_NOTIONAL,
             },
             component="narrator.sdk",
             severity="info",

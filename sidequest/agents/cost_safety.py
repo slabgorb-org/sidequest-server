@@ -307,6 +307,11 @@ class SessionCostLedger:
                 "cumulative_cost_usd": cumulative,
                 "ceiling_usd": ceiling_usd,
                 "model": model,
+                # Story 119-4 (AC4): under 119-3's subscription transport the
+                # cumulative is NOTIONAL (token×PAYG-rate), so this hard-kill is
+                # a notional-shape ceiling — it still FIRES, but the panel must
+                # not read the figure as a real bill.
+                "cost_basis": "notional",
             },
             component="narrator.sdk",
             severity="error",

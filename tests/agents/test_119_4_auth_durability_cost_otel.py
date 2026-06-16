@@ -63,6 +63,7 @@ from tests.agents.fakes.fake_agent_sdk import (
     converged_text_stream,
     error_result_stream,
     fake_usage,
+    max_turns_one_stream,
 )
 
 _SONNET = "claude-sonnet-4-6"
@@ -80,6 +81,27 @@ _AUTH_PATH_SUBSCRIPTION = "subscription"
 
 # AC1' — the auth-failure watcher event fired before the loud raise.
 _AUTH_FAILURE_EVENT = "narrator.auth_unavailable"
+
+# AC1' (Reviewer round 2) — the discriminating ``reason`` on the *query-raised*
+# branch's auth event, distinct from the ``is_error`` branch's ``"is_error"``.
+# A raised query() is how an absent/expired login surfaces (OQ-5); it maps to the
+# typed auth error AND fires this event so the GM panel can see it.
+_QUERY_RAISED_REASON = "query_raised"
+
+# AC1' (Reviewer round 2 — the [HIGH] mislabel fix). A raised query() is *probably*
+# an absent login but COULD be a transport fault — the headline must not assert
+# auth as the SOLE diagnosis. The operator-facing message must acknowledge a
+# transport cause too, so the lie detector never asserts a cause it cannot prove.
+_NONCOMMITTAL_CAUSE_SUBSTR = "transport"
+
+# AC1' (Reviewer round 2 — the [HIGH] mislabel fix). A non-auth error that arises
+# from OUR OWN loop-body processing (a parse bug, an unexpected message shape)
+# must NEVER be coerced into the auth signal. ``_is_agent_result_message`` is the
+# first per-message call inside the iteration; making it raise reproduces "a
+# future edit added a branch that did message.content[0] and got IndexError" —
+# the exact devil's-advocate failure mode — as an unambiguously INTERNAL fault
+# (not the transport failing).
+_INTERNAL_FAULT_SENTINEL = "internal-parse-bug-not-an-auth-failure"
 
 # AC4 — the notional cost-basis marker on every cost-bearing surface.
 _COST_BASIS_FIELD = "cost_basis"
@@ -253,15 +275,152 @@ async def test_is_error_still_raises_no_silent_success(
 ) -> None:
     """NEGATIVE GUARD (passes today, must keep passing): the ``is_error`` path
     raises, never returns a degraded-success ToolingResult. The AC1' event work
-    must not regress the fail-loud invariant 119-3 already lands."""
+    must not regress the fail-loud invariant 119-3 already lands.
+
+    Reviewer round 2 [MEDIUM]: tightened from the base ``AnthropicSdkClientError``
+    to the exact ``AgentSdkAuthUnavailable`` — the base catch passed even if the
+    WRONG subclass raised (``AnthropicSdkConfigError`` / ``AnthropicSdkLoopExceeded``),
+    so it could not tell the auth-failure raise from any other client error."""
     from sidequest.agents import anthropic_sdk_client
-    from sidequest.agents.anthropic_sdk_client import AnthropicSdkClientError
+    from sidequest.agents.anthropic_sdk_client import AgentSdkAuthUnavailable
 
     fake = FakeQuery(error_result_stream(subtype="error_auth"))
     monkeypatch.setattr(anthropic_sdk_client, "query", fake, raising=False)
 
-    with pytest.raises(AnthropicSdkClientError):
+    with pytest.raises(AgentSdkAuthUnavailable):
         await _drive(_new_client())
+
+
+async def test_internal_processing_error_is_not_mislabeled_as_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """[HIGH] The mislabel pin. An error that arises from our OWN loop-body
+    processing — NOT the transport failing — must never be coerced into the auth
+    signal. Today a broad ``except Exception`` catches any in-loop error and
+    re-raises it as ``AgentSdkAuthUnavailable("subscription login absent or
+    expired")`` with a ``narrator.auth_unavailable`` event: a future parse bug
+    (``message.content[0]`` on an empty list → ``IndexError``) would light the GM
+    panel red for 'login expired' while the real fault is in our parser. The
+    panel built to END 'winging it' must not assert a diagnosis it cannot
+    support (CLAUDE.md OTEL doctrine; lang-review #1 'catch specifically when the
+    type is known').
+
+    We reproduce an INTERNAL fault by making ``_is_agent_result_message`` (the
+    first per-message call inside the iteration) raise — a fault that is
+    unambiguously ours, not the ``query()`` transport's. The honest contract:
+    such an error propagates with its cause intact (raw or chained), is NOT a
+    subclass of ``AgentSdkAuthUnavailable``, and emits NO auth event."""
+    from sidequest.agents import anthropic_sdk_client
+    from sidequest.agents.anthropic_sdk_client import AgentSdkAuthUnavailable
+
+    events: list[tuple[str, dict[str, Any]]] = []
+    _patch_all_watchers(monkeypatch, events)
+
+    def _raise_internal(_msg: Any) -> bool:
+        raise ValueError(_INTERNAL_FAULT_SENTINEL)
+
+    # The transport itself is healthy — it yields a normal stream. The fault is
+    # entirely in OUR processing of the first yielded message.
+    fake = FakeQuery(converged_text_stream(text="The door creaks open."))
+    monkeypatch.setattr(anthropic_sdk_client, "query", fake, raising=False)
+    monkeypatch.setattr(anthropic_sdk_client, "_is_agent_result_message", _raise_internal)
+
+    with pytest.raises(Exception) as excinfo:  # noqa: PT011 - asserted precisely below
+        await _drive(_new_client())
+
+    raised = excinfo.value
+    # 1) Must NOT be coerced into the auth lie.
+    assert not isinstance(raised, AgentSdkAuthUnavailable), (
+        "an INTERNAL loop-body error (a parse bug, not an auth failure) must not "
+        f"be re-raised as AgentSdkAuthUnavailable; got {raised!r}"
+    )
+    # 2) The original cause must survive — raw, or chained via ``from exc``.
+    cause = getattr(raised, "__cause__", None)
+    assert isinstance(raised, ValueError) or isinstance(cause, ValueError), (
+        "the original ValueError must propagate (raw or cause-chained), never be "
+        f"masked behind an unrelated error type; got {raised!r} (cause={cause!r})"
+    )
+    assert _INTERNAL_FAULT_SENTINEL in str(raised) or _INTERNAL_FAULT_SENTINEL in str(cause), (
+        "the real error detail must survive to the operator, not be discarded"
+    )
+    # 3) The GM-panel lie detector must NOT show an auth event for a non-auth error.
+    assert not any(name == _AUTH_FAILURE_EVENT for name, _ in events), (
+        f"{_AUTH_FAILURE_EVENT!r} must NOT fire for an internal/non-auth error — "
+        "that false signal is the exact failure mode the panel exists to prevent; "
+        f"events seen: {[n for n, _ in events]!r}"
+    )
+
+
+async def test_raised_query_emits_auth_event_before_raise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """[MEDIUM] The query-raised branch's event was untested — only the
+    ``is_error`` branch (``test_auth_failure_emits_watcher_event_before_raise``)
+    was event-verified, so a future edit could drop the ``query_raised`` emit and
+    stay green. A *raised* ``query()`` (an absent/expired login, OQ-5) must emit
+    ``narrator.auth_unavailable`` (reason ``query_raised``) BEFORE the loud raise.
+
+    Round-2 honesty rider: a raised query is *probably* auth but could be
+    transport, so the raised ``AgentSdkAuthUnavailable`` headline must not assert
+    auth as the SOLE cause — it must acknowledge a transport fault too
+    (Reviewer [HIGH]: stop the top-level label asserting a diagnosis it can't
+    prove)."""
+    from sidequest.agents import anthropic_sdk_client
+    from sidequest.agents.anthropic_sdk_client import AgentSdkAuthUnavailable
+
+    events: list[tuple[str, dict[str, Any]]] = []
+    _patch_all_watchers(monkeypatch, events)
+
+    fake = RaisingFakeQuery(RuntimeError("subscription OAuth login expired"))
+    monkeypatch.setattr(anthropic_sdk_client, "query", fake, raising=False)
+
+    with pytest.raises(AgentSdkAuthUnavailable) as excinfo:
+        await _drive(_new_client())
+
+    # The query-raised branch must announce itself to the panel before raising.
+    auth_events = [f for n, f in events if n == _AUTH_FAILURE_EVENT]
+    assert auth_events, (
+        f"the query-raised auth-failure branch must emit {_AUTH_FAILURE_EVENT!r} "
+        f"before raising (GM-panel visibility); events: {[n for n, _ in events]!r}"
+    )
+    assert auth_events[-1].get("reason") == _QUERY_RAISED_REASON, (
+        "the event must identify the query-raised branch via "
+        f"reason={_QUERY_RAISED_REASON!r}; got {auth_events[-1].get('reason')!r}"
+    )
+    # The headline must not assert auth as the only diagnosis.
+    message = str(excinfo.value).lower()
+    assert _NONCOMMITTAL_CAUSE_SUBSTR in message, (
+        "a raised query() could be a transport fault, not only an expired login — "
+        "the failure message must acknowledge a transport cause so the panel "
+        f"stops asserting auth as the sole diagnosis; got {str(excinfo.value)!r}"
+    )
+
+
+async def test_max_turns_does_not_emit_spurious_auth_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """[LOW] NEGATIVE GUARD (passes today, must keep passing): the
+    tool-loop-exceeded path (``is_error`` + ``error_max_turns``) raises
+    ``AnthropicSdkLoopExceeded`` — a convergence failure, NOT an auth failure. It
+    must exit BEFORE the ``is_error`` auth branch and emit NO
+    ``narrator.auth_unavailable``; the panel must never cry 'login expired' when
+    the model simply failed to converge."""
+    from sidequest.agents import anthropic_sdk_client
+    from sidequest.agents.anthropic_sdk_client import AnthropicSdkLoopExceeded
+
+    events: list[tuple[str, dict[str, Any]]] = []
+    _patch_all_watchers(monkeypatch, events)
+
+    fake = FakeQuery(max_turns_one_stream())
+    monkeypatch.setattr(anthropic_sdk_client, "query", fake, raising=False)
+
+    with pytest.raises(AnthropicSdkLoopExceeded):
+        await _drive(_new_client())
+
+    assert not any(name == _AUTH_FAILURE_EVENT for name, _ in events), (
+        "error_max_turns is a convergence failure, not auth — it must not emit "
+        f"{_AUTH_FAILURE_EVENT!r}; events seen: {[n for n, _ in events]!r}"
+    )
 
 
 # ===========================================================================
@@ -411,8 +570,49 @@ async def test_usage_event_surfaces_sdk_reported_cost(
     )
 
 
-async def test_usage_surfaces_never_fabricate_subscription_budget(
+async def test_usage_surfaces_sdk_reported_cost_none_honestly(
     monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """[LOW] No Silent Fallbacks: when the transport reports NO spend
+    (``ResultMessage.total_cost_usd is None``), ``narrator.sdk.usage`` must
+    surface ``sdk_reported_cost_usd=None`` — the key PRESENT and explicitly
+    ``None`` — never silently defaulted to ``0.0``. A fabricated 'clean $0' would
+    hide that the transport gave us no signal at all (distinct from a real
+    measured zero), exactly the OQ-6 cache-split trap the story warns against."""
+    from sidequest.agents import anthropic_sdk_client
+
+    events: list[tuple[str, dict[str, Any]]] = []
+    _patch_all_watchers(monkeypatch, events)
+
+    stream = [
+        FakeAssistantMessage(content=[FakeTextBlock(text="A hush settles.")]),
+        FakeResultMessage(
+            result="A hush settles.",
+            is_error=False,
+            subtype="success",
+            num_turns=2,
+            usage=fake_usage(),
+            total_cost_usd=None,
+        ),
+    ]
+    fake = FakeQuery(stream)
+    monkeypatch.setattr(anthropic_sdk_client, "query", fake, raising=False)
+
+    await _drive(_new_client())
+
+    usage = _fields_for(events, "narrator.sdk.usage")
+    assert _SDK_REPORTED_COST_FIELD in usage, (
+        f"{_SDK_REPORTED_COST_FIELD!r} must be PRESENT on narrator.sdk.usage even "
+        "when None — dropping the key hides that the transport reported no spend"
+    )
+    assert usage[_SDK_REPORTED_COST_FIELD] is None, (
+        "a None transport cost must surface as None, never a fabricated 0.0; "
+        f"got {usage[_SDK_REPORTED_COST_FIELD]!r}"
+    )
+
+
+async def test_usage_surfaces_never_fabricate_subscription_budget(
+    monkeypatch: pytest.MonkeyPatch, otel_capture: Any
 ) -> None:
     """NEGATIVE GUARD (No Silent Fallbacks): the real subscription budget /
     rate-limit pool is NOT machine-readable from the agent-SDK subprocess. No
@@ -435,4 +635,16 @@ async def test_usage_surfaces_never_fabricate_subscription_budget(
                 f"{name!r} must not fabricate a measured subscription budget — "
                 f"found {forbidden!r}={fields[forbidden]!r}; the real pool is "
                 "unreadable from this transport (No Silent Fallbacks)"
+            )
+
+    # Reviewer round 2 [LOW]: the guard checked watcher events but not span
+    # attributes — a fabricated budget could still ride on the llm.request span.
+    spans = [s for s in otel_capture.get_finished_spans() if s.name == "llm.request"]
+    assert spans, "the llm.request span must fire on the inference path"
+    span_attrs = dict(spans[-1].attributes or {})
+    for forbidden in _FORBIDDEN_FABRICATED_BUDGET_KEYS:
+        for key in (forbidden, f"llm.{forbidden}"):
+            assert key not in span_attrs, (
+                f"the llm.request span must not fabricate a measured subscription "
+                f"budget — found {key!r}={span_attrs[key]!r} (No Silent Fallbacks)"
             )

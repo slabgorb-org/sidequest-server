@@ -11,7 +11,7 @@ from opentelemetry import trace
 from ._core import FLAT_ONLY_SPANS
 from .span import Span
 
-SPAN_ASSET_URL_RESOLVED = "server.asset_url.resolved"
+SPAN_ASSET_URL_RESOLVED = "foundation.asset_url.resolved"
 
 # Flat-only: the GM panel reads it via the agent_span_close fan-out; no
 # typed event extractor needed yet (forensics-only span).

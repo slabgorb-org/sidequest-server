@@ -25,7 +25,12 @@ tests/ is sufficient (no import-linter dependency), consistent with ADR-088's
 
 The scan uses ``ast.walk`` so lazy in-method imports — the exact dodge ADR-147
 calls out in native.py / without_number.py / projection/validator.py — are
-caught alongside top-level ones.
+caught alongside top-level ones. Relative imports (``from ...server import x``,
+``from .. import server``) are resolved to their absolute path against the
+importing module's package before matching, so they cannot evade the guard by
+switching spelling. Dynamic imports (``importlib.import_module``/``__import__``)
+are ``ast.Call`` nodes, not import statements, and are a documented
+out-of-scope limitation — see ``_server_import_targets``.
 
 GRANDFATHERED EXCEPTION (loud, pinned, and self-expiring — NOT a silent fallback)
 --------------------------------------------------------------------------------
@@ -98,30 +103,99 @@ def _iter_py_files(root: Path) -> list[Path]:
     return sorted(p for p in root.rglob("*.py") if "__pycache__" not in p.parts)
 
 
-def _server_import_targets(tree: ast.AST) -> set[str]:
+def _package_parts_for(path: Path) -> list[str]:
+    """Dotted parts of the *containing package* of a module file.
+
+    Needed to resolve relative imports to absolute paths. Examples:
+      sidequest/game/projection/validator.py -> ['sidequest','game','projection']
+      sidequest/game/__init__.py             -> ['sidequest','game']
+
+    The module is anchored at ``sidequest`` (``SIDEQUEST_PKG.parent`` is its
+    parent on disk), so the path relative to that parent, minus the module name,
+    is the package. ``__init__.py`` is the package itself; dropping the final
+    component handles both cases identically.
+    """
+    rel = path.relative_to(SIDEQUEST_PKG.parent).with_suffix("")
+    return list(rel.parts)[:-1]
+
+
+def _resolve_relative(level: int, module: str | None, package_parts: list[str]) -> str | None:
+    """Resolve a relative ``ImportFrom`` to its absolute dotted module path.
+
+    ``level`` is the number of leading dots; ``level==1`` is the current package,
+    each extra dot strips one trailing package component. Returns ``None`` for an
+    over-deep relative import (one Python itself would reject at import time).
+    """
+    drop = level - 1
+    if drop > len(package_parts):
+        return None
+    base = package_parts[: len(package_parts) - drop]
+    suffix = module.split(".") if module else []
+    return ".".join(base + suffix)
+
+
+def _server_import_targets(tree: ast.AST, package_parts: list[str]) -> set[str]:
     """Every ``sidequest.server`` dotted path this AST imports.
 
     ``ast.walk`` recurses into function/method bodies, so lazy in-method imports
-    are caught alongside module-level ones. Both spellings are detected:
-    ``from sidequest.server import x`` (module ``sidequest.server`` + name
-    ``sidequest.server.x``) and ``import sidequest.server.x`` (alias name).
+    are caught alongside module-level ones. All static import spellings resolve
+    to an absolute path before matching:
+
+      * ``from sidequest.server import x``       -> sidequest.server[.x]
+      * ``import sidequest.server.x [as s]``     -> sidequest.server.x
+      * ``from sidequest import server``         -> sidequest.server
+      * ``from ...server import x`` (relative)   -> resolved via ``package_parts``
+      * ``from .. import server``   (relative)   -> resolved via ``package_parts``
+
+    ``package_parts`` is the importing module's containing package, used to turn
+    relative imports into absolute paths. Relative imports that resolve to a
+    *sibling* (e.g. ``from ..server`` inside ``game/projection`` -> the
+    nonexistent ``sidequest.game.server``) correctly do NOT match.
+
+    KNOWN LIMITATION: dynamic imports — ``importlib.import_module("sidequest.server")``
+    and ``__import__("sidequest.server")`` — are ``ast.Call`` nodes, not import
+    statements, and are out of scope for this static scan. Domain code reaching
+    server via runtime string imports is not prevented here (it would also defeat
+    the codebase's absolute-import convention and stand out in review).
     """
     targets: set[str] = set()
 
-    def _record(dotted: str) -> None:
-        if dotted == "sidequest.server" or dotted.startswith("sidequest.server."):
+    def _record(dotted: str | None) -> None:
+        if dotted and (dotted == "sidequest.server" or dotted.startswith("sidequest.server.")):
             targets.add(dotted)
 
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
-            mod = node.module or ""
+            if node.level:  # relative import — resolve against the file's package
+                mod = _resolve_relative(node.level, node.module, package_parts)
+            else:
+                mod = node.module
             _record(mod)
             for alias in node.names:
-                _record(f"{mod}.{alias.name}" if mod else alias.name)
+                _record(f"{mod}.{alias.name}" if mod else None)
         elif isinstance(node, ast.Import):
             for alias in node.names:
                 _record(alias.name)
     return targets
+
+
+def _parse_module(path: Path) -> ast.AST:
+    """Read + parse a module, failing loud (not crashing) on bad input.
+
+    A malformed or non-UTF-8 ``.py`` file under a guarded tier must produce a
+    clear, actionable failure naming the file — not an opaque ``SyntaxError`` /
+    ``UnicodeDecodeError`` traceback unrelated to the layering law (No Silent
+    Fallbacks: fail loud *and* legibly).
+    """
+    rel = path.relative_to(SIDEQUEST_PKG).as_posix()
+    try:
+        source = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        pytest.fail(f"import-direction guard: {rel} is not valid UTF-8 ({exc}).")
+    try:
+        return ast.parse(source)
+    except SyntaxError as exc:
+        pytest.fail(f"import-direction guard: {rel} failed to parse ({exc}).")
 
 
 def _scan_tier(tier: str) -> dict[str, set[str]]:
@@ -131,7 +205,7 @@ def _scan_tier(tier: str) -> dict[str, set[str]]:
         return {}
     found: dict[str, set[str]] = {}
     for path in _iter_py_files(tier_dir):
-        targets = _server_import_targets(ast.parse(path.read_text(encoding="utf-8")))
+        targets = _server_import_targets(_parse_module(path), _package_parts_for(path))
         if targets:
             found[path.relative_to(SIDEQUEST_PKG).as_posix()] = targets
     return found
@@ -197,7 +271,7 @@ def test_grandfathered_exceptions_are_still_live(rel_path: str) -> None:
         f"Grandfathered file {rel_path} no longer exists — delete its entry "
         "from GRANDFATHERED (the edge it covered is gone)."
     )
-    actual = _server_import_targets(ast.parse(path.read_text(encoding="utf-8")))
+    actual = _server_import_targets(_parse_module(path), _package_parts_for(path))
     expected = GRANDFATHERED[rel_path]
     stale = sorted(expected - actual)
     assert not stale, (
@@ -205,3 +279,52 @@ def test_grandfathered_exceptions_are_still_live(rel_path: str) -> None:
         "ADR-147 grandfather exception is stale. DELETE the now-unnecessary "
         "entry from GRANDFATHERED so the guard tightens automatically."
     )
+
+
+# ---------------------------------------------------------------------------
+# Resolver unit tests: relative-import spellings must resolve correctly.
+# (Pure-logic tests on synthetic ASTs — we cannot add a real relative
+# import-to-server file without it being an actual layering violation.)
+# ---------------------------------------------------------------------------
+
+
+def test_relative_import_reaching_server_is_detected() -> None:
+    # A module at sidequest/game/projection/foo.py: `from ...server import x`
+    # resolves to sidequest.server and MUST be caught.
+    tree = ast.parse("from ...server import session_handler\n")
+    pkg = ["sidequest", "game", "projection"]
+    targets = _server_import_targets(tree, pkg)
+    assert targets == {"sidequest.server", "sidequest.server.session_handler"}
+
+
+def test_relative_bare_import_reaching_server_is_detected() -> None:
+    # `from .. import server` in sidequest/game/foo.py -> sidequest.server.
+    tree = ast.parse("from .. import server\n")
+    pkg = ["sidequest", "game"]
+    targets = _server_import_targets(tree, pkg)
+    assert targets == {"sidequest.server"}
+
+
+def test_relative_import_to_sibling_is_not_a_false_positive() -> None:
+    # `from ..server import x` in sidequest/game/projection/foo.py resolves to
+    # the sibling sidequest.game.server, NOT sidequest.server — must NOT match.
+    tree = ast.parse("from ..server import x\n")
+    pkg = ["sidequest", "game", "projection"]
+    assert _server_import_targets(tree, pkg) == set()
+
+
+def test_overdeep_relative_import_does_not_crash() -> None:
+    # More dots than package depth: resolve to None (Python would reject it too);
+    # the scan must tolerate it without raising.
+    tree = ast.parse("from ....server import x\n")
+    pkg = ["sidequest", "game"]
+    assert _server_import_targets(tree, pkg) == set()
+
+
+def test_package_parts_for_handles_init_and_module() -> None:
+    assert _package_parts_for(SIDEQUEST_PKG / "game" / "projection" / "validator.py") == [
+        "sidequest",
+        "game",
+        "projection",
+    ]
+    assert _package_parts_for(SIDEQUEST_PKG / "game" / "__init__.py") == ["sidequest", "game"]

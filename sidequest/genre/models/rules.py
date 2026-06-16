@@ -1043,6 +1043,33 @@ class FateConfig(BaseModel):
     default_high_concept: str = ""
     default_trouble: str = ""
     stunts: list[FateStuntDef] = Field(default_factory=list)
+    # Interactive chargen (story 121-7 / F4a2). The skill-pyramid SHAPE is
+    # pack-tunable (Crunch in the Genre): ``chargen_pyramid[i]`` skills sit at
+    # ladder rating ``chargen_apex_rating - i`` (apex first). SRD default is
+    # [1,2,3,4] @ apex 4 → 1 Great / 2 Good / 3 Fair / 4 Average. ``free_aspect_count``
+    # is the free aspects beyond High-Concept + Trouble (→ 5 total at default 3).
+    # ``free_stunts`` is the stunts free before refresh is debited (shared with the
+    # gear model: each extra stunt debits 1 refresh, floored at 1).
+    chargen_pyramid: list[int] = Field(default_factory=lambda: [1, 2, 3, 4])
+    chargen_apex_rating: int = 4
+    free_aspect_count: int = 3
+    free_stunts: int = 3
+
+    @field_validator("chargen_pyramid")
+    @classmethod
+    def _chargen_pyramid_apex_narrowest(cls, v: list[int]) -> list[int]:
+        """A legal Fate pyramid never widens toward the apex: each rung holds at
+        most as many skills as the rung below it (``v[i] <= v[i+1]``). [2,1] and
+        [4,3,2,1] are illegal. Fail loud — No Silent Fallbacks."""
+        if any(count < 1 for count in v):
+            raise ValueError(f"chargen_pyramid rung counts must be >= 1, got {v}")
+        for i in range(len(v) - 1):
+            if v[i] > v[i + 1]:
+                raise ValueError(
+                    f"chargen_pyramid must be apex-narrowest (v[i] <= v[i+1]); {v} widens "
+                    f"at rung {i} ({v[i]} > {v[i + 1]})"
+                )
+        return v
 
 
 class RulesConfig(BaseModel):

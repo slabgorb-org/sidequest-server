@@ -1039,6 +1039,10 @@ class CharacterBuilder:
         # ADR-143: ruleset module bound once at construction; build() delegates
         # chargen resource seeding to seed_chargen_resources.
         self._ruleset = get_ruleset_module(rules.ruleset)
+        # ADR-144 F4a2: interactive Fate chargen choices, recorded by the Fate
+        # scene walk via record_fate_chargen(). None => the Menu path (the F4a
+        # default seed); set => build() attaches the validated interactive sheet.
+        self._fate_choices: object | None = None
 
         # Eager roll at construction — scan scenes for the first
         # `stat_generation: roll_3d6_strict` directive so stat values
@@ -1694,6 +1698,14 @@ class CharacterBuilder:
                 if eff is not None and eff.identity_capture is not None:
                     return self._render_story_message(scene, scene_index, player_id)
 
+                # Interactive Fate chargen step (ADR-144 F4a2): a fate-step scene
+                # renders its fate_* input_type so the surfaces never co-render with
+                # the d20 roll_the_bones/stat_arrange ones.
+                if eff is not None and eff.fate_chargen_step is not None:
+                    return self._render_fate_step_message(
+                        scene, scene_index, player_id, eff.fate_chargen_step
+                    )
+
                 choices = [
                     CreationChoice(
                         label=NonBlankString(c.label),
@@ -1760,6 +1772,39 @@ class CharacterBuilder:
 
             case _:  # pragma: no cover — exhaustive
                 raise AssertionError(f"unknown phase: {self._phase!r}")
+
+    def _render_fate_step_message(
+        self,
+        scene: CharCreationScene,
+        scene_index: int,
+        player_id: str,
+        step: str,
+    ) -> CharacterCreationMessage:
+        """Render an interactive Fate chargen step (ADR-144 F4a2). The step name
+        maps to the ``input_type`` the UI renders. The rich per-step payload fields
+        (aspect slots / available skills / stunt catalog with the live legality
+        mirror, design §7) land with their UI consumer in story 121-8; this story
+        ships the input_type surface so the paired-negative gate holds. Fail loud on
+        an unknown step — No Silent Fallbacks."""
+        input_type = {
+            "aspects": "fate_aspects",
+            "pyramid": "fate_skill_pyramid",
+            "stunts": "fate_stunts",
+        }.get(step)
+        if input_type is None:
+            raise ValueError(
+                f"unknown fate_chargen_step {step!r} on scene {scene.id!r} "
+                "(expected 'aspects', 'pyramid', or 'stunts')"
+            )
+        payload = CharacterCreationPayload(
+            phase="scene",
+            scene_index=scene_index,
+            total_scenes=len(self._scenes),
+            prompt=self.interpolate_scene_narration(scene.narration),
+            input_type=input_type,
+            loading_text=scene.loading_text,
+        )
+        return CharacterCreationMessage(payload=payload, player_id=player_id)
 
     def _render_bones_message(
         self,
@@ -2411,6 +2456,18 @@ class CharacterBuilder:
 
     # --- Finalizer ---
 
+    def record_fate_chargen(self, choices: object) -> None:
+        """Record the player's interactive Fate chargen choices (ADR-144 F4a2).
+
+        The Fate scene walk (aspects -> pyramid -> stunts) accumulates the
+        explicit choices here; ``build()`` then routes them through
+        ``FateRulesetModule.apply_fate_chargen`` to attach a VALIDATED FateSheet
+        instead of the F4a default seed. ``choices`` is a
+        ``sidequest.game.ruleset.fate_chargen.FateChargenChoices`` (typed as
+        ``object`` to keep the builder ruleset-agnostic — only a fate pack records
+        them, and only ``apply_fate_chargen`` consumes them)."""
+        self._fate_choices = choices
+
     def build(self, name: str) -> Character:
         """Build the final Character from accumulated choices.
 
@@ -2445,8 +2502,23 @@ class CharacterBuilder:
 
         acc = self.accumulated()
 
-        race_str = acc.race_hint or self._default_race or "Human"
-        class_str = acc.class_hint or self._default_class or "Fighter"
+        if self._rules.ruleset == "fate":
+            # ADR-144 F4a2 §6: a Fate PC carries NO d20 race/class. The High
+            # Concept IS the identity, surfaced as a display-only label — never the
+            # "Human"/"Fighter" d20 defaults. The non-blank Character validators
+            # forbid empty, so HC-as-label is the documented fallback.
+            _fate_hc = ""
+            if self._fate_choices is not None:
+                _fate_hc = getattr(self._fate_choices, "high_concept", "") or ""
+            if not _fate_hc:
+                _fate_cfg = self._rules.ruleset_config()
+                _fate_hc = getattr(_fate_cfg, "default_high_concept", "") or ""
+            _fate_label = _fate_hc or "Adventurer"
+            race_str = acc.race_hint or _fate_label
+            class_str = acc.class_hint or _fate_label
+        else:
+            race_str = acc.race_hint or self._default_race or "Human"
+            class_str = acc.class_hint or self._default_class or "Fighter"
 
         stats = self.generate_stats(acc)
         span = trace.get_current_span()
@@ -2871,6 +2943,21 @@ class CharacterBuilder:
         # ADR-144 F4a: a ruleset: fate pack seeds a FateSheet here; every WN/native
         # module returns fate_sheet=None.
         fate_sheet = _res.fate_sheet
+        # ADR-144 F4a2: if the player walked the interactive Fate chargen flow, the
+        # recorded choices REPLACE the default seed with a player-authored,
+        # server-validated sheet (apply_fate_chargen fails loud on an illegal one).
+        if self._fate_choices is not None:
+            from sidequest.game.ruleset.fate import FateRulesetModule
+
+            if not isinstance(self._ruleset, FateRulesetModule):
+                raise TypeError(
+                    "interactive Fate chargen choices were recorded, but the bound "
+                    f"ruleset is {type(self._ruleset).__name__}, not FateRulesetModule "
+                    "(No Silent Fallbacks)"
+                )
+            fate_sheet = self._ruleset.apply_fate_chargen(
+                rules=self._rules, choices=self._fate_choices
+            ).fate_sheet
 
         # Chargen contribution application (ADR-143 Task 10): background skills
         # + foci skill/ability grants, delegated to the bound RulesetModule.

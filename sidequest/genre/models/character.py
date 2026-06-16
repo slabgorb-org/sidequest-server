@@ -126,6 +126,11 @@ class MechanicalEffects(BaseModel):
     pronoun_hint: str | None = None
     stat_generation: str | None = None
     equipment_generation: str | None = None
+    # Interactive Fate chargen step (ADR-144 F4a2): a scene declaring one of
+    # "aspects" / "pyramid" / "stunts" renders the matching Fate input_type
+    # ("fate_aspects" / "fate_skill_pyramid" / "fate_stunts"). Same FILTER doctrine
+    # as stat_generation — a non-fate pack authors none, so no fate surface fires.
+    fate_chargen_step: str | None = None
     jungian_hint: str | None = None
     rpg_role_hint: str | None = None
     # spaghetti_western: chargen-choice-applied reputation tag

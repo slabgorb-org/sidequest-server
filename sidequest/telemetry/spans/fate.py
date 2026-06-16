@@ -384,6 +384,70 @@ SPAN_ROUTES["fate.chargen.seeded"] = SpanRoute(
         "refresh": (span.attributes or {}).get("refresh", 0),
     },
 )
+# --- F4a2: interactive chargen spans (GM panel = lie detector) ----------------
+# The player walked the interactive Fate chargen flow (archetype -> aspects ->
+# pyramid -> stunts) and the server validated it to a legal sheet. One span per
+# step + a validated/completed pair so the GM panel can confirm the sheet was
+# engine-built from explicit choices, not narrator-improvised. Literal keys (no
+# SPAN_* constant) — the routing-completeness lint only inspects SPAN_* constants.
+SPAN_ROUTES["fate.chargen.archetype_selected"] = SpanRoute(
+    event_type="state_transition",
+    component="fate",
+    extract=lambda span: {
+        "field": "chargen_archetype_selected",
+        "archetype": (span.attributes or {}).get("archetype", ""),
+    },
+)
+SPAN_ROUTES["fate.chargen.aspects_authored"] = SpanRoute(
+    event_type="state_transition",
+    component="fate",
+    extract=lambda span: {
+        "field": "chargen_aspects_authored",
+        "high_concept_present": bool((span.attributes or {}).get("high_concept_present", False)),
+        "trouble_present": bool((span.attributes or {}).get("trouble_present", False)),
+        "free_count": (span.attributes or {}).get("free_count", 0),
+    },
+)
+SPAN_ROUTES["fate.chargen.pyramid_allocated"] = SpanRoute(
+    event_type="state_transition",
+    component="fate",
+    extract=lambda span: {
+        "field": "chargen_pyramid_allocated",
+        "rung_counts": (span.attributes or {}).get("rung_counts", ""),
+        "skills_placed": (span.attributes or {}).get("skills_placed", 0),
+        "legal": bool((span.attributes or {}).get("legal", False)),
+    },
+)
+SPAN_ROUTES["fate.chargen.stunts_selected"] = SpanRoute(
+    event_type="state_transition",
+    component="fate",
+    extract=lambda span: {
+        "field": "chargen_stunts_selected",
+        "count": (span.attributes or {}).get("count", 0),
+        "refresh_before": (span.attributes or {}).get("refresh_before", 0),
+        "refresh_after": (span.attributes or {}).get("refresh_after", 0),
+    },
+)
+SPAN_ROUTES["fate.chargen.validated"] = SpanRoute(
+    event_type="state_transition",
+    component="fate",
+    extract=lambda span: {
+        "field": "chargen_validated",
+        "legal": bool((span.attributes or {}).get("legal", False)),
+        "violations": (span.attributes or {}).get("violations", ""),
+    },
+)
+SPAN_ROUTES["fate.chargen.completed"] = SpanRoute(
+    event_type="state_transition",
+    component="fate",
+    extract=lambda span: {
+        "field": "chargen_completed",
+        "aspect_count": (span.attributes or {}).get("aspect_count", 0),
+        "skill_count": (span.attributes or {}).get("skill_count", 0),
+        "stunt_count": (span.attributes or {}).get("stunt_count", 0),
+        "refresh": (span.attributes or {}).get("refresh", 0),
+    },
+)
 
 
 def fate_exchange_committed_span(
@@ -575,11 +639,136 @@ def fate_chargen_seeded_span(
         pass
 
 
+def fate_chargen_archetype_selected_span(
+    *, archetype: str, _tracer: trace.Tracer | None = None, **attrs: Any
+) -> None:
+    """Emit ``fate.chargen.archetype_selected`` — the player picked a chargen
+    archetype template (F4a2). The seed-then-edit starting point."""
+    attributes: dict[str, Any] = {
+        "field": "chargen_archetype_selected",
+        "archetype": archetype,
+        **attrs,
+    }
+    with Span.open("fate.chargen.archetype_selected", attributes, tracer_override=_tracer):
+        pass
+
+
+def fate_chargen_aspects_authored_span(
+    *,
+    high_concept_present: bool,
+    trouble_present: bool,
+    free_count: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``fate.chargen.aspects_authored`` — the player authored/confirmed their
+    aspects (High Concept + Trouble + N free) at chargen (F4a2)."""
+    attributes: dict[str, Any] = {
+        "field": "chargen_aspects_authored",
+        "high_concept_present": high_concept_present,
+        "trouble_present": trouble_present,
+        "free_count": free_count,
+        **attrs,
+    }
+    with Span.open("fate.chargen.aspects_authored", attributes, tracer_override=_tracer):
+        pass
+
+
+def fate_chargen_pyramid_allocated_span(
+    *,
+    rung_counts: str,
+    skills_placed: int,
+    legal: bool,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``fate.chargen.pyramid_allocated`` — the player allocated the skill
+    pyramid (F4a2). ``rung_counts`` is the rating->count census; ``legal`` is the
+    validator verdict for the allocation."""
+    attributes: dict[str, Any] = {
+        "field": "chargen_pyramid_allocated",
+        "rung_counts": rung_counts,
+        "skills_placed": skills_placed,
+        "legal": legal,
+        **attrs,
+    }
+    with Span.open("fate.chargen.pyramid_allocated", attributes, tracer_override=_tracer):
+        pass
+
+
+def fate_chargen_stunts_selected_span(
+    *,
+    count: int,
+    refresh_before: int,
+    refresh_after: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``fate.chargen.stunts_selected`` — the player picked stunts at chargen
+    (F4a2). The refresh delta is the economy cost (each stunt over ``free_stunts``
+    debits 1 refresh, floored at 1)."""
+    attributes: dict[str, Any] = {
+        "field": "chargen_stunts_selected",
+        "count": count,
+        "refresh_before": refresh_before,
+        "refresh_after": refresh_after,
+        **attrs,
+    }
+    with Span.open("fate.chargen.stunts_selected", attributes, tracer_override=_tracer):
+        pass
+
+
+def fate_chargen_validated_span(
+    *, legal: bool, violations: str, _tracer: trace.Tracer | None = None, **attrs: Any
+) -> None:
+    """Emit ``fate.chargen.validated`` — the server ran ``validate_fate_sheet`` on
+    the candidate sheet (F4a2). Fires on BOTH success and failure so the GM panel
+    sees a rejected sheet's violations, not only accepted ones."""
+    attributes: dict[str, Any] = {
+        "field": "chargen_validated",
+        "legal": legal,
+        "violations": violations,
+        **attrs,
+    }
+    with Span.open("fate.chargen.validated", attributes, tracer_override=_tracer):
+        pass
+
+
+def fate_chargen_completed_span(
+    *,
+    aspect_count: int,
+    skill_count: int,
+    stunt_count: int,
+    refresh: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``fate.chargen.completed`` — a legal interactive Fate sheet was built
+    and attached (F4a2). The GM-panel census of the finished sheet. Fires only on a
+    legal sheet (an illegal one raises after ``fate.chargen.validated``)."""
+    attributes: dict[str, Any] = {
+        "field": "chargen_completed",
+        "aspect_count": aspect_count,
+        "skill_count": skill_count,
+        "stunt_count": stunt_count,
+        "refresh": refresh,
+        **attrs,
+    }
+    with Span.open("fate.chargen.completed", attributes, tracer_override=_tracer):
+        pass
+
+
 __all__ = [
     "SPAN_FATE_PROJECTION_EMITTED",
     "fate_action_classified_span",
     "fate_action_resolved_span",
+    "fate_chargen_archetype_selected_span",
+    "fate_chargen_aspects_authored_span",
+    "fate_chargen_completed_span",
+    "fate_chargen_pyramid_allocated_span",
     "fate_chargen_seeded_span",
+    "fate_chargen_stunts_selected_span",
+    "fate_chargen_validated_span",
     "fate_aspect_created_span",
     "fate_aspect_invoked_span",
     "fate_compel_accepted_span",

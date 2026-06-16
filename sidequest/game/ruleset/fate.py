@@ -20,7 +20,13 @@ from sidequest.game.ruleset.fate_resolution import FateOutcome, Opposition, reso
 from sidequest.telemetry.spans.fate import (
     fate_action_resolved_span,
     fate_aspect_invoked_span,
+    fate_chargen_archetype_selected_span,
+    fate_chargen_aspects_authored_span,
+    fate_chargen_completed_span,
+    fate_chargen_pyramid_allocated_span,
     fate_chargen_seeded_span,
+    fate_chargen_stunts_selected_span,
+    fate_chargen_validated_span,
     fate_compel_accepted_span,
     fate_compel_offered_span,
     fate_consequence_taken_span,
@@ -93,6 +99,71 @@ class FateRulesetModule(RulesetModule):
         fate_chargen_seeded_span(
             skill_count=len(sheet.skills),
             aspect_count=len(sheet.aspects),
+            refresh=sheet.refresh,
+            _tracer=_tracer,
+        )
+        return ChargenResources(fate_sheet=sheet)
+
+    def apply_fate_chargen(self, *, rules, choices, _tracer=None):
+        """Build a VALIDATED FateSheet from explicit interactive choices (ADR-144
+        F4a2). The Guided/Freeform analogue of ``seed_chargen_resources``: the
+        player's archetype/aspects/pyramid/stunts become a sheet, the single
+        ``validate_fate_sheet`` authority checks it, and an illegal sheet fails loud
+        (No Silent Fallbacks) — never silently corrected. Emits the ``fate.chargen.*``
+        lie-detector spans so the GM panel can confirm the sheet was engine-built
+        from explicit choices, not narrator-improvised. Returns ``ChargenResources``
+        carrying the validated ``fate_sheet``."""
+        from sidequest.game.chargen_contribution import ChargenResources
+        from sidequest.game.ruleset.fate_chargen import (
+            FateChargenError,
+            build_fate_sheet,
+            validate_fate_sheet,
+        )
+        from sidequest.genre.models.rules import FateConfig
+
+        cfg = rules.ruleset_config()
+        if not isinstance(cfg, FateConfig):
+            raise FateEconomyError(
+                "FateRulesetModule.apply_fate_chargen requires a FateConfig "
+                f"(rules.ruleset_config() returned {type(cfg).__name__}); a 'fate' pack "
+                "must author rules.fate (ADR-144)"
+            )
+
+        sheet = build_fate_sheet(choices, cfg)
+        violations = validate_fate_sheet(sheet, cfg)
+        legal = not violations
+
+        if choices.archetype:
+            fate_chargen_archetype_selected_span(archetype=choices.archetype, _tracer=_tracer)
+        fate_chargen_aspects_authored_span(
+            high_concept_present=bool(choices.high_concept.strip()),
+            trouble_present=bool(choices.trouble.strip()),
+            free_count=len(choices.free_aspects),
+            _tracer=_tracer,
+        )
+        placed = {name: r for name, r in sheet.skills.items() if r > 0}
+        counts: dict[int, int] = {}
+        for rating in placed.values():
+            counts[rating] = counts.get(rating, 0) + 1
+        rung_counts = ",".join(f"{r}:{counts[r]}" for r in sorted(counts, reverse=True))
+        fate_chargen_pyramid_allocated_span(
+            rung_counts=rung_counts, skills_placed=len(placed), legal=legal, _tracer=_tracer
+        )
+        fate_chargen_stunts_selected_span(
+            count=len(sheet.stunts),
+            refresh_before=cfg.refresh,
+            refresh_after=sheet.refresh,
+            _tracer=_tracer,
+        )
+        fate_chargen_validated_span(legal=legal, violations="; ".join(violations), _tracer=_tracer)
+        if not legal:
+            raise FateChargenError(
+                "interactive Fate chargen produced an illegal sheet: " + "; ".join(violations)
+            )
+        fate_chargen_completed_span(
+            aspect_count=len(sheet.aspects),
+            skill_count=len(sheet.skills),
+            stunt_count=len(sheet.stunts),
             refresh=sheet.refresh,
             _tracer=_tracer,
         )

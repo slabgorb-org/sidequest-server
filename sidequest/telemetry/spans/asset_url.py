@@ -1,4 +1,4 @@
-"""Asset-URL resolution span — fires every time the server emits a media URL."""
+"""Asset-URL resolution span — fires every time a media URL is resolved (foundation tier)."""
 
 from __future__ import annotations
 

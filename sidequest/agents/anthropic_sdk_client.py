@@ -90,6 +90,18 @@ _ABSOLUTE_INPUT_TOKENS_FLOOR = cost_safety._ABSOLUTE_INPUT_TOKENS_FLOOR
 _SESSION_COST_CEILING_USD = cost_safety._SESSION_COST_CEILING_USD
 
 
+# Story 119-4 — honest OTEL labels for the subscription transport.
+# ``auth_path='subscription'`` affirms every inference drew the free Max
+# subscription pool (AC2 — the GM/cost-panel lie detector). ``cost_basis=
+# 'notional'`` marks every cost figure as token×PAYG-rate NOTIONAL, not real
+# billed dollars (AC4 — the bill is $0 under subscription auth, so the $10
+# ceiling is a notional-shape signal). The auth-failure event makes an
+# expired/absent login VISIBLE to the panel before the loud raise (AC1').
+_AUTH_PATH_SUBSCRIPTION = "subscription"
+_COST_BASIS_NOTIONAL = "notional"
+_AUTH_UNAVAILABLE_EVENT = "narrator.auth_unavailable"
+
+
 class AnthropicSdkClientError(LlmClientError):
     """Base error from AnthropicSdkClient."""
 
@@ -375,9 +387,7 @@ class AnthropicSdkClient:
         )
 
         all_tool_uses: list[ToolUseBlock] = []
-        mcp_servers, allowed_tools = self._build_narration_mcp(
-            tools, tool_dispatch, all_tool_uses
-        )
+        mcp_servers, allowed_tools = self._build_narration_mcp(tools, tool_dispatch, all_tool_uses)
         options = build_agent_sdk_options(
             model=model,
             system_prompt=system_prompt,
@@ -390,42 +400,60 @@ class AnthropicSdkClient:
         last_model = model
         result_msg: Any = None
         with llm_request_span(model=model) as span:
-            async for message in query(prompt=prompt, options=options):
-                if _is_agent_result_message(message):
-                    result_msg = message
-                    continue
-                model_id = getattr(message, "model", None)
-                if model_id:
-                    last_model = model_id
-                content = getattr(message, "content", None)
-                if isinstance(content, list):
-                    text_chunks = [
-                        b.text for b in content if getattr(b, "type", None) == "text"
-                    ]
-                    # Playtest 2026-06-07 (five_points doubled-narration): keep
-                    # only the LAST text block of an assistant message; earlier
-                    # blocks are drafts. Emit a WARNING span so the drop is
-                    # audited, never silent (house OTEL rule, spec §7.3).
-                    if len(text_chunks) > 1:
-                        discarded_chars = sum(len(c) for c in text_chunks[:-1])
-                        logger.warning(
-                            "narrator.multi_text_block_discarded count=%d "
-                            "discarded_chars=%d kept_chars=%d caller=%s",
-                            len(text_chunks) - 1,
-                            discarded_chars,
-                            len(text_chunks[-1]),
-                            caller,
-                        )
-                        with narrator_multi_text_block_discarded_span(
-                            discarded_count=len(text_chunks) - 1,
-                            discarded_chars=discarded_chars,
-                            kept_chars=len(text_chunks[-1]),
-                            iteration=1,
-                            caller=caller,
-                        ):
-                            pass
-                    if text_chunks:
-                        last_text = text_chunks[-1]
+            try:
+                async for message in query(prompt=prompt, options=options):
+                    if _is_agent_result_message(message):
+                        result_msg = message
+                        continue
+                    model_id = getattr(message, "model", None)
+                    if model_id:
+                        last_model = model_id
+                    content = getattr(message, "content", None)
+                    if isinstance(content, list):
+                        text_chunks = [
+                            b.text for b in content if getattr(b, "type", None) == "text"
+                        ]
+                        # Playtest 2026-06-07 (five_points doubled-narration): keep
+                        # only the LAST text block of an assistant message; earlier
+                        # blocks are drafts. Emit a WARNING span so the drop is
+                        # audited, never silent (house OTEL rule, spec §7.3).
+                        if len(text_chunks) > 1:
+                            discarded_chars = sum(len(c) for c in text_chunks[:-1])
+                            logger.warning(
+                                "narrator.multi_text_block_discarded count=%d "
+                                "discarded_chars=%d kept_chars=%d caller=%s",
+                                len(text_chunks) - 1,
+                                discarded_chars,
+                                len(text_chunks[-1]),
+                                caller,
+                            )
+                            with narrator_multi_text_block_discarded_span(
+                                discarded_count=len(text_chunks) - 1,
+                                discarded_chars=discarded_chars,
+                                kept_chars=len(text_chunks[-1]),
+                                iteration=1,
+                                caller=caller,
+                            ):
+                                pass
+                        if text_chunks:
+                            last_text = text_chunks[-1]
+            except AgentSdkAuthUnavailable:
+                # Already the typed, GM-panel-visible auth error — propagate as-is.
+                raise
+            except Exception as exc:
+                # Story 119-4 (AC1'): a RAISED query() exception is how an
+                # absent/expired subscription login surfaces (OQ-5). Map it to the
+                # typed auth error and emit the GM-panel event BEFORE the loud
+                # raise — never let a raw transport error mask an auth failure
+                # (No Silent Fallbacks).
+                self._emit_auth_unavailable(
+                    reason="query_raised", model=model, caller=caller, detail=str(exc)
+                )
+                raise AgentSdkAuthUnavailable(
+                    "claude-agent-sdk query raised "
+                    f"({type(exc).__name__}: {exc}) — subscription login absent or "
+                    "expired; no PAYG fallback (No Silent Fallbacks)."
+                ) from exc
 
             if result_msg is None:
                 raise AnthropicSdkClientError(
@@ -447,6 +475,12 @@ class AnthropicSdkClient:
                 cached_input_write_tokens=cache_write,
                 model=last_model,
             )
+            # Story 119-4 (AC3'): the agent SDK's own per-call spend view. The
+            # claude-agent-sdk subprocess does NOT expose the anthropic-ratelimit-*
+            # headers (the raw-SDK signal is unreachable here), so ResultMessage.
+            # total_cost_usd is the only transport-reported figure — surface it
+            # distinct from our notional cost so a non-zero value flags a PAYG leak.
+            sdk_reported_cost_usd = getattr(result_msg, "total_cost_usd", None)
             span.set_attributes(
                 {
                     "llm.caller": caller,
@@ -455,6 +489,9 @@ class AnthropicSdkClient:
                     "llm.cached_input_read_tokens": cache_read,
                     "llm.cached_input_write_tokens": cache_write,
                     "llm.cost_usd": cost,
+                    # Story 119-4 (AC2): affirm this inference drew the free
+                    # subscription pool — the GM/cost-panel lie detector.
+                    "llm.auth_path": _AUTH_PATH_SUBSCRIPTION,
                 }
             )
             subtype = getattr(result_msg, "subtype", None)
@@ -480,6 +517,12 @@ class AnthropicSdkClient:
                     "model": last_model,
                     "cache_read_tokens": cache_read,
                     "cache_write_tokens": cache_write,
+                    # Story 119-4: AC2 affirmative free-pool tag, AC4 notional
+                    # cost-basis (token×PAYG-rate, not a real bill), AC3' the
+                    # transport's own reported spend (PAYG-leak tell).
+                    "auth_path": _AUTH_PATH_SUBSCRIPTION,
+                    "cost_basis": _COST_BASIS_NOTIONAL,
+                    "sdk_reported_cost_usd": sdk_reported_cost_usd,
                 },
                 component="narrator.sdk",
                 severity="info",
@@ -519,6 +562,13 @@ class AnthropicSdkClient:
                 )
             # An auth/credit/transport failure surfaces as is_error — raise, never
             # return a degraded-success result that masks the missing credential.
+            # Story 119-4 (AC1'): announce it to the GM panel before the raise.
+            self._emit_auth_unavailable(
+                reason="is_error",
+                model=last_model,
+                caller=caller,
+                detail=f"subtype={getattr(result_msg, 'subtype', None)!r}",
+            )
             raise AgentSdkAuthUnavailable(
                 "claude-agent-sdk query failed (is_error, "
                 f"subtype={getattr(result_msg, 'subtype', None)!r}) — subscription "
@@ -590,7 +640,6 @@ class AnthropicSdkClient:
             allowed.append(f"mcp__{_NARRATION_SERVER_NAME}__{t.name}")
         server = create_sdk_mcp_server(name=_NARRATION_SERVER_NAME, tools=sdk_tools)
         return {_NARRATION_SERVER_NAME: server}, allowed
-
 
     # ------------------------------------------------------------------
     # cost-runaway fingerprint alarm (Story 61-4)
@@ -808,6 +857,41 @@ class AnthropicSdkClient:
             ceiling_usd=self.session_cost_ceiling_usd,
         )
 
+    def _emit_auth_unavailable(
+        self,
+        *,
+        reason: str,
+        model: str,
+        caller: str,
+        detail: str,
+    ) -> None:
+        """Story 119-4 (AC1'): announce a subscription-auth failure to the GM
+        panel BEFORE the loud raise.
+
+        An expired/absent OAuth login must be VISIBLE to the cost panel (the lie
+        detector), not just a stack trace in the logs — so the operator can tell
+        "the narrator fell over because the login expired" from any other server
+        error. There is no PAYG fallback; this event always precedes a raise.
+        """
+        logger.error(
+            "narrator.auth_unavailable reason=%s model=%s caller=%s detail=%s",
+            reason,
+            model,
+            caller,
+            detail,
+        )
+        _watcher_publish_event(
+            _AUTH_UNAVAILABLE_EVENT,
+            {
+                "reason": reason,
+                "model": model,
+                "caller": caller,
+                "detail": detail,
+            },
+            component="narrator.sdk",
+            severity="error",
+        )
+
     def _emit_cost_running_total(
         self,
         *,
@@ -832,6 +916,9 @@ class AnthropicSdkClient:
                 "ceiling_usd": ceiling,
                 "fraction_used": fraction_used,
                 "model": model,
+                # Story 119-4 (AC4): the "X / $10" denominator is NOTIONAL
+                # (token×PAYG-rate) under subscription auth, not real dollars.
+                "cost_basis": _COST_BASIS_NOTIONAL,
             },
             component="narrator.sdk",
             severity="info",

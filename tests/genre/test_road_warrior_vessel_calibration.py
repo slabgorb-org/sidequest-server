@@ -33,6 +33,7 @@ import pytest
 import yaml
 
 from sidequest.game.vessel_tags import parse_vessel_tags
+from sidequest.server.dispatch.inventory_resolve import resolve_inventory
 from tests._helpers.genre_paths import GENRE_PACKS_DIR, PackNotFound, find_pack_path
 from tests.genre.test_resolution_mode import load_pack
 
@@ -212,21 +213,35 @@ def test_starting_mounted_weapons_fit_in_starting_rig_slots() -> None:
 
     A loadout that over-fills the mount slots is an un-equippable content bug.
     Cross-references starting_equipment against the parsed mount_slots of the
-    granted rig — RED until mount_slots parses."""
-    inv = _circuit_inventory()
-    catalog = {it["id"]: it for it in inv["item_catalog"]}
-    starting = inv.get("starting_equipment", {})
-    assert starting, "road_warrior must define starting_equipment"
+    granted rig — RED until mount_slots parses.
+
+    Resolves against the MERGED genre+world catalog (``resolve_inventory(pack,
+    "the_circuit")``), not the_circuit's world inventory alone. Post-120-2 the kits
+    mix world-tier bespoke rigs/mount-weapons with genre-tier ``cwn_*`` verbatim
+    gear; reading the world catalog by itself silently dropped every ``cwn_*`` id to
+    ``{}`` (via ``.get(i, {})``), so this guard ran against a catalog that wasn't the
+    real chargen path. The merged catalog is what chargen actually resolves
+    (world-replaces-genre for kits, union for items — ADR-140 / ADR-145 D3)."""
+    pack = _load_typed()
+    resolved = resolve_inventory(pack, "the_circuit")
+    assert resolved is not None, "road_warrior/the_circuit must resolve an inventory config"
+    catalog = {it.id: it for it in resolved.item_catalog}
+    starting = resolved.starting_equipment
+    assert starting, "road_warrior/the_circuit must define starting_equipment"
 
     for class_name, item_ids in starting.items():
-        rig_ids = [i for i in item_ids if "vessel" in (catalog.get(i, {}).get("tags") or [])]
+        missing = [i for i in item_ids if i not in catalog]
+        assert not missing, (
+            f"{class_name} kit references ids absent from the merged the_circuit "
+            f"catalog (no silent skip): {missing}"
+        )
+        rig_ids = [i for i in item_ids if "vessel" in (catalog[i].tags or [])]
         assert len(rig_ids) == 1, f"{class_name} must start with exactly one rig; got {rig_ids}"
-        slots = parse_vessel_tags(catalog[rig_ids[0]]).mount_slots
+        slots = parse_vessel_tags(catalog[rig_ids[0]].model_dump()).mount_slots
         mounted = [
             i
             for i in item_ids
-            if {"mounted", "rig"} <= set(catalog.get(i, {}).get("tags") or [])
-            and catalog.get(i, {}).get("category") == "weapon"
+            if {"mounted", "rig"} <= set(catalog[i].tags or []) and catalog[i].category == "weapon"
         ]
         assert len(mounted) <= slots, (
             f"{class_name} starts with {len(mounted)} mounted rig weapons {mounted} "

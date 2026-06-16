@@ -23,6 +23,7 @@ from sidequest.server.status_clear import clear_scratch_on_scene_end
 
 if TYPE_CHECKING:
     from sidequest.game.session import GameSnapshot
+    from sidequest.orbital.course import PlottedCourse
     from sidequest.orbital.loader import OrbitalContent
 
 
@@ -122,6 +123,16 @@ class Session:
     @orbital_scope.setter
     def orbital_scope(self, scope: Scope) -> None:
         self._orbital_scope = scope
+
+    @property
+    def plotted_course(self) -> PlottedCourse | None:
+        """The snapshot's persistent course state, surfaced as a clean accessor.
+
+        Exposed so the orbital tier can read the course off a narrow Protocol
+        surface instead of reaching through the private ``_snapshot`` (ADR-147
+        honest-layering; see ``sidequest.orbital.intent.OrbitalIntentSession``).
+        """
+        return self._snapshot.plotted_course
 
     @property
     def recent_body_mentions(self) -> deque[str]:

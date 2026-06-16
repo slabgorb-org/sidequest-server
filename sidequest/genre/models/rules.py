@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from sidequest.game.beat_kinds import BeatKind
 from sidequest.game.disposition import AttitudeThresholds
-from sidequest.genre.models.inventory import DamageSpec
+from sidequest.genre.models.inventory import DamageSpec, GearDef
 
 # Keys inside ``ConfrontationDef.opponent_default_stats`` that are NOT
 # ability scores. ``hp`` seeds the opponent CreatureCore HP pool and
@@ -1048,12 +1048,29 @@ class FateConfig(BaseModel):
     # ladder rating ``chargen_apex_rating - i`` (apex first). SRD default is
     # [1,2,3,4] @ apex 4 → 1 Great / 2 Good / 3 Fair / 4 Average. ``free_aspect_count``
     # is the free aspects beyond High-Concept + Trouble (→ 5 total at default 3).
-    # ``free_stunts`` is the stunts free before refresh is debited (shared with the
-    # gear model: each extra stunt debits 1 refresh, floored at 1).
+    # ``free_stunts`` is the stunts free before refresh is debited — shared with the
+    # gear model (114-10): each extra stunt (authored or gear-granted) debits 1
+    # refresh, floored at 1.
     chargen_pyramid: list[int] = Field(default_factory=lambda: [1, 2, 3, 4])
     chargen_apex_rating: int = 4
     free_aspect_count: int = 3
     free_stunts: int = 3
+    # Gear refresh invariant (114-10, ADR-144 gear model). ``base_refresh`` is the
+    # pack's starting refresh before any stunt-gear debit; ``free_stunts`` (above,
+    # shared with interactive chargen) is how many stunts a PC may carry at
+    # base_refresh before each further stunt debits one refresh. SRD default 3 when
+    # omitted (a pack tunes it per genre tone) — never hardcoded globally.
+    base_refresh: int = 3
+    # The pack's shared signature starting gear — gear ids (resolved against the
+    # loaded gear.yaml) compiled onto every PC's FateSheet at chargen (the coat,
+    # the badge, the hat each archetype inherently carries; design K-i).
+    gear: list[str] = Field(default_factory=list)
+    # Loader-injected: the genre-tier GearDef set from gear.yaml. NOT authored in
+    # rules.yaml — the genre loader populates it so the seed can resolve ``gear``
+    # ids without the builder needing the whole GenrePack. World-tier gear merge is
+    # not wired today (no pack authors world-distinct gear). Default empty for
+    # non-fate / synthetic configs.
+    gear_catalog: list[GearDef] = Field(default_factory=list)
 
     @field_validator("chargen_pyramid")
     @classmethod

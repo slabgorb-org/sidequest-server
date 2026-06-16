@@ -226,6 +226,57 @@ class CatalogItem(BaseModel):
     system_strain: float | None = Field(default=None, ge=0)
 
 
+# ---------------------------------------------------------------------------
+# Fate gear model (ADR-144 §D5-seam, ADR-145 §D5; design 2026-06-15)
+#
+# Fate has NO equipment economy — no value, weight, or damage table. So Fate
+# "gear" is not a carried inventory of CatalogItems; it is a thin authoring shim
+# that compiles into the existing FateSheet at chargen (a piece of gear becomes
+# an aspect, a stunt, or a permission). These models live ALONGSIDE the WN-shaped
+# CatalogItem, which stays untouched (no union rot — design A2-i).
+# ---------------------------------------------------------------------------
+
+
+class GearGrantAspect(BaseModel):
+    """An aspect a piece of Fate gear grants. ``kind`` is narrower than the
+    sheet's ``AspectKind`` — gear may only author a ``character`` aspect or a
+    ``permission`` (a narrator-read capability, never an engine gate — P-i)."""
+
+    model_config = {"extra": "forbid"}
+
+    text: str
+    kind: Literal["character", "permission"] = "character"
+
+
+class GearGrantStunt(BaseModel):
+    """A stunt a piece of Fate gear grants. There is deliberately NO per-stunt
+    cost field: a Fate stunt costs exactly one refresh (SRD), so cost is the
+    stunt *count* against the pack's ``free_stunts`` allotment (the refresh
+    invariant) — a single source of truth beats a redundant cost field."""
+
+    model_config = {"extra": "forbid"}
+
+    name: str
+    description: str = ""
+
+
+class GearDef(BaseModel):
+    """A piece of Fate starting gear. Compiles into FateSheet entries at chargen.
+
+    Fate has no equipment economy: no value, weight, damage, or provenance fields
+    exist here (every GearDef is bespoke-by-construction — Fate Core ships no
+    equipment chapter). A gear item with neither grant is pure narrative flavor
+    (legal: a hat is a hat)."""
+
+    model_config = {"extra": "forbid"}
+
+    id: str
+    name: str
+    description: str = ""
+    grants_aspects: list[GearGrantAspect] = Field(default_factory=list)
+    grants_stunts: list[GearGrantStunt] = Field(default_factory=list)
+
+
 class CarryMode(StrEnum):
     """Whether inventory limits are enforced by item count or total weight."""
 

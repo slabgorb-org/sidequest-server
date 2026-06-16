@@ -35,7 +35,7 @@ from sidequest.genre.models.character import (
 )
 from sidequest.genre.models.chassis import ChassisClassesConfig
 from sidequest.genre.models.culture import Culture
-from sidequest.genre.models.inventory import InventoryConfig
+from sidequest.genre.models.inventory import GearDef, InventoryConfig
 from sidequest.genre.models.items import WorldItemsCatalog
 from sidequest.genre.models.legends import Legend
 from sidequest.genre.models.lethality import LethalityPolicy
@@ -416,6 +416,12 @@ class GenrePack(BaseModel):
     scenarios: dict[str, ScenarioPack] = Field(default_factory=dict)
     drama_thresholds: DramaThresholds | None = None
     inventory: InventoryConfig | None = None
+    # Fate gear catalog (genre-tier ``gear.yaml``). The lightweight Fate analogue
+    # of ``inventory`` — Fate has no equipment economy, so gear compiles into the
+    # FateSheet at chargen rather than living as carried CatalogItems (ADR-144 gear
+    # model, 114-10). World-tier gear merge is a future story (no pack authors
+    # world-distinct gear yet).
+    gear: list[GearDef] = Field(default_factory=list)
     openings: list[Opening] = Field(default_factory=list)
     backstory_tables: BackstoryTables | None = None
     equipment_tables: EquipmentTables | None = None

@@ -9,17 +9,17 @@ from __future__ import annotations
 
 from sidequest.game.beat_kinds import apply_beat as _engine_apply_beat
 from sidequest.game.ruleset.base import RulesetModule
+
+# ADR-147 / story 122-2: these pure combat-rules helpers now live in the game tier
+# (a sibling module), so this is a normal same-tier import — the historical
+# game->server layering inversion (and its lazy-import workarounds) is deleted.
+from sidequest.game.ruleset.combat_rules import (
+    find_confrontation_def,
+    resolve_damage_spec_from_beat_and_actor,
+)
 from sidequest.game.ruleset.resolution import AttackRollParams
 from sidequest.game.status import status_roll_modifier
 from sidequest.genre.models.rules import BeatDef, ConfrontationDef
-
-# Layer-inversion note: find_confrontation_def and resolve_damage_spec_from_beat_and_actor
-# are pure game logic that happens to live under server.dispatch.* by historical accident.
-# This game->server import is an intentional Spec-0 layering inversion; it works because
-# those functions import only game/genre/protocol, so there is no load-time cycle.
-# A later task may relocate them into the game layer proper.
-from sidequest.server.dispatch.confrontation import find_confrontation_def
-from sidequest.server.dispatch.damage_roll import resolve_damage_spec_from_beat_and_actor
 
 
 def _stat_score(stats: dict[str, int], stat_check: str) -> int | None:

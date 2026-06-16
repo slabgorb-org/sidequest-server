@@ -30,7 +30,7 @@ skipping #6/#7/#8". This file's level-3 test is the structural half of #6.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, fields
+from dataclasses import fields
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -39,16 +39,18 @@ import pytest
 
 # Importing the tools package wires the 26 adapters onto default_registry.
 import sidequest.agents.tools  # noqa: F401
+from sidequest.agents import anthropic_sdk_client
+from sidequest.agents import tool_registry as tool_registry_mod
 from sidequest.agents.anthropic_sdk_client import AnthropicSdkClient
 from sidequest.agents.orchestrator import Orchestrator, TurnContext
-from sidequest.agents.tool_registry import ToolContext, default_registry
-from sidequest.agents.tooling_protocol import ToolResultBlock, ToolUseBlock
+from sidequest.agents.tool_registry import ToolContext
 from sidequest.game.session import GameSnapshot
 from sidequest.game.turn import TurnManager
 from sidequest.game.weather import WeatherState
 from sidequest.genre.loader import load_genre_pack
 from sidequest.server.session_handler import _build_turn_context, _SessionData
 from tests._helpers.session_room import room_for
+from tests.agents.fakes.fake_agent_sdk import FakeQuery, converged_text_stream
 
 CONTENT_GENRE_PACKS = Path(__file__).resolve().parents[3] / "sidequest-content" / "genre_packs"
 
@@ -220,45 +222,18 @@ def test_build_turn_context_propagates_grounding_from_session_data() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Level 3 — production SDK path (orchestrator.py:3259) wires ToolContext
+# Level 3 — production SDK path wires ToolContext
 # ---------------------------------------------------------------------------
-
-
-@dataclass
-class _Usage:
-    input_tokens: int
-    output_tokens: int
-    cache_read_input_tokens: int = 0
-    cache_creation_input_tokens: int = 0
-
-
-@dataclass
-class _TextBlock:
-    type: str
-    text: str
-
-
-@dataclass
-class _Resp:
-    content: list[Any]
-    stop_reason: str
-    usage: _Usage
-    model: str
-
-
-class _Msgs:
-    def __init__(self, responses: list[_Resp]) -> None:
-        self._responses = responses
-        self.calls: list[dict[str, Any]] = []
-
-    async def create(self, **kwargs: Any) -> _Resp:
-        self.calls.append(kwargs)
-        return self._responses.pop(0)
-
-
-class _Sdk:
-    def __init__(self, responses: list[_Resp]) -> None:
-        self.messages = _Msgs(responses)
+#
+# Story 119-3: the narrator drives the late-bound
+# ``sidequest.agents.anthropic_sdk_client.query`` seam. A converged no-tool
+# ``query`` stream carries no SDK-owned tool round-trip — ``@tool`` handlers
+# (and thus the orchestrator's ``default_registry.dispatch`` closure) are only
+# invoked by the real SDK loop, so a dispatch spy would never fire here.
+# Instead we capture the ``ToolContext`` the production path constructs at the
+# ``_run_narration_turn_sdk`` call site by wrapping the function-local
+# ``ToolContext`` constructor — the same load-bearing wiring assertion as
+# ``test_turn_context_sdk_wiring.py``, independent of whether a tool fires.
 
 
 class _FakeRegistry:
@@ -279,56 +254,40 @@ class _FakeRegistry:
 async def _run_sdk_and_capture_tool_ctx(
     monkeypatch: pytest.MonkeyPatch,
     context: TurnContext,
-    tool_name: str = "get_world_grounding",
-    tool_input: dict[str, Any] | None = None,
 ) -> ToolContext:
-    """Drive ``run_narration_turn`` through the SDK path with a fake SDK
-    that emits a single tool_use block + a closing text response. Capture
-    the ToolContext the production code constructed at orchestrator.py:3259.
+    """Drive ``run_narration_turn`` through the SDK path with a no-tool
+    converged ``query`` stream and capture the ToolContext the production code
+    constructed at the ``_run_narration_turn_sdk`` call site.
 
     Mirrors ``test_turn_context_sdk_wiring.py::_run_sdk_and_capture_ctx`` —
-    same protocol shape, different tool name. Reused so future grounding
-    extensions land here too."""
+    same transport seam, same constructor-wrap capture. Reused so future
+    grounding extensions land here too."""
+    # Story 119-3: subscription transport — both PAYG credentials unset.
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+
+    monkeypatch.setattr(
+        anthropic_sdk_client,
+        "query",
+        FakeQuery(converged_text_stream(text="The fog hangs low.")),
+        raising=False,
+    )
 
     captured: dict[str, ToolContext] = {}
 
-    async def _spy_dispatch(block: ToolUseBlock, ctx: ToolContext) -> ToolResultBlock:
+    real_tool_context = ToolContext
+
+    def _capturing_tool_context(*args: object, **kwargs: object) -> ToolContext:
+        ctx = real_tool_context(*args, **kwargs)
         captured["ctx"] = ctx
-        return ToolResultBlock(tool_use_id=block.id, content="ok", is_error=False)
+        return ctx
 
-    sdk = _Sdk(
-        responses=[
-            _Resp(
-                content=[
-                    type(
-                        "TU",
-                        (),
-                        {
-                            "type": "tool_use",
-                            "id": "toolu_1",
-                            "name": tool_name,
-                            "input": tool_input
-                            or {"include": ["weather", "demographics", "calendar"]},
-                        },
-                    )()
-                ],
-                stop_reason="tool_use",
-                usage=_Usage(input_tokens=120, output_tokens=10),
-                model="claude-sonnet-4-6",
-            ),
-            _Resp(
-                content=[_TextBlock(type="text", text="The fog hangs low.")],
-                stop_reason="end_turn",
-                usage=_Usage(input_tokens=130, output_tokens=14),
-                model="claude-sonnet-4-6",
-            ),
-        ]
-    )
-    client = AnthropicSdkClient(sdk=sdk)
+    # ``_run_narration_turn_sdk`` imports ToolContext function-locally from
+    # ``tool_registry``; patch the source module symbol.
+    monkeypatch.setattr(tool_registry_mod, "ToolContext", _capturing_tool_context)
+
+    client = AnthropicSdkClient()
     orch = Orchestrator(client=client)
-
-    monkeypatch.setattr(default_registry, "dispatch", _spy_dispatch)
 
     async def _fake_build_prompt(
         self: Orchestrator, action: str, ctx: TurnContext
@@ -338,7 +297,10 @@ async def _run_sdk_and_capture_tool_ctx(
     monkeypatch.setattr(Orchestrator, "build_narrator_prompt", _fake_build_prompt)
 
     await orch.run_narration_turn("look around", context)
-    assert "ctx" in captured, "tool_dispatch never fired — cannot assert ToolContext wiring"
+    assert "ctx" in captured, (
+        "_run_narration_turn_sdk never constructed a ToolContext — cannot "
+        "assert the grounding wiring"
+    )
     return captured["ctx"]
 
 

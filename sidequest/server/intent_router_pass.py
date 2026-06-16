@@ -86,8 +86,9 @@ logger = logging.getLogger(__name__)
 # budget breach is reserved for structurally impossible counts.
 #
 # Read LATE-BOUND (module attribute at call time) so tests and operators
-# diagnosing a storm can patch it — same contract as 91-1's
-# ``build_async_anthropic`` choke-point seam.
+# diagnosing a storm can patch it — same contract as the module-level
+# ``query`` transport seam (91-1's single choke point, ported to the Agent
+# SDK in 119-3).
 INTENT_ROUTER_CALL_BUDGET_PER_TURN: int = 2
 
 

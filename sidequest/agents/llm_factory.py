@@ -1,10 +1,15 @@
 """LlmClient factory — selects backend from env (ADR-073 Phase 1/2).
 
-Story 91-1 (epic 91 "Dark Spend"): this module is also the **single SDK
-choke point** — :func:`build_async_anthropic` is the sole ``AsyncAnthropic``
-construction site in the server, and :func:`_record_usage_telemetry` is the
-uniform per-call usage accounting (log line + ``llm.request`` span attributes
-+ ``cost_usd`` + caller tag) every Anthropic call flows through.
+Story 119-3 (ADR-101 amendment): the four single-shot Haiku sites (aside, Intent
+Router, un-seeded objective classifier, archetype inference) port off the raw
+``anthropic`` Messages SDK onto ``claude-agent-sdk`` over the Max subscription
+pool, through the shared :func:`anthropic_sdk_client.build_agent_sdk_options`
+construction seam. The three forced-extraction sites use ``output_format``
+JSON-schema structured output at ``max_turns=2`` (Path A — the Agent SDK has no
+``tool_choice``; spec §6.4.2); the aside is a plain no-tools completion.
+:func:`_record_usage_telemetry` remains the uniform per-call usage accounting
+(log line + ``llm.request`` span attributes + ``cost_usd`` + caller tag) every
+Haiku call flows through.
 """
 
 from __future__ import annotations
@@ -14,11 +19,14 @@ import logging
 import os
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
+from claude_agent_sdk import query
+
 from sidequest.agents import cost_safety
 from sidequest.agents.anthropic_cost import compute_cost_usd
 from sidequest.agents.anthropic_sdk_client import (
-    _EXTENDED_CACHE_TTL_BETA,
     AnthropicSdkClient,
+    _usage_int,
+    build_agent_sdk_options,
 )
 from sidequest.agents.claude_client import LlmClient, LlmClientError
 
@@ -39,18 +47,16 @@ from sidequest.telemetry.spans.intent_router import intent_router_cache_floor_sp
 from sidequest.telemetry.spans.llm_request import llm_request_span
 
 if TYPE_CHECKING:
-    from anthropic import AsyncAnthropic
-
     from sidequest.agents.post_narration_classifier import ObjectiveClassifierLLM
     from sidequest.genre.models.archetype_axes import BaseArchetypes
     from sidequest.genre.models.archetype_constraints import ArchetypeConstraints
 
 logger = logging.getLogger(__name__)
 
-# Canonical Anthropic beta opt-in for ttl:"1h" ephemeral cache lives in
-# ``anthropic_sdk_client`` (the narrator's 1h path). Import it rather than
-# duplicate the wire string — a drifted copy would silently 400 every Haiku
-# turn (No Silent Fallbacks).
+# Story 119-3: ``query`` is bound at module scope (imported above) as the
+# late-bound, monkeypatchable transport seam (OQ-9) — the four single-shot Haiku
+# sites drive ``llm_factory.query`` so the test fleet injects a fake without a
+# live subscription, mirroring the old ``build_async_anthropic`` doctrine.
 
 ENV_BACKEND = "SIDEQUEST_LLM_BACKEND"
 ENV_OLLAMA_URL = "SIDEQUEST_OLLAMA_URL"
@@ -74,27 +80,37 @@ class NarratorBackendRetired(LlmClientError):
     """
 
 
-def build_async_anthropic() -> AsyncAnthropic:
-    """Construct the Anthropic SDK client — the SINGLE construction site.
+async def _consume_to_result(prompt: str, options: Any) -> Any:
+    """Drive one single-shot ``query()`` and return its terminal ResultMessage.
 
-    Story 91-1 (epic 91 "Dark Spend"): every ``AsyncAnthropic`` in the server
-    is built here so usage instrumentation cannot be bypassed by an ad-hoc
-    construction. Consumers must look this function up late-bound (through
-    the module dict at call time, e.g. ``llm_factory.build_async_anthropic()``
-    or a function-level ``from ... import``) so the wiring test's
-    monkeypatched fake is what every adapter receives.
-
-    Fails loudly when ``ANTHROPIC_API_KEY`` is unset — No Silent Fallbacks.
+    Story 119-3: the Haiku single-shots have no agent loop — the stream is a
+    (possibly empty) prose turn then a terminal ``ResultMessage``. Calls the
+    module-level :data:`query` seam (late-bound, monkeypatchable). Raises loudly
+    if no ResultMessage arrives — a call we cannot account for is the dark spend
+    this discipline eliminates (No Silent Fallbacks).
     """
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
+    result_msg: Any = None
+    async for msg in query(prompt=prompt, options=options):
+        if hasattr(msg, "is_error") and hasattr(msg, "num_turns"):
+            result_msg = msg
+    if result_msg is None:
         raise LlmClientError(
-            "ANTHROPIC_API_KEY not set — required to construct the Anthropic "
-            "SDK client (story 91-1 single choke point). No silent fallback."
+            "claude-agent-sdk query produced no terminal ResultMessage — "
+            "the single-shot call cannot be accounted for (No Silent Fallbacks)."
         )
-    from anthropic import AsyncAnthropic
+    return result_msg
 
-    return AsyncAnthropic(api_key=api_key)
+
+def _compose_structured_system(system: str, tool_name: str, tool_description: str) -> str:
+    """Fold the forced tool's name + description into the system prompt.
+
+    Story 119-3: Path A (``output_format``) constrains the response SHAPE via the
+    JSON schema but carries no tool name/description; appending them preserves
+    the model's understanding of what it is producing (the forced tool's
+    purpose) without touching the schema (which round-trips verbatim into
+    ``output_format.schema``).
+    """
+    return f"{system}\n\nProduce a JSON object for the `{tool_name}` tool: {tool_description}"
 
 
 class _UsageSummary(NamedTuple):
@@ -141,10 +157,13 @@ def _record_usage_telemetry(
             "Refusing to emit a zero-cost usage line (No Silent Fallbacks)."
         )
     model = str(getattr(resp, "model", "") or "") or request_model
-    input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
-    output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
-    cache_read = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
-    cache_write = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
+    # Story 119-3: the agent SDK's ``ResultMessage.usage`` is a ``dict`` (spec
+    # §3.2), not a usage object — read tokens dict-or-attr (``_usage_int``) so
+    # the per-call cost is not silently $0 (TEA finding).
+    input_tokens = _usage_int(usage, "input_tokens")
+    output_tokens = _usage_int(usage, "output_tokens")
+    cache_read = _usage_int(usage, "cache_read_input_tokens")
+    cache_write = _usage_int(usage, "cache_creation_input_tokens")
     cost = compute_cost_usd(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
@@ -230,9 +249,11 @@ _ASIDE_MODEL = "claude-haiku-4-5-20251001"
 class _AsideLlm:
     """Single-shot Haiku adapter satisfying ``AsideResolver``'s ``AsideLLM``.
 
-    Obtains its SDK through :func:`build_async_anthropic` — the single
-    construction site (story 91-1). Fails loudly if ``ANTHROPIC_API_KEY``
-    is unset — No Silent Fallbacks.
+    Drives the module-level :func:`query` transport seam with options from
+    :func:`build_agent_sdk_options` — the single construction site (story
+    91-1, ported to the Agent SDK over subscription auth in 119-3). Fails
+    loudly if subscription auth is unavailable, and rejects a set
+    ``ANTHROPIC_API_KEY`` (PAYG re-route) — No Silent Fallbacks.
 
     Story 91-4: carries the session identity so its Haiku spend runs the
     ADR-134 detector and feeds the per-session cumulative ceiling.
@@ -244,38 +265,39 @@ class _AsideLlm:
     """
 
     def __init__(self, *, session_id: str | None) -> None:
-        self._sdk = build_async_anthropic()
         self._session_id = session_id
         self._session_cost_ceiling_usd = cost_safety.parse_session_cost_ceiling_usd()
 
     async def complete(self, *, system: str, user: str) -> str:
-        # ``system`` stays a BARE string — NOT a cached content block. The
-        # aside prompt is ~361 tokens, far below Haiku 4.5's 4,096-token
-        # cacheable-prefix floor, so a ``cache_control`` marker here is
-        # accepted by the API but silently never caches. Adding one would
-        # imply caching that does not happen (No Silent Fallbacks). The
-        # Intent Router (``_IntentRouterLlm``) is the every-turn cost driver
-        # and clears the floor — that is where caching pays off.
+        # Story 119-3: a plain no-tools subscription completion via the agent
+        # SDK ``query()`` seam. No ``output_format`` (the aside returns prose,
+        # not a schema). ``max_turns=2`` is MANDATORY — the SDK spends an
+        # internal finalize turn even with zero tools, so ``max_turns=1`` fails
+        # closed with ``subtype='error_max_turns'`` (spec §3.6/OQ-16). No
+        # ANTHROPIC_API_KEY is read; a set key would re-route to PAYG and is
+        # rejected loudly in ``build_agent_sdk_options`` (No Silent Fallbacks).
         #
         # Story 91-1: the call runs inside an ``llm.request`` span with the
-        # uniform usage accounting — pre-91-1 this path emitted NO telemetry
-        # at all and was structurally invisible to cost forensics.
+        # uniform usage accounting (caller=aside).
         #
         # Story 91-4: pre-flight ceiling refusal (a killed session must not
-        # bill another Haiku token) + post-call safety pass (detector +
-        # cumulative). ``session_id=None`` bypasses both, never the books.
+        # bill another Haiku token) + post-call safety pass. ``session_id=None``
+        # bypasses both, never the books.
         if self._session_id is not None:
             cost_safety.ledger().check_ceiling(
                 self._session_id, ceiling_usd=self._session_cost_ceiling_usd
             )
+        options = build_agent_sdk_options(
+            model=_ASIDE_MODEL,
+            system_prompt=system,
+            max_turns=2,
+            allowed_tools=[],
+        )
         with llm_request_span(model=_ASIDE_MODEL) as span:
-            resp = await self._sdk.messages.create(
-                model=_ASIDE_MODEL,
-                system=system,
-                messages=[{"role": "user", "content": user}],
-                max_tokens=512,
+            result_msg = await _consume_to_result(user, options)
+            usage = _record_usage_telemetry(
+                span, result_msg, caller="aside", request_model=_ASIDE_MODEL
             )
-            usage = _record_usage_telemetry(span, resp, caller="aside", request_model=_ASIDE_MODEL)
         if self._session_id is not None:
             cost_safety.ledger().record_call(
                 session_id=self._session_id,
@@ -286,7 +308,15 @@ class _AsideLlm:
                 cost_usd=usage.cost_usd,
                 ceiling_usd=self._session_cost_ceiling_usd,
             )
-        return "".join(block.text for block in resp.content if block.type == "text")
+        if getattr(result_msg, "is_error", False):
+            # A failed query (auth absent / max_turns / transport) must raise —
+            # never return an empty string a caller could mistake for a real
+            # "the aside had nothing to say" (No Silent Fallbacks).
+            raise LlmClientError(
+                "aside completion failed (is_error, "
+                f"subtype={getattr(result_msg, 'subtype', None)!r}) — no PAYG fallback"
+            )
+        return getattr(result_msg, "result", None) or ""
 
 
 def build_aside_llm(*, session_id: str | None) -> _AsideLlm:
@@ -362,7 +392,7 @@ def _estimate_intent_router_prefix_tokens() -> tuple[int, int]:
 
     Reads the production prompt/schema LATE-BOUND through the
     ``sidequest.agents.intent_router`` module at call time (same monkeypatch
-    doctrine as :func:`build_async_anthropic`). The import is function-level
+    doctrine as the module-level :func:`query` seam). The import is function-level
     because ``intent_router`` imports this module at module scope.
 
     Offline by design: the adapter is rebuilt once per turn
@@ -397,9 +427,10 @@ class IntentRouterEmptyResponse(LlmClientError):
 class _IntentRouterLlm:
     """Single-shot Haiku adapter satisfying the Intent Router's ``IntentRouterLLM``.
 
-    Same shape as :class:`_AsideLlm` — eagerly obtains its SDK through
-    :func:`build_async_anthropic` (the single construction site, story 91-1)
-    so the build-time environment check fires loudly (memory rule
+    Same shape as :class:`_AsideLlm` — drives the module-level :func:`query`
+    seam with options from :func:`build_agent_sdk_options` (the single
+    construction site, story 91-1; Agent-SDK port 119-3) so the subscription
+    auth check fires loudly (memory rule
     ``feedback_no_fallbacks_hard``), and carries the session identity
     (story 91-4) so the every-turn router spend — the #1 dark spender in
     the [COST-1] forensics — runs the ADR-134 detector and feeds the
@@ -407,7 +438,6 @@ class _IntentRouterLlm:
     """
 
     def __init__(self, *, session_id: str | None) -> None:
-        self._sdk = build_async_anthropic()
         self._session_id = session_id
         self._session_cost_ceiling_usd = cost_safety.parse_session_cost_ceiling_usd()
 
@@ -420,21 +450,19 @@ class _IntentRouterLlm:
         tool_description: str,
         tool_schema: dict[str, Any],
     ) -> dict[str, Any]:
-        """Force a single tool call and return its structured input (ADR-102).
+        """Force structured extraction via ``output_format`` (Path A, spec §6.4.2).
 
-        ``tool_choice`` pins the model to ``tool_name`` so the response
-        carries a ``tool_use`` block whose ``input`` is already structured
-        — no free-text JSON to parse, no markdown fences to strip.
-
-        The static ``system`` prompt is sent as a 1h ephemeral cache block.
-        One marker on the system block caches the whole tools+system prefix
-        (canonical cache order is tools → system → messages), so both the
-        DispatchPackage schema and the ~2,760-token prompt read back on turn
-        2+ instead of re-billing every player turn. ``ttl:"1h"`` is a beta —
-        without the ``extended-cache-ttl`` header the API 400-rejects the
-        request, so the header is mandatory, not optional (No Silent
-        Fallbacks). The call runs inside an ``llm.request`` span so the GM
-        panel can confirm the cache is live (OTEL Observability Principle).
+        Story 119-3: the Agent SDK exposes no ``tool_choice``; the verified
+        replacement for the raw "force one tool, read its ``.input``" mechanism
+        is ``output_format={"type":"json_schema","schema": tool_schema}`` read
+        from ``ResultMessage.structured_output`` — API-enforced schema-valid
+        output in one shot, at ``max_turns=2`` (the +1 finalize turn is
+        MANDATORY; ``max_turns=1`` fails closed with ``error_max_turns`` —
+        §3.6/OQ-16). The tool name + description fold into the system prompt as
+        guidance (the schema enforces the shape). The consumer's ``dict``/raise
+        contract is preserved: returns the structured dict where the forced
+        tool's ``.input`` went, raises :class:`IntentRouterEmptyResponse` on
+        absent ``structured_output`` (the loud-raise contract).
         """
         # Story 91-4: pre-flight ceiling refusal — a session killed by ANY
         # call site (narrator included) must not bill another router token.
@@ -442,33 +470,17 @@ class _IntentRouterLlm:
             cost_safety.ledger().check_ceiling(
                 self._session_id, ceiling_usd=self._session_cost_ceiling_usd
             )
+        options = build_agent_sdk_options(
+            model=_INTENT_ROUTER_MODEL,
+            system_prompt=_compose_structured_system(system, tool_name, tool_description),
+            max_turns=2,
+            allowed_tools=[],
+            output_format={"type": "json_schema", "schema": tool_schema},
+        )
         with llm_request_span(model=_INTENT_ROUTER_MODEL) as span:
-            resp = await self._sdk.messages.create(
-                model=_INTENT_ROUTER_MODEL,
-                system=[
-                    {
-                        "type": "text",
-                        "text": system,
-                        "cache_control": {
-                            "type": "ephemeral",
-                            "ttl": _INTENT_ROUTER_CACHE_TTL,
-                        },
-                    }
-                ],
-                messages=[{"role": "user", "content": user}],
-                tools=[
-                    {
-                        "name": tool_name,
-                        "description": tool_description,
-                        "input_schema": tool_schema,
-                    }
-                ],
-                tool_choice={"type": "tool", "name": tool_name},
-                max_tokens=2048,
-                extra_headers={"anthropic-beta": _EXTENDED_CACHE_TTL_BETA},
-            )
+            result_msg = await _consume_to_result(user, options)
             usage = _record_usage_telemetry(
-                span, resp, caller="intent_router", request_model=_INTENT_ROUTER_MODEL
+                span, result_msg, caller="intent_router", request_model=_INTENT_ROUTER_MODEL
             )
         # Story 91-4: post-call safety pass — detector against the
         # (session, intent_router) rolling baselines + cumulative ceiling.
@@ -482,20 +494,15 @@ class _IntentRouterLlm:
                 cost_usd=usage.cost_usd,
                 ceiling_usd=self._session_cost_ceiling_usd,
             )
-        for block in resp.content:
-            if getattr(block, "type", None) == "tool_use" and block.name == tool_name:
-                return dict(block.input)
-        block_types = [getattr(b, "type", "?") for b in resp.content]
-        usage_repr: str
-        try:
-            usage_repr = repr(resp.usage.model_dump())
-        except Exception:  # noqa: BLE001 — usage shape varies by SDK version
-            usage_repr = repr(getattr(resp, "usage", None))
-        raise IntentRouterEmptyResponse(
-            f"Haiku returned no tool_use block "
-            f"(stop_reason={resp.stop_reason!r}, blocks={block_types}, "
-            f"usage={usage_repr})"
-        )
+        structured = getattr(result_msg, "structured_output", None)
+        if structured is None:
+            raise IntentRouterEmptyResponse(
+                "agent-sdk returned no structured_output "
+                f"(subtype={getattr(result_msg, 'subtype', None)!r}, "
+                f"is_error={getattr(result_msg, 'is_error', None)!r}, "
+                f"num_turns={getattr(result_msg, 'num_turns', None)!r})"
+            )
+        return dict(structured)
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
@@ -554,8 +561,9 @@ class _OllamaIntentRouterLlm:
     surface as ``OllamaClientError`` — an unreachable Ollama fails the turn
     LOUDLY; there is NO fallback to Haiku, ever (a silent fallback would
     recreate the exact dark spend epic 92 eliminates, by design). The
-    Anthropic construction site (:func:`build_async_anthropic`) is never
-    touched on this path — no ``ANTHROPIC_API_KEY`` required.
+    Anthropic construction site (:func:`build_agent_sdk_options` / the
+    :func:`query` seam) is never touched on this path — no Anthropic
+    subscription required.
 
     ``session_id`` is carried for signature parity with the Haiku adapter
     (story 91-4 keyword-only contract) but the ADR-134 cost ledger is not
@@ -689,7 +697,6 @@ class _UnseededObjectiveClassifierLlm:
     """
 
     def __init__(self, *, session_id: str | None) -> None:
-        self._sdk = build_async_anthropic()
         self._session_id = session_id
         self._session_cost_ceiling_usd = cost_safety.parse_session_cost_ceiling_usd()
 
@@ -702,30 +709,28 @@ class _UnseededObjectiveClassifierLlm:
         tool_description: str,
         tool_schema: dict[str, Any],
     ) -> dict[str, Any]:
+        # Story 119-3: forced extraction via ``output_format`` (Path A, §6.4.2) —
+        # the Agent SDK has no ``tool_choice``; read the schema-valid dict from
+        # ``ResultMessage.structured_output`` at ``max_turns=2``. The ``dict``/
+        # raise contract is preserved.
         # Pre-flight ceiling refusal (ADR-134): a session killed by ANY call site
         # must not bill another classification token.
         if self._session_id is not None:
             cost_safety.ledger().check_ceiling(
                 self._session_id, ceiling_usd=self._session_cost_ceiling_usd
             )
+        options = build_agent_sdk_options(
+            model=_UNSEEDED_OBJECTIVE_CLASSIFIER_MODEL,
+            system_prompt=_compose_structured_system(system, tool_name, tool_description),
+            max_turns=2,
+            allowed_tools=[],
+            output_format={"type": "json_schema", "schema": tool_schema},
+        )
         with llm_request_span(model=_UNSEEDED_OBJECTIVE_CLASSIFIER_MODEL) as span:
-            resp = await self._sdk.messages.create(
-                model=_UNSEEDED_OBJECTIVE_CLASSIFIER_MODEL,
-                system=system,
-                messages=[{"role": "user", "content": user}],
-                tools=[
-                    {
-                        "name": tool_name,
-                        "description": tool_description,
-                        "input_schema": tool_schema,
-                    }
-                ],
-                tool_choice={"type": "tool", "name": tool_name},
-                max_tokens=256,
-            )
+            result_msg = await _consume_to_result(user, options)
             usage = _record_usage_telemetry(
                 span,
-                resp,
+                result_msg,
                 caller="unseeded_objective_classifier",
                 request_model=_UNSEEDED_OBJECTIVE_CLASSIFIER_MODEL,
             )
@@ -739,14 +744,14 @@ class _UnseededObjectiveClassifierLlm:
                 cost_usd=usage.cost_usd,
                 ceiling_usd=self._session_cost_ceiling_usd,
             )
-        for block in resp.content:
-            if getattr(block, "type", None) == "tool_use" and block.name == tool_name:
-                return dict(block.input)
-        block_types = [getattr(b, "type", "?") for b in resp.content]
-        raise LlmClientError(
-            f"unseeded objective classifier returned no tool_use block "
-            f"(stop_reason={getattr(resp, 'stop_reason', None)!r}, blocks={block_types})"
-        )
+        structured = getattr(result_msg, "structured_output", None)
+        if structured is None:
+            raise LlmClientError(
+                "unseeded objective classifier returned no structured_output "
+                f"(subtype={getattr(result_msg, 'subtype', None)!r}, "
+                f"is_error={getattr(result_msg, 'is_error', None)!r})"
+            )
+        return dict(structured)
 
 
 def build_unseeded_objective_classifier_llm(*, session_id: str | None) -> ObjectiveClassifierLLM:
@@ -814,9 +819,10 @@ async def infer_archetype_from_freeform(
 
     Cost (ADR-134): pre-flight ``check_ceiling`` refuses a killed session
     before a single token is billed; the call records to the session ledger
-    via ``record_call`` under caller ``archetype_inference``. The SDK comes
-    from :func:`build_async_anthropic` (story 91-1 single construction
-    site, late-bound through module globals so the test fake is what this
+    via ``record_call`` under caller ``archetype_inference``. The transport
+    comes from the module-level :func:`query` seam with options from
+    :func:`build_agent_sdk_options` (story 91-1 single construction site,
+    late-bound through module globals so the test fake is what this
     function receives).
 
     The bare-string ``system`` is deliberate: this fires at most once per
@@ -889,29 +895,28 @@ async def infer_archetype_from_freeform(
         f"{constraint_lines}"
     )
 
-    # Late-bound through module globals (story 91-1 monkeypatch doctrine).
-    sdk = build_async_anthropic()
+    # Story 119-3: forced extraction via ``output_format`` (Path A, §6.4.2) —
+    # the Agent SDK has no ``tool_choice``; read the enum-constrained dict from
+    # ``ResultMessage.structured_output`` at ``max_turns=2``. The tool's
+    # name/description fold into the system prompt; the schema (with its per-axis
+    # ``enum``) rides ``output_format``. ``query`` is the module-level seam.
+    options = build_agent_sdk_options(
+        model=_ARCHETYPE_INFERENCE_MODEL,
+        system_prompt=_compose_structured_system(
+            _ARCHETYPE_INFERENCE_SYSTEM,
+            _ARCHETYPE_INFERENCE_TOOL_NAME,
+            "Report the inferred archetype axis value(s). Omit any axis you "
+            "cannot infer from the player's answers.",
+        ),
+        max_turns=2,
+        allowed_tools=[],
+        output_format={"type": "json_schema", "schema": tool_schema},
+    )
     with llm_request_span(model=_ARCHETYPE_INFERENCE_MODEL) as span:
-        resp = await sdk.messages.create(
-            model=_ARCHETYPE_INFERENCE_MODEL,
-            system=_ARCHETYPE_INFERENCE_SYSTEM,
-            messages=[{"role": "user", "content": user}],
-            tools=[
-                {
-                    "name": _ARCHETYPE_INFERENCE_TOOL_NAME,
-                    "description": (
-                        "Report the inferred archetype axis value(s). Omit any "
-                        "axis you cannot infer from the player's answers."
-                    ),
-                    "input_schema": tool_schema,
-                }
-            ],
-            tool_choice={"type": "tool", "name": _ARCHETYPE_INFERENCE_TOOL_NAME},
-            max_tokens=256,
-        )
+        result_msg = await _consume_to_result(user, options)
         usage = _record_usage_telemetry(
             span,
-            resp,
+            result_msg,
             caller="archetype_inference",
             request_model=_ARCHETYPE_INFERENCE_MODEL,
         )
@@ -926,20 +931,14 @@ async def infer_archetype_from_freeform(
             ceiling_usd=ceiling_usd,
         )
 
-    parsed: dict[str, Any] | None = None
-    for block in resp.content:
-        if (
-            getattr(block, "type", None) == "tool_use"
-            and block.name == _ARCHETYPE_INFERENCE_TOOL_NAME
-        ):
-            parsed = dict(block.input)
-            break
-    if parsed is None:
-        block_types = [getattr(b, "type", "?") for b in resp.content]
+    structured = getattr(result_msg, "structured_output", None)
+    if structured is None:
         raise LlmClientError(
-            f"archetype inference returned no tool_use block "
-            f"(stop_reason={getattr(resp, 'stop_reason', None)!r}, blocks={block_types})"
+            "archetype inference returned no structured_output "
+            f"(subtype={getattr(result_msg, 'subtype', None)!r}, "
+            f"is_error={getattr(result_msg, 'is_error', None)!r})"
         )
+    parsed: dict[str, Any] = dict(structured)
 
     inferred: dict[str, str] = {}
     for axis, enum in missing:

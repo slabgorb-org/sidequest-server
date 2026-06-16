@@ -34,7 +34,6 @@ narration path advertises the gated tools on every pack.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
@@ -45,6 +44,7 @@ from pydantic import BaseModel
 
 # Importing the tools package wires every adapter onto default_registry.
 import sidequest.agents.tools  # noqa: F401
+from sidequest.agents import anthropic_sdk_client
 from sidequest.agents.anthropic_sdk_client import AnthropicSdkClient
 from sidequest.agents.orchestrator import Orchestrator, TurnContext
 from sidequest.agents.tool_registry import (
@@ -56,6 +56,7 @@ from sidequest.agents.tool_registry import (
     tool,
 )
 from sidequest.agents.tooling_protocol import ToolUseBlock
+from tests.agents.fakes.fake_agent_sdk import FakeQuery, converged_text_stream
 
 # Per-tool ruleset advertisement after ADR-142 DD-5 (Effort + lethality are
 # WN-core, so the tools that drive them advertise to the whole WN family that
@@ -308,47 +309,21 @@ class _NoopFilter:
 # ---------------------------------------------------------------------------
 # Wiring — the PRODUCTION narration assembly path filters by the bound ruleset.
 #
-# Harness mirrors tests/agents/test_narrator_uses_sdk_client.py: an in-memory
-# fake SDK captures the ``tools=`` array handed to ``complete_with_tools`` so we
-# assert the real ``run_narration_turn`` path (not just the registry unit).
+# Story 119-3: the narrator transport is claude-agent-sdk. The ruleset-filtered
+# tool catalog becomes the SDK-MCP server's ``allowed_tools`` (each entry is
+# ``mcp__narration__<bare_name>``) on the ``ClaudeAgentOptions`` the narrator
+# builds — captured here off ``fake.last_options``. The orchestrator emits the
+# ``narrator.tools.ruleset_filter`` OTEL span itself (transport-independent),
+# asserted via ``otel_capture``.
 # ---------------------------------------------------------------------------
 
-
-@dataclass
-class _Usage:
-    input_tokens: int
-    output_tokens: int
-    cache_read_input_tokens: int = 0
-    cache_creation_input_tokens: int = 0
+_MCP_PREFIX = "mcp__narration__"
 
 
-@dataclass
-class _TextBlock:
-    type: str
-    text: str
-
-
-@dataclass
-class _Resp:
-    content: list[Any]
-    stop_reason: str
-    usage: _Usage
-    model: str
-
-
-class _Msgs:
-    def __init__(self, responses: list[_Resp]) -> None:
-        self._responses = responses
-        self.calls: list[dict[str, Any]] = []
-
-    async def create(self, **kwargs: Any) -> _Resp:
-        self.calls.append(kwargs)
-        return self._responses.pop(0)
-
-
-class _Sdk:
-    def __init__(self, responses: list[_Resp]) -> None:
-        self.messages = _Msgs(responses)
+@pytest.fixture(autouse=True)
+def _subscription_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
 
 
 class _FakeRegistry:
@@ -362,19 +337,6 @@ class _FakeRegistry:
 
     def registry(self, agent_name: str) -> list:
         return []
-
-
-def _single_prose_sdk() -> _Sdk:
-    return _Sdk(
-        responses=[
-            _Resp(
-                content=[_TextBlock(type="text", text="The salt flats shimmer.")],
-                stop_reason="end_turn",
-                usage=_Usage(input_tokens=200, output_tokens=24),
-                model="claude-sonnet-4-6",
-            )
-        ]
-    )
 
 
 def _pack(ruleset: str) -> SimpleNamespace:
@@ -393,11 +355,13 @@ def _bypass_prompt_builder(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(Orchestrator, "build_narrator_prompt", _fake_build_prompt)
 
 
-async def _run_turn(monkeypatch: pytest.MonkeyPatch, ruleset: str) -> _Sdk:
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+async def _run_turn(monkeypatch: pytest.MonkeyPatch, ruleset: str) -> FakeQuery:
+    """Drive one SDK narration turn and return the fake ``query`` so the caller
+    can read the advertised ``allowed_tools`` off ``fake.last_options``."""
     _bypass_prompt_builder(monkeypatch)
-    sdk = _single_prose_sdk()
-    orch = Orchestrator(client=AnthropicSdkClient(sdk=sdk))
+    fake = FakeQuery(converged_text_stream(text="The salt flats shimmer."))
+    monkeypatch.setattr(anthropic_sdk_client, "query", fake, raising=False)
+    orch = Orchestrator(client=AnthropicSdkClient())
     ctx = TurnContext(
         character_name="Kael",
         genre="caverns_and_claudes",
@@ -405,15 +369,24 @@ async def _run_turn(monkeypatch: pytest.MonkeyPatch, ruleset: str) -> _Sdk:
         pack=_pack(ruleset),
     )
     await orch.run_narration_turn("look around", ctx)
-    return sdk
+    return fake
+
+
+def _advertised_tool_names(fake: FakeQuery) -> set[str]:
+    """Bare tool names from the SDK-MCP ``allowed_tools`` the turn advertised."""
+    return {
+        name[len(_MCP_PREFIX) :]
+        for name in fake.last_options.allowed_tools
+        if name.startswith(_MCP_PREFIX)
+    }
 
 
 @pytest.mark.asyncio
 async def test_native_pack_narration_excludes_gated_tools_from_sdk_array(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    sdk = await _run_turn(monkeypatch, "native")
-    sent = {t["name"] for t in sdk.messages.calls[0]["tools"]}
+    fake = await _run_turn(monkeypatch, "native")
+    sent = _advertised_tool_names(fake)
     assert GATED_ALL.isdisjoint(sent), f"native narration leaked gated tools: {GATED_ALL & sent}"
     assert "roll_dice" in sent  # agnostic tool still advertised
 
@@ -422,8 +395,8 @@ async def test_native_pack_narration_excludes_gated_tools_from_sdk_array(
 async def test_wwn_pack_narration_includes_wwn_tools_excludes_non_wwn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    sdk = await _run_turn(monkeypatch, "wwn")
-    sent = {t["name"] for t in sdk.messages.calls[0]["tools"]}
+    fake = await _run_turn(monkeypatch, "wwn")
+    sent = _advertised_tool_names(fake)
     # DD-5: WWN narration advertises every tool whose WN-core capability WWN
     # carries — commit_effort, long_rest, veterans_luck, AND the strain/stabilize
     # lethality tools (wwn is a strain-bearing WN sibling).

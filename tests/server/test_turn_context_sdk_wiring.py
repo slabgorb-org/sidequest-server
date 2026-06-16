@@ -29,19 +29,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
 # Importing the tools package wires the 26 adapters onto default_registry.
 import sidequest.agents.tools  # noqa: F401
+from sidequest.agents import anthropic_sdk_client
+from sidequest.agents import tool_registry as tool_registry_mod
 from sidequest.agents.anthropic_sdk_client import AnthropicSdkClient
 from sidequest.agents.orchestrator import Orchestrator, TurnContext
-from sidequest.agents.tool_registry import ToolContext, default_registry
-from sidequest.agents.tooling_protocol import ToolResultBlock, ToolUseBlock
+from sidequest.agents.tool_registry import ToolContext
 from sidequest.game.lore_store import LoreFragment, LoreStore
 from sidequest.game.session import GameSnapshot
 from sidequest.game.turn import TurnManager
@@ -49,6 +48,7 @@ from sidequest.genre.loader import load_genre_pack
 from sidequest.server.session_handler import _build_turn_context, _SessionData
 from tests._helpers.doubles import FakeSocket
 from tests._helpers.session_room import room_for
+from tests.agents.fakes.fake_agent_sdk import FakeQuery, converged_text_stream
 
 CONTENT_GENRE_PACKS = Path(__file__).resolve().parents[3] / "sidequest-content" / "genre_packs"
 
@@ -157,45 +157,24 @@ def test_build_turn_context_monster_manual_none_when_unbound() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Fake SDK — mirrors test_narrator_sdk_hybrid_split.py
+# Fake transport — Story 119-3 claude-agent-sdk ``query`` seam
 # ---------------------------------------------------------------------------
-
-
-@dataclass
-class _Usage:
-    input_tokens: int
-    output_tokens: int
-    cache_read_input_tokens: int = 0
-    cache_creation_input_tokens: int = 0
-
-
-@dataclass
-class _TextBlock:
-    type: str
-    text: str
-
-
-@dataclass
-class _Resp:
-    content: list[Any]
-    stop_reason: str
-    usage: _Usage
-    model: str
-
-
-class _Msgs:
-    def __init__(self, responses: list[_Resp]) -> None:
-        self._responses = responses
-        self.calls: list[dict[str, Any]] = []
-
-    async def create(self, **kwargs: Any) -> _Resp:
-        self.calls.append(kwargs)
-        return self._responses.pop(0)
-
-
-class _Sdk:
-    def __init__(self, responses: list[_Resp]) -> None:
-        self.messages = _Msgs(responses)
+#
+# The narrator now drives ``sidequest.agents.anthropic_sdk_client.query`` (the
+# late-bound module-level seam, spec §6.2/OQ-9). The fake ``query`` replays a
+# scripted message stream but — like the real SDK — the simple converged stream
+# carries no SDK-owned tool round-trip; ``@tool`` handlers (and therefore the
+# orchestrator's ``default_registry.dispatch`` closure) are only invoked by the
+# real SDK loop. So a spy on ``default_registry.dispatch`` would never fire here.
+#
+# Instead we capture the *very* ``ToolContext`` the production path constructs
+# at ``orchestrator.py`` (the Phase-E wiring under test) by wrapping the
+# function-local ``ToolContext`` constructor. That is the load-bearing wiring
+# assertion: ``_run_narration_turn_sdk`` builds a ToolContext with the real
+# ids / lore_store / monster_manual, reachable from ``run_narration_turn`` and
+# driven through the real fake-``query`` transport. The capture is independent
+# of whether a tool actually fires — it proves the construction, which is the
+# thing the spike-era bug got wrong.
 
 
 class _FakeRegistry:
@@ -213,67 +192,41 @@ class _FakeRegistry:
         return []
 
 
-def _single_turn_sdk(prose: str) -> _Sdk:
-    return _Sdk(
-        responses=[
-            _Resp(
-                content=[_TextBlock(type="text", text=prose)],
-                stop_reason="end_turn",
-                usage=_Usage(input_tokens=120, output_tokens=20),
-                model="claude-sonnet-4-6",
-            ),
-        ]
-    )
-
-
 async def _run_sdk_and_capture_ctx(
     monkeypatch: pytest.MonkeyPatch,
     context: TurnContext,
 ) -> ToolContext:
     """Drive ``run_narration_turn`` through the SDK path with a no-tool
-    response and return the ``ToolContext`` the production code built."""
+    converged ``query`` stream and return the ``ToolContext`` the production
+    code constructed at the ``_run_narration_turn_sdk`` call site."""
+    # Story 119-3: subscription transport — both PAYG credentials unset (a SET
+    # key now re-routes to PAYG and raises ``AgentSdkAuthUnavailable``).
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+
+    # Replace the late-bound transport with a converged no-tool turn.
+    monkeypatch.setattr(
+        anthropic_sdk_client,
+        "query",
+        FakeQuery(converged_text_stream(text="The water rises.")),
+        raising=False,
+    )
 
     captured: dict[str, ToolContext] = {}
 
-    async def _spy_dispatch(block: ToolUseBlock, ctx: ToolContext) -> ToolResultBlock:
+    real_tool_context = ToolContext
+
+    def _capturing_tool_context(*args: object, **kwargs: object) -> ToolContext:
+        ctx = real_tool_context(*args, **kwargs)
         captured["ctx"] = ctx
-        return ToolResultBlock(tool_use_id=block.id, content="ok", is_error=False)
+        return ctx
 
-    # complete_with_tools always invokes tool_dispatch via the registry
-    # surface; a one-tool round lets us capture the ctx the production code
-    # constructed. Use a tool_use round so dispatch fires.
-    sdk = _Sdk(
-        responses=[
-            _Resp(
-                content=[
-                    type(
-                        "TU",
-                        (),
-                        {
-                            "type": "tool_use",
-                            "id": "toolu_1",
-                            "name": "query_lore",
-                            "input": {"query": "the wardens"},
-                        },
-                    )()
-                ],
-                stop_reason="tool_use",
-                usage=_Usage(input_tokens=120, output_tokens=10),
-                model="claude-sonnet-4-6",
-            ),
-            _Resp(
-                content=[_TextBlock(type="text", text="The water rises.")],
-                stop_reason="end_turn",
-                usage=_Usage(input_tokens=130, output_tokens=14),
-                model="claude-sonnet-4-6",
-            ),
-        ]
-    )
-    client = AnthropicSdkClient(sdk=sdk)
+    # ``_run_narration_turn_sdk`` does ``from sidequest.agents.tool_registry
+    # import ToolContext`` function-locally, so patch the source module symbol.
+    monkeypatch.setattr(tool_registry_mod, "ToolContext", _capturing_tool_context)
+
+    client = AnthropicSdkClient()
     orch = Orchestrator(client=client)
-
-    monkeypatch.setattr(default_registry, "dispatch", _spy_dispatch)
 
     async def _fake_build_prompt(
         self: Orchestrator, action: str, ctx: TurnContext
@@ -283,7 +236,10 @@ async def _run_sdk_and_capture_ctx(
     monkeypatch.setattr(Orchestrator, "build_narrator_prompt", _fake_build_prompt)
 
     await orch.run_narration_turn("look around", context)
-    assert "ctx" in captured, "tool_dispatch never fired — cannot assert ToolContext wiring"
+    assert "ctx" in captured, (
+        "_run_narration_turn_sdk never constructed a ToolContext — cannot "
+        "assert the Phase-E wiring"
+    )
     return captured["ctx"]
 
 

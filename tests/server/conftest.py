@@ -516,38 +516,34 @@ def _stub_intent_router_factory(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _no_real_anthropic_sdk(monkeypatch):
-    """Autouse guard (Story 93-1): forbid REAL ``AsyncAnthropic`` construction.
+    """Autouse guard: forbid the REAL ``claude-agent-sdk`` query transport.
 
     Third leg of the hermeticity tripod alongside ``_mock_claude_client``
-    (narrator) and ``_stub_intent_router_factory`` (router): story 93-1
-    wired a Haiku call (``infer_archetype_from_freeform``) into the chargen
-    confirm seam, which made ``build_async_anthropic`` reachable from
-    ordinary WS-driven tests. On a developer machine with a live
-    ``ANTHROPIC_API_KEY`` in the environment, four pumblestone gate tests
-    were discovered making REAL billed API calls — and passing/failing on
-    the live model's output. Server tests must be hermetic: any test that
-    reaches the single SDK construction site without installing a fake
-    fails loudly here instead of silently spending money.
+    (narrator) and ``_stub_intent_router_factory`` (router). Story 119-3 ported
+    the narrator + Haiku transport off the raw ``anthropic`` SDK onto
+    ``claude-agent-sdk``'s module-level ``query`` seam (replacing the
+    ``build_async_anthropic`` construction site). A server test that reaches the
+    real ``query`` without installing a fake would drive a live subscription
+    call; on a developer machine with credentials present that silently spends.
+    Server tests must be hermetic: any test that reaches the transport without a
+    fake fails loudly here.
 
-    Tests that need the SDK install their own fake AFTER this guard
-    (monkeypatch LIFO shadowing, same doctrine as the two guards above) —
-    see ``test_93_1_archetype_inference.py::_fake_inference_sdk``.
+    Tests that need the SDK install their own ``FakeQuery`` AFTER this guard
+    (monkeypatch LIFO shadowing, same doctrine as the two guards above) — see
+    ``test_93_1_archetype_inference.py``.
     """
     from sidequest.agents.claude_client import LlmClientError
 
-    def _refuse() -> object:
+    def _refuse(*_args: object, **_kwargs: object) -> object:
         raise LlmClientError(
-            "Test attempted to construct the REAL Anthropic SDK via "
-            "build_async_anthropic() — server tests must be hermetic "
-            "(with a developer ANTHROPIC_API_KEY this silently bills a "
-            "live API call). Install a fake: monkeypatch.setattr("
-            "llm_factory, 'build_async_anthropic', lambda: fake_sdk)."
+            "Test reached the REAL claude-agent-sdk query() transport without "
+            "installing a fake — server tests must be hermetic (with developer "
+            "subscription credentials present this drives a live call). Install "
+            "a fake: monkeypatch.setattr(<module>, 'query', FakeQuery(...))."
         )
 
-    monkeypatch.setattr(
-        "sidequest.agents.llm_factory.build_async_anthropic",
-        _refuse,
-    )
+    monkeypatch.setattr("sidequest.agents.llm_factory.query", _refuse)
+    monkeypatch.setattr("sidequest.agents.anthropic_sdk_client.query", _refuse)
 
 
 @pytest.fixture(autouse=True)

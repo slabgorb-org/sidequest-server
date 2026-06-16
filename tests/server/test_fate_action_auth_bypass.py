@@ -35,12 +35,14 @@ from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore
 from sidequest.game.encounter import EncounterActor, EncounterMetric, StructuredEncounter
 from sidequest.game.fate_sheet import FateSheet
+from sidequest.game.persistence import GameMode
 from sidequest.game.session import GameSnapshot
 from sidequest.handlers.fate_action import HANDLER as FATE_HANDLER
 from sidequest.protocol.fate import FateActionPayload
 from sidequest.protocol.messages import FateActionMessage
 from sidequest.protocol.sanitize import sanitize_player_text
 from sidequest.server.session_handler import _State
+from sidequest.server.session_room import SessionRoom
 
 
 def _pc(name: str, skills: dict[str, int]) -> Character:
@@ -72,14 +74,21 @@ def _two_pc_session(*, authenticated_player_id: str) -> tuple[SimpleNamespace, S
         encounter=enc,
     )
     snap.player_seats = {"p1": "Hero", "p2": "Rival"}
+    # Story 118-7 (F3g): an overcome rolls, so the handler now broadcasts the
+    # 4dF roll via ``sd._room`` (was a sender-only return). Attach a bare MP room
+    # so the broadcast has a target — these tests assert on the sealed-commit
+    # ledger, not delivery, so no attached queues are needed (broadcast → 0
+    # recipients, no crash).
+    room = SessionRoom(slug="slug-auth-bypass", mode=GameMode.MULTIPLAYER)
     sd = SimpleNamespace(
         snapshot=snap,
         genre_pack=SimpleNamespace(rules=SimpleNamespace(ruleset="fate")),
         genre_slug="fate_test",
         world_slug="test_world",
         player_id=authenticated_player_id,
+        _room=room,
     )
-    session = SimpleNamespace(_state=_State.Playing, _session_data=sd)
+    session = SimpleNamespace(_state=_State.Playing, _session_data=sd, _room=room)
     return session, enc
 
 

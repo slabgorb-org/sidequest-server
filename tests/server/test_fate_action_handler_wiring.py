@@ -1,4 +1,4 @@
-"""Wiring net for the FATE_ACTION channel (ADR-144 F1d).
+"""Wiring net for the FATE_ACTION channel (ADR-144 F1d; broadcast updated F3g).
 
 Two assertions, neither a source grep (server CLAUDE.md):
   1. Registry membership — the FATE_ACTION message type resolves to the real
@@ -6,6 +6,13 @@ Two assertions, neither a source grep (server CLAUDE.md):
      reflection exception).
   2. End-to-end — driving HANDLER.handle on a Fate-bound fake session reaches
      dispatch_fate_action → run_fate_exchange (encounter state changes).
+
+Story 118-7 (F3g) changed the roll-delivery contract: the resolved 4dF roll is
+now BROADCAST to the table via ``SessionRoom.broadcast`` (so peers see the
+soloist's roll) rather than RETURNED for sender-only ``out_queue`` delivery, so
+the end-to-end test now attaches a room and asserts the broadcast + an empty
+return (no double-deliver). The broadcast fan-out + player_id attribution detail
+lives in ``test_fate_roll_broadcast_wire_118_7.py``.
 """
 
 from __future__ import annotations
@@ -17,12 +24,35 @@ from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore
 from sidequest.game.encounter import EncounterActor, EncounterMetric, StructuredEncounter
 from sidequest.game.fate_sheet import Aspect, FateSheet
+from sidequest.game.persistence import GameMode
 from sidequest.game.session import GameSnapshot, Npc
 from sidequest.handlers.fate_action import HANDLER as FATE_HANDLER
 from sidequest.protocol.fate import FateActionPayload
 from sidequest.protocol.messages import FateActionMessage, FateRollMessage
 from sidequest.server.session_handler import _State
+from sidequest.server.session_room import SessionRoom
 from sidequest.server.websocket_session_handler import WebSocketSessionHandler
+
+
+def _room_with_seat(player_id: str):
+    """A live MP room with one connected seat + attached outbound queue, so a
+    broadcast from the handler has somewhere to land."""
+    import asyncio as _asyncio
+
+    room = SessionRoom(slug="slug-fate-wire", mode=GameMode.MULTIPLAYER)
+    q: _asyncio.Queue = _asyncio.Queue()
+    room.connect(player_id, socket_id="sock-1")
+    room.attach_outbound("sock-1", q)
+    return room, q
+
+
+def _drain_rolls(q) -> list[FateRollMessage]:
+    out: list[FateRollMessage] = []
+    while not q.empty():
+        m = q.get_nowait()
+        if isinstance(m, FateRollMessage):
+            out.append(m)
+    return out
 
 
 def test_fate_action_is_registered_to_its_handler():
@@ -64,15 +94,18 @@ def test_handler_drives_dispatch_end_to_end():
     snap.npcs.append(_depleted_thug())
 
     # Minimal fake session: the handler reads _state, _session_data (snapshot,
-    # genre_pack.rules.ruleset, player_id), and snapshot.player_seats.
+    # genre_pack.rules.ruleset, player_id), snapshot.player_seats, and the room
+    # (set on both session and session_data — production plumbs it onto both).
+    room, q = _room_with_seat("p1")
     sd = SimpleNamespace(
         snapshot=snap,
         genre_pack=SimpleNamespace(rules=SimpleNamespace(ruleset="fate")),
         genre_slug="fate_test",
         world_slug="test_world",
         player_id="p1",
+        _room=room,
     )
-    session = SimpleNamespace(_state=_State.Playing, _session_data=sd)
+    session = SimpleNamespace(_state=_State.Playing, _session_data=sd, _room=room)
 
     msg = FateActionMessage(
         payload=FateActionPayload(request_id="r1", action="attack", skill="Fight", target="Thug"),
@@ -81,11 +114,13 @@ def test_handler_drives_dispatch_end_to_end():
 
     out = asyncio.run(FATE_HANDLER.handle(session, msg))
 
-    # F3c (ADR-144 / Story 118-3): the handler now BROADCASTS the acting PC's 4dF
-    # roll (was [] in F1d). The roll surface is the story's whole point.
-    assert len(out) == 1
-    assert isinstance(out[0], FateRollMessage)
-    roll = out[0].payload
+    # F3g (ADR-144 / Story 118-7): the handler BROADCASTS the acting PC's 4dF roll
+    # to the table (SOUL Guitar Solo) rather than returning it for sender-only
+    # delivery — so the return is empty and the roll lands on the seat's queue.
+    assert out == [], "the roll is broadcast, not returned for sender-only delivery"
+    rolls = _drain_rolls(q)
+    assert len(rolls) == 1
+    roll = rolls[0].payload
     assert len(roll.dice) == 4 and all(d in (-1, 0, 1) for d in roll.dice)
     assert roll.ladder_name  # the player reads the adjective, not just the number
     assert roll.tier in ("Fail", "Tie", "Succeed", "SucceedWithStyle")
@@ -95,7 +130,7 @@ def test_handler_drives_dispatch_end_to_end():
 
 def test_handler_concede_emits_no_roll():
     """Concession is pre-roll (non-committing) — there is no 4dF roll to surface,
-    so the handler broadcasts nothing (action_roll is None)."""
+    so the handler broadcasts nothing (action_roll is None) and returns nothing."""
     enc = StructuredEncounter(
         encounter_type="duel",
         category="combat",
@@ -110,14 +145,16 @@ def test_handler_concede_emits_no_roll():
         genre_slug="fate_test", characters=[_pc("Hero", {"Fight": 4})], encounter=enc
     )
     snap.npcs.append(_depleted_thug())
+    room, q = _room_with_seat("p1")
     sd = SimpleNamespace(
         snapshot=snap,
         genre_pack=SimpleNamespace(rules=SimpleNamespace(ruleset="fate")),
         genre_slug="fate_test",
         world_slug="test_world",
         player_id="p1",
+        _room=room,
     )
-    session = SimpleNamespace(_state=_State.Playing, _session_data=sd)
+    session = SimpleNamespace(_state=_State.Playing, _session_data=sd, _room=room)
     msg = FateActionMessage(
         payload=FateActionPayload(request_id="r1", action="concede", skill="Fight"),
         player_id="p1",
@@ -125,3 +162,4 @@ def test_handler_concede_emits_no_roll():
 
     out = asyncio.run(FATE_HANDLER.handle(session, msg))
     assert out == []  # no roll surfaced on a concession
+    assert _drain_rolls(q) == []  # and nothing broadcast to the table

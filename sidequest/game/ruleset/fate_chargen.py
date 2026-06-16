@@ -76,20 +76,15 @@ def build_fate_sheet(choices: FateChargenChoices, cfg: FateConfig) -> FateSheet:
     )
 
 
-def validate_fate_sheet(sheet: FateSheet, cfg: FateConfig) -> list[str]:
-    """Return a list of human-readable legality violations; empty == legal.
+def pyramid_violations(allocation: dict[str, int], cfg: FateConfig) -> list[str]:
+    """Pyramid-shape + skills-in-pack violations for a ``{skill: rating}`` allocation.
 
-    Pure; no I/O. The single legality authority (design §9), reused by the engine,
-    the wire contract, and the content validator. Checks: skill-pyramid shape vs
-    ``chargen_pyramid``/``chargen_apex_rating``, skills in the pack list, mandatory
-    non-empty High Concept + Trouble, the free-aspect count, stunts in the pack
-    catalog, and the refresh invariant.
-    """
+    The skill-allocation subset of :func:`validate_fate_sheet`, factored out so the
+    live render mirror of the ``fate_skill_pyramid`` step can reuse the one authority
+    (No duplicate rules). Pure; no I/O."""
     violations: list[str] = []
-
-    # --- skill pyramid shape -------------------------------------------------
     expected = expected_rung_counts(cfg)
-    placed = {name: rating for name, rating in sheet.skills.items() if rating > 0}
+    placed = {name: rating for name, rating in allocation.items() if rating > 0}
     actual_by_rating: dict[int, int] = {}
     for rating in placed.values():
         actual_by_rating[rating] = actual_by_rating.get(rating, 0) + 1
@@ -106,11 +101,33 @@ def validate_fate_sheet(sheet: FateSheet, cfg: FateConfig) -> list[str]:
             violations.append(
                 f"pyramid rung at rating {rating} expects {want} skill(s) but has {have}"
             )
-
-    # --- skills belong to the pack -------------------------------------------
-    for name in sheet.skills:
+    for name in allocation:
         if name not in cfg.skills:
             violations.append(f"skill {name!r} is not in the pack skill list")
+    return violations
+
+
+def stunt_catalog_violations(stunts: list[str], cfg: FateConfig) -> list[str]:
+    """Catalog-membership violations for a stunt-name list (the live ``fate_stunts``
+    mirror subset of :func:`validate_fate_sheet`). Pure; no I/O."""
+    catalog = {s.name for s in cfg.stunts}
+    return [f"stunt {n!r} is not in the pack stunt catalog" for n in stunts if n not in catalog]
+
+
+def validate_fate_sheet(sheet: FateSheet, cfg: FateConfig) -> list[str]:
+    """Return a list of human-readable legality violations; empty == legal.
+
+    Pure; no I/O. The single legality authority (design §9), reused by the engine,
+    the wire contract, and the content validator. Checks: skill-pyramid shape vs
+    ``chargen_pyramid``/``chargen_apex_rating``, skills in the pack list, mandatory
+    non-empty High Concept + Trouble, the free-aspect count, stunts in the pack
+    catalog, and the refresh invariant. Composes the factored ``pyramid_violations``
+    / ``stunt_catalog_violations`` subsets so a rule lives in exactly one place.
+    """
+    violations: list[str] = []
+
+    # --- skill pyramid shape + skills belong to the pack ---------------------
+    violations.extend(pyramid_violations(sheet.skills, cfg))
 
     # --- mandatory aspects ---------------------------------------------------
     if not any(a.kind == "high_concept" and a.text.strip() for a in sheet.aspects):
@@ -118,18 +135,19 @@ def validate_fate_sheet(sheet: FateSheet, cfg: FateConfig) -> list[str]:
     if not any(a.kind == "trouble" and a.text.strip() for a in sheet.aspects):
         violations.append("missing or empty Trouble aspect")
     free_aspects = [a for a in sheet.aspects if a.kind == "character"]
-    if len(free_aspects) != cfg.free_aspect_count:
+    # Free aspects are OPTIONAL at chargen (seeded + refined in play — story 121-8
+    # AC1 / epic 121). ``free_aspect_count`` is the upper bound, not an exact
+    # requirement; 0..N is legal. A present free aspect must still be non-empty.
+    if len(free_aspects) > cfg.free_aspect_count:
         violations.append(
-            f"expected {cfg.free_aspect_count} free aspect(s), found {len(free_aspects)}"
+            f"too many free aspects: at most {cfg.free_aspect_count} allowed, "
+            f"found {len(free_aspects)}"
         )
     if any(not a.text.strip() for a in free_aspects):
         violations.append("a free aspect is empty")
 
     # --- stunts belong to the catalog ----------------------------------------
-    catalog = {s.name for s in cfg.stunts}
-    for stunt in sheet.stunts:
-        if stunt.name not in catalog:
-            violations.append(f"stunt {stunt.name!r} is not in the pack stunt catalog")
+    violations.extend(stunt_catalog_violations([s.name for s in sheet.stunts], cfg))
 
     # --- refresh invariant ----------------------------------------------------
     want_refresh = required_refresh(cfg, len(sheet.stunts))

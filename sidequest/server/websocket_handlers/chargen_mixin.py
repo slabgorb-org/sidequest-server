@@ -50,6 +50,7 @@ from sidequest.game.room_movement import (
     init_room_graph_location,
     process_session_open,
 )
+from sidequest.game.ruleset.fate_chargen import FateChargenError
 from sidequest.game.session import (
     GameSnapshot,
 )
@@ -469,6 +470,110 @@ class CharGenMixin:
             builder.apply_arrangement_reject()
         except BuilderError as exc:
             return [_error_msg(f"arrange_reject failed: {exc!r}")]
+        return self._next_message(builder, sd, player_id)
+
+    # ---- phase=fate_aspects_confirm (ADR-144 F4a3 / story 121-8) -------
+    def _chargen_fate_aspects_confirm(
+        self,
+        builder: CharacterBuilder,
+        payload: CharacterCreationPayload,
+        sd: _SessionData,
+        player_id: str,
+        span: trace.Span,
+    ) -> list[object]:
+        if payload.fate_high_concept is None or payload.fate_trouble is None:
+            return [_error_msg("fate_aspects_confirm requires fate_high_concept and fate_trouble")]
+        # Mandatory pair must be non-empty (No Silent Fallbacks): re-prompt loud and
+        # EARLY at this step rather than letting an empty High Concept / Trouble slip
+        # through to build() (where validate_fate_sheet would reject it). Free aspects
+        # are optional at chargen (seeded + refined in play — story AC1 / epic 121).
+        if not payload.fate_high_concept.strip() or not payload.fate_trouble.strip():
+            return [
+                _error_msg(
+                    "fate_aspects_confirm: High Concept and Trouble are required and "
+                    "cannot be empty"
+                )
+            ]
+        free_aspects = payload.fate_free_aspects or []
+        span.add_event(
+            "character_creation.fate_aspects_confirm",
+            {"player_id": player_id, "free_count": len(free_aspects)},
+        )
+        try:
+            builder.apply_fate_aspects(
+                high_concept=payload.fate_high_concept,
+                trouble=payload.fate_trouble,
+                free_aspects=free_aspects,
+            )
+        except (BuilderError, RuntimeError) as exc:
+            logger.warning("chargen.fate_aspects_confirm_failed err=%r", exc)
+            return [_error_msg("fate_aspects_confirm: could not record aspects")]
+        return self._next_message(builder, sd, player_id)
+
+    # ---- phase=fate_pyramid_confirm -----------------------------------
+    def _chargen_fate_pyramid_confirm(
+        self,
+        builder: CharacterBuilder,
+        payload: CharacterCreationPayload,
+        sd: _SessionData,
+        player_id: str,
+        span: trace.Span,
+    ) -> list[object]:
+        from sidequest.game.ruleset.fate_chargen import pyramid_violations
+        from sidequest.genre.models.rules import FateConfig
+
+        if payload.fate_allocation is None:
+            return [_error_msg("fate_pyramid_confirm requires fate_allocation")]
+        cfg = builder.rules.ruleset_config()
+        if not isinstance(cfg, FateConfig):
+            return [_error_msg("fate_pyramid_confirm: pack carries no FateConfig")]
+        violations = pyramid_violations(payload.fate_allocation, cfg)
+        span.add_event(
+            "character_creation.fate_pyramid_confirm",
+            {"player_id": player_id, "legal": not violations},
+        )
+        if violations:
+            # No Silent Fallbacks: never silently accept an illegal pyramid. Echo
+            # the submission and re-prompt the same step with its violations.
+            builder.preview_fate_pyramid(payload.fate_allocation)
+            return self._next_message(builder, sd, player_id)
+        try:
+            builder.apply_fate_pyramid(payload.fate_allocation)
+        except (BuilderError, RuntimeError) as exc:
+            logger.warning("chargen.fate_pyramid_confirm_failed err=%r", exc)
+            return [_error_msg("fate_pyramid_confirm: could not record allocation")]
+        return self._next_message(builder, sd, player_id)
+
+    # ---- phase=fate_stunts_confirm ------------------------------------
+    def _chargen_fate_stunts_confirm(
+        self,
+        builder: CharacterBuilder,
+        payload: CharacterCreationPayload,
+        sd: _SessionData,
+        player_id: str,
+        span: trace.Span,
+    ) -> list[object]:
+        from sidequest.game.ruleset.fate_chargen import stunt_catalog_violations
+        from sidequest.genre.models.rules import FateConfig
+
+        selected = payload.fate_selected_stunts or []
+        cfg = builder.rules.ruleset_config()
+        if not isinstance(cfg, FateConfig):
+            return [_error_msg("fate_stunts_confirm: pack carries no FateConfig")]
+        # Re-validate at the boundary (server is the authority): an out-of-catalog
+        # stunt is rejected here, not deferred to build().
+        violations = stunt_catalog_violations(selected, cfg)
+        span.add_event(
+            "character_creation.fate_stunts_confirm",
+            {"player_id": player_id, "count": len(selected), "legal": not violations},
+        )
+        if violations:
+            return [_error_msg(f"fate_stunts_confirm: {'; '.join(violations)}")]
+        try:
+            builder.apply_fate_stunts(selected)
+        except (FateChargenError, BuilderError, RuntimeError) as exc:
+            logger.warning("chargen.fate_stunts_confirm_failed err=%r", exc)
+            return [_error_msg("fate_stunts_confirm: could not record stunts")]
         return self._next_message(builder, sd, player_id)
 
     # ---- phase=story_autogen -------------------------------------------
@@ -1146,6 +1251,14 @@ class CharGenMixin:
             character = builder.build(char_name)
         except BuilderError as exc:
             return [_error_msg(f"Character build failed: {exc!r}")]
+        except FateChargenError as exc:
+            # ADR-144 F4a3: a Fate pack's build() routes through apply_fate_chargen,
+            # which fails loud on an illegal sheet (e.g. a cleared mandatory aspect
+            # that slipped past the per-step guards). Catch it here so the WebSocket
+            # never sees an uncaught exception (handler contract) — structured error,
+            # not a leaked repr.
+            logger.warning("chargen.fate_build_rejected err=%r", exc)
+            return [_error_msg("Character build failed: the Fate sheet is incomplete or invalid")]
 
         # Epic 66: copy the parked portrait-picker choice onto the built
         # Character before it lands on the snapshot. None = skipped picker

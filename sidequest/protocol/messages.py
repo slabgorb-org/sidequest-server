@@ -387,6 +387,27 @@ class StockOption(ProtocolBase):
     deltas: StockDeltas = Field(default_factory=StockDeltas)
 
 
+class FateAspectSlot(ProtocolBase):
+    """One editable aspect slot on the Fate ``fate_aspects`` step (121-8, ADR-144 F4a3).
+
+    ``kind`` is ``"high_concept"`` / ``"trouble"`` (the mandatory pair) or
+    ``"character"`` (a free aspect). ``value`` is the player's current text (empty
+    before editing); ``suggestion`` is the archetype/pack seed the UI pre-fills."""
+
+    kind: str
+    label: str
+    value: str = ""
+    required: bool = False
+    suggestion: str = ""
+
+
+class FateStuntOption(ProtocolBase):
+    """One stunt in the catalog on the Fate ``fate_stunts`` step (121-8)."""
+
+    name: str
+    description: str = ""
+
+
 class CharacterCreationPayload(ProtocolBase):
     """Character creation flow payload.
 
@@ -504,6 +525,50 @@ class CharacterCreationPayload(ProtocolBase):
     """Server → client: in-progress build archetype, for UI soft-suggest."""
     suggest_culture: str | None = None
     """Server → client: in-progress build culture hint, for UI soft-suggest."""
+
+    # --- the Fate chargen steps (server → client, story 121-8 / ADR-144 F4a3) ---
+    # The UI mirrors these; the server (validate_fate_sheet) stays the authority.
+    # fate_aspects:
+    fate_aspect_slots: list[FateAspectSlot] | None = None
+    """Editable aspect slots (HC + Trouble + N free); present when input_type is
+    ``"fate_aspects"``."""
+    # fate_skill_pyramid:
+    fate_available_skills: list[str] | None = None
+    """The pack's skills the player may place; present for ``"fate_skill_pyramid"``."""
+    fate_pyramid: list[int] | None = None
+    """Rung counts (apex-narrowest, e.g. [1,2,3,4])."""
+    fate_apex_rating: int | None = None
+    """The top ladder rating of the pyramid (e.g. 4 = Great)."""
+    fate_current_allocation: dict[str, int] | None = None
+    """The player's in-progress ``{skill: rating}`` allocation (empty at first)."""
+    fate_ladder_labels: dict[int, str] | None = None
+    """Ladder rating → adjective (4→Great … 1→Average), for the rung labels."""
+    # fate_stunts:
+    fate_available_stunts: list[FateStuntOption] | None = None
+    """The pack stunt catalog; present for ``"fate_stunts"``."""
+    fate_free_stunts: int | None = None
+    """Stunts free before refresh is debited."""
+    fate_base_refresh: int | None = None
+    """The pack's starting refresh before any stunt debit."""
+    fate_current_refresh: int | None = None
+    """The refresh remaining for the current stunt selection (the readout)."""
+    # shared live-legality mirror (pyramid + stunts steps):
+    fate_legal: bool | None = None
+    """Whether the current step's state is legal per the server validator (mirror)."""
+    fate_violations: list[str] | None = None
+    """Human-readable violations for the current step (mirror; server re-validates)."""
+
+    # --- client → server (the Fate chargen submissions, story 121-8) ---
+    fate_high_concept: str | None = None
+    """High Concept text (phase=fate_aspects_confirm)."""
+    fate_trouble: str | None = None
+    """Trouble text (phase=fate_aspects_confirm)."""
+    fate_free_aspects: list[str] | None = None
+    """Free-aspect texts (phase=fate_aspects_confirm)."""
+    fate_allocation: dict[str, int] | None = None
+    """Submitted ``{skill: rating}`` allocation (phase=fate_pyramid_confirm)."""
+    fate_selected_stunts: list[str] | None = None
+    """Selected stunt names — render echo AND submission (phase=fate_stunts_confirm)."""
 
 
 # ---------------------------------------------------------------------------

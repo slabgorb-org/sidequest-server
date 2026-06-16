@@ -471,6 +471,87 @@ class CharGenMixin:
             return [_error_msg(f"arrange_reject failed: {exc!r}")]
         return self._next_message(builder, sd, player_id)
 
+    # ---- phase=fate_aspects_confirm (ADR-144 F4a3 / story 121-8) -------
+    def _chargen_fate_aspects_confirm(
+        self,
+        builder: CharacterBuilder,
+        payload: CharacterCreationPayload,
+        sd: _SessionData,
+        player_id: str,
+        span: trace.Span,
+    ) -> list[object]:
+        if payload.fate_high_concept is None or payload.fate_trouble is None:
+            return [_error_msg("fate_aspects_confirm requires fate_high_concept and fate_trouble")]
+        free_aspects = payload.fate_free_aspects or []
+        span.add_event(
+            "character_creation.fate_aspects_confirm",
+            {"player_id": player_id, "free_count": len(free_aspects)},
+        )
+        try:
+            builder.apply_fate_aspects(
+                high_concept=payload.fate_high_concept,
+                trouble=payload.fate_trouble,
+                free_aspects=free_aspects,
+            )
+        except (BuilderError, RuntimeError) as exc:
+            return [_error_msg(f"fate_aspects_confirm failed: {exc!r}")]
+        return self._next_message(builder, sd, player_id)
+
+    # ---- phase=fate_pyramid_confirm -----------------------------------
+    def _chargen_fate_pyramid_confirm(
+        self,
+        builder: CharacterBuilder,
+        payload: CharacterCreationPayload,
+        sd: _SessionData,
+        player_id: str,
+        span: trace.Span,
+    ) -> list[object]:
+        from sidequest.game.ruleset.fate_chargen import pyramid_violations
+        from sidequest.genre.models.rules import FateConfig
+
+        if payload.fate_allocation is None:
+            return [_error_msg("fate_pyramid_confirm requires fate_allocation")]
+        cfg = builder._rules.ruleset_config()
+        if not isinstance(cfg, FateConfig):
+            return [_error_msg("fate_pyramid_confirm: pack carries no FateConfig")]
+        violations = pyramid_violations(payload.fate_allocation, cfg)
+        span.add_event(
+            "character_creation.fate_pyramid_confirm",
+            {"player_id": player_id, "legal": not violations},
+        )
+        if violations:
+            # No Silent Fallbacks: never silently accept an illegal pyramid. Echo
+            # the submission and re-prompt the same step with its violations.
+            builder.preview_fate_pyramid(payload.fate_allocation)
+            return self._next_message(builder, sd, player_id)
+        try:
+            builder.apply_fate_pyramid(payload.fate_allocation)
+        except (BuilderError, RuntimeError) as exc:
+            return [_error_msg(f"fate_pyramid_confirm failed: {exc!r}")]
+        return self._next_message(builder, sd, player_id)
+
+    # ---- phase=fate_stunts_confirm ------------------------------------
+    def _chargen_fate_stunts_confirm(
+        self,
+        builder: CharacterBuilder,
+        payload: CharacterCreationPayload,
+        sd: _SessionData,
+        player_id: str,
+        span: trace.Span,
+    ) -> list[object]:
+        from sidequest.game.ruleset.fate_chargen import FateChargenError
+
+        selected = payload.fate_selected_stunts or []
+        span.add_event(
+            "character_creation.fate_stunts_confirm",
+            {"player_id": player_id, "count": len(selected)},
+        )
+        try:
+            builder.apply_fate_stunts(selected)
+        except (FateChargenError, BuilderError, RuntimeError) as exc:
+            return [_error_msg(f"fate_stunts_confirm rejected: {exc!r}")]
+        return self._next_message(builder, sd, player_id)
+
     # ---- phase=story_autogen -------------------------------------------
     def _chargen_story_autogen(
         self,

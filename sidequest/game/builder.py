@@ -40,10 +40,12 @@ from sidequest.genre.models.character import (
     MechanicalEffects,
     OriginTraitDef,
 )
-from sidequest.genre.models.rules import EdgeConfig, RulesConfig
+from sidequest.genre.models.rules import EdgeConfig, FateConfig, RulesConfig
 from sidequest.protocol.messages import (
     CharacterCreationMessage,
     CharacterCreationPayload,
+    FateAspectSlot,
+    FateStuntOption,
 )
 from sidequest.protocol.models import ClassRequirement, CreationChoice, RolledStat
 from sidequest.protocol.types import NonBlankString
@@ -1052,6 +1054,15 @@ class CharacterBuilder:
         # scene walk via record_fate_chargen(). None => the Menu path (the F4a
         # default seed); set => build() attaches the validated interactive sheet.
         self._fate_choices: object | None = None
+        # ADR-144 F4a3 (121-8): per-step accumulator for the interactive Fate
+        # scene walk (aspects -> pyramid -> stunts). The render mirror reads it
+        # for the live current_allocation / selected_stunts / slot values; the
+        # confirm handlers write it; the stunts step assembles _fate_choices.
+        self._fate_high_concept: str = ""
+        self._fate_trouble: str = ""
+        self._fate_free_aspects: list[str] = []
+        self._fate_pyramid: dict[str, int] = {}
+        self._fate_stunts: list[str] = []
 
         # Eager roll at construction — scan scenes for the first
         # `stat_generation: roll_3d6_strict` directive so stat values
@@ -1797,12 +1808,20 @@ class CharacterBuilder:
         player_id: str,
         step: str,
     ) -> CharacterCreationMessage:
-        """Render an interactive Fate chargen step (ADR-144 F4a2). The step name
-        maps to the ``input_type`` the UI renders. The rich per-step payload fields
-        (aspect slots / available skills / stunt catalog with the live legality
-        mirror, design §7) land with their UI consumer in story 121-8; this story
-        ships the input_type surface so the paired-negative gate holds. Fail loud on
-        an unknown step — No Silent Fallbacks."""
+        """Render an interactive Fate chargen step (ADR-144 F4a2/F4a3). The step
+        name maps to the ``input_type`` the UI renders, and the rich per-step
+        payload (aspect slots / available skills / stunt catalog with the live
+        legality mirror, design §7) is populated from the FateConfig + the
+        in-progress accumulator. The server stays the validation authority — the
+        ``fate_legal``/``fate_violations`` mirror reuses the fate_chargen
+        validators; the UI never adjudicates. Fail loud on an unknown step (No
+        Silent Fallbacks) or a missing FateConfig (a fate pack must carry one)."""
+        from sidequest.game.ruleset.fate_chargen import (
+            pyramid_violations,
+            required_refresh,
+            stunt_catalog_violations,
+        )
+
         input_type = {
             "aspects": "fate_aspects",
             "pyramid": "fate_skill_pyramid",
@@ -1813,6 +1832,12 @@ class CharacterBuilder:
                 f"unknown fate_chargen_step {step!r} on scene {scene.id!r} "
                 "(expected 'aspects', 'pyramid', or 'stunts')"
             )
+        cfg = self._rules.ruleset_config()
+        if not isinstance(cfg, FateConfig):
+            raise ValueError(
+                f"fate_chargen_step {step!r} on scene {scene.id!r} requires a fate "
+                f"FateConfig but the pack carries {type(cfg).__name__}"
+            )
         payload = CharacterCreationPayload(
             phase="scene",
             scene_index=scene_index,
@@ -1821,7 +1846,126 @@ class CharacterBuilder:
             input_type=input_type,
             loading_text=scene.loading_text,
         )
+        if step == "aspects":
+            payload.fate_aspect_slots = self._fate_aspect_slots(cfg)
+        elif step == "pyramid":
+            violations = pyramid_violations(self._fate_pyramid, cfg)
+            payload.fate_available_skills = list(cfg.skills.keys())
+            payload.fate_pyramid = list(cfg.chargen_pyramid)
+            payload.fate_apex_rating = cfg.chargen_apex_rating
+            payload.fate_current_allocation = dict(self._fate_pyramid)
+            payload.fate_ladder_labels = self._fate_ladder_labels(cfg)
+            payload.fate_legal = not violations
+            payload.fate_violations = violations
+        elif step == "stunts":
+            violations = stunt_catalog_violations(self._fate_stunts, cfg)
+            payload.fate_available_stunts = [
+                FateStuntOption(name=s.name, description=s.description) for s in cfg.stunts
+            ]
+            payload.fate_selected_stunts = list(self._fate_stunts)
+            payload.fate_free_stunts = cfg.free_stunts
+            payload.fate_base_refresh = cfg.refresh
+            payload.fate_current_refresh = required_refresh(cfg, len(self._fate_stunts))
+            payload.fate_legal = not violations
+            payload.fate_violations = violations
         return CharacterCreationMessage(payload=payload, player_id=player_id)
+
+    def _fate_aspect_slots(self, cfg: FateConfig) -> list[FateAspectSlot]:
+        """The editable aspect slots for the ``fate_aspects`` step: the mandatory
+        High Concept + Trouble (seeded from the pack defaults) then ``free_aspect_count``
+        free slots. ``value`` reflects any prior edit in the accumulator; ``suggestion``
+        is the pack seed the UI pre-fills."""
+        slots = [
+            FateAspectSlot(
+                kind="high_concept",
+                label="High Concept",
+                value=self._fate_high_concept,
+                required=True,
+                suggestion=cfg.default_high_concept,
+            ),
+            FateAspectSlot(
+                kind="trouble",
+                label="Trouble",
+                value=self._fate_trouble,
+                required=True,
+                suggestion=cfg.default_trouble,
+            ),
+        ]
+        for i in range(cfg.free_aspect_count):
+            value = self._fate_free_aspects[i] if i < len(self._fate_free_aspects) else ""
+            slots.append(
+                FateAspectSlot(kind="character", label="Aspect", value=value, required=False)
+            )
+        return slots
+
+    @staticmethod
+    def _fate_ladder_labels(cfg: FateConfig) -> dict[int, str]:
+        """rating -> ladder adjective for 0..apex (the single ladder source)."""
+        from sidequest.game.ruleset.fate_resolution import ladder_name
+
+        return {rating: ladder_name(rating) for rating in range(0, cfg.chargen_apex_rating + 1)}
+
+    def apply_fate_aspects(
+        self, *, high_concept: str, trouble: str, free_aspects: list[str]
+    ) -> None:
+        """Record the aspects step and advance (mirrors ``apply_bones_confirm``)."""
+        self._fate_high_concept = high_concept
+        self._fate_trouble = trouble
+        self._fate_free_aspects = list(free_aspects)
+        self._commit_fate_step("aspects")
+
+    def preview_fate_pyramid(self, allocation: dict[str, int]) -> None:
+        """Echo an in-progress allocation into the accumulator WITHOUT advancing,
+        so a re-prompt (illegal submission) re-renders the pyramid step showing the
+        player's input + its violations. No legality side effects."""
+        self._fate_pyramid = dict(allocation)
+
+    def apply_fate_pyramid(self, allocation: dict[str, int]) -> None:
+        """Record the skill-pyramid step and advance."""
+        self._fate_pyramid = dict(allocation)
+        self._commit_fate_step("pyramid")
+
+    def apply_fate_stunts(self, stunts: list[str]) -> None:
+        """Record the stunts step, assemble the validated choices, and advance.
+
+        Assembling here (the final step) and routing through ``record_fate_chargen``
+        means ``build()`` attaches the interactive sheet via ``apply_fate_chargen``
+        — which re-validates and fails loud on an illegal sheet (No Silent Fallbacks)."""
+        from sidequest.game.ruleset.fate_chargen import FateChargenChoices
+
+        self._fate_stunts = list(stunts)
+        self.record_fate_chargen(
+            FateChargenChoices(
+                high_concept=self._fate_high_concept,
+                trouble=self._fate_trouble,
+                free_aspects=list(self._fate_free_aspects),
+                pyramid=dict(self._fate_pyramid),
+                stunts=list(self._fate_stunts),
+            )
+        )
+        self._commit_fate_step("stunts")
+
+    def _commit_fate_step(self, step: str) -> None:
+        """Record a SceneResult for the current fate-step scene and advance past it
+        (the per-presented-scene ledger doctrine, mirroring ``apply_bones_confirm``)."""
+        if not isinstance(self._phase, InProgress):
+            raise WrongPhaseError(expected="InProgress", actual=self._phase_name())
+        scene_index = self._phase.scene_index
+        scene = self._scenes[scene_index]
+        eff = scene.mechanical_effects
+        if eff is None or eff.fate_chargen_step != step:
+            raise RuntimeError(f"scene {scene.id!r} is not a fate {step!r} step")
+        self._results.append(
+            SceneResult(
+                input_type=ChoiceInput(index=0),
+                effects_applied=eff,
+                hooks_added=[],
+                anchors_added=[],
+                choice_description=None,
+                scene_index=scene_index,
+            )
+        )
+        self._advance_scene(scene_index)
 
     def _render_bones_message(
         self,

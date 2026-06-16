@@ -121,9 +121,7 @@ def _creating_session(tmp_path, builder: CharacterBuilder) -> WebSocketSessionHa
 
 
 def _msg(**fields) -> CharacterCreationMessage:
-    return CharacterCreationMessage(
-        payload=CharacterCreationPayload(**fields), player_id="p1"
-    )  # type: ignore[arg-type]
+    return CharacterCreationMessage(payload=CharacterCreationPayload(**fields), player_id="p1")  # type: ignore[arg-type]
 
 
 def _is_unknown_phase(out: list) -> bool:
@@ -207,9 +205,7 @@ class TestFateSubmissionRoundTrip:
 
         rejected = False
         try:
-            out = await h.handle(
-                handler, _msg(phase="fate_pyramid_confirm", fate_allocation=bad)
-            )
+            out = await h.handle(handler, _msg(phase="fate_pyramid_confirm", fate_allocation=bad))
             # Accepted-with-rejection: an error/violations frame came back AND the
             # illegal allocation did not silently become the sheet.
             if any(isinstance(m, ErrorMessage) for m in out):

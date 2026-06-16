@@ -47,7 +47,7 @@ from typing import Any
 
 from sidequest.game.builder import CharacterBuilder
 from sidequest.genre.models.character import CharCreationScene, MechanicalEffects
-from sidequest.genre.models.rules import FateConfig, FateStuntDef, RulesConfig
+from sidequest.genre.models.rules import RulesConfig
 from sidequest.protocol.messages import CharacterCreationPayload
 
 # ---------------------------------------------------------------------------

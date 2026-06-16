@@ -114,6 +114,12 @@ class CharacterCreationHandler:
             return session._chargen_arrange_confirm(builder, sd, player_id, span)
         if phase == "arrange_reject":
             return session._chargen_arrange_reject(builder, sd, player_id, span)
+        if phase == "fate_aspects_confirm":
+            return session._chargen_fate_aspects_confirm(builder, payload, sd, player_id, span)
+        if phase == "fate_pyramid_confirm":
+            return session._chargen_fate_pyramid_confirm(builder, payload, sd, player_id, span)
+        if phase == "fate_stunts_confirm":
+            return session._chargen_fate_stunts_confirm(builder, payload, sd, player_id, span)
         if phase == "story_autogen":
             return session._chargen_story_autogen(builder, payload, sd, player_id, span)
         if phase == "story_confirm":

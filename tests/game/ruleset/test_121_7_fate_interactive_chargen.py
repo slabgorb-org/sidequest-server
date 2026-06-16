@@ -39,13 +39,13 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pydantic import ValidationError
 
-# fate_chargen is NEW in F4a2. The ImportError in RED is the first signal Dev must
-# satisfy (create the module); once present, the behavioral assertions below take over.
-from sidequest.game.ruleset.fate_chargen import FateChargenChoices, validate_fate_sheet
-
 from sidequest.game.builder import CharacterBuilder
 from sidequest.game.fate_sheet import Aspect, FateSheet, Stunt
 from sidequest.game.ruleset import get_ruleset_module
+
+# fate_chargen is NEW in F4a2. The ImportError in RED is the first signal Dev must
+# satisfy (create the module); once present, the behavioral assertions below take over.
+from sidequest.game.ruleset.fate_chargen import FateChargenChoices, validate_fate_sheet
 from sidequest.genre.models.character import (
     CharCreationChoice,
     CharCreationScene,
@@ -333,12 +333,18 @@ class TestAC3ValidatorRejections:
         violations = validate_fate_sheet(legal_sheet(trouble=None), fate_config())
         assert any("trouble" in v.lower() for v in violations)
 
-    def test_wrong_free_aspect_count_is_rejected(self) -> None:
-        # free_aspect_count == 3 by default; two free aspects is illegal.
+    def test_too_many_free_aspects_is_rejected(self) -> None:
+        # free_aspect_count == 3 is the UPPER bound; free aspects are optional at
+        # chargen (story 121-8 AC1 / epic 121 "seeded + refined in play"), so FOUR
+        # exceeds the cap and is illegal.
         violations = validate_fate_sheet(
-            legal_sheet(free_aspects=["Only One", "Only Two"]), fate_config()
+            legal_sheet(free_aspects=["One", "Two", "Three", "Four"]), fate_config()
         )
         assert any("aspect" in v.lower() for v in violations)
+
+    def test_fewer_free_aspects_is_legal(self) -> None:
+        # Free aspects optional (≤ free_aspect_count): one of three is legal.
+        assert validate_fate_sheet(legal_sheet(free_aspects=["Just One"]), fate_config()) == []
 
     def test_stunt_not_in_catalog_is_rejected(self) -> None:
         violations = validate_fate_sheet(legal_sheet(stunts=["Time Travel"]), fate_config())

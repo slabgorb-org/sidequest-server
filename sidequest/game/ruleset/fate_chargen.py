@@ -135,9 +135,13 @@ def validate_fate_sheet(sheet: FateSheet, cfg: FateConfig) -> list[str]:
     if not any(a.kind == "trouble" and a.text.strip() for a in sheet.aspects):
         violations.append("missing or empty Trouble aspect")
     free_aspects = [a for a in sheet.aspects if a.kind == "character"]
-    if len(free_aspects) != cfg.free_aspect_count:
+    # Free aspects are OPTIONAL at chargen (seeded + refined in play — story 121-8
+    # AC1 / epic 121). ``free_aspect_count`` is the upper bound, not an exact
+    # requirement; 0..N is legal. A present free aspect must still be non-empty.
+    if len(free_aspects) > cfg.free_aspect_count:
         violations.append(
-            f"expected {cfg.free_aspect_count} free aspect(s), found {len(free_aspects)}"
+            f"too many free aspects: at most {cfg.free_aspect_count} allowed, "
+            f"found {len(free_aspects)}"
         )
     if any(not a.text.strip() for a in free_aspects):
         violations.append("a free aspect is empty")

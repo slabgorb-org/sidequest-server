@@ -218,3 +218,114 @@ class TestFateSubmissionRoundTrip:
             rejected = True  # fail-loud raise is also acceptable
 
         assert rejected, "an illegal pyramid submission must not be silently accepted"
+
+
+# ---------------------------------------------------------------------------
+# Reviewer-rework regression (121-8): the default flow must not dead-end, and an
+# illegal sheet must surface as a structured error — never an uncaught exception.
+# ---------------------------------------------------------------------------
+
+
+class TestFateReworkRegression:
+    async def test_default_flow_zero_free_aspects_builds_legal_sheet(self, tmp_path) -> None:
+        # The HIGH the Reviewer caught: free aspects are OPTIONAL at chargen, so the
+        # default flow (HC + Trouble seeded, free slots left blank) must produce a
+        # LEGAL sheet — not a build() rejection.
+        handler = _creating_session(tmp_path, _fate_builder())
+        h = CharacterCreationHandler()
+        await h.handle(
+            handler,
+            _msg(
+                phase="fate_aspects_confirm",
+                fate_high_concept=HIGH_CONCEPT,
+                fate_trouble=TROUBLE,
+                fate_free_aspects=[],  # default: no free aspects authored
+            ),
+        )
+        await h.handle(handler, _msg(phase="fate_pyramid_confirm", fate_allocation=legal_pyramid()))
+        await h.handle(handler, _msg(phase="fate_stunts_confirm", fate_selected_stunts=[]))
+        character = handler._session_data.builder.build("Sam Quaid")
+        sheet = character.core.fate_sheet
+        assert isinstance(sheet, FateSheet)
+        assert sheet.skills == legal_pyramid()
+        assert sum(1 for a in sheet.aspects if a.kind == "character") == 0
+
+    async def test_empty_high_concept_is_re_prompted_early(self, tmp_path) -> None:
+        # An empty mandatory aspect must be rejected EARLY at the aspects step
+        # (structured error), not silently advanced to a late build() failure.
+        handler = _creating_session(tmp_path, _fate_builder())
+        out = await CharacterCreationHandler().handle(
+            handler,
+            _msg(
+                phase="fate_aspects_confirm",
+                fate_high_concept="   ",
+                fate_trouble=TROUBLE,
+                fate_free_aspects=[],
+            ),
+        )
+        assert any(isinstance(m, ErrorMessage) for m in out)
+        # Did NOT advance — the builder is still on the aspects step.
+        assert handler._session_data.builder.to_scene_message("p1").payload.input_type == (
+            "fate_aspects"
+        )
+
+    async def test_out_of_catalog_stunt_rejected_at_boundary(self, tmp_path) -> None:
+        # Server is the validation authority: an out-of-catalog stunt is rejected at
+        # the stunts step, not deferred to build().
+        handler = _creating_session(tmp_path, _fate_builder())
+        h = CharacterCreationHandler()
+        await h.handle(
+            handler,
+            _msg(
+                phase="fate_aspects_confirm",
+                fate_high_concept=HIGH_CONCEPT,
+                fate_trouble=TROUBLE,
+                fate_free_aspects=[],
+            ),
+        )
+        await h.handle(handler, _msg(phase="fate_pyramid_confirm", fate_allocation=legal_pyramid()))
+        out = await h.handle(
+            handler, _msg(phase="fate_stunts_confirm", fate_selected_stunts=["Time Travel"])
+        )
+        assert any(isinstance(m, ErrorMessage) for m in out)
+
+    async def test_confirmation_catches_illegal_fate_build(self, tmp_path) -> None:
+        # Defense in depth: if an illegal sheet ever reaches build() (e.g. a poisoned
+        # choices object), _chargen_confirmation must return a structured ERROR — the
+        # FateChargenError must never leak uncaught through the handler.
+        from opentelemetry import trace
+
+        from sidequest.game.ruleset.fate_chargen import FateChargenChoices
+
+        handler = _creating_session(tmp_path, _fate_builder())
+        h = CharacterCreationHandler()
+        # Walk to confirmation with a legal sheet...
+        await h.handle(
+            handler,
+            _msg(
+                phase="fate_aspects_confirm",
+                fate_high_concept=HIGH_CONCEPT,
+                fate_trouble=TROUBLE,
+                fate_free_aspects=[],
+            ),
+        )
+        await h.handle(handler, _msg(phase="fate_pyramid_confirm", fate_allocation=legal_pyramid()))
+        await h.handle(handler, _msg(phase="fate_stunts_confirm", fate_selected_stunts=[]))
+        builder = handler._session_data.builder
+        # ...then poison the recorded choices with an illegal (empty HC) sheet.
+        builder.record_fate_chargen(
+            FateChargenChoices(
+                high_concept="",
+                trouble=TROUBLE,
+                free_aspects=[],
+                pyramid=legal_pyramid(),
+                stunts=[],
+            )
+        )
+        out = await handler._chargen_confirmation(
+            builder, handler._session_data, "p1", trace.get_current_span()
+        )
+        assert any(isinstance(m, ErrorMessage) for m in out), (
+            "an illegal Fate sheet at build() must surface as a structured ERROR, "
+            "not leak an uncaught FateChargenError"
+        )

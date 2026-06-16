@@ -559,15 +559,19 @@ class CharacterCreationPayload(ProtocolBase):
     """Human-readable violations for the current step (mirror; server re-validates)."""
 
     # --- client → server (the Fate chargen submissions, story 121-8) ---
-    fate_high_concept: str | None = None
+    # Bounded to defend the narrator token budget + O(N) validation against a
+    # crafted client (aspect text is phrase-length; the validator is the authority).
+    fate_high_concept: Annotated[str, Field(max_length=200)] | None = None
     """High Concept text (phase=fate_aspects_confirm)."""
-    fate_trouble: str | None = None
+    fate_trouble: Annotated[str, Field(max_length=200)] | None = None
     """Trouble text (phase=fate_aspects_confirm)."""
-    fate_free_aspects: list[str] | None = None
+    fate_free_aspects: (
+        Annotated[list[Annotated[str, Field(max_length=200)]], Field(max_length=10)] | None
+    ) = None
     """Free-aspect texts (phase=fate_aspects_confirm)."""
-    fate_allocation: dict[str, int] | None = None
+    fate_allocation: Annotated[dict[str, int], Field(max_length=50)] | None = None
     """Submitted ``{skill: rating}`` allocation (phase=fate_pyramid_confirm)."""
-    fate_selected_stunts: list[str] | None = None
+    fate_selected_stunts: Annotated[list[str], Field(max_length=50)] | None = None
     """Selected stunt names — render echo AND submission (phase=fate_stunts_confirm)."""
 
 

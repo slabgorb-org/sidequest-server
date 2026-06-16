@@ -18,10 +18,13 @@ from sidequest.protocol.base import ProtocolBase
 class FateActionPayload(ProtocolBase):
     """Client -> server: a Fate action to seal (or a concession).
 
-    - ``action``: the three proactive actions plus ``concede`` (concede is
-      pre-roll and routes to ``concede_in_conflict``, never to the commit ledger).
-      Defend is reactive (engine-rolled), never submitted — there is no
-      full_defense (not in the Fate SRD).
+    - ``action``: the three proactive actions plus ``concede`` and the two compel
+      verbs ``compel_accept`` / ``compel_refuse`` (ADR-144 F3e). ``concede`` and the
+      compel verbs are pre-roll and non-committing — they route to
+      ``concede_in_conflict`` / ``resolve_compel`` respectively, never to the commit
+      ledger. A compel verb names the compelled aspect in ``aspect_text``. Defend is
+      reactive (engine-rolled), never submitted — there is no full_defense (not in
+      the Fate SRD).
     - ``skill``: the skill name used (empty for ``concede``).
     - ``target``: the opposed participant for an ACTIVE action (the engine rolls
       their defense); ``None`` for a passive action.
@@ -42,7 +45,9 @@ class FateActionPayload(ProtocolBase):
     """
 
     request_id: str
-    action: Literal["overcome", "create_advantage", "attack", "concede"]
+    action: Literal[
+        "overcome", "create_advantage", "attack", "concede", "compel_accept", "compel_refuse"
+    ]
     skill: str = ""
     target: str | None = None
     difficulty: int = 0

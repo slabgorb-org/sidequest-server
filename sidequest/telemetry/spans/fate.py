@@ -111,6 +111,16 @@ SPAN_ROUTES["fate.compel.accepted"] = SpanRoute(
         "fate_points_after": (span.attributes or {}).get("fate_points_after", 0),
     },
 )
+SPAN_ROUTES["fate.compel.refused"] = SpanRoute(
+    event_type="state_transition",
+    component="fate",
+    extract=lambda span: {
+        "field": "compel_refused",
+        "actor": (span.attributes or {}).get("actor", ""),
+        "aspect": (span.attributes or {}).get("aspect", ""),
+        "fate_points_after": (span.attributes or {}).get("fate_points_after", 0),
+    },
+)
 SPAN_ROUTES["fate.stress.applied"] = SpanRoute(
     event_type="state_transition",
     component="fate",
@@ -254,6 +264,28 @@ def fate_compel_accepted_span(
         **attrs,
     }
     with Span.open("fate.compel.accepted", attributes, tracer_override=_tracer):
+        pass
+
+
+def fate_compel_refused_span(
+    *,
+    actor: str,
+    aspect: str,
+    fate_points_after: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``fate.compel.refused`` — a compel declined (pays one fate point per
+    SRD). The GM-panel evidence the player BOUGHT OUT of the complication, not just
+    that an offer was made — the decline half of the F3e accept/refuse round-trip."""
+    attributes: dict[str, Any] = {
+        "field": "compel_refused",
+        "actor": actor,
+        "aspect": aspect,
+        "fate_points_after": fate_points_after,
+        **attrs,
+    }
+    with Span.open("fate.compel.refused", attributes, tracer_override=_tracer):
         pass
 
 
@@ -878,6 +910,7 @@ __all__ = [
     "fate_aspect_invoked_span",
     "fate_compel_accepted_span",
     "fate_compel_offered_span",
+    "fate_compel_refused_span",
     "fate_conceded_span",
     "fate_flavor_rider_span",
     "fate_consequence_taken_span",

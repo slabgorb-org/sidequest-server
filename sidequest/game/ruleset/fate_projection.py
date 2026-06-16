@@ -24,6 +24,7 @@ from sidequest.protocol.models import (
     FateConflictEntry,
     FateConflictParticipant,
     FateConsequenceEntry,
+    FatePendingCompel,
     FateRollPayload,
     FateSkillEntry,
     FateStatePayload,
@@ -135,7 +136,10 @@ def build_fate_state_payload(snapshot: GameSnapshot) -> FateStatePayload:
     # compact projection's `active_conflict` reads). The guard is inlined per
     # branch so the type checker narrows `enc` to non-None.
     scene_aspects = (
-        [FateAspectEntry(text=a.text, kind=a.kind, free_invokes=a.free_invokes) for a in enc.situation_aspects]
+        [
+            FateAspectEntry(text=a.text, kind=a.kind, free_invokes=a.free_invokes)
+            for a in enc.situation_aspects
+        ]
         if enc is not None and not enc.resolved
         else []
     )
@@ -145,6 +149,13 @@ def build_fate_state_payload(snapshot: GameSnapshot) -> FateStatePayload:
             # Seating order is the engine's tiebreak order
             # (fate_opponent._live_player_actors); preserve encounter.actors order.
             participants=[FateConflictParticipant(name=a.name, side=a.side) for a in enc.actors],
+            # ADR-144 F3e: surface the narrator's offered compels so the player
+            # surface can render its accept/refuse control. Display text is raw
+            # (the UI escapes it), consistent with the rest of this builder.
+            pending_compels=[
+                FatePendingCompel(aspect=c.aspect, target=c.target, reason=c.reason)
+                for c in enc.pending_compels
+            ],
         )
         if enc is not None and not enc.resolved
         else None

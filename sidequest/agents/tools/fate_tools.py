@@ -71,7 +71,23 @@ async def propose_fate_compel(args: ProposeFateCompelArgs, ctx: ToolContext) -> 
         raise ValueError(f"ruleset 'fate' resolved a non-Fate module: {type(module).__name__}")
     # offer_compel fires fate.compel.offered (no economy change). The GM panel sees the
     # offer even when the player declines — including the proposed complication (reason).
-    module.offer_compel(aspect_text=args.aspect_text, actor=args.actor, reason=args.compel_reason)
+    #
+    # ADR-144 F3e: PERSIST the offer onto the CANONICAL in-turn snapshot's active
+    # conflict (the one the end-of-turn ``room.save`` writes — the advance_confrontation
+    # discipline), NOT a fresh ``repository.load()`` copy that the save would clobber. The
+    # persisted PendingCompel rides the next FATE_STATE projection to the player's
+    # accept/refuse control. With no active conflict there is nowhere to attach (the F3e
+    # surface is conflict-scoped) — offer_compel still fires the span, it just isn't
+    # actionable. ``ctx.snapshot`` is the conflict-turn snapshot; on a non-conflict offer
+    # it may be absent, which is the not-actionable path (no silent state loss — the offer
+    # was never persistable to begin with).
+    encounter = ctx.snapshot.encounter if ctx.snapshot is not None else None
+    module.offer_compel(
+        aspect_text=args.aspect_text,
+        actor=args.actor,
+        reason=args.compel_reason,
+        encounter=encounter,
+    )
     return ToolResult.ok(
         {"offered": args.aspect_text, "actor": args.actor, "reason": args.compel_reason}
     )

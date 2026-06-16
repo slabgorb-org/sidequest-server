@@ -185,6 +185,25 @@ class FateSealedCommit(BaseModel):
     aspect_text: str = ""
 
 
+class PendingCompel(BaseModel):
+    """One narrator-offered compel awaiting the player's accept/refuse (ADR-144 F3e).
+
+    F2b's ``propose_fate_compel`` fired ``fate.compel.offered`` but persisted
+    nothing — the offer evaporated. F3e persists it here so the FATE_STATE
+    projection can surface it to the player and the accept/refuse round-trip can
+    resolve it. ``target`` is the compelled PC, ``aspect`` the compelled aspect
+    (verbatim), ``reason`` the complication the narrator proposed. ``offered_delta``
+    is the fate point the player GAINS by accepting (SRD: +1); refusing pays one.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    target: str
+    aspect: str
+    reason: str = ""
+    offered_delta: int = 1
+
+
 class EncounterMetric(BaseModel):
     """Ascending dial. ``current`` advances toward ``threshold``; the side
     that reaches ``threshold`` first triggers resolution.
@@ -250,6 +269,11 @@ class StructuredEncounter(BaseModel):
     """ADR-144 F1c: scene-scoped Fate aspects placed by create-advantage (and
     boosts from ties). Distinct from character/consequence aspects, which live on
     the actor's FateSheet. Cleared on scene end (F2/F3 lifecycle)."""
+    pending_compels: list[PendingCompel] = Field(default_factory=list)
+    """ADR-144 F3e: compels the narrator has offered this conflict, awaiting the
+    player's accept/refuse. ``offer_compel`` appends; the accept/refuse dispatch
+    consumes the matching entry. The FATE_STATE projection surfaces these to the
+    player surface. Always empty for native/WN encounters."""
     zones: list[str] = Field(default_factory=list)
     """ADR-144 F1c: named Fate zones for this scene (reuses the encounter as the
     spatial notion — design §4.2 / open-Q3). An actor's current zone lives in
@@ -320,6 +344,23 @@ class StructuredEncounter(BaseModel):
             if a.name == name:
                 return a
         return None
+
+    def add_pending_compel(self, *, target: str, aspect: str, reason: str = "") -> PendingCompel:
+        """Persist a narrator-offered compel awaiting accept/refuse (ADR-144 F3e)."""
+        compel = PendingCompel(target=target, aspect=aspect, reason=reason)
+        self.pending_compels.append(compel)
+        return compel
+
+    def find_pending_compel(self, *, target: str, aspect: str) -> PendingCompel | None:
+        """The pending compel on ``aspect`` offered to ``target``, or None."""
+        for c in self.pending_compels:
+            if c.target == target and c.aspect == aspect:
+                return c
+        return None
+
+    def remove_pending_compel(self, compel: PendingCompel) -> None:
+        """Consume a resolved compel (accepted or refused)."""
+        self.pending_compels.remove(compel)
 
     def find_actor_for_player(self, player_name: str) -> EncounterActor | None:
         for a in self.actors:

@@ -80,3 +80,6 @@ artifacts/router_corpus.jsonl
 
 # brm (brainstorm/agent tool) scratch
 .brm/
+
+# 123-1 test-baseline census run logs — regenerable, see docs/test-baseline-manifest.json
+artifacts/123-1/

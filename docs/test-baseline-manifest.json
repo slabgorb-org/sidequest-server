@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "story": "123-1",
+  "title": "Server test-suite baseline-failure manifest",
+  "generated_from": {
+    "census": "Reproduce: `env -u ANTHROPIC_API_KEY uv run pytest tests/ -n0 --junitxml=census.xml` on freshly FF-pulled develop \u2014 full suite (13,286 tests), serial (-n0) to avoid the known parallel OTEL span-count deadlock, clean env (key unset). Run logs are dev-local (gitignored under artifacts/123-1/), not committed; this manifest is the durable record.",
+    "recheck": "Reproduce: re-run the census failures with the fix applied and the key set \u2014 `uv run pytest <failed-nodeids> -n0 --junitxml=recheck.xml`. Confirms 0 SDK-hermeticity residue."
+  },
+  "summary": {
+    "suite_size": 13286,
+    "census_failing": 269,
+    "fixed_by_this_story": 170,
+    "deferred_epic_108": 84,
+    "investigated_preexisting": 8,
+    "deliverable_self_tests": 6,
+    "note": "The dominant SDK-hermeticity bucket (169 server tests) and the snapshot-governance failure (1) are FIXED. Remaining baseline failures are deferred (epic-108 WWN de-nativization) or investigated (pre-existing, unrelated). For AC-4 'green-or-explicitly-quarantined': the deferred buckets are explicitly documented here per the story's WWN disposition clause; epic-108 owns and repairs them, so they are intentionally not xfail-churned across ~84 tests."
+  },
+  "buckets": [
+    {
+      "category": "SDK hermeticity \u2014 un-seeded objective classifier",
+      "disposition": "fixed",
+      "count": 169,
+      "root_cause": "Story 117-6 wired build_unseeded_objective_classifier_llm into _execute_narration_turn (websocket_session_handler.py:1197); the adapter constructs the real Anthropic SDK eagerly in __init__ (llm_factory.py:692), before the watcher's cost-gate. The 93-1 hermeticity tripod had no leg for it, so every WS-driven test reaching narration tripped the _no_real_anthropic_sdk guard. Root-caused as a REAL develop regression (deterministic on fresh develop), NOT a stale-tree/env artifact: the guard fires regardless of ANTHROPIC_API_KEY; unsetting the key did not change this count and only added 4 key-requiring artifact failures (see the clean-env bucket).",
+      "fix": "Added a 4th autouse leg `_stub_unseeded_objective_classifier` in tests/server/conftest.py: monkeypatches `websocket_session_handler.build_unseeded_objective_classifier_llm` to a no-op fake (emit_tool -> is_objective_given=False), mirroring `_stub_intent_router_factory`. Recheck: 0 SDK-hermeticity residue in tests/server.",
+      "tests": [
+        "tests/server/dispatch/test_entity_sync_dispatch.py::test_narration_turn_syncs_entity_cards",
+        "tests/server/dispatch/test_entity_sync_dispatch.py::test_second_turn_refreshes_mutated_card",
+        "tests/server/dispatch/test_entity_sync_world_tier_tropes.py::test_chargen_commit_runs_seeded_trope_audit",
+        "tests/server/dispatch/test_lore_accretion_dispatch.py::test_narration_turn_accretes_known_facts",
+        "tests/server/dispatch/test_monster_manual_inject.py::test_execute_narration_turn_refreshes_stale_monster_manual",
+        "tests/server/dispatch/test_universal_retrieval_dispatch.py::test_narration_turn_survives_emit_failure",
+        "tests/server/test_106_1_chargen_armor_wire.py::test_chargen_confirm_fires_armor_derivation_through_real_wire",
+        "tests/server/test_45_20_trope_resolution_wire.py::TestDispatchSeamEmitsHandshakeSpan::test_dispatch_seam_emits_handshake_span_with_full_payload",
+        "... +161 more"
+      ]
+    },
+    {
+      "category": "Snapshot-field governance \u2014 pending_quest_offers uncategorized",
+      "disposition": "fixed",
+      "count": 1,
+      "root_cause": "Story 117-3 added pending_quest_offers: dict[str, QuestSeed] to GameSnapshot (session.py:846) without an ADR-110 bounding registry placement, failing the 61-5 architecture gate.",
+      "fix": "Categorized pending_quest_offers in _BOUNDED_BY_CONSTRUCTION (session_helpers.py), category (d): the key domain (quest ids) is finite, like quest_log.",
+      "tests": [
+        "tests/server/test_snapshot_field_governance.py::test_every_snapshot_field_is_categorized"
+      ]
+    },
+    {
+      "category": "WWN beat-pool de-nativization \u2014 committed_blow / cast_spell not in pool",
+      "disposition": "deferred",
+      "count": 59,
+      "root_cause": "Under a Without Number binding the native beat pool is de-nativized (zero-beat). Content carrying stale encounter_beat_choices (committed_blow) or expecting cast_spell beats fails the loader/live-content cross-reference (genre/loader.py:794, PackError). Deliberate in-flight WWN work (SOUL.md 'Bind the Ruleset, Don't Balance It'; ADR-143), not a regression to fix here.",
+      "owning_epic": "epic-108 (108-3 / 108-7) \u2014 WWN de-nativization",
+      "tests": [
+        "tests/game/test_barsoom_cast_beat_live_content.py::test_barsoom_caster_sees_cast_spell_in_live_combat[Mentalist-phantom_bowmen]",
+        "tests/game/test_barsoom_cast_beat_live_content.py::test_barsoom_caster_sees_cast_spell_in_live_combat[Super-scientist-disintegration_ray]",
+        "tests/genre/test_class_abilities_loader.py::test_caverns_and_claudes_loads_with_committed_blow_beat",
+        "tests/genre/test_classes_yaml_loader.py::test_classes_yaml_loads_entries",
+        "tests/genre/test_elemental_harmony_loads_wwn.py::test_elemental_harmony_loads_clean_under_wwn",
+        "tests/genre/test_heavy_metal_loads_wwn_classes.py::test_heavy_metal_blade_work_has_class_filtered_cast_spell",
+        "tests/integration/test_102_4_dead_premise.py::test_actor_dropped_before_its_slot_does_not_act",
+        "tests/integration/test_102_4_dead_premise.py::test_dead_premise_reaches_the_narrator_surface",
+        "... +51 more"
+      ]
+    },
+    {
+      "category": "WWN chargen / content drift \u2014 None class choices, archetype resolution",
+      "disposition": "deferred",
+      "count": 17,
+      "root_cause": "Chargen e2e / class-signature / lore-link integration tests against WWN-ported content (caverns_and_claudes) resolve class choices to [None, ...] or raise InvalidChoiceError. Tracks the content-side WWN migration; resolves with epic-108.",
+      "owning_epic": "epic-108 \u2014 WWN de-nativization + caverns_and_claudes WWN port",
+      "tests": [
+        "tests/genre/test_beneath_sunden_room_binding_107_2.py::test_distinct_rooms_bind_distinct_creatures",
+        "tests/integration/test_cc_chargen_e2e.py::test_e2e_archetype_resolution_gate_passes",
+        "tests/integration/test_cc_chargen_e2e.py::test_e2e_chargen_produces_classed_mage",
+        "tests/integration/test_cc_chargen_e2e.py::test_e2e_chargen_produces_classed_warrior",
+        "tests/integration/test_cc_chargen_e2e.py::test_e2e_warrior_kit_always_includes_exactly_one_heal_potion",
+        "tests/integration/test_class_signature_wiring.py::test_class_signature_prose_is_pronoun_agnostic[Expert-Read the Ledger]",
+        "tests/integration/test_class_signature_wiring.py::test_class_signature_prose_is_pronoun_agnostic[Mage-Read the Worked Stone]",
+        "tests/integration/test_class_signature_wiring.py::test_class_signature_prose_is_pronoun_agnostic[Warrior-Killing Blow]",
+        "... +9 more"
+      ]
+    },
+    {
+      "category": "WN round / sealed-commit wiring",
+      "disposition": "deferred",
+      "count": 8,
+      "root_cause": "Integration tests asserting the WN sealed-round runs end-to-end ('the wire commit must run the sealed round; got []') and item-use/spell-cast round wiring \u2014 in-flight WN-round work of epic-108.",
+      "owning_epic": "epic-108 (108-1 / 108-5) \u2014 WN owns the round",
+      "tests": [
+        "tests/integration/test_102_4_wn_family_smoke.py::test_first_commit_seals_across_the_wn_family[heavy_metal-wwn]",
+        "tests/integration/test_102_4_wn_round_wire_wiring.py::test_mp_wire_first_commit_seals_second_commit_fires_the_round",
+        "tests/integration/test_102_4_wn_round_wire_wiring.py::test_ws_dice_throw_runs_the_initiative_ordered_round",
+        "tests/integration/test_106_2_wwn_defensive_reprisal.py::test_posture_helper_push_prevents_only_on_success_not_tie",
+        "tests/integration/test_106_4_item_use_beat.py::test_item_use_costs_the_round_opponent_still_attacks",
+        "tests/integration/test_108_1_wn_native_scaffolding_cut.py::test_ws_dice_throw_suppresses_native_scaffolding_end_to_end",
+        "tests/integration/test_108_5_wn_flavor_rider.py::test_flavor_rider_span_wired_end_to_end",
+        "tests/integration/test_dice_throw_spell_cast_wiring_102_2.py::test_ws_dice_throw_with_spell_id_reaches_cast_spine"
+      ]
+    },
+    {
+      "category": "Pre-existing stale hardcoded counts",
+      "disposition": "investigated",
+      "count": 2,
+      "root_cause": "Stale literal-count assertions whose production code is correct: MessageType has 57 (test expects 56); the narrator tool roster has 41 (test expects 40). Unrelated to this story; the count grew with the feature that added the variant/tool. Not bumped here (AC-5: do not silence failures by editing assertions) \u2014 the bump belongs with the change that grew the count.",
+      "tests": [
+        "tests/agents/test_narrator_uses_sdk_client.py::test_orchestrator_routes_narration_through_sdk",
+        "tests/protocol/test_enums.py::test_message_type_complete_count"
+      ]
+    },
+    {
+      "category": "Integration-conftest hermeticity gap \u2014 real SDK reached on resume",
+      "disposition": "investigated",
+      "count": 2,
+      "root_cause": "tests/integration/ does not inherit the tests/server/conftest.py autouse hermeticity tripod (sibling dir). Two resume-path tests reach the real Anthropic SDK (401 with a key set; 'ANTHROPIC_API_KEY not set' with it unset). Pre-existing and narrow. Recommended follow-up: re-export the four autouse legs to tests/integration/conftest.py so these fail loud (or pass with a fake) instead of reaching the live SDK.",
+      "tests": [
+        "tests/integration/test_resources_wired_on_session_create.py::test_light_current_preserved_on_resume",
+        "tests/integration/test_resources_wired_on_session_create.py::test_light_pool_wired_on_resume_for_save_predating_pool"
+      ]
+    },
+    {
+      "category": "Clean-env artifacts \u2014 tests that REQUIRE ANTHROPIC_API_KEY set",
+      "disposition": "investigated",
+      "count": 4,
+      "root_cause": "These 4 tests assert the SDK narrator/tool client is returned when the SDK backend is selected, so they need a key present; they fail with AnthropicSdkConfigError ONLY under Step 1's clean-env run (key unset). They PASS in normal CI/dev (key set) \u2014 not a real baseline failure. Step-1 finding: the clean-env run is not apples-to-apples; these tests are env-coupled by design.",
+      "tests": [
+        "tests/agents/test_61_9_sdk_commitment.py::TestNarratorBackendGate::test_narrator_purpose_with_sdk_backend_returns_tooling_client",
+        "tests/agents/test_61_9_sdk_commitment.py::TestNarratorBackendGate::test_tool_purpose_with_sdk_backend_returns_tooling_client",
+        "tests/integration/test_resources_wired_on_session_create.py::test_light_current_preserved_on_resume",
+        "tests/integration/test_resources_wired_on_session_create.py::test_light_pool_wired_on_resume_for_save_predating_pool"
+      ]
+    }
+  ]
+}

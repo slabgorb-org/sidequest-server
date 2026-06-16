@@ -550,6 +550,44 @@ def _no_real_anthropic_sdk(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def _stub_unseeded_objective_classifier(monkeypatch):
+    """Autouse guard (Story 123-1): stub the un-seeded objective classifier LLM.
+
+    Fourth leg of the hermeticity tripod alongside ``_mock_claude_client``
+    (narrator), ``_stub_intent_router_factory`` (router), and
+    ``_no_real_anthropic_sdk`` (the catch-all SDK refusal). Story 117-6
+    wired ``build_unseeded_objective_classifier_llm`` into
+    ``_execute_narration_turn`` — the adapter is constructed *eagerly* every
+    narration turn (before the watcher's cost-gate), and its ``__init__``
+    calls ``build_async_anthropic()``. That made the real SDK reachable from
+    every WS-driven test that reaches narration: ~169 server tests fell to
+    the ``_no_real_anthropic_sdk`` guard with no leg installing a fake — the
+    exact 93-1 failure shape, one construction site later (story 123-1
+    triage, see ``docs/test-baseline-manifest.json``).
+
+    The stub returns an ``ObjectiveClassifierLLM`` whose ``emit_tool`` yields
+    ``is_objective_given=False`` — a no-op verdict, so the post-narration
+    watcher never beeps a phantom objective. Mirrors the empty-``DispatchPackage``
+    contract of ``_stub_intent_router_factory``. Tests that need a real verdict
+    install their own fake AFTER this guard (LIFO shadowing).
+
+    Patched at the handler's import site (``websocket_session_handler``
+    binds the name at import time), not the factory module.
+    """
+
+    async def _no_objective(**_kwargs) -> dict:
+        return {"is_objective_given": False, "confidence": 0.0, "reasoning": None}
+
+    stub_llm = MagicMock()
+    stub_llm.emit_tool = _no_objective
+
+    monkeypatch.setattr(
+        "sidequest.server.websocket_session_handler.build_unseeded_objective_classifier_llm",
+        lambda **_kwargs: stub_llm,
+    )
+
+
 def canned_claude_response(
     *,
     text: str | None = None,

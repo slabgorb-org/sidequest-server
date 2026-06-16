@@ -76,7 +76,14 @@ async def run_fate_action_dispatch(
         target=target,
         difficulty=int(params.get("difficulty", 0) or 0),
         invoke_aspect=str(params.get("invoke_aspect", "")),
+        # Story 118-10: the F2a freeform channel mirrors F1d — carry the invoke
+        # KIND and the RP-flavor rider so a router-classified reroll-invoke or a
+        # "chandelier swing" reaches the SAME dispatch engine entry the explicit
+        # FATE_ACTION message uses. ``invoke_mode`` defaults to 'bonus' (the wire
+        # Literal rejects an out-of-band value); ``player_action`` defaults to ''.
+        invoke_mode=str(params.get("invoke_mode", "bonus") or "bonus"),  # type: ignore[arg-type]
         aspect_text=str(params.get("aspect_text", "")),
+        player_action=str(params.get("player_action", "")),
     )
 
     # The F2 lie-detector anchor: a Fate action was classified from language.

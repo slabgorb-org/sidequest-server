@@ -28,7 +28,17 @@ class FateActionPayload(ProtocolBase):
     - ``difficulty``: the passive opposition value when ``target`` is ``None``.
     - ``invoke_aspect``: an aspect text to invoke for +2 before the roll (spends a
       free invoke or a fate point — server-side via the F1b economy).
+    - ``invoke_mode``: which KIND of invoke — ``'bonus'`` (flat +2) or ``'reroll'``
+      (reroll the 4dF). Only meaningful when ``invoke_aspect`` is set. Defaults to
+      ``'bonus'``: an omitting client keeps the +2 behavior the dispatch hardcoded
+      before this field existed (Story 118-10). The Literal guard rejects an
+      out-of-band mode loudly (No Silent Fallbacks) rather than coercing it.
     - ``aspect_text``: the situation aspect a ``create_advantage`` intends to place.
+    - ``player_action``: freeform RP text the player typed alongside the Fate action
+      tile (the "I swing from the chandelier and fire" flavor rider). Mirrors
+      ``DiceThrowPayload.player_action`` (Story 108-5): it rides as narrator color
+      ONLY and NEVER feeds the 4dF roll a bonus or a difficulty (Story 118-10).
+      Defaults to ``''`` — no rider.
     """
 
     request_id: str
@@ -37,4 +47,6 @@ class FateActionPayload(ProtocolBase):
     target: str | None = None
     difficulty: int = 0
     invoke_aspect: str = ""
+    invoke_mode: Literal["bonus", "reroll"] = "bonus"
     aspect_text: str = ""
+    player_action: str = ""

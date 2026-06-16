@@ -180,6 +180,44 @@ def fate_aspect_invoked_span(
         pass
 
 
+def fate_flavor_rider_span(
+    *,
+    actor: str,
+    affected_mechanics: bool = False,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``fate.action.flavor_rider`` (Story 118-10; the Fate analog of
+    ``{slug}.action.flavor_rider``, Story 108-5).
+
+    The GM-panel lie-detector that the player's RP-flavor rider — the freeform
+    "chandelier swing" typed alongside a Fate action tile, riding
+    ``FateActionPayload.player_action`` — was attached as narrator color ONLY and
+    did NOT enter the 4dF resolution. The roll is resolved from the skill rating,
+    opposition, and any aspect invoke; the rider is downstream cosmetic context
+    the narrator uses to flavor the resolved outcome (SOUL: "Rule of Cool" /
+    "Yes, And" without mechanical advantage). The span fires ONLY when text is
+    actually attached, so ``attached`` is always True. ``affected_mechanics`` is
+    the structural attestation that the dispatch resolved the dice without
+    consulting the rider — the green guard ``test_player_action_is_mechanically_
+    inert`` is its runtime proof.
+
+    Without this span the GM panel cannot tell an inert RP affordance from a
+    covert freeform-adjudication regression — the El Dorado failure the
+    mechanical-scaffold architecture exists to prevent (CLAUDE.md OTEL
+    Observability Principle).
+    """
+    attributes: dict[str, Any] = {
+        "field": "flavor_rider",
+        "actor": actor,
+        "attached": True,
+        "affected_mechanics": affected_mechanics,
+        **attrs,
+    }
+    with Span.open("fate.action.flavor_rider", attributes, tracer_override=_tracer):
+        pass
+
+
 def fate_compel_offered_span(
     *,
     actor: str,
@@ -331,6 +369,16 @@ SPAN_ROUTES["fate.action.classified"] = SpanRoute(
         "skill": (span.attributes or {}).get("skill", ""),
         "target": (span.attributes or {}).get("target", ""),
         "confidence": (span.attributes or {}).get("confidence", 0.0),
+    },
+)
+SPAN_ROUTES["fate.action.flavor_rider"] = SpanRoute(
+    event_type="state_transition",
+    component="fate",
+    extract=lambda span: {
+        "field": "flavor_rider",
+        "actor": (span.attributes or {}).get("actor", ""),
+        "attached": (span.attributes or {}).get("attached", True),
+        "affected_mechanics": (span.attributes or {}).get("affected_mechanics", False),
     },
 )
 # --- F2d: deterministic opponent decision span (GM panel = lie detector) ------
@@ -774,6 +822,7 @@ __all__ = [
     "fate_compel_accepted_span",
     "fate_compel_offered_span",
     "fate_conceded_span",
+    "fate_flavor_rider_span",
     "fate_consequence_taken_span",
     "fate_exchange_committed_span",
     "fate_exchange_order_span",

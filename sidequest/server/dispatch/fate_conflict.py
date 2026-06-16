@@ -44,6 +44,7 @@ from sidequest.telemetry.spans import (
     fate_exchange_committed_span,
     fate_exchange_order_span,
     fate_exchange_resolved_span,
+    fate_flavor_rider_span,
     fate_opponent_decided_span,
     fate_taken_out_span,
 )
@@ -735,13 +736,30 @@ def dispatch_fate_action(
     if core is None or core.fate_sheet is None:
         raise FateConflictError(f"{actor_name!r} has no Fate sheet to act with")
 
-    # Optional pre-roll invoke (+2; spends a free invoke or a fate point — F1b).
+    # Story 118-10 (Fate analog of 108-5): the RP-flavor rider lie-detector. When
+    # the player typed freeform text alongside the action tile — the "chandelier
+    # swing" riding ``payload.player_action`` — emit ``fate.action.flavor_rider``
+    # proving the text was attached as narrator color ONLY and never entered the
+    # 4dF resolution below (the roll is computed from skill/opposition/invoke; the
+    # rider is downstream cosmetic context). Fires here, at the shared dispatch
+    # engagement point reached by both the F1d explicit channel and the F2a
+    # router channel — exactly where the dice path emits its rider span at beat
+    # commit. ``affected_mechanics=False`` is the structural attestation, proven
+    # at runtime by ``test_player_action_is_mechanically_inert``.
+    if payload.player_action and payload.player_action.strip():
+        fate_flavor_rider_span(actor=actor_name, affected_mechanics=False, _tracer=_tracer)
+
+    # Optional pre-roll invoke (+2 for 'bonus', a reroll for 'reroll' — F1b). The
+    # KIND is the client's ``invoke_mode`` (Story 118-10): the dispatch threads the
+    # wire value through instead of hardcoding 'bonus', which is what unblocks the
+    # reroll half of F3d. ``invoke_aspect`` fails loud on an unknown mode, but the
+    # Literal on ``FateActionPayload.invoke_mode`` already rejects one at the wire.
     invoke_bonus = 0
     if payload.invoke_aspect:
         invoke_bonus = ruleset.invoke_aspect(
             sheet=core.fate_sheet,
             aspect_text=payload.invoke_aspect,
-            mode="bonus",
+            mode=payload.invoke_mode,
             actor=actor_name,
             _tracer=_tracer,
         )

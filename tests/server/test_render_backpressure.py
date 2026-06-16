@@ -108,9 +108,7 @@ def _make_session_data() -> _SessionData:
         player_name="Rux",
         player_id="player-1",
         snapshot=snap,
-        repository=MagicMock(),
-        dungeon_repository=MagicMock(),
-        telemetry_sink=MagicMock(),
+        store=MagicMock(),
         genre_pack=MagicMock(),
         orchestrator=MagicMock(),
         # R2 migration Task 20: production slug-connect always populates

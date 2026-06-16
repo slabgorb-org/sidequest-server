@@ -13,7 +13,6 @@ from __future__ import annotations
 from opentelemetry import trace
 
 from sidequest.protocol.dispatch import (
-    CrossAction,
     DispatchPackage,
     LethalityVerdict,
     NarratorDirective,
@@ -60,22 +59,6 @@ def redact_dispatch_package(
             )
         )
 
-    # cross_player carries the same redactable SubsystemDispatch entries (a
-    # shared-target MP interaction can be sealed from the narrator), but
-    # CrossAction has no narrator_instructions field — so filter `dispatch`
-    # only. Removals land in the SAME `removed` accumulator the span below
-    # reports, matching every other cross_player consumer (run_dispatch_bank,
-    # the engagement watcher, the idempotency validator). Story 59-9.
-    new_cross: list[CrossAction] = []
-    for ca in pkg.cross_player:
-        kept_dispatch = []
-        for d in ca.dispatch:
-            if d.visibility.redact_from_narrator_canonical:
-                removed.append(d)
-            else:
-                kept_dispatch.append(d)
-        new_cross.append(ca.model_copy(update={"dispatch": kept_dispatch}))
-
     if removed:
         with _tracer.start_as_current_span("prompt.redaction.structural") as span:
             span.set_attribute("turn_id", pkg.turn_id)
@@ -89,5 +72,5 @@ def redact_dispatch_package(
                 [r.idempotency_key for r in removed if isinstance(r, SubsystemDispatch)],
             )
 
-    redacted_pkg = pkg.model_copy(update={"per_player": new_players, "cross_player": new_cross})
+    redacted_pkg = pkg.model_copy(update={"per_player": new_players})
     return redacted_pkg, removed

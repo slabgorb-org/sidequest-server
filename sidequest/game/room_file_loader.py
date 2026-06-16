@@ -22,13 +22,13 @@ from typing import Any
 import yaml
 from PIL import Image, ImageDraw
 
-from sidequest.foundation.asset_urls import resolve_asset_url
 from sidequest.protocol.models import (
     CellularParams,
     DerivedRoomData,
     LocationEntity,
     TacticalGridPayload,
 )
+from sidequest.server.asset_urls import resolve_asset_url
 from sidequest.telemetry.spans.cavern_room import cavern_room_load_span
 from sidequest.telemetry.spans.dungeon_render import cavern_mask_to_png_span
 

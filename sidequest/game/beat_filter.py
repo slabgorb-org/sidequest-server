@@ -19,141 +19,9 @@ memorize anything this morning". The two gates are NOT collapsed into one.
 
 from __future__ import annotations
 
-import re
-from typing import Any
-
-from sidequest.game.beat_kinds import BeatKind
-from sidequest.game.wwn_magic import SpellcastingState
 from sidequest.genre.error import PackError
 from sidequest.genre.models.character import ClassDef
-from sidequest.genre.models.rules import BeatDef, ConfrontationDef, DamageChannel
-
-# Story 106-4 Part C — transient inventory item-use beats. The confrontation
-# beat menu scans the actor's carried inventory and offers a "Drink <potion>"
-# beat for each usable heal consumable so a player can drink mid-fight (the
-# Zork-Problem / Agency fix: the verb set was closed at the most consequential
-# moment). The beat id encodes the item slug so the dispatch can match it back
-# to the inventory stack to consume. Resolution is auto-success (no roll) and
-# costs the Main Action — the opponent still acts on its initiative slot
-# (Keith, 2026-06-14; WWN-faithful, consistent with 106-2 Option A).
-ITEM_USE_BEAT_PREFIX = "use_item:"
-
-
-def item_slug(name: str) -> str:
-    """Stable, reversible-enough slug for an item name (``"Potion of Mending"``
-    → ``"potion_of_mending"``). The dispatch matches a committed item-use beat
-    back to an inventory item by comparing this slug, so it must be a pure
-    function of the name with no external state."""
-    return re.sub(r"[^a-z0-9]+", "_", name.strip().lower()).strip("_")
-
-
-def item_use_beat_id(name: str) -> str:
-    """The transient beat id for using the named item."""
-    return f"{ITEM_USE_BEAT_PREFIX}{item_slug(name)}"
-
-
-def is_item_use_beat(beat_id: str) -> bool:
-    """True iff ``beat_id`` is a transient inventory item-use beat."""
-    return beat_id.startswith(ITEM_USE_BEAT_PREFIX)
-
-
-def _is_consumable(item: dict[str, Any]) -> bool:
-    """Mirror of narration_apply._is_consumable_item (kept local to avoid a
-    game→server layering import): a genuine single-use item — category
-    ``consumable`` OR a ``consumable`` tag. Only these may be spent on use."""
-    category = str(item.get("category", "") or "").strip().lower()
-    if category == "consumable":
-        return True
-    tags = item.get("tags") or []
-    if isinstance(tags, (list, tuple, set)):
-        return any(str(tag).strip().lower() == "consumable" for tag in tags)
-    return False
-
-
-def item_use_beats(inventory_items: list[dict[str, Any]] | None) -> list[BeatDef]:
-    """Transient item-use BeatDefs for the usable heal consumables carried.
-
-    A usable item is a genuine consumable (``_is_consumable``) carrying a
-    truthy ``heal_amount`` — the effect the dispatch will roll and apply. Two
-    identical stacks collapse to one beat (the action is the same; using it
-    consumes one). ``kind``/``stat_check`` are inert for these beats: the
-    dispatch intercepts the ``use_item:`` id BEFORE confrontation resolution,
-    so they never feed the dial/attack engine — they exist only to satisfy the
-    BeatDef model and render the tile.
-    """
-    if not inventory_items:
-        return []
-    beats: list[BeatDef] = []
-    seen: set[str] = set()
-    for item in inventory_items:
-        name = str(item.get("name", "") or "").strip()
-        if not name or not _is_consumable(item) or not item.get("heal_amount"):
-            continue
-        slug = item_slug(name)
-        if slug in seen:
-            continue
-        seen.add(slug)
-        beats.append(
-            BeatDef(
-                id=item_use_beat_id(name),
-                label=f"Drink {name}",
-                kind=BeatKind.push,
-                base=0,
-                stat_check="CON",
-                flavor="Spend your action to use a carried item.",
-            )
-        )
-    return beats
-
-
-# Story 108-8 (epic 108, ADR-143) — the Without-Number action set. Under a WN
-# binding the WN engine OWNS the round (SOUL "Bind the Ruleset, Don't Balance It"):
-# 108-3 strips the native combat beats off every WWN ``hp_depletion`` def, leaving
-# ``cdef.beats == []``, so the runtime must SYNTHESIZE a transient beat for each
-# core WN action — independent of cdef.beats — exactly as ``item_use_beats`` above
-# synthesizes the "Drink <potion>" beat that is not authored on the cdef. The
-# dispatch intercepts these ids BEFORE the cdef beat lookup, gated on
-# ``isinstance(ruleset, WithoutNumberRulesetModule)`` (dice.py + wn_round.py).
-#
-# item-use (``use_item:<slug>``) and cast (``cast_spell``) already have their own
-# dispatch routes and are NOT in this set. ``move`` is the WN disengage action and
-# is deferred (no resolution semantics on the dice path yet — story follow-up).
-#
-# Gate caveat: a NATIVE pack may itself author a beat literally named ``attack``
-# (tests/fixtures/packs/test_genre). The isinstance gate at the call site leaves
-# native ids on the authored-beat lookup, so this only fires under a WN binding.
-WN_ATTACK_BEAT_ID = "attack"
-_WN_ACTION_BEAT_IDS = frozenset({WN_ATTACK_BEAT_ID})
-
-
-def is_wn_action_beat(beat_id: str) -> bool:
-    """True iff ``beat_id`` is a synthesized Without-Number action beat (story 108-8).
-
-    A pure id check — the WN binding gate lives at the dispatch call site, mirroring
-    ``is_item_use_beat``. Native packs route the same id through the cdef lookup."""
-    return beat_id in _WN_ACTION_BEAT_IDS
-
-
-def wn_action_beat(beat_id: str) -> BeatDef:
-    """The transient strike ``BeatDef`` for a WN action id (story 108-8).
-
-    A plain STR strike carrying no authored damage: the weapon dice resolve from the
-    actor's inventory (``damage_roll`` priority 2/3) or the genre unarmed floor —
-    the same source the now-stripped native combat beat drew from. ``damage_channel``
-    is ``strike`` so ``dice._resolve_wn_committed_action`` lands the weapon dice on
-    the target's ablative HP (ADR-114) with the native scaffolding cut (ADR-143).
-    ``attack_bonus``/``combat_skill`` default to 0 — a synthesized action carries no
-    class to-hit progression, matching the ``wn_attack`` narrator tool."""
-    if beat_id not in _WN_ACTION_BEAT_IDS:
-        raise PackError(f"{beat_id!r} is not a synthesizable WN action beat")
-    return BeatDef(
-        id=beat_id,
-        label="Attack",
-        kind=BeatKind.strike,
-        base=0,
-        stat_check="STR",
-        damage_channel=DamageChannel.strike,
-    )
+from sidequest.genre.models.rules import BeatDef, ConfrontationDef
 
 
 def _has_any_prepared(prepared_spells: dict[int, list[str]] | None) -> bool:
@@ -168,8 +36,6 @@ def beats_available_for(
     class_def: ClassDef,
     spell_slots_remaining: float,
     prepared_spells: dict[int, list[str]] | None = None,
-    spellcasting: SpellcastingState | None = None,
-    inventory_items: list[dict[str, Any]] | None = None,
 ) -> list[BeatDef]:
     """Return the BeatDefs the given class can select this turn.
 
@@ -178,12 +44,6 @@ def beats_available_for(
     skipped and behavior matches the pre-47-10 contract. Existing
     callers (narrator.py, orchestrator.py) continue to work; new
     callers should pass it.
-
-    ``spellcasting`` (WWN arm, Task 5): when a ``SpellcastingState`` is
-    provided, the cast_spell gate uses WWN economy (casts_remaining +
-    non-empty prepared list) and completely ignores ``spell_slots_remaining``
-    / ``prepared_spells``.  When ``spellcasting is None`` the existing B/X
-    behavior is preserved byte-for-byte.
     """
     if not class_def.encounter_beat_choices:
         raise PackError(f"class {class_def.display_name!r} has empty encounter_beat_choices")
@@ -204,24 +64,10 @@ def beats_available_for(
         if beat.class_filter is None:
             pool.append(beat)
             continue
-        # WWN cast_spell (89-5): gate 1 (class_filter) is the ONLY class
-        # gate that offers it on the WWN arm. The heavy_metal chassis
-        # contract deliberately forbids cast_spell in every class's
-        # encounter_beat_choices ("the rules.yaml class_filter is the only
-        # gate that should offer it"), so running gate 2 here starved every
-        # WWN caster of the beat. The WWN economy still gates casts/prepared.
-        if beat.id == "cast_spell" and spellcasting is not None:
-            if spellcasting.casts_remaining < 1:
-                continue
-            if not spellcasting.prepared:
-                continue
-            pool.append(beat)
-            continue
         # Gate 2 — per-class whitelist for class-specific beats.
         if beat.id not in class_def.encounter_beat_choices:
             continue
         if beat.id == "cast_spell":
-            # B/X arm — unchanged (the WWN arm exited above).
             if spell_slots_remaining < 1.0:
                 continue
             # Prepared-list gate runs only when the caller opts in by
@@ -231,13 +77,6 @@ def beats_available_for(
             if prepared_spells is not None and not _has_any_prepared(prepared_spells):
                 continue
         pool.append(beat)
-    # Story 106-4 Part C: append transient item-use beats from the actor's
-    # inventory, gated to hp_depletion combat — a heal consumable is only
-    # usable where HP is the track (a chase/social cdef has no HP to restore,
-    # so offering "Drink Potion" there is a dead affordance). Appended AFTER
-    # the authored pool so item beats sort to the end of the menu.
-    if inventory_items and confrontation.win_condition == "hp_depletion":
-        pool.extend(item_use_beats(inventory_items))
     return pool
 
 
@@ -246,23 +85,17 @@ def cast_spell_rejection_reason(
     class_def: ClassDef,
     spell_slots_remaining: float,
     prepared_spells: dict[int, list[str]] | None = None,
-    spellcasting: SpellcastingState | None = None,
 ) -> str | None:
     """Why was cast_spell filtered out for this actor?
 
     Returns one of:
       - ``None`` — cast_spell was selectable (no rejection), OR ``prepared_spells``
         was omitted (backward-compat caller — gate is dormant)
-      - ``"no_slots"`` — slot bar at zero; rest required (B/X) OR
-        casts_remaining == 0 (WWN — semantically "needs rest")
+      - ``"no_slots"`` — slot bar at zero; rest required
       - ``"unprepared"`` — caller passed a non-None ``prepared_spells`` and the
-        actor has no spells prepared at any level (B/X), OR WWN
-        ``spellcasting.prepared`` is empty
+        actor has no spells prepared at any level
       - ``"class"`` — class isn't allowed cast_spell at all (Fighter/Thief)
       - ``"absent"`` — beat isn't in this confrontation's pool
-
-    When ``spellcasting`` is provided the WWN economy takes precedence and
-    ``spell_slots_remaining``/``prepared_spells`` are ignored.
 
     Used by OTEL emitters to stamp distinct decision values on the
     confrontation.beat_filter span — the GM panel reads them to tell
@@ -273,19 +106,8 @@ def cast_spell_rejection_reason(
         return "absent"
     if cast_beat.class_filter is not None and class_def.display_name not in cast_beat.class_filter:
         return "class"
-    if spellcasting is not None:
-        # WWN arm (89-5): class_filter is the only class gate — symmetric
-        # with beats_available_for; classes never list cast_spell in
-        # encounter_beat_choices on the WWN chassis. Gate on
-        # SpellcastingState, ignore B/X slots.
-        if spellcasting.casts_remaining < 1:
-            return "no_slots"
-        if not spellcasting.prepared:
-            return "unprepared"
-        return None
     if "cast_spell" not in (class_def.encounter_beat_choices or []):
         return "class"
-    # B/X arm — unchanged.
     if spell_slots_remaining < 1.0:
         return "no_slots"
     # Symmetric with beats_available_for: when prepared_spells is omitted

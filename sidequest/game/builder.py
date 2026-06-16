@@ -8,15 +8,13 @@ construction and consumption are the boundaries.
 from __future__ import annotations
 
 import random
-import re
 from dataclasses import dataclass, field
 from enum import StrEnum
 
 from opentelemetry import trace
 
-from sidequest.foundation.reference_anchors import reference_url_for_ability
 from sidequest.game.ability import AbilitySource
-from sidequest.game.character import AbilityDefinition, Character, CreationAnswer
+from sidequest.game.character import AbilityDefinition, Character
 from sidequest.game.creature_core import (
     CreatureCore,
     HpPool,
@@ -26,19 +24,12 @@ from sidequest.game.creature_core import (
 from sidequest.game.creature_core import (
     HpConfigMissingClassError as _CoreHpConfigMissingClassError,
 )
-from sidequest.game.ruleset import get_ruleset_module
-from sidequest.game.ruleset.base import _DEFAULT_STANDARD_ARRAY
 from sidequest.genre.models.character import (
-    Background,
     BackstoryTables,
     CharCreationScene,
-    ClassAbilityDef,
     ClassDef,
     EquipmentTables,
-    Focus,
-    GuaranteedGrant,
     MechanicalEffects,
-    OriginTraitDef,
 )
 from sidequest.genre.models.rules import EdgeConfig, RulesConfig
 from sidequest.protocol.messages import (
@@ -47,6 +38,7 @@ from sidequest.protocol.messages import (
 )
 from sidequest.protocol.models import ClassRequirement, CreationChoice, RolledStat
 from sidequest.protocol.types import NonBlankString
+from sidequest.server.reference_anchors import reference_url_for_ability
 from sidequest.telemetry.spans.reference import (
     reference_url_attached_span,
     reference_url_skipped_span,
@@ -82,29 +74,6 @@ def qualifying_classes_arrangement(
     as 0 — they cannot satisfy any minimum.
     """
     return [c for c in classes if (arrangement.get(c.prime_requisite) or 0) >= c.minimum_score]
-
-
-def _class_ability_to_definition(
-    ca: ClassAbilityDef,
-    *,
-    reference_url: str | None = None,
-) -> AbilityDefinition:
-    """Convert a ClassAbilityDef (YAML-authored, no source discriminator) to an
-    AbilityDefinition, stamping source=AbilitySource.Class.
-
-    Single source of truth for the six-field struct shared by class-signature
-    seeding (``_seed_class_abilities``, reference_url computed from pack_id) and
-    focus-ability seeding (ADR-143 Task 10, reference_url=None — there is no
-    AbilitySource.Focus, so foci are stamped Class to match class abilities).
-    """
-    return AbilityDefinition(
-        name=ca.name,
-        genre_description=ca.genre_description,
-        mechanical_effect=ca.mechanical_effect,
-        involuntary=ca.involuntary,
-        source=AbilitySource.Class,
-        reference_url=reference_url,
-    )
 
 
 def _seed_class_abilities(
@@ -158,7 +127,16 @@ def _seed_class_abilities(
             ):
                 pass
 
-        abilities.append(_class_ability_to_definition(ca, reference_url=url))
+        abilities.append(
+            AbilityDefinition(
+                name=ca.name,
+                genre_description=ca.genre_description,
+                mechanical_effect=ca.mechanical_effect,
+                involuntary=ca.involuntary,
+                source=AbilitySource.Class,
+                reference_url=url,
+            )
+        )
 
 
 def _seed_item_abilities(abilities: list[AbilityDefinition], kit_def: object) -> None:
@@ -260,57 +238,6 @@ class StoryInput(SceneInputType):
     description: str
 
 
-# Indefinite/definite articles that mark a chargen CHOICE label as an oblique
-# flavor phrase rather than a vocation title. heavy_metal's calling scene uses
-# evocative phrases ("A craft that costs the craftsman") whose real class lives
-# in ``class_hint``; spaghetti_western uses thematic paths ("The Gun" → Gunslinger);
-# wry_whimsy echoes the class with an article ("A curious child" → "Curious Child").
-# A genuine vocation display label ("Country Veterinary Surgeon", "Channeler")
-# never leads with an article. See ``_is_vocation_label``.
-_ARTICLE_PREFIXES = ("a ", "an ", "the ")
-
-
-def _is_vocation_label(label: str) -> bool:
-    """True when a choice label reads like a vocation title fit for the Calling
-    display, False when it's an oblique flavor phrase that should fall back to
-    the resolved ``class_hint``.
-
-    The discriminator is a leading indefinite/definite article. A label like
-    "A craft that costs the craftsman" is a feeling the player chose, not a job
-    name — stamping it as the Calling produced the doubled-article bug
-    ("Vesska, a A craft that costs the craftsman"). Falling back to the
-    ``class_hint`` ("Elementalist") that every such choice already carries is
-    strictly cleaner across every pack that does this (heavy_metal,
-    spaghetti_western, wry_whimsy). Combined-origin packs (elemental_harmony
-    "The Ember Isles" → race+class) are already excluded upstream by the
-    ``race_hint is None`` guard at the capture site.
-    """
-    return not label.strip().lower().startswith(_ARTICLE_PREFIXES)
-
-
-# The race-axis discriminator is INDEFINITE-only — see _is_origin_display_label.
-_INDEFINITE_ARTICLE_PREFIXES = ("a ", "an ")
-
-
-def _is_origin_display_label(label: str) -> bool:
-    """True when a choice label works as the origin/Race display, False when
-    it's an indefinite-article descriptor phrase that should fall back to the
-    resolved ``race_hint``.
-
-    Race-axis sibling of ``_is_vocation_label`` (sq-playtest 2026-06-10,
-    barsoom): "A Green Martian of the Hordes" stamped verbatim made the sheet
-    read "Race: A Green Martian of the Hordes" where the resolved race_hint
-    ("Green Martian") belongs. Unlike the Calling guard this one keys on the
-    INDEFINITE article only — a full-corpus survey shows every "a/an" origin
-    label reads better as its race_hint ("A Sealed Vault" → Pure Strain Human,
-    "A Lab" → Synthetic, all five barsoom origins), while DEFINITE-article
-    labels are intended displays across the packs ("The Village Itself" over
-    Servant, "The Streets" over Street, elemental_harmony's "The …" homelands
-    — the documented reason race_label exists). Do not widen to "the".
-    """
-    return not label.strip().lower().startswith(_INDEFINITE_ARTICLE_PREFIXES)
-
-
 # ---------------------------------------------------------------------------
 # SceneResult — unit of revert for go_back
 # ---------------------------------------------------------------------------
@@ -348,19 +275,6 @@ class SceneResult:
     # scene list (e.g. the_story's StoryInput dispatch). Older paths leave
     # this as None — scene order is implicit in the results list.
     scene_id: str | None = None
-    # The scene-list index this result was produced at (103-2 review
-    # rework). go_back/revert target THIS index — the old formula
-    # ``len(_results)`` assumed every scene appends exactly one result,
-    # an invariant the requires_stock skip-walk broke (skipped scenes
-    # append nothing). None only for externally-constructed results;
-    # builder paths always stamp it.
-    scene_index: int | None = None
-    # Name-scene followup correction (playtest 2026-06-05 RW-2). When the
-    # name-entry scene has a hook_prompt, the followup answer is the player's
-    # name correction — stored here so character_name()/vessel_name() can
-    # merge it over the original parse. Non-name scenes keep the legacy
-    # followup-as-wound-hook behavior and leave this None.
-    followup_text: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -389,15 +303,6 @@ class AccumulatedChoices:
     # class_hint-or-default. Symmetric with background_label.
     class_label: str | None = None
     race_hint: str | None = None
-    # Display-only origin label — the choice LABEL of the scene whose
-    # MechanicalEffects.race_hint produced the mechanical origin archetype.
-    # Symmetric with background_label / class_label. tea_and_murder's
-    # "origins" scene maps rich flavor buttons ("The Village Itself") onto a
-    # small mechanical taxonomy (race_hint: Servant); the player-facing
-    # chargen summary should surface the chosen flavor, not the raw archetype
-    # slug (sq-playtest 2026-05-28 BUG-LOW). The mechanical Character.race
-    # still resolves from race_hint — this is display-only. Last-wins.
-    race_label: str | None = None
     personality_trait: str | None = None
     item_hints: list[str] = field(default_factory=list)
     affinity_hint: str | None = None
@@ -422,10 +327,6 @@ class AccumulatedChoices:
     # label ("Vault Dweller", "Heap Rat").
     backstory_label: str | None = None
     mutation_hint: str | None = None
-    # World-tier origin trait (89-5): dual-voice Race-source ability carried
-    # by a chargen choice (e.g. the Barsoom Earthman gravity boon).
-    # Last-wins like other single-value hints.
-    origin_trait: OriginTraitDef | None = None
     training_hint: str | None = None
     emotional_state: str | None = None
     relationship: str | None = None
@@ -435,8 +336,6 @@ class AccumulatedChoices:
     catch_phrase: str | None = None
     backstory_fragments: list[str] = field(default_factory=list)
     stat_bonuses: dict[str, int] = field(default_factory=dict)
-    skill_grants: dict[str, int] = field(default_factory=dict)
-    foci: list[str] = field(default_factory=list)
     pronoun_hint: str | None = None
     jungian_hint: str | None = None
     rpg_role_hint: str | None = None
@@ -583,27 +482,6 @@ class NoQualifyingClassesError(Exception):
     """confirm_arrangement called but the arrangement qualifies for no classes."""
 
 
-class RerollBudgetExhaustedError(BuilderError):
-    """reroll_stat called after both reroll-budget slots were spent (103-3)."""
-
-    def __init__(self, stat_name: str) -> None:
-        self.stat_name = stat_name
-        super().__init__(
-            f"reroll budget exhausted: cannot reroll '{stat_name}' — "
-            "Roll the Bones allows two stat rerolls per character"
-        )
-
-
-class StatAlreadyRerolledError(BuilderError):
-    """reroll_stat called twice for the same stat (once-each rule, 103-3)."""
-
-    def __init__(self, stat_name: str) -> None:
-        self.stat_name = stat_name
-        super().__init__(
-            f"stat '{stat_name}' was already rerolled — Roll the Bones allows one reroll per stat"
-        )
-
-
 class ArrangementSceneActiveError(Exception):
     """apply_response called while the_arrangement scene is active.
 
@@ -734,19 +612,6 @@ def humanize_snake_case(s: str) -> str:
     return " ".join(word.capitalize() if word else "" for word in s.split("_"))
 
 
-def roll_guaranteed_grant(grant: GuaranteedGrant, rng: random.Random) -> str:
-    """Resolve a :class:`GuaranteedGrant` to the item id actually granted.
-
-    Story 106-4: returns ``grant.upgrade`` when an upgrade is configured and the
-    roll lands strictly below ``grant.upgrade_chance``; otherwise ``grant.item``.
-    Upgrade-only — the base item is the floor, so a guaranteed grant never yields
-    nothing and never something worse than the base.
-    """
-    if grant.upgrade and rng.random() < grant.upgrade_chance:
-        return grant.upgrade
-    return grant.item
-
-
 def _split_name(full_name: str) -> tuple[str, str]:
     """Split 'First Middle Last' → ('First', 'Middle Last'). Empty → ('', '').
 
@@ -868,116 +733,6 @@ def derive_class_label(text: str) -> str:
     return label
 
 
-def indefinite_article(word: str) -> str:
-    """Return "a" or "an" for the leading sound of ``word``.
-
-    Letter-based heuristic on the first character (good enough for the
-    race/class identity line — "Ember Isles" → "an", "Channeler" → "a"). Not a
-    full phonetic library; it does not special-case "hour"/"university"-class
-    exceptions, which do not occur in race/class slugs.
-    """
-    stripped = word.lstrip()
-    if stripped and stripped[0].lower() in "aeiou":
-        return "an"
-    return "a"
-
-
-# A proper-noun-ish token ("Zeppo", "V8", "D'Arcy") and a 1-4 token phrase
-# ("Mad Max", "Duck Soup", "Snake Plissken"). Deliberately case-SENSITIVE —
-# the keyword prefixes below match case-insensitively via scoped (?i:) groups,
-# but the captured name itself must look like a proper noun, which is what
-# terminates the capture at the first lowercase word ("Duck Soup — because…"
-# stops after "Soup").
-_NAME_TOKEN = r"[A-Z0-9][\w'’\-]*"
-_NAME_PHRASE = rf"{_NAME_TOKEN}(?: {_NAME_TOKEN}){{0,3}}"
-
-# Rider-name patterns, priority order. The generic "name:" form excludes a
-# preceding "rig " / "rig's " so "Rig name: Duck Soup" never bleeds into the
-# rider half.
-_RIDER_NAME_PATTERNS = (
-    re.compile(rf"(?i:\b(?:road|rider)\s+name\s*(?:is|[:=])\s*)({_NAME_PHRASE})"),
-    re.compile(rf"(?i:(?<!rig )(?<!rig's )\bname\s*(?:is|[:=])\s*)({_NAME_PHRASE})"),
-    re.compile(
-        rf"(?i:\b(?:they call me|call me|i'?m called|i am called|i go by|go by|known as|name's)\s+)"
-        rf"({_NAME_PHRASE})"
-    ),
-)
-
-# Vessel/rig-name patterns, priority order.
-_VESSEL_NAME_PATTERNS = (
-    re.compile(rf"(?i:\brig(?:'s)?\s+name\s*(?:is|[:=])\s*)({_NAME_PHRASE})"),
-    re.compile(rf"(?i:\b(?:the\s+)?rig\s*[:=]\s*)({_NAME_PHRASE})"),
-    re.compile(rf"(?i:\b(?:the\s+)?rig\s+is(?:\s+called)?\s+)({_NAME_PHRASE})"),
-)
-
-# Whole-text fallbacks: a bare name ("Kara", "Mad Max") and the two-part
-# comma answer to the two-part question ("Zeppo, Duck Soup").
-_PLAIN_NAME_RE = re.compile(rf"^({_NAME_PHRASE})[.!]?$")
-_COMMA_PAIR_RE = re.compile(rf"^({_NAME_PHRASE}),\s*({_NAME_PHRASE})[.!]?$")
-# Leading short segment before sentence punctuation ("Zeppo. The rig: …").
-# Only consulted when a vessel name was found — the two-part answer shape —
-# so arbitrary prose never gets its first sentence promoted to a name.
-_LEADING_NAME_RE = re.compile(rf"^({_NAME_PHRASE})\s*[.!;,]")
-
-
-def extract_freeform_names(text: str) -> tuple[str | None, str | None]:
-    """Parse a freeform name-scene answer into (character_name, vessel_name).
-
-    The name-entry scene can ask a two-part question (road_warrior the_name:
-    "What do they call you? And what do they call the rig?") and players
-    answer in prose. Deterministic best-effort extraction of the observed
-    phrasings (playtest 2026-06-05 RW-2):
-
-      "They call me Zeppo. The rig is Duck Soup — because…"  → both halves
-      "Road name: Zeppo. Rig name: Duck Soup."               → both halves
-      "Zeppo. The rig: Duck Soup."                           → both halves
-      "Zeppo, Duck Soup"                                     → both halves
-      "Kara"                                                 → name only
-
-    Returns (None, None) when nothing name-like is recognized — the caller
-    decides the fallback (``character_name()`` keeps the legacy verbatim
-    text) rather than this helper guessing silently.
-    """
-    trimmed = text.strip()
-    if not trimmed:
-        return (None, None)
-
-    name: str | None = None
-    vessel: str | None = None
-    for pattern in _RIDER_NAME_PATTERNS:
-        m = pattern.search(trimmed)
-        if m:
-            name = m.group(1)
-            break
-    for pattern in _VESSEL_NAME_PATTERNS:
-        m = pattern.search(trimmed)
-        if m:
-            vessel = m.group(1)
-            break
-
-    # Two-part comma answer — fill only the missing halves.
-    if name is None and vessel is None:
-        m = _COMMA_PAIR_RE.match(trimmed)
-        if m:
-            return (m.group(1), m.group(2))
-
-    # Bare name.
-    if name is None:
-        m = _PLAIN_NAME_RE.match(trimmed)
-        if m:
-            name = m.group(1)
-
-    # Two-part answer where the rider half is an unprefixed leading segment
-    # ("Zeppo. The rig: Duck Soup.") — gated on the vessel half having
-    # matched so plain prose never promotes its first words to a name.
-    if name is None and vessel is not None:
-        m = _LEADING_NAME_RE.match(trimmed)
-        if m:
-            name = m.group(1)
-
-    return (name, vessel)
-
-
 # ---------------------------------------------------------------------------
 # CharacterBuilder — the state machine
 # ---------------------------------------------------------------------------
@@ -1031,18 +786,8 @@ class CharacterBuilder:
         self._default_race: str | None = rules.default_race
         self._edge_config: EdgeConfig | None = rules.edge_config
         self._point_buy_budget: int = rules.point_buy_budget
-        # ADR-142 Step 2A: per-pack standard array (None ⇒ legacy default
-        # [15, 14, 13, 12, 10, 8], resolved in generate_stats).
-        self._standard_array: list[int] | None = rules.standard_array
         self._race_label: str = rules.race_label or "Race"
         self._class_label: str = rules.class_label or "Class"
-        # ADR-143: ruleset module bound once at construction; build() delegates
-        # chargen resource seeding to seed_chargen_resources.
-        self._ruleset = get_ruleset_module(rules.ruleset)
-        # ADR-144 F4a2: interactive Fate chargen choices, recorded by the Fate
-        # scene walk via record_fate_chargen(). None => the Menu path (the F4a
-        # default seed); set => build() attaches the validated interactive sheet.
-        self._fate_choices: object | None = None
 
         # Eager roll at construction — scan scenes for the first
         # `stat_generation: roll_3d6_strict` directive so stat values
@@ -1056,19 +801,7 @@ class CharacterBuilder:
         # confirmed via confirm_arrangement, rejected via reject_arrangement.
         self._arrangement_pool: list[int] | None = None
         self._arrangement_assignment: dict[str, int | None] | None = None
-        # Roll the Bones (103-3): reroll budget is None until a choice
-        # adopts the mode; the rerolled set enforces once-each; pending
-        # broadcasts queue (stat, faces) pairs for the dispatch layer's
-        # DiceResult fan-out (ADR-074 visibility — dice on the wire).
-        self._bones_budget: int | None = None
-        self._bones_rerolled: set[str] = set()
-        self._bones_pending_broadcasts: list[tuple[str, list[int]]] = []
         self._classes: list[ClassDef] = []
-        # ADR-143: chargen defs (backgrounds, foci) populated via with_chargen_defs().
-        # Default empty dicts so existing construction is unaffected (Task 10 consumes
-        # them; Task 9 only stores them).
-        self._backgrounds: dict[str, Background] = {}
-        self._foci: dict[str, Focus] = {}
         for s in scenes:
             eff = s.mechanical_effects
             if eff is None or eff.stat_generation is None:
@@ -1077,8 +810,6 @@ class CharacterBuilder:
                 self._roll_3d6_strict()
             elif eff.stat_generation == "roll_3d6_arrange_visible":
                 self._roll_3d6_arrange_visible()
-            elif eff.stat_generation == "standard_array_arrange":
-                self._seed_standard_array_arrange()
             break
 
         self._backstory_tables: BackstoryTables | None = backstory_tables
@@ -1116,25 +847,6 @@ class CharacterBuilder:
         """Attach the genre pack's class definitions for qualification loop
         and class_kit equipment selection."""
         self._classes = list(classes)
-        return self
-
-    def with_chargen_defs(
-        self,
-        *,
-        backgrounds: dict[str, Background],
-        foci: dict[str, Focus],
-    ) -> CharacterBuilder:
-        """Attach resolved background and focus catalogs for chargen application.
-
-        ADR-143 Task 9. Called from connect.py after ``resolve_backgrounds`` /
-        ``resolve_foci`` (world-first); Task 10 reads ``self._backgrounds`` and
-        ``self._foci`` in ``build()`` to seed the character. Defaults to empty
-        dicts in ``__init__`` so packs without these files are unaffected.
-
-        Returns self for fluent chaining (mirrors ``with_classes``).
-        """
-        self._backgrounds = dict(backgrounds)
-        self._foci = dict(foci)
         return self
 
     def with_pack_id(self, pack_id: str) -> CharacterBuilder:
@@ -1302,19 +1014,10 @@ class CharacterBuilder:
         self._arrangement_assignment = None
 
     def reject_arrangement(self) -> None:
-        """Discard the current pool and reset. Stays in arrange mode.
-
-        For ``roll_3d6_arrange_visible`` this rerolls the pool.
-        For ``standard_array_arrange`` this re-seeds from the fixed standard
-        array (ADR-143 DD-3) — the values are unchanged, but all assignments
-        are cleared so the player can re-assign from scratch.
-        """
+        """Discard the current pool and reroll. Stays in arrange mode."""
         if self._arrangement_assignment is None:
             raise RuntimeError("not in arrangement mode")
-        if self._stat_generation == "standard_array_arrange":
-            self._seed_standard_array_arrange()
-        else:
-            self._roll_3d6_arrange_visible()
+        self._roll_3d6_arrange_visible()
 
     @property
     def rules(self) -> RulesConfig:
@@ -1342,69 +1045,25 @@ class CharacterBuilder:
         """
         return self._default_class
 
-    def _name_scene_inputs(self) -> tuple[str | None, str | None]:
-        """(original_freeform, followup_correction) from the name-entry scene.
-
-        The name scene is the terminal name-entry scene (no choices AND
-        ``allows_freeform`` — see ``_is_name_scene``); once answered, its
-        result is the last result. Returns (None, None) when there is no name
-        scene (e.g. heavy_metal & siblings end on a no-choice *display*
-        confirmation scene with ``allows_freeform: false``, which is NOT a
-        name scene) or it hasn't been answered with freeform text.
-        """
-        if not self._scenes:
-            return (None, None)
-        if not self._is_name_scene(len(self._scenes) - 1):
-            return (None, None)
-        if not self._results:
-            return (None, None)
-        last_result = self._results[-1]
-        if not isinstance(last_result.input_type, FreeformInput):
-            return (None, None)
-        return (last_result.input_type.text, last_result.followup_text)
-
     def character_name(self) -> str | None:
         """Extract the character name from the name-entry scene.
 
-        The name scene is the last scene with no choices. The freeform
-        answer is parsed via ``extract_freeform_names`` (playtest 2026-06-05
-        RW-2: "They call me Zeppo. The rig is Duck Soup — …" must yield
-        "Zeppo", not the whole sentence), with the hook_prompt followup
-        correction winning per-field over the original answer. When neither
-        parses, the legacy verbatim text is kept (correction first — the
-        player's latest word) so a wrong-but-present name beats a blank one.
-        Blank text falls through to None so callers can substitute the
-        lobby name.
+        The name scene is the last scene with no choices — if the player
+        typed freeform text there, that's the name. Blank text falls
+        through to None so callers can substitute the lobby name.
         """
-        original, correction = self._name_scene_inputs()
-        if original is None:
+        if not self._scenes:
             return None
-        base_name, _ = extract_freeform_names(original)
-        corr_name: str | None = None
-        if correction is not None:
-            corr_name, _ = extract_freeform_names(correction)
-        name = corr_name or base_name
-        if name:
-            return name
-        fallback = (correction or "").strip() or original.strip()
-        return fallback if fallback else None
-
-    def vessel_name(self) -> str | None:
-        """The player-given vessel/rig name from the name-entry scene, if any.
-
-        The second half of a two-part name question ("What do they call you?
-        And what do they call the rig?"). Same parse-and-merge rules as
-        ``character_name()``; no verbatim fallback — an unparsed vessel half
-        is simply absent.
-        """
-        original, correction = self._name_scene_inputs()
-        if original is None:
+        last_scene = self._scenes[-1]
+        if last_scene.choices:
             return None
-        _, base_vessel = extract_freeform_names(original)
-        corr_vessel: str | None = None
-        if correction is not None:
-            _, corr_vessel = extract_freeform_names(correction)
-        return corr_vessel or base_vessel
+        if not self._results:
+            return None
+        last_result = self._results[-1]
+        if not isinstance(last_result.input_type, FreeformInput):
+            return None
+        trimmed = last_result.input_type.text.strip()
+        return trimmed if trimmed else None
 
     # --- Accumulated view ---
 
@@ -1432,50 +1091,12 @@ class CharacterBuilder:
             # Single-value hints — last one wins.
             if eff.class_hint is not None:
                 acc.class_hint = eff.class_hint
-                # Capture the chosen vocation LABEL when the class was picked
-                # from a choice button (e.g. "Country Veterinary Surgeon" →
-                # class_hint "Doctor"). Display-only; symmetric with
-                # background_label. Lets the summary + {class} prose show the
-                # flavor instead of the collapsed archetype slug.
-                #
-                # BUT not when the SAME choice also sets race_hint: that's a
-                # combined ORIGIN choice (elemental_harmony "The Ember Isles" →
-                # race_hint "Ember Isles" + class_hint "Channeler"), whose label
-                # names the origin, not the class. Capturing it here duplicated
-                # origin_label onto calling_label and seeded a hollow quest
-                # ("The Ember Isles · The Ember Isles"). The label belongs to
-                # race_label (set below); calling_label resolves from class_hint.
-                # ...but only when the label reads like a vocation. An oblique
-                # flavor phrase that leads with an article ("A craft that costs
-                # the craftsman", "The Gun") is NOT a job title; capturing it
-                # produced the doubled-article Calling bug ("a A craft …").
-                # Leaving class_label empty falls back to class_hint at build
-                # time (the resolved class — "Elementalist", "Gunslinger").
-                if (
-                    result.choice_label is not None
-                    and eff.race_hint is None
-                    and _is_vocation_label(result.choice_label)
-                ):
-                    acc.class_label = result.choice_label
             # Freeform vocation display label (class-selecting scene answered
             # with free text). Last-wins, display-only.
             if result.freeform_class_label is not None:
                 acc.class_label = result.freeform_class_label
             if eff.race_hint is not None:
                 acc.race_hint = eff.race_hint
-                # Capture the chosen origin LABEL when picked from a choice
-                # button (e.g. "The Village Itself" → race_hint "Servant").
-                # Display-only; the mechanical Character.race still resolves
-                # from race_hint.
-                # ...but not an indefinite-article descriptor phrase ("A Green
-                # Martian of the Hordes") — leaving race_label empty falls the
-                # sheet back to the resolved race_hint ("Green Martian"). The
-                # race-axis sibling of the _is_vocation_label Calling guard
-                # above (sq-playtest 2026-06-10, barsoom Tarkas).
-                if result.choice_label is not None and _is_origin_display_label(
-                    result.choice_label
-                ):
-                    acc.race_label = result.choice_label
             if eff.personality_trait is not None:
                 acc.personality_trait = eff.personality_trait
             if eff.affinity_hint is not None:
@@ -1486,8 +1107,6 @@ class CharacterBuilder:
                     acc.background_label = result.choice_label
             if eff.mutation_hint is not None:
                 acc.mutation_hint = eff.mutation_hint
-            if eff.origin_trait is not None:
-                acc.origin_trait = eff.origin_trait
             if eff.training_hint is not None:
                 acc.training_hint = eff.training_hint
             if eff.emotional_state is not None:
@@ -1566,16 +1185,6 @@ class CharacterBuilder:
             for stat, bonus in eff.stat_bonuses.items():
                 acc.stat_bonuses[stat] = acc.stat_bonuses.get(stat, 0) + bonus
 
-            # Skill grants use higher-of (max) semantics per WWN rules —
-            # NOT additive. A later scene granting Sneak-0 does not undo
-            # an earlier Sneak-1.
-            for skill, lvl in eff.skill_grants.items():
-                acc.skill_grants[skill] = max(acc.skill_grants.get(skill, 0), lvl)
-
-            # Focus ids accumulate de-duped (no duplicate focus ids).
-            if eff.focus_id is not None and eff.focus_id not in acc.foci:
-                acc.foci.append(eff.focus_id)
-
         return acc
 
     # --- Protocol rendering ---
@@ -1607,11 +1216,6 @@ class CharacterBuilder:
         # Freeform vocation label (player's own words) wins for the prose slot;
         # canned classes fall through to class_hint.
         class_ = acc.class_label or acc.class_hint or ""
-        # {race} prose intentionally uses the mechanical hint, NOT race_label:
-        # templates phrase it as a noun ("come up from a {race} household"), so
-        # the archetype slug ("Servant") fits grammatically where an origin
-        # flavor label ("The Village Itself") would not. The chargen-summary
-        # FIELD uses race_label (display-only); the prose slot keeps the hint.
         race = acc.race_hint or ""
 
         had_name = "{name}" in text
@@ -1685,11 +1289,6 @@ class CharacterBuilder:
                 scene = self._filter_class_choices(self._scenes[scene_index])
                 eff = scene.mechanical_effects
 
-                # the_bones — stat-generation-gated scenes get a custom
-                # payload (103-3): rolled values + reroll budget.
-                if scene.requires_stat_generation is not None:
-                    return self._render_bones_message(scene, scene_index, player_id)
-
                 # the_arrangement — assignment-required scenes get a custom payload.
                 if eff is not None and eff.assignment_required:
                     return self._render_arrangement_message(scene, scene_index, player_id)
@@ -1697,14 +1296,6 @@ class CharacterBuilder:
                 # the_story — identity-capture scenes get a custom payload.
                 if eff is not None and eff.identity_capture is not None:
                     return self._render_story_message(scene, scene_index, player_id)
-
-                # Interactive Fate chargen step (ADR-144 F4a2): a fate-step scene
-                # renders its fate_* input_type so the surfaces never co-render with
-                # the d20 roll_the_bones/stat_arrange ones.
-                if eff is not None and eff.fate_chargen_step is not None:
-                    return self._render_fate_step_message(
-                        scene, scene_index, player_id, eff.fate_chargen_step
-                    )
 
                 choices = [
                     CreationChoice(
@@ -1773,70 +1364,6 @@ class CharacterBuilder:
             case _:  # pragma: no cover — exhaustive
                 raise AssertionError(f"unknown phase: {self._phase!r}")
 
-    def _render_fate_step_message(
-        self,
-        scene: CharCreationScene,
-        scene_index: int,
-        player_id: str,
-        step: str,
-    ) -> CharacterCreationMessage:
-        """Render an interactive Fate chargen step (ADR-144 F4a2). The step name
-        maps to the ``input_type`` the UI renders. The rich per-step payload fields
-        (aspect slots / available skills / stunt catalog with the live legality
-        mirror, design §7) land with their UI consumer in story 121-8; this story
-        ships the input_type surface so the paired-negative gate holds. Fail loud on
-        an unknown step — No Silent Fallbacks."""
-        input_type = {
-            "aspects": "fate_aspects",
-            "pyramid": "fate_skill_pyramid",
-            "stunts": "fate_stunts",
-        }.get(step)
-        if input_type is None:
-            raise ValueError(
-                f"unknown fate_chargen_step {step!r} on scene {scene.id!r} "
-                "(expected 'aspects', 'pyramid', or 'stunts')"
-            )
-        payload = CharacterCreationPayload(
-            phase="scene",
-            scene_index=scene_index,
-            total_scenes=len(self._scenes),
-            prompt=self.interpolate_scene_narration(scene.narration),
-            input_type=input_type,
-            loading_text=scene.loading_text,
-        )
-        return CharacterCreationMessage(payload=payload, player_id=player_id)
-
-    def _render_bones_message(
-        self,
-        scene: CharCreationScene,
-        scene_index: int,
-        player_id: str,
-    ) -> CharacterCreationMessage:
-        """Render the Roll the Bones scene: rolled values + reroll budget.
-
-        The scene is only reachable when the skip-walk matched the active
-        stat_generation, which rolled eagerly at adoption — a missing
-        rolled array here is a programmer error (no silent re-roll).
-        """
-        if self._rolled_stats is None or self._bones_budget is None:
-            raise RuntimeError(
-                f"bones scene {scene.id!r} presented without an active "
-                "roll-the-bones state — mode adoption must precede the scene"
-            )
-        payload = CharacterCreationPayload(
-            phase="scene",
-            scene_index=scene_index,
-            total_scenes=len(self._scenes),
-            prompt=self.interpolate_scene_narration(scene.narration),
-            input_type="roll_the_bones",
-            loading_text=scene.loading_text,
-            rolled_stats=[
-                RolledStat(name=ability, value=value) for ability, value in self._rolled_stats
-            ],
-            reroll_budget_remaining=self._bones_budget,
-        )
-        return CharacterCreationMessage(payload=payload, player_id=player_id)
-
     def _render_arrangement_message(
         self,
         scene: CharCreationScene,
@@ -1873,7 +1400,6 @@ class CharacterBuilder:
             qualifying_classes=qualifying_names,
             class_requirements=class_requirements,
             confirm_enabled=confirm_enabled,
-            ability_names=list(self._ability_score_names),
         )
         return CharacterCreationMessage(payload=payload, player_id=player_id)
 
@@ -1936,15 +1462,6 @@ class CharacterBuilder:
 
         choice = scene.choices[index]
         effects = choice.mechanical_effects
-
-        # Roll the Bones (103-3): a choice-level stat_generation of
-        # "roll_the_bones" adopts the mode and rolls eagerly so the gated
-        # bones scene presents the values on its first frame. Other
-        # choice-level stat_generation strings remain scene-level-only
-        # directives (apply_freeform / auto_advance), unchanged.
-        if effects.stat_generation == "roll_the_bones":
-            self._enter_roll_the_bones()
-
         hooks = extract_hooks(scene.id, effects)
         anchors = extract_anchors(scene.id, effects)
 
@@ -1956,7 +1473,6 @@ class CharacterBuilder:
                 anchors_added=anchors,
                 choice_description=choice.description,
                 choice_label=choice.label,
-                scene_index=scene_index,
             )
         )
 
@@ -2010,7 +1526,7 @@ class CharacterBuilder:
         if effects.stat_generation is not None:
             if effects.stat_generation == "roll_3d6_strict":
                 self._roll_3d6_strict()
-            elif effects.stat_generation in ("roll_3d6_arrange_visible", "standard_array_arrange"):
+            elif effects.stat_generation == "roll_3d6_arrange_visible":
                 # Scene-flow method, not a generate_stats method.
                 # confirm_arrangement materializes _rolled_stats.
                 pass
@@ -2051,33 +1567,8 @@ class CharacterBuilder:
                 anchors_added=anchors,
                 choice_description=None,
                 freeform_class_label=freeform_class_label,
-                # Story 93-1: stamp the source scene so freeform_answer_texts()
-                # can exclude the name-entry scene from the archetype-inference
-                # fodder without re-deriving result→scene alignment.
-                scene_id=scene.id,
-                scene_index=scene_index,
             )
         )
-
-        # Playtest 2026-06-05 (RW-2): the name-entry scene (last scene, no
-        # choices) parses the freeform answer into name + vessel halves.
-        # Emit the extraction decision so the GM panel can see what the
-        # parser did with the player's words (the reported OTEL gap: "no
-        # extraction span fired on either submit").
-        if self._is_name_scene(scene_index):
-            extracted_name, extracted_vessel = extract_freeform_names(text)
-            trace.get_current_span().add_event(
-                "chargen.names_extracted",
-                {
-                    "action": "names_extracted",
-                    "scene_id": scene.id,
-                    "raw_len": len(text),
-                    "extracted_name": extracted_name or "",
-                    "extracted_vessel_name": extracted_vessel or "",
-                    "fallback_verbatim": extracted_name is None,
-                    "severity": "info" if extracted_name else "warn",
-                },
-            )
 
         if scene.hook_prompt is not None:
             self._phase = AwaitingFollowup(
@@ -2087,52 +1578,6 @@ class CharacterBuilder:
         else:
             self._advance_scene(scene_index)
 
-    def freeform_answer_texts(self) -> list[str]:
-        """The player's freeform scene answers — archetype-inference fodder.
-
-        Story 93-1: when the archetype gate would block with
-        ``missing_axes_with_pack_axes``, the confirm seam infers the missing
-        axes from these texts. Name-entry scene answers are EXCLUDED: every
-        player types a name (preset-only players included), so counting the
-        name would make the no-freeform fail-loud path unreachable and spend
-        a Haiku call on text with no archetype signal.
-
-        Derived from ``_results`` (revert-safe — a popped result drops its
-        text) using the ``scene_id`` stamped by ``apply_freeform``. Results
-        from other input paths that left ``scene_id`` as ``None`` are
-        included: only a positively-identified name scene is excluded.
-        """
-        name_scene_ids = {
-            self._scenes[i].id for i in range(len(self._scenes)) if self._is_name_scene(i)
-        }
-        return [
-            result.input_type.text
-            for result in self._results
-            if isinstance(result.input_type, FreeformInput)
-            and result.input_type.text.strip()
-            and (result.scene_id is None or result.scene_id not in name_scene_ids)
-        ]
-
-    def _is_name_scene(self, scene_index: int) -> bool:
-        """True when ``scene_index`` is the name-entry scene: the terminal
-        scene with no choices AND ``allows_freeform`` set.
-
-        ``allows_freeform`` is the load-bearing discriminator. A name-entry
-        scene (road_warrior's ``the_name``) has no choices and
-        ``allows_freeform: true`` — it renders ``input_type="name"`` (see
-        ``to_scene_message``). A terminal *display*/confirmation scene
-        (heavy_metal and 8 sibling packs) also has no choices but
-        ``allows_freeform: false`` — it renders ``input_type="continue"`` and
-        is never answered with a name. Treating the latter as a name scene
-        leaked the prior scene's freeform answer into ``character_name()``
-        and the confirmation prose's ``{name}`` slot ([BAR-1])."""
-        scene = self._scenes[scene_index]
-        return (
-            scene_index == len(self._scenes) - 1
-            and not scene.choices
-            and bool(scene.allows_freeform)
-        )
-
     def answer_followup(self, text: str) -> None:
         """Answer a followup prompt while in AwaitingFollowup state.
 
@@ -2140,35 +1585,14 @@ class CharacterBuilder:
         followup answer is the player's primary hook (trauma description,
         motive elaboration, backstory beat). Advances to the next scene
         (or Confirmation).
-
-        Name-scene exception (playtest 2026-06-05 RW-2): when the followup
-        belongs to the name-entry scene, the answer is the player's NAME
-        CORRECTION ("Road name: Zeppo. Rig name: Duck Soup."), not a trauma
-        hook. It's stored on the result's ``followup_text`` so
-        ``character_name()``/``vessel_name()`` re-parse it (correction wins
-        per-field) — previously the correction was buried as a WOUND hook
-        and the re-prompt was a dead input.
         """
         if not isinstance(self._phase, AwaitingFollowup):
             raise WrongPhaseError(expected="AwaitingFollowup", actual=self._phase_name())
         scene_index = self._phase.scene_index
         scene_id = self._scenes[scene_index].id
 
-        if self._is_name_scene(scene_index) and self._results:
-            self._results[-1].followup_text = text
-            corr_name, corr_vessel = extract_freeform_names(text)
-            trace.get_current_span().add_event(
-                "chargen.name_followup_correction",
-                {
-                    "action": "name_followup_correction",
-                    "scene_id": scene_id,
-                    "extracted_name": corr_name or "",
-                    "extracted_vessel_name": corr_vessel or "",
-                    "severity": "info" if (corr_name or corr_vessel) else "warn",
-                },
-            )
-        elif self._results:
-            # Insert the followup hook at position 0 on the most recent result.
+        # Insert the followup hook at position 0 on the most recent result.
+        if self._results:
             self._results[-1].hooks_added.insert(
                 0,
                 NarrativeHook(
@@ -2224,8 +1648,8 @@ class CharacterBuilder:
                         "chargen.class_qualifying",
                         {"class_ids": [c.id for c in qual]},
                     )
-            elif effects.stat_generation in ("roll_3d6_arrange_visible", "standard_array_arrange"):
-                # The pool was seeded at construction; arrangement
+            elif effects.stat_generation == "roll_3d6_arrange_visible":
+                # The pool was rolled at construction; arrangement
                 # materializes _rolled_stats. generate_stats() reuses the
                 # ``roll_3d6_strict`` branch — both materialize stats
                 # before generate_stats runs, so don't override
@@ -2241,7 +1665,6 @@ class CharacterBuilder:
                 hooks_added=[],
                 anchors_added=[],
                 choice_description=None,
-                scene_index=scene_index,
             )
         )
 
@@ -2299,39 +1722,6 @@ class CharacterBuilder:
                 hooks_added=[],
                 anchors_added=[],
                 choice_description=None,
-                scene_index=scene_index,
-            )
-        )
-        self._advance_scene(scene_index)
-
-    def apply_bones_confirm(self) -> None:
-        """Lock the Roll the Bones array and advance past the bones scene.
-
-        Records a SceneResult stamped with this scene's index so the
-        one-result-per-presented-scene ledger holds for go_back/revert
-        (the 103-2 doctrine). The rolled values are already materialized
-        in ``_rolled_stats``; confirm is purely a commit-and-advance.
-        """
-        if not isinstance(self._phase, InProgress):
-            raise WrongPhaseError(expected="InProgress", actual=self._phase_name())
-        scene_index = self._phase.scene_index
-        scene = self._scenes[scene_index]
-        if scene.requires_stat_generation is None:
-            raise RuntimeError(f"scene {scene.id!r} is not a roll-the-bones scene")
-        if self._rolled_stats is None or self._bones_budget is None:
-            raise RuntimeError(
-                f"bones scene {scene.id!r} confirmed without an active roll-the-bones state"
-            )
-        self._results.append(
-            SceneResult(
-                input_type=ChoiceInput(index=0),
-                effects_applied=scene.mechanical_effects
-                if scene.mechanical_effects is not None
-                else MechanicalEffects(),
-                hooks_added=[],
-                anchors_added=[],
-                choice_description=None,
-                scene_index=scene_index,
             )
         )
         self._advance_scene(scene_index)
@@ -2399,7 +1789,6 @@ class CharacterBuilder:
                 anchors_added=anchors,
                 choice_description=None,
                 scene_id=scene.id,
-                scene_index=scene_index,
             )
         )
 
@@ -2417,27 +1806,9 @@ class CharacterBuilder:
                 expected="InProgress with history",
                 actual="no previous scenes to return to",
             )
-        popped = self._results.pop()
-        # Branch-aware return (103-2 review [HIGH]): go back to the scene
-        # the popped result was ANSWERED at — len(_results) is wrong once
-        # requires_stock skips break the one-result-per-scene invariant.
-        target = popped.scene_index if popped.scene_index is not None else len(self._results)
-        self._undo_popped_effects(popped)
+        self._results.pop()
+        target = len(self._results)
         self._phase = InProgress(scene_index=target)
-
-    def _undo_popped_effects(self, popped: SceneResult) -> None:
-        """Ledger-driven undo of builder-state mutations recorded on a
-        popped result (103-3 review [HIGH]).
-
-        Mode adoption mutates ``_stat_generation`` at apply time; popping
-        the adopting result must restore the pack default or the player's
-        next pick walks a stale branch (a default pick was still presented
-        the bones scene). The bones array/budget/rerolled-set are
-        PRESERVED so re-adoption is idempotent — no reroll-budget fishing
-        via Back (see ``_enter_roll_the_bones``).
-        """
-        if popped.effects_applied.stat_generation == "roll_the_bones":
-            self._stat_generation = self._rules.stat_generation
 
     def revert(self) -> None:
         """Revert the last scene — pop the SceneResult and go back one.
@@ -2449,24 +1820,10 @@ class CharacterBuilder:
         """
         if not self._results:
             raise CannotRevertError()
-        popped = self._results.pop()
-        target = popped.scene_index if popped.scene_index is not None else len(self._results)
-        self._undo_popped_effects(popped)
-        self._phase = InProgress(scene_index=target)
+        self._results.pop()
+        self._phase = InProgress(scene_index=len(self._results))
 
     # --- Finalizer ---
-
-    def record_fate_chargen(self, choices: object) -> None:
-        """Record the player's interactive Fate chargen choices (ADR-144 F4a2).
-
-        The Fate scene walk (aspects -> pyramid -> stunts) accumulates the
-        explicit choices here; ``build()`` then routes them through
-        ``FateRulesetModule.apply_fate_chargen`` to attach a VALIDATED FateSheet
-        instead of the F4a default seed. ``choices`` is a
-        ``sidequest.game.ruleset.fate_chargen.FateChargenChoices`` (typed as
-        ``object`` to keep the builder ruleset-agnostic — only a fate pack records
-        them, and only ``apply_fate_chargen`` consumes them)."""
-        self._fate_choices = choices
 
     def build(self, name: str) -> Character:
         """Build the final Character from accumulated choices.
@@ -2502,23 +1859,8 @@ class CharacterBuilder:
 
         acc = self.accumulated()
 
-        if self._rules.ruleset == "fate":
-            # ADR-144 F4a2 §6: a Fate PC carries NO d20 race/class. The High
-            # Concept IS the identity, surfaced as a display-only label — never the
-            # "Human"/"Fighter" d20 defaults. The non-blank Character validators
-            # forbid empty, so HC-as-label is the documented fallback.
-            _fate_hc = ""
-            if self._fate_choices is not None:
-                _fate_hc = getattr(self._fate_choices, "high_concept", "") or ""
-            if not _fate_hc:
-                _fate_cfg = self._rules.ruleset_config()
-                _fate_hc = getattr(_fate_cfg, "default_high_concept", "") or ""
-            _fate_label = _fate_hc or "Adventurer"
-            race_str = acc.race_hint or _fate_label
-            class_str = acc.class_hint or _fate_label
-        else:
-            race_str = acc.race_hint or self._default_race or "Human"
-            class_str = acc.class_hint or self._default_class or "Fighter"
+        race_str = acc.race_hint or self._default_race or "Human"
+        class_str = acc.class_hint or self._default_class or "Fighter"
 
         stats = self.generate_stats(acc)
         span = trace.get_current_span()
@@ -2639,46 +1981,6 @@ class CharacterBuilder:
                         }
                     )
                     added += 1
-            # Story 106-4: guaranteed grants — items every character of this kit
-            # receives on top of the random rolls (e.g. a heal potion), with an
-            # optional probabilistic upgrade. Keyed by kit id (class_kit:<id> →
-            # <id>; random_table → "tables"). Appended as generic dicts; the
-            # chargen catalog-upgrade pass enriches them (name/tags/heal_amount)
-            # by id just like the rolled items.
-            kit_id = (
-                kit_source.split(":", 1)[1] if kit_source.startswith("class_kit:") else "tables"
-            )
-            for grant in self._equipment_tables.guaranteed_grants.get(kit_id, []):
-                granted_id = roll_guaranteed_grant(grant, self._rng)
-                if not granted_id.strip():
-                    span.add_event(
-                        "chargen.blank_guaranteed_grant_skipped",
-                        {"kit_id": kit_id, "base": grant.item, "severity": "warn"},
-                    )
-                    continue
-                display_name = humanize_snake_case(granted_id) or "Unknown Item"
-                items.append(
-                    {
-                        "id": granted_id,
-                        "name": display_name,
-                        "description": f"Starting equipment (guaranteed): {display_name}",
-                        "category": "consumable",
-                        "value": 0,
-                        "weight": 1.0,
-                        "rarity": "common",
-                        "narrative_weight": 0.3,
-                        "tags": [],
-                        "equipped": False,
-                        "quantity": 1,
-                        "uses_remaining": None,
-                        "state": "Carried",
-                    }
-                )
-                added += 1
-                span.add_event(
-                    "chargen.guaranteed_grant_added",
-                    {"kit_id": kit_id, "item_id": granted_id, "base": grant.item},
-                )
             if class_kit_requested and kit_source.startswith("class_kit:"):
                 span.add_event(
                     "chargen.class_kit_rolled",
@@ -2836,37 +2138,6 @@ class CharacterBuilder:
             },
         )
 
-        # World-tier origin trait (89-5): a chargen choice may grant a
-        # dual-voice Race-source ability (the Barsoom Earthman gravity boon).
-        # The trait DEFINITION lives in the world's char_creation.yaml choice
-        # — never keyed off the race string in engine code — so non-barsoom
-        # builds with race "Earthman" correctly receive nothing. The stat
-        # half of such a boon rides the same choice's stat_bonuses (already
-        # consumed additively by generate_stats); this seam wires the
-        # ability half and the lie-detector event.
-        if acc.origin_trait is not None:
-            trait = acc.origin_trait
-            abilities.append(
-                AbilityDefinition(
-                    name=trait.name,
-                    genre_description=trait.genre_description,
-                    mechanical_effect=trait.mechanical_effect,
-                    involuntary=trait.involuntary,
-                    source=AbilitySource.Race,
-                    reference_url=None,
-                )
-            )
-            from sidequest.telemetry.spans import SPAN_CHARGEN_ORIGIN_TRAIT_APPLIED
-
-            span.add_event(
-                SPAN_CHARGEN_ORIGIN_TRAIT_APPLIED,
-                {
-                    "origin": race_str,
-                    "ability_names": trait.name,
-                    "stat_bonuses": str(dict(acc.stat_bonuses)),
-                },
-            )
-
         # Class signature seeding (spec 2026-05-10 §6.1).
         # Resolve the ClassDef from the pack's class list using class_str.
         # No-op when self._classes is empty (packs without classes.yaml)
@@ -2930,75 +2201,6 @@ class CharacterBuilder:
                 },
             )
 
-        # Chargen resource seeding (ADR-143): Effort pools + spellcasting +
-        # SystemStrainPool delegated to the bound RulesetModule.  The module
-        # returns ChargenResources with empty defaults for rulesets that seed
-        # nothing (native, swn); CWN/AWN return a system_strain pool; WWN
-        # returns effort + spellcasting for magic classes.
-        _res = self._ruleset.seed_chargen_resources(
-            rules=self._rules, stats=stats, class_def=_resolved_class_def
-        )
-        system_strain = _res.system_strain
-        wwn_effort, wwn_spellcasting = _res.effort, _res.spellcasting
-        # ADR-144 F4a: a ruleset: fate pack seeds a FateSheet here; every WN/native
-        # module returns fate_sheet=None.
-        fate_sheet = _res.fate_sheet
-        # ADR-144 F4a2: if the player walked the interactive Fate chargen flow, the
-        # recorded choices REPLACE the default seed with a player-authored,
-        # server-validated sheet (apply_fate_chargen fails loud on an illegal one).
-        if self._fate_choices is not None:
-            from sidequest.game.ruleset.fate import FateRulesetModule
-
-            if not isinstance(self._ruleset, FateRulesetModule):
-                raise TypeError(
-                    "interactive Fate chargen choices were recorded, but the bound "
-                    f"ruleset is {type(self._ruleset).__name__}, not FateRulesetModule "
-                    "(No Silent Fallbacks)"
-                )
-            fate_sheet = self._ruleset.apply_fate_chargen(
-                rules=self._rules, choices=self._fate_choices
-            ).fate_sheet
-
-        # Chargen contribution application (ADR-143 Task 10): background skills
-        # + foci skill/ability grants, delegated to the bound RulesetModule.
-        #
-        # Background: look up the accumulated background ID in the loaded defs.
-        # If unmatched (None or free-text prose background), no skills are granted
-        # (DD-5 documented; this is NOT a silent fallback — DD-5 explicitly permits
-        # free-text backgrounds that carry no mechanical skill grants).
-        # If matched, the WN-core override reads the def and returns the grants.
-        #
-        # Foci: look up each accumulated focus ID; unmatched IDs are silently
-        # skipped here (the content validator catches them at pack-validate time).
-        _background_def = (
-            self._backgrounds.get(acc.background) if acc.background is not None else None
-        )
-        _focus_defs = [self._foci[fid] for fid in acc.foci if fid in self._foci]
-
-        _bg_skills = self._ruleset.contribute_background_skills(
-            background_def=_background_def, rng=self._rng
-        )
-        _foci_contrib = self._ruleset.contribute_foci(focus_defs=_focus_defs)
-
-        # Merge skills: scene grants ∪ background grants ∪ foci grants.
-        # Higher-of (max) semantics across all three sources — consistent
-        # with how AccumulatedChoices.skill_grants accumulates scene-level
-        # grants (not additive). A skill present in multiple sources takes
-        # the highest level.
-        _merged_skills: dict[str, int] = dict(acc.skill_grants)
-        for _sk, _lvl in _bg_skills.items():
-            _merged_skills[_sk] = max(_merged_skills.get(_sk, 0), _lvl)
-        for _sk, _lvl in _foci_contrib.skills.items():
-            _merged_skills[_sk] = max(_merged_skills.get(_sk, 0), _lvl)
-
-        # Convert foci ClassAbilityDef instances → AbilityDefinition, stamping
-        # source=AbilitySource.Class (no AbilitySource.Focus exists; Class matches
-        # how _seed_class_abilities converts ClassDef.abilities). Shared converter
-        # (_class_ability_to_definition) is the single source of truth for the
-        # six-field struct; foci pass reference_url=None.
-        for _ca in _foci_contrib.abilities:
-            abilities.append(_class_ability_to_definition(_ca, reference_url=None))
-
         # Resolved archetype: pairs jungian_hint / rpg_role_hint if both
         # are present. archetype_provenance is populated downstream by
         # dispatch (connect.rs) once the tiered resolver runs.
@@ -3014,81 +2216,18 @@ class CharacterBuilder:
         # fallback).
         first_name, last_name = _split_name(name)
 
-        # Story 93-2: durable provenance of the player's chargen answers —
-        # one entry per ANSWERED scene in scene-walk order. Auto-advance
-        # acks and the arrangement confirm append a SceneResult but carry
-        # no prompt/answer pair (choice_label is None), so they are
-        # skipped. Results align with scenes by index (every applied scene
-        # appends exactly one result — the same invariant the abilities
-        # loop above relies on); freeform/story results also carry an
-        # explicit scene_id stamp which wins when present.
-        creation_answers: list[CreationAnswer] = []
-        # strict=False: results ≤ scenes always (build runs from the
-        # Confirmation phase, where every walked scene appended exactly
-        # one result; barsoom-style packs with a trailing display scene
-        # can legitimately have fewer results than scenes after revert).
-        for scene_for_answer, result in zip(self._scenes, self._results, strict=False):
-            answer_scene_id = result.scene_id or scene_for_answer.id
-            if isinstance(result.input_type, FreeformInput):
-                creation_answers.append(
-                    CreationAnswer(
-                        scene_id=answer_scene_id,
-                        prompt=scene_for_answer.title,
-                        kind="freeform",
-                        value=result.input_type.text,
-                    )
-                )
-            elif isinstance(result.input_type, StoryInput):
-                # the_story folds background + description; pronouns are
-                # mechanical (pronoun_hint), not narrative words. Same join
-                # _apply_story uses for MechanicalEffects.background.
-                story_parts = [
-                    result.input_type.background.strip(),
-                    result.input_type.description.strip(),
-                ]
-                creation_answers.append(
-                    CreationAnswer(
-                        scene_id=answer_scene_id,
-                        prompt=scene_for_answer.title,
-                        kind="freeform",
-                        value=" | ".join(p for p in story_parts if p),
-                    )
-                )
-            elif isinstance(result.input_type, ChoiceInput) and result.choice_label is not None:
-                creation_answers.append(
-                    CreationAnswer(
-                        scene_id=answer_scene_id,
-                        prompt=scene_for_answer.title,
-                        kind="choice",
-                        value=result.choice_label,
-                    )
-                )
-        span.add_event(
-            "chargen.creation_answers_recorded",
-            {
-                "count": len(creation_answers),
-                "choice_count": sum(1 for a in creation_answers if a.kind == "choice"),
-                "freeform_count": sum(1 for a in creation_answers if a.kind == "freeform"),
-                "scene_ids": ", ".join(a.scene_id for a in creation_answers),
-            },
-        )
-
         # Compose the Character. Character / CreatureCore non-blank
         # validators will catch blank name / description / personality.
         character = Character(
             core=CreatureCore(
                 name=name,
-                description=(f"{indefinite_article(race_str).capitalize()} {race_str} {class_str}"),
+                description=f"A {race_str} {class_str}",
                 personality=acc.personality_trait or "Determined",
                 level=1,
                 xp=0,
                 inventory=Inventory(items=items, gold=0),
                 statuses=[],
                 hp=hp,
-                system_strain=system_strain,
-                effort=wwn_effort,
-                spellcasting=wwn_spellcasting,
-                fate_sheet=fate_sheet,
                 acquired_advancements=[],
             ),
             backstory=backstory_text,
@@ -3099,8 +2238,6 @@ class CharacterBuilder:
             pronouns=acc.pronoun_hint or "",
             stats=stats,
             abilities=abilities,
-            skills=_merged_skills,
-            foci=list(acc.foci),
             known_facts=[],
             affinities=[],
             is_friendly=True,
@@ -3108,21 +2245,9 @@ class CharacterBuilder:
             archetype_provenance=None,
             background=acc.background_label or "",
             drive=acc.backstory_label or "",
-            # Display-only flavor labels (symmetric with background_label).
-            # acc.race_label / acc.class_label capture a CHOICE's chosen flavor
-            # when it differs from the collapsed mechanical hint; empty when the
-            # label IS the archetype. The live sheet shows these over the slug.
-            origin_label=acc.race_label or "",
-            # A genuine vocation-flavor label wins (tea_and_murder "Country
-            # Veterinary Surgeon"); otherwise fall back to the mechanical
-            # class_hint ("Channeler") so combined-origin packs get a real
-            # Discipline identity instead of an empty calling. class_hint must
-            # win over the origin display label — never duplicate origin_label.
-            calling_label=acc.class_label or acc.class_hint or "",
             first_name=first_name,
             last_name=last_name,
             nickname="",
-            creation_answers=creation_answers,
         )
 
         return character
@@ -3160,17 +2285,6 @@ class CharacterBuilder:
         self._arrangement_assignment = {name: None for name in self._ability_score_names}
         # rolled_stats stays None until confirm_arrangement materializes it.
 
-    def _seed_standard_array_arrange(self) -> None:
-        """Seed the arrange pool from the pack's standard array (ADR-143 DD-3).
-
-        Parallel to _roll_3d6_arrange_visible, but the six values are the fixed
-        standard array (default [15,14,13,12,10,8] when unset) instead of 3d6
-        rolls. The existing arrange picker/handlers/FSM are reused unchanged.
-        """
-        base = self._standard_array if self._standard_array is not None else _DEFAULT_STANDARD_ARRAY
-        self._arrangement_pool = list(base)
-        self._arrangement_assignment = {name: None for name in self._ability_score_names}
-
     def _roll_3d6_strict(self) -> None:
         """Roll 3d6 stats once into self._rolled_stats.
 
@@ -3187,197 +2301,159 @@ class CharacterBuilder:
                 {"class_ids": [c.id for c in qual]},
             )
 
-    def _bones_roll_one(self, name: str) -> int:
-        """Roll 3d6 for one stat in Roll the Bones mode.
+    def _roll_3d6_stats(self) -> list[tuple[str, int]]:
+        """Roll 3d6 for each ability score in order. Returns ``(name, total)``
+        pairs in ``ability_score_names`` order.
 
-        Fires SPAN_CHARGEN_STAT_ROLL with the faces (GM-panel lie
-        detector) and queues a (stat, faces) broadcast for the dispatch
-        layer's DiceResult fan-out. Returns the total.
+        Uses the builder's seedable RNG so tests can drive deterministic
+        outputs.
         """
         from sidequest.telemetry.spans import SPAN_CHARGEN_STAT_ROLL, Emitter
 
-        dice = [self._rng.randint(1, 6) for _ in range(3)]
-        total = sum(dice)
-        Emitter.fire(
-            SPAN_CHARGEN_STAT_ROLL,
-            {"stat": name, "dice": list(dice), "total": total},
-        )
-        self._bones_pending_broadcasts.append((name, dice))
-        return total
-
-    def _enter_roll_the_bones(self) -> None:
-        """Adopt Roll the Bones: 3d6 per stat, in order, dice stand.
-
-        Eager roll at adoption (mirrors the construction-time eager roll
-        for roll_3d6_strict): the rolled values are available for the
-        bones scene's first frame. Budget initializes to two rerolls.
-
-        Idempotent re-adoption (103-3 review [MEDIUM]): when bones state
-        already exists on this builder (the player went Back and picked
-        Roll the Bones again), the existing array, remaining budget, and
-        once-each ledger stand — no new rolls, spans, or broadcasts.
-        Back + re-pick must not be a free full-array reroll.
-        """
-        self._stat_generation = "roll_the_bones"
-        if self._bones_budget is not None and self._rolled_stats is not None:
-            return
-        self._rolled_stats = [
-            (name, self._bones_roll_one(name)) for name in self._ability_score_names
-        ]
-        self._bones_budget = 2
-        self._bones_rerolled = set()
-
-    @property
-    def reroll_budget_remaining(self) -> int | None:
-        """Remaining Roll the Bones rerolls; None outside the mode.
-
-        Mode-aware, not storage-aware: after the player backs out of an
-        adoption the stored array/budget survive for idempotent re-adoption,
-        but the surface reads not-in-mode until the mode is active again.
-        """
-        if self._stat_generation != "roll_the_bones":
-            return None
-        return self._bones_budget
-
-    def reroll_stat(self, stat_name: str) -> None:
-        """Reroll one stat's 3d6 in Roll the Bones mode (103-3).
-
-        Replacement semantics — the new total stands even when lower.
-        Budget is two stats, once each. Rerolls are only legal while the
-        bones scene is the CURRENT scene — once ``apply_bones_confirm``
-        locks the array, leftover budget is dead (103-3 review [MEDIUM]:
-        no post-confirm rerolls from the name scene or the confirmation
-        summary). All rejections are loud:
-
-        Raises:
-            RuntimeError: not in Roll the Bones mode, or the bones scene
-                is not the current scene (pre-adoption, post-confirm, or
-                summary phase).
-            ValueError: ``stat_name`` is not an ability score.
-            StatAlreadyRerolledError: this stat was already rerolled.
-            RerollBudgetExhaustedError: both budget slots spent.
-        """
-        if self._bones_budget is None:
-            raise RuntimeError("not in roll-the-bones mode")
-        if not isinstance(self._phase, InProgress) or (
-            self._scenes[self._phase.scene_index].requires_stat_generation is None
-        ):
-            raise RuntimeError(
-                "rerolls are only available while the roll-the-bones scene "
-                "is active — the confirmed array stands"
+        rng = self._rng
+        results: list[tuple[str, int]] = []
+        for name in self._ability_score_names:
+            dice = (rng.randint(1, 6), rng.randint(1, 6), rng.randint(1, 6))
+            total = sum(dice)
+            Emitter.fire(
+                SPAN_CHARGEN_STAT_ROLL,
+                {
+                    "stat": name,
+                    "dice": list(dice),
+                    "total": total,
+                },
             )
-        if stat_name not in self._ability_score_names:
-            raise ValueError(f"unknown stat '{stat_name}'")
-        if stat_name in self._bones_rerolled:
-            raise StatAlreadyRerolledError(stat_name)
-        if self._bones_budget <= 0:
-            raise RerollBudgetExhaustedError(stat_name)
-
-        total = self._bones_roll_one(stat_name)
-        assert self._rolled_stats is not None  # set by _enter_roll_the_bones
-        self._rolled_stats = [
-            (name, total if name == stat_name else value) for name, value in self._rolled_stats
-        ]
-        self._bones_rerolled.add(stat_name)
-        self._bones_budget -= 1
-
-    def consume_bones_broadcasts(self) -> list[tuple[str, list[int]]]:
-        """Drain queued (stat, faces) bones rolls for DiceResult fan-out."""
-        drained = self._bones_pending_broadcasts
-        self._bones_pending_broadcasts = []
-        return drained
-
-    def _roll_3d6_stats(self) -> list[tuple[str, int]]:
-        """Delegate to the module-level helper (ADR-143: moved to ruleset/base.py
-        so the builder and the ABC default generate_attributes share one
-        implementation). Uses the builder's seedable RNG.
-        """
-        from sidequest.game.ruleset.base import _roll_3d6_stats
-
-        return _roll_3d6_stats(self._ability_score_names, self._rng)
+            results.append((name, total))
+        return results
 
     @staticmethod
     def _allocate_point_buy(n: int, budget: int) -> list[int]:
-        """Delegate to the module-level helper (ADR-143: moved to ruleset/base.py).
+        """Allocate a point-buy budget across `n` stats.
 
-        Preserved as a static method on CharacterBuilder so existing call
-        sites (tests, etc.) do not need to be updated.
+        All stats start at 8. Points distributed round-robin, raising each
+        stat by 1 at a time (cheapest-first) until budget is spent. No
+        stat can exceed 15. Cost table (cumulative from 8):
+          8→9..12: 1pt each; 13→14..15: 2pt each.
         """
-        from sidequest.game.ruleset.base import _allocate_point_buy
 
-        return _allocate_point_buy(n, budget)
+        def marginal_cost(value: int) -> int:
+            if 9 <= value <= 13:
+                return 1
+            if value in (14, 15):
+                return 2
+            # Outside [9, 15] — effectively infinite; callers filter via
+            # the next_val > 15 guard before reaching this branch.
+            return 1 << 30
+
+        stats = [8] * n
+        remaining = budget
+        while True:
+            any_raised = False
+            for i in range(n):
+                next_val = stats[i] + 1
+                if next_val > 15:
+                    continue
+                cost = marginal_cost(next_val)
+                if cost <= remaining:
+                    stats[i] = next_val
+                    remaining -= cost
+                    any_raised = True
+            if not any_raised or remaining == 0:
+                break
+        return stats
 
     def generate_stats(self, acc: AccumulatedChoices) -> dict[str, int]:
-        """Delegate to the bound RulesetModule (ADR-143). The module owns the
-        attribute mechanics; the builder owns the FSM that gathered `acc`.
+        """Generate ability scores per the declared stat_generation method.
 
-        Resolves class_def from the builder's class roster + acc.class_hint so
-        the ruleset can use it for prime-aware assignment (ADR-143 Task 4).
-        Reuses the same resolution pattern as confirm_build: class_hint →
-        _default_class → None. Passes None when no classes are attached or
-        no class hint matches (no silent fallback — unmatched hint means no
-        class_def, not a fabricated one)."""
-        class_str = acc.class_hint or self._default_class
-        class_def = None
-        if class_str and self._classes:
-            class_def = next(
-                (c for c in self._classes if c.display_name == class_str),
-                None,
+        Strategies:
+        - roll_3d6_strict: reuse pre-rolled stats from construction or
+          scene directive; re-roll inline if absent (defensive — the
+          eager roll should have fired).
+        - standard_array: [15, 14, 13, 12, 10, 8] mapped to the
+          ability_score_names in declaration order. When no explicit
+          stat_bonuses were set by chargen choices, derive bonuses from
+          accumulated hints (race/mutation/class) to differentiate stat
+          spreads across builds.
+        - point_buy: distribute point_buy_budget across ability scores.
+
+        Accumulated `acc.stat_bonuses` are applied additively on top of
+        the generated baseline (every strategy).
+
+        Raises UnknownStatGenerationError for any other method string.
+        """
+        method = self._stat_generation
+
+        if method == "roll_3d6_strict":
+            if self._rolled_stats is not None:
+                stats = dict(self._rolled_stats)
+            else:
+                # Defensive re-roll — shouldn't fire in practice because
+                # the eager construction roll covers this path.
+                rolled = self._roll_3d6_stats()
+                stats = dict(rolled)
+
+        elif method == "standard_array":
+            base_values = [15, 14, 13, 12, 10, 8]
+            stats = dict(zip(self._ability_score_names, base_values, strict=False))
+
+        elif method == "point_buy":
+            values = self._allocate_point_buy(
+                len(self._ability_score_names), self._point_buy_budget
             )
-        return self._ruleset.generate_attributes(
-            method=self._stat_generation,
-            ability_names=self._ability_score_names,
-            standard_array=self._standard_array,
-            point_buy_budget=self._point_buy_budget,
-            rolled_stats=self._rolled_stats,
-            acc=acc,
-            rng=self._rng,
-            class_def=class_def,
+            stats = dict(zip(self._ability_score_names, values, strict=True))
+
+        else:
+            raise UnknownStatGenerationError(method=method)
+
+        # Apply explicit stat bonuses from chargen choices (origin,
+        # mutation, artifact).
+        for stat, bonus in acc.stat_bonuses.items():
+            if stat in stats:
+                stats[stat] += bonus
+
+        # Standard-array derivation: when no explicit bonuses were
+        # authored and we have at least 3 stats, differentiate the
+        # spread using accumulated hints.
+        if (
+            not acc.stat_bonuses
+            and method == "standard_array"
+            and len(self._ability_score_names) >= 3
+        ):
+            names = self._ability_score_names
+            # Origin/race → boost first stat
+            if acc.race_hint is not None:
+                stats[names[0]] = stats[names[0]] + 3
+            # Mutation/affinity → boost second stat, reduce last
+            if acc.mutation_hint is not None or acc.affinity_hint is not None:
+                stats[names[1]] = stats[names[1]] + 2
+                stats[names[-1]] = stats[names[-1]] - 1
+            # Class/training → boost third stat (floor at last index if
+            # fewer than 3 names, though the guard above already rejects
+            # that case).
+            if acc.class_hint is not None or acc.training_hint is not None:
+                idx = min(2, len(names) - 1)
+                stats[names[idx]] = stats[names[idx]] + 2
+
+        import json as _json
+
+        from sidequest.telemetry.spans import SPAN_CHARGEN_STATS_GENERATED, Emitter
+
+        Emitter.fire(
+            SPAN_CHARGEN_STATS_GENERATED,
+            {
+                "method": method,
+                "stat_count": len(stats),
+                "stats_json": _json.dumps(dict(stats), sort_keys=True),
+            },
         )
+        return stats
 
     # --- Private helpers ---
 
-    @property
-    def chosen_stock_id(self) -> str | None:
-        """The stock picked on the stock scene, if any (story 103-2).
-
-        Accumulated from applied choices so the chargen confirm handler can
-        plumb it to init_mutation_state_for_session without re-walking."""
-        for result in self._results:
-            if result.effects_applied.stock_id is not None:
-                return result.effects_applied.stock_id
-        return None
-
-    @property
-    def chosen_saint_id(self) -> str | None:
-        """The Saint picked on a branch scene, if any (103-1's selection
-        surface, delivered by 103-2)."""
-        for result in self._results:
-            if result.effects_applied.saint_id is not None:
-                return result.effects_applied.saint_id
-        return None
-
     def _advance_scene(self, current: int) -> None:
         """Advance to the next scene, or transition to Confirmation if
-        `current` was the last scene.
-
-        Stock branching (103-2): scenes tagged ``requires_stock`` are
-        presented only when the tag matches the chosen stock; non-matching
-        scenes are skipped. The tag is a FILTER — with no stock chosen,
-        every tagged scene is skipped (single-path worlds walk unchanged)."""
+        `current` was the last scene."""
         next_index = current + 1
-        chosen = self.chosen_stock_id
-        while next_index < len(self._scenes):
-            candidate = self._scenes[next_index]
-            stock_tag = candidate.requires_stock
-            stock_ok = stock_tag is None or stock_tag == chosen
-            # Roll the Bones (103-3): same FILTER doctrine for the
-            # stat-generation gate — default-mode walks skip tagged scenes.
-            gen_tag = candidate.requires_stat_generation
-            gen_ok = gen_tag is None or gen_tag == self._stat_generation
-            if stock_ok and gen_ok:
-                break
-            next_index += 1
         if next_index >= len(self._scenes):
             self._phase = CONFIRMATION
         else:

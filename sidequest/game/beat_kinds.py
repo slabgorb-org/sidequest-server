@@ -17,9 +17,9 @@ arithmetic the engine needs.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Literal
+from typing import Any
 
 from sidequest.protocol.dice import RollOutcome
 
@@ -54,165 +54,6 @@ class ResolvedDeltas:
     grants_fleeting_tag: str | None = None
     tag_backfire: bool = False
     resolution: bool = False
-
-
-# Closed set of beat-impact categories (Story 73-4). The UI mirrors this as a
-# TypeScript union (ConfrontationOverlay.tsx ``BeatEffect``); keeping both as a
-# fixed enumeration means a renamed/typo'd category fails type-check on both
-# sides instead of silently producing a dead ``beat-impact-${effect}`` class.
-BeatEffect = Literal["advance", "setback", "resolution", "tag", "backfire", "inert"]
-
-
-@dataclass(frozen=True)
-class BeatImpact:
-    """Player-facing semantic readout of one resolved beat (Story 73-4).
-
-    The dial math is correct but illegible: a ``push`` CritSuccess intentionally
-    moves no dial (``own=0``/``opponent=0``, ``resolution=True``, fleeting
-    "Clean Exit"), and a mechanics-first player (Sebastien / Jade) reads the 0 as
-    a broken roll. This descriptor classifies the *resolved* deltas into a single
-    ``effect`` category plus a human-legible ``summary`` so the UI can render
-    "clean exit, by design" instead of a bare 0.
-
-    Single source of truth for kind+tier semantics (SOUL: "legible in
-    player-facing surfaces"). NOT a dev/OTEL artifact — the existing
-    ``beat_no_op`` / ``beat_applied`` watcher emits cover the dev side.
-
-    ``effect`` is one of: ``advance`` (a dial moved in the actor's favor),
-    ``setback`` (a dial moved against the actor), ``resolution`` (the beat ends
-    the confrontation, no dial change by design), ``tag`` (a scene tag was
-    granted, no dial change by design), ``backfire`` (an angle rebounded), or
-    ``inert`` (the beat landed but nothing happened — a genuine Fail).
-    """
-
-    effect: BeatEffect
-    dial_moved: bool
-    summary: str
-    own: int = 0
-    opponent: int = 0
-    resolution: bool = False
-    tag: str | None = None
-
-
-def describe_beat_impact(
-    deltas: ResolvedDeltas,
-    *,
-    kind: BeatKind,
-    outcome: RollOutcome,
-    hp_depletion_suppressed: bool = False,
-    hp_removed: int = 0,
-) -> BeatImpact:
-    """Classify *resolved* deltas into a legible :class:`BeatImpact` (Story 73-4).
-
-    Reads the resolved deltas (so per-tier overrides are honored — an override
-    that adds a dial move to a normally-no-move tier reads as a move, not "no
-    dial by design"). ``kind``/``outcome`` enrich the summary text only.
-
-    Effect precedence — a fixed order, because the DEFAULT_DELTAS tiers never
-    carry two effects but a per-tier ``override`` CAN (e.g. a backfire plus a
-    dial penalty). When two are present the dial move wins, deterministically:
-    favorable dial move → ``advance``; unfavorable dial move → ``setback``;
-    backfire → ``backfire``; resolution → ``resolution``; tag granted → ``tag``;
-    else → ``inert``.
-
-    Story 73-8 — ``hp_depletion_suppressed``: under
-    ``win_condition="hp_depletion"`` ``apply_beat`` suppresses the dial mutation
-    (the dials are inert HP placeholders; the move lands on the HP channel). The
-    honest dial classification is then "no dial motion", so zero the dial deltas:
-    the favorable/unfavorable branches fall through to ``inert``, ``dial_moved``
-    is ``False``, and the surfaced ``own``/``opponent`` numbers (shipped to the UI
-    by 73-7) don't read as a phantom dial gain. Tag, resolution, and backfire are
-    not dial motion and still fire (read from ``deltas``).
-
-    ``hp_removed`` (sq-playtest 2026-06-13 impact-chip-gap): the HP the strike
-    actually ablated on the suppressed-dial path. The early call (pre-damage)
-    passes 0 and reads "dial held / moved nothing"; ``apply_beat`` RE-derives
-    with the resolved ``hp_removed`` once the HP channel lands, so a damaging
-    strike (the most salient mechanical event — a crit removing HP) reads as an
-    ``advance`` with the real HP delta instead of "No change — moved nothing".
-    Only consulted under ``hp_depletion_suppressed``; takes precedence over the
-    inert/suppressed-dial branches (a strike that drew blood is never inert).
-    """
-    own = deltas.own
-    opponent = deltas.opponent
-    # A nominal dial move that suppression zeroed means the move actually landed on
-    # the HP channel — distinct from a genuine miss (no nominal delta at all), where
-    # "moved nothing" stays the honest summary. Captured before zeroing so the inert
-    # branch can tell the two apart (Story 73-8 follow-up).
-    suppressed_dial_move = hp_depletion_suppressed and (own != 0 or opponent != 0)
-    if hp_depletion_suppressed:
-        own = 0
-        opponent = 0
-    dial_moved = own != 0 or opponent != 0
-    tag = deltas.grants_tag or deltas.grants_fleeting_tag
-
-    # Favorable: you advanced your own dial OR drained the opponent's (negative
-    # opponent delta). Unfavorable: your dial slipped OR theirs rose against you.
-    favorable = own > 0 or opponent < 0
-    unfavorable = own < 0 or opponent > 0
-
-    effect: BeatEffect
-    if hp_depletion_suppressed and hp_removed > 0:
-        # HP combat: the strike's real impact is the HP it ablated, not the
-        # suppressed dial. Wins over the inert/suppressed-dial branches below so
-        # a damaging crit reads as an advance with its HP delta, not "No change"
-        # (sq-playtest 2026-06-13). The dial numbers stay zeroed (no dial moved);
-        # the HP bar — not this readout's dial — animates the actual loss.
-        effect = "advance"
-        summary = f"−{hp_removed} to their HP"
-        if tag:
-            summary = f"{summary} ({tag})"
-    elif favorable:
-        effect = "advance"
-        detail = []
-        if own > 0:
-            detail.append(f"+{own} to your edge")
-        if opponent < 0:
-            detail.append(f"{opponent} to their edge")
-        summary = "; ".join(detail) or "Your edge advances"
-        if tag:
-            summary = f"{summary} ({tag})"
-    elif unfavorable:
-        effect = "setback"
-        if own < 0:
-            summary = f"Setback — your edge slips ({own})"
-        else:
-            summary = f"Setback — their edge rises (+{opponent})"
-    elif deltas.tag_backfire:
-        effect = "backfire"
-        summary = (
-            f"Backfire — your angle rebounds ({tag})"
-            if tag
-            else "Backfire — your angle rebounds onto you"
-        )
-    elif deltas.resolution:
-        effect = "resolution"
-        if tag:
-            summary = f"{tag} — resolves the confrontation (no dial change by design)"
-        else:
-            summary = "Resolves the confrontation (no dial change by design)"
-    elif tag:
-        effect = "tag"
-        summary = f"Sets up a scene tag: {tag} (no dial change by design)"
-    elif suppressed_dial_move:
-        # Story 73-8 — the dial was held (hp_depletion), but the beat DID resolve:
-        # the move landed on the HP channel, so "moved nothing" would itself be a
-        # small lie. The genuine-miss branch below keeps "moved nothing".
-        effect = "inert"
-        summary = "Dial held — HP channel resolved this beat"
-    else:
-        effect = "inert"
-        summary = "No change — the beat landed but moved nothing"
-
-    return BeatImpact(
-        effect=effect,
-        dial_moved=dial_moved,
-        summary=summary,
-        own=own,
-        opponent=opponent,
-        resolution=deltas.resolution,
-        tag=tag,
-    )
 
 
 # Per-kind default delta tables. ``b`` is the beat's ``base``; the lambdas
@@ -337,7 +178,6 @@ from sidequest.game.encounter import (  # noqa: E402
     StructuredEncounter,
 )
 from sidequest.game.encounter_tag import EncounterTag  # noqa: E402
-from sidequest.game.hp_depletion import check_hp_depletion  # noqa: E402
 from sidequest.telemetry.spans import (  # noqa: E402
     SPAN_ENCOUNTER_TAUNT_ACTIVATED,
     encounter_composure_break_span,
@@ -398,18 +238,6 @@ class ApplyResult:
     deltas: ResolvedDeltas | None
     resolved: bool
     skipped_reason: str | None = None
-    # Player-facing legibility descriptor (Story 73-4). None only when the beat
-    # was skipped (no deltas resolved).
-    impact: BeatImpact | None = None
-    # Actual HP removed from the primary target by the strike damage channel
-    # (ADR-114 §2). Distinct from ``deltas.opponent``, which is the *dial*
-    # delta and is suppressed to 0 under ``win_condition="hp_depletion"`` (the
-    # dials are inert placeholders). Without this, the persisted forensics
-    # ``ENCOUNTER_BEAT_APPLIED`` event records only the inert dial delta and a
-    # post-hoc reader sees ``opponent_delta=0`` for a strike that removed real
-    # HP — the lie-detector goes blind on the persisted surface even though the
-    # live ``state_patch.hp`` span fired. 0 when no HP channel ran.
-    hp_removed: int = 0
 
 
 def _phase_for_beat(beat: int) -> EncounterPhase:
@@ -589,61 +417,10 @@ def apply_beat(
         target_tag=getattr(beat, "target_tag", None),
     )
 
-    # Story 73-4 — derive + stamp the player-facing legibility descriptor. Stored
-    # per-side so an opposed_check opponent beat (applied later this turn) can't
-    # clobber the player's readout. Derived from the *nominal* resolved deltas.
-    # CAVEAT (hp_depletion): for win_condition="hp_depletion" the dial application
-    # below is suppressed (the dials are inert HP placeholders), so the descriptor
-    # can report effect="advance"/dial_moved=True for a beat whose dial never
-    # actually moved on-screen. That mode renders HP bars, not this dial-impact
-    # panel (out of scope for 73-4 / dial confrontations) — but a future story
-    # surfacing last_beat_impact under hp_depletion must read the HP channel, not
-    # these nominal dial deltas. See Delivery Findings (Dev) for the follow-up.
-    # Story 73-8 — that follow-up: pass the hp_depletion flag so the descriptor
-    # stamps a truthful "no dial motion" (inert/tag/resolution) instead of a
-    # phantom advance/dial_moved=True for the suppressed dial below.
-    impact = describe_beat_impact(
-        deltas,
-        kind=beat.kind,
-        outcome=outcome,
-        hp_depletion_suppressed=enc.win_condition == "hp_depletion",
-    )
-    enc.last_beat_impacts[actor.side] = asdict(impact)
-
     own_metric = enc.player_metric if actor.side == "player" else enc.opponent_metric
     other_metric = enc.opponent_metric if actor.side == "player" else enc.player_metric
 
-    # hp_depletion (SWN combat): the dials are inert 1e6 placeholders synthesized
-    # by the init seam, and the HP channel (damage_channel/edge_delta below) is the
-    # authoritative resolution track. Applying dial deltas here advances that
-    # placeholder — playtest 67-10 (59-26) caught a Fail shoot pushing the inert
-    # dial to 2, broadcast as momentum and rendered by the overlay as the
-    # "0/1000000" bar. Suppress the dial mutation for hp_depletion; emit a span so
-    # the GM panel sees the deltas were computed-then-suppressed, not silently
-    # dropped (OTEL Observability Principle). The resolution-beat / HP branches
-    # below are unaffected.
-    hp_depletion = enc.win_condition == "hp_depletion"
-    if hp_depletion and (deltas.own != 0 or deltas.opponent != 0):
-        _watcher_publish(
-            "state_transition",
-            {
-                "field": "encounter",
-                "op": "dial_suppressed_hp_depletion",
-                "actor": actor.name,
-                "actor_side": actor.side,
-                "beat_id": getattr(beat, "id", "?"),
-                "suppressed_own": deltas.own,
-                "suppressed_opponent": deltas.opponent,
-                "rationale": (
-                    "win_condition=hp_depletion — dials are inert placeholders; "
-                    "HP channel is authoritative, dial deltas not applied"
-                ),
-            },
-            component="encounter",
-            severity="info",
-        )
-
-    if deltas.own != 0 and not hp_depletion:
+    if deltas.own != 0:
         before = own_metric.current
         own_metric.current = max(0, own_metric.current + deltas.own)
         with encounter_metric_advance_span(
@@ -668,7 +445,7 @@ def apply_beat(
             component="encounter",
         )
 
-    if deltas.opponent != 0 and not hp_depletion:
+    if deltas.opponent != 0:
         before = other_metric.current
         # Opponent dial: ``brace`` emits a negative delta; ascending dials
         # are clamped at 0.
@@ -915,7 +692,6 @@ def apply_beat(
     # HP path is skipped — Task 7 injects the real dice resolver; until then
     # the engine is silent on HP for channel=strike beats (no phantom zero damage).
     damage_channel = str(getattr(beat, "damage_channel", "none") or "none")
-    hp_removed = 0
     if damage_channel == "strike" and damage_resolver is not None:
         damage_total = damage_resolver()
         # Resolve target mitigation: beat.mitigation_override takes precedence;
@@ -944,32 +720,13 @@ def apply_beat(
         if primary_target is not None and edge_resolver is not None:
             hp_target = edge_resolver(primary_target)
             if hp_target is not None:
-                hp_removed = apply_beat_hp_channel(
+                apply_beat_hp_channel(
                     target=hp_target,
                     channel="strike",
                     damage_total=damage_total,
                     target_mitigation=target_mitigation,
                     source_beat_id=getattr(beat, "id", "?"),
                 )
-
-    # Story 73-8 follow-up (sq-playtest 2026-06-13 impact-chip-gap): the early
-    # impact stamp above ran BEFORE the HP channel resolved, so under hp_depletion
-    # it could only say "dial held / moved nothing" — the overlay's beat-impact
-    # chip then read "No change" even on a crit that removed HP. Now that the
-    # strike's real HP loss is known, re-derive the descriptor with it so the
-    # most salient mechanical event reads as an advance (Sebastien/Jade "see the
-    # math"). Only re-stamps when damage actually landed; a true whiff keeps the
-    # honest "moved nothing".
-    if hp_depletion and hp_removed > 0:
-        enc.last_beat_impacts[actor.side] = asdict(
-            describe_beat_impact(
-                deltas,
-                kind=beat.kind,
-                outcome=outcome,
-                hp_depletion_suppressed=True,
-                hp_removed=hp_removed,
-            )
-        )
 
     enc.beat += 1
     enc.structured_phase = _phase_for_beat(enc.beat)
@@ -1061,53 +818,23 @@ def apply_beat(
         enc.structured_phase = EncounterPhase.Resolution
         resolved = True
 
-    # ADR-114 §2 — HP-depletion resolution. For ``win_condition="hp_depletion"``
-    # confrontations the dials are inert (threshold synthesized at 1e6 by the
-    # init seam); the encounter ends when a side's primary combatant hits 0 HP
-    # as read through the edge_resolver. The dial-threshold branches below are
-    # gated OFF for this win condition so an inert dial can never falsely
-    # resolve the fight. Emits ``encounter.resolved`` with ``source="hp_depletion"``
-    # so the GM panel can tell an HP kill from a dial victory.
-    # (``hp_depletion`` computed once near the top of this function.)
-    if hp_depletion and not resolved and edge_resolver is not None:
-        result = check_hp_depletion(enc, edge_resolver, beat_id=getattr(beat, "id", "?"))
-        if result is not None:
-            resolved = True
-
     # Player threshold first, then opponent — sealed-letter order via
     # ADR-036 already places player beats first in the iteration; this
-    # second-level tie-break is "first crossing wins". Gated to dial-threshold
-    # confrontations only; hp_depletion resolves on the HP branch above.
-    if (
-        not hp_depletion
-        and not resolved
-        and enc.player_metric.current >= enc.player_metric.threshold
-    ):
+    # second-level tie-break is "first crossing wins".
+    if not resolved and enc.player_metric.current >= enc.player_metric.threshold:
         enc.resolved = True
         enc.outcome = "player_victory"
         enc.structured_phase = EncounterPhase.Resolution
         resolved = True
-    elif (
-        not hp_depletion
-        and not resolved
-        and enc.opponent_metric.current >= enc.opponent_metric.threshold
-    ):
+    elif not resolved and enc.opponent_metric.current >= enc.opponent_metric.threshold:
         enc.resolved = True
         enc.outcome = "opponent_victory"
         enc.structured_phase = EncounterPhase.Resolution
         resolved = True
-    # Ungated by hp_depletion ON PURPOSE: a resolution / surrender beat ends
-    # either kind of confrontation (dial-threshold or HP-depletion).
     elif not resolved and (deltas.resolution or getattr(beat, "resolution", False)):
         enc.resolved = True
         enc.outcome = f"resolution_beat:{beat.id}"
         enc.structured_phase = EncounterPhase.Resolution
         resolved = True
 
-    return ApplyResult(
-        deltas=deltas,
-        resolved=resolved,
-        skipped_reason=None,
-        impact=impact,
-        hp_removed=hp_removed,
-    )
+    return ApplyResult(deltas=deltas, resolved=resolved, skipped_reason=None)

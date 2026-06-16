@@ -32,7 +32,6 @@ if TYPE_CHECKING:
     )
     from sidequest.game.lore_store import LoreStore
     from sidequest.game.monster_manual import MonsterManual
-    from sidequest.game.session import GameSnapshot
     from sidequest.game.weather import WeatherState
     from sidequest.genre.names.generator import NameGenerator
 
@@ -94,19 +93,19 @@ class ToolContext:
     session_id: str
     perspective_pc: str | None
     turn_number: int
-    repository: Any  # SaveRepository — kept Any to avoid Phase B coupling
+    store: Any  # SqliteStore — kept Any to avoid Phase B coupling
     otel_span: Span
     perception_filter: PerceptionFilter
     # Phase C Task 13 amendment: narrator-private LoreStore reference for
     # the query_lore tool. LoreStore lives on SessionHandler, not on the
-    # save repository, so it cannot be reached via ``repository``. Phase E
+    # SqliteStore save layer, so it cannot be reached via ``store``. Phase E
     # wires this at the production call site; Phase C tools tolerate ``None``
     # (query_lore returns an empty result with an OTEL marker).
     lore_store: LoreStore | None = None
     # Phase C Task 14 amendment: MonsterManual reference for the
     # lookup_monster tool. The MonsterManual is per-genre/world and lives on
     # SessionHandler (loaded via ``MonsterManual.load(genre, world)``), not on
-    # the save repository — same shape as the lore_store amendment
+    # the SqliteStore save layer — same shape as the lore_store amendment
     # above. Phase E wires this at the production call site; Phase C tools
     # tolerate ``None`` (lookup_monster returns ``found=False`` with an OTEL
     # marker).
@@ -141,17 +140,6 @@ class ToolContext:
     weather_state: WeatherState | None = None
     world_demographics: dict[str, Any] | None = None
     world_calendar: dict[str, Any] | None = None
-    # Story 73-3 amendment: the canonical in-turn GameSnapshot the narration
-    # pipeline mutates and the end-of-turn save persists (ADR-037 — the
-    # SessionRoom owns it). WRITE tools that nudge persistent state (e.g.
-    # advance_confrontation's dial move) MUST mutate THIS object, not a fresh
-    # ``repository.load()`` copy — otherwise the end-of-turn ``room.save()``
-    # writes the canonical object back over the tool's write and the change is
-    # silently lost (the 73-3 lost-update). Threaded from
-    # ``TurnContext.snapshot`` at the orchestrator construction site. None on
-    # legacy/fixture paths that never built a TurnContext; tools that need it
-    # fail loud (no silent fallback to repository.load()).
-    snapshot: GameSnapshot | None = None
 
 
 _ArgsT = TypeVar("_ArgsT", bound=BaseModel)
@@ -164,31 +152,6 @@ class _RegisteredTool:
     category: ToolCategory
     args_model: type[BaseModel]
     handler: Callable[..., Awaitable[ToolResult]]
-    # Story 73-15: the SRD ruleset this tool requires, or None for a
-    # ruleset-agnostic tool. WWN-only tools declare "wwn", CWN-only tools
-    # "cwn". Drives tool_definitions(ruleset=...) filtering so the narrator is
-    # only ever advertised tools its bound ruleset can actually use (ADR-117
-    # tightening). The per-tool fail-loud self-guard remains as a backstop.
-    #
-    # Story 102-5: a FAMILY tool declares a tuple of slugs (e.g. the four
-    # "Without Number" modules ``("swn", "wwn", "cwn", "awn")``) — one contract,
-    # advertised to every member, hidden from non-members. The single-slug str
-    # form (73-15) is the one-member special case.
-    ruleset: str | tuple[str, ...] | None = None
-
-
-def _ruleset_advertises(declared: str | tuple[str, ...] | None, bound_slug: str) -> bool:
-    """True if a tool declaring ``declared`` is advertised to ``bound_slug``.
-
-    Ruleset-agnostic (``None``) advertises everywhere. A single-slug str matches
-    exactly (73-15). A family tuple matches any member (102-5). Data-driven —
-    never a name allowlist.
-    """
-    if declared is None:
-        return True
-    if isinstance(declared, str):
-        return declared == bound_slug
-    return bound_slug in declared
 
 
 class Registry:
@@ -206,7 +169,6 @@ class Registry:
         category: ToolCategory,
         args_model: type[BaseModel],
         handler: Callable[..., Awaitable[ToolResult]],
-        ruleset: str | tuple[str, ...] | None = None,
     ) -> None:
         if name in self._tools:
             raise ValueError(f"Tool {name!r} already registered")
@@ -216,28 +178,12 @@ class Registry:
             category=category,
             args_model=args_model,
             handler=handler,
-            ruleset=ruleset,
         )
 
     def list_names(self) -> list[str]:
         return sorted(self._tools)
 
-    def tool_definitions(self, ruleset: str | None = None) -> list[ToolDefinition]:
-        """Tool definitions, optionally filtered to a bound ruleset.
-
-        Story 73-15 (ADR-117 tightening): when ``ruleset`` is a slug (e.g.
-        ``"native"`` / ``"wwn"`` / ``"cwn"``), a tool is advertised iff it is
-        ruleset-agnostic (``t.ruleset is None``) OR declares that exact slug.
-        WWN/CWN-only tools therefore vanish from the narrator's surface on any
-        other pack. ``ruleset=None`` (the default) returns the full catalog —
-        back-compat for the diagnostic token-estimate call site, pack-less /
-        legacy narration paths, and the per-tool self-guard backstop, none of
-        which carry a bound slug.
-
-        Story 102-5: a tool may declare a FAMILY (a tuple of slugs) — advertised
-        to every member and hidden from non-members. The single-slug str form is
-        the one-member case.
-        """
+    def tool_definitions(self) -> list[ToolDefinition]:
         return [
             ToolDefinition(
                 name=t.name,
@@ -245,7 +191,6 @@ class Registry:
                 input_schema=t.args_model.model_json_schema(),
             )
             for t in self._tools.values()
-            if ruleset is None or _ruleset_advertises(t.ruleset, ruleset)
         ]
 
     async def dispatch(
@@ -350,7 +295,6 @@ def tool(
     description: str,
     category: ToolCategory,
     registry: Registry | None = None,
-    ruleset: str | tuple[str, ...] | None = None,
 ) -> Callable[[Callable[..., Awaitable[ToolResult]]], Callable[..., Awaitable[ToolResult]]]:
     """Decorator: register an async handler with a Pydantic-args model.
 
@@ -390,7 +334,6 @@ def tool(
             category=category,
             args_model=args_annotation,
             handler=fn,
-            ruleset=ruleset,
         )
         return fn
 

@@ -1,4 +1,4 @@
-"""Audio configuration types from audio.yaml.
+"""Audio configuration types from audio.yaml and voice_presets.yaml.
 
 Port of sidequest-genre/src/models/audio.rs.
 """
@@ -32,6 +32,18 @@ class AudioEffect(BaseModel):
 
     effect_type: str = Field(alias="type", serialization_alias="type")
     params: dict[str, float] = Field(default_factory=dict)
+
+
+class CreatureVoicePreset(BaseModel):
+    """Voice preset for a creature type."""
+
+    model_config = {"extra": "forbid"}
+
+    creature_type: str
+    description: str
+    pitch: float
+    rate: float
+    effects: list[AudioEffect] = Field(default_factory=list)
 
 
 class MixerConfig(BaseModel):
@@ -97,12 +109,13 @@ class FactionThemeDef(BaseModel):
 
 
 class AudioConfig(BaseModel):
-    """Audio configuration for music and SFX."""
+    """Audio configuration for music, SFX, and voice."""
 
     model_config = {"extra": "forbid"}
 
     mood_tracks: dict[str, list[MoodTrack]] = Field(default_factory=dict)
     sfx_library: dict[str, list[str]] = Field(default_factory=dict)
+    creature_voice_presets: dict[str, CreatureVoicePreset] = Field(default_factory=dict)
     mixer: MixerConfig
     themes: list[AudioTheme] = Field(default_factory=list)
     ai_generation: AudioAiGeneration | None = None
@@ -165,3 +178,23 @@ class TrackVariation(StrEnum):
     sparse = "sparse"
     tension_build = "tension_build"
     resolution = "resolution"
+
+
+class VoiceConfig(BaseModel):
+    """A single TTS voice configuration."""
+
+    model_config = {"extra": "forbid"}
+
+    model: str
+    pitch: float
+    rate: float
+    effects: list[AudioEffect] = Field(default_factory=list)
+
+
+class VoicePresets(BaseModel):
+    """TTS voice preset configuration."""
+
+    model_config = {"extra": "forbid"}
+
+    narrator: VoiceConfig
+    characters: dict[str, VoiceConfig] = Field(default_factory=dict)

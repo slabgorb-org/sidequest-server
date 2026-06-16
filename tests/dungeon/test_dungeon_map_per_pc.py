@@ -27,7 +27,7 @@ from sidequest.dungeon.region_graph.model import RegionEdge, RegionGraph, Region
 if TYPE_CHECKING:
     from sidequest.dungeon.themes import ThemePalette
     from sidequest.server.session_state import _SessionData
-from sidequest.server.websocket_handlers.map_emit import (
+from sidequest.server.websocket_session_handler import (
     _build_dungeon_map_payload,
     _resolve_connection_pc_region,
 )
@@ -168,7 +168,7 @@ def test_region_for_consensus_none_but_per_pc_resolves() -> None:
 #           no fallback to current_region (via the full emit entry point).
 # --------------------------------------------------------------------------
 def test_emit_spectator_map_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
-    from sidequest.server.websocket_handlers import map_emit as h
+    import sidequest.server.websocket_session_handler as h
 
     events: list[dict[str, Any]] = []
 
@@ -211,7 +211,7 @@ def test_emit_spectator_map_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
 #           is the shared set (via the full emit entry point).
 # --------------------------------------------------------------------------
 def test_emit_span_carries_pc_name_and_region(monkeypatch: pytest.MonkeyPatch) -> None:
-    from sidequest.server.websocket_handlers import map_emit as h
+    import sidequest.server.websocket_session_handler as h
 
     events: list[dict[str, Any]] = []
 
@@ -294,7 +294,7 @@ def _stub_content_path(monkeypatch: pytest.MonkeyPatch) -> Any:
     ``_load_dungeon_map_context(sd)`` returns ``(graph, palette, entrance_id)``
     or ``None`` (other-world no-op / no-schema / empty map). We return the
     synthetic pair so the per-PC payload logic runs unchanged."""
-    from sidequest.server.websocket_handlers import map_emit as h
+    import sidequest.server.websocket_session_handler as h
 
     def _stub_load(sd: Any) -> Any:
         return (sd._graph, sd._palette, _ENTRANCE)

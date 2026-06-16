@@ -56,7 +56,6 @@ def _extract_snapshot_canonicalize(span: Any) -> dict[str, Any]:
         "s1_world_confrontations_merged",
         "s1_world_confrontations_dropped_no_target",
         "s3_party_location_seeded",
-        "s6_voice_id_stripped",
     ):
         if key in attrs:
             payload[key] = attrs[key]
@@ -110,30 +109,6 @@ SPAN_ROUTES[SPAN_REGION_QUERY] = SpanRoute(
         "perspective_supplied": (span.attributes or {}).get("perspective_supplied", False),
         "consensus_found": (span.attributes or {}).get("consensus_found", False),
         "party_split": (span.attributes or {}).get("party_split", False),
-    },
-)
-
-
-# ---------------------------------------------------------------------------
-# Region anchor sync — sq-playtest 2026-06-12 (beneath_sunden split-brain).
-# Emitted by ``GameSnapshot._apply_world_patch_inner`` when a per-PC
-# ``pc_region`` crossing leaves the seated party in CONSENSUS on a region
-# that differs from the singular ``current_region`` anchor: the anchor is
-# advanced to the consensus. Without this sync every anchor consumer (the
-# per-turn region projection, save forensics, the render trigger) reads a
-# stale surface region while the PCs stand inside the dungeon graph — the
-# narrator never receives the generated room manifest and improvises the
-# crawl. The GM panel sees from/to so a stuck anchor is visible, not silent.
-# ---------------------------------------------------------------------------
-SPAN_REGION_ANCHOR_SYNCED = "snapshot.region_anchor_synced"
-SPAN_ROUTES[SPAN_REGION_ANCHOR_SYNCED] = SpanRoute(
-    event_type="state_transition",
-    component="snapshot",
-    extract=lambda span: {
-        "field": "current_region",
-        "op": "anchor_synced",
-        "from_region": (span.attributes or {}).get("from_region", ""),
-        "to_region": (span.attributes or {}).get("to_region", ""),
     },
 )
 

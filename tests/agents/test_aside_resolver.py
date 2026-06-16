@@ -78,22 +78,6 @@ async def test_policy_is_in_system_prompt():
 
 
 @pytest.mark.asyncio
-async def test_answer_outcome_is_pinned_in_system_prompt():
-    # Regression (playtest 2026-05-27, road_warrior/the_circuit): the prompt
-    # named the outcome for every REFUSAL branch but never told the model to
-    # set outcome="answered" on the happy path, so a perfectly good answer
-    # omitted the outcome, failed the _VALID_OUTCOMES allowlist, and degraded
-    # to the canned "(The GM didn't catch that — ask again.)" 100% of the time.
-    # The ANSWER section must name its outcome the same way refusals do.
-    llm = _FakeLLM('{"answer":"x","outcome":"answered","grounded_on":["a"]}')
-    await AsideResolver(llm=llm).resolve(question="how does Edge work?", read_view=_view())
-    sys = llm.seen_system.lower()
-    assert "answered" in sys, "prompt must name the happy-path outcome 'answered'"
-    # It must appear in an instructional context, not only as a refusal contrast.
-    assert "outcome answered" in sys or 'outcome to "answered"' in sys
-
-
-@pytest.mark.asyncio
 async def test_unparseable_llm_output_declines_loudly_not_improvises():
     res = await AsideResolver(llm=_FakeLLM("not json at all")).resolve(
         question="anything", read_view=_view()

@@ -156,9 +156,7 @@ def _build_minimal_session_data(snapshot: GameSnapshot):
         player_name="Tester",
         player_id="player:tester",
         snapshot=snapshot,
-        repository=MagicMock(),
-        dungeon_repository=MagicMock(),
-        telemetry_sink=MagicMock(),
+        store=MagicMock(),
         genre_pack=pack,
         orchestrator=MagicMock(),
     )

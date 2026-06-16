@@ -48,7 +48,6 @@ def _fake_ws() -> SimpleNamespace:
         app=SimpleNamespace(state=SimpleNamespace(room_registry=RoomRegistry())),
         application_state=WebSocketState.CONNECTED,
         client_state=WebSocketState.CONNECTED,
-        headers={"host": "localhost"},
     )
 
     async def accept() -> None:
@@ -156,10 +155,8 @@ class _PinnedRoomHandler:
         registry: RoomRegistry | None = None,
         socket_id: str,
         out_queue: Any,
-        player_identity: str | None = None,
-        player_identity_source: str | None = None,
     ) -> None:
-        del registry, player_identity, player_identity_source  # not used by this test
+        del registry  # not used by this test
         if self._endpoint_player is not None:
             self._room.connect(self._endpoint_player, socket_id=socket_id)
             self._room.attach_outbound(socket_id, out_queue)

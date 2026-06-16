@@ -131,12 +131,6 @@ def _events(exporter: InMemorySpanExporter, name: str) -> list:
     return [e for span in exporter.get_finished_spans() for e in span.events if e.name == name]
 
 
-# Both tests drive a full chargen walk to confirmation through the real pack
-# (~22s at rest). Under ``-n auto`` CPU contention pushes wall-clock past the
-# global ``--timeout=30``, whose thread method crashes the worker mid-test
-# ("node down: Not properly terminated"). Raise the ceiling for this heavy
-# class only — the HP-schema assertions are unaffected.
-@pytest.mark.timeout(120)
 class TestChargenCompleteNoHpLeak:
     def test_chargen_complete_log_uses_edge_not_hp(
         self, handler_factory, caplog: pytest.LogCaptureFixture

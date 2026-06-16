@@ -1,8 +1,0 @@
-# Valid YAML, but `bogus_unknown_field` violates Legend(extra="forbid"). The
-# typed timeline loader must raise -> loud HTTP 500. A silent fallback that
-# renders a timeline-less page would be a No-Silent-Fallbacks violation.
-legends:
-  - name: The Broken Legend
-    era: "1700"
-    description: This legend carries a field the schema forbids.
-    bogus_unknown_field: this key must make the typed loader fail loud

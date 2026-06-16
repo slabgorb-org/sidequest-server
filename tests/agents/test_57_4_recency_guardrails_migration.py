@@ -55,6 +55,9 @@ These tests pin the migration contract from ADR-111 §Decision:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Any
+
 import pytest
 
 # Importing the tools package wires all 26 adapters onto default_registry
@@ -75,28 +78,56 @@ GUARDRAIL_NAMES: tuple[str, ...] = (
 )
 
 
-@pytest.fixture(autouse=True)
-def _subscription_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Story 119-3: the claude-agent-sdk transport runs over the Max
-    subscription pool. Both PAYG credentials must be UNSET — a SET key now
-    re-routes to PAYG and raises ``AgentSdkAuthUnavailable`` at call time.
-    Construction reads no env, but pin the absence so a polluted environment
-    can't leak into the prompt-build path."""
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+# ---------------------------------------------------------------------------
+# Minimal fake SDK shaped like the AsyncAnthropic surface AnthropicSdkClient
+# touches. The prompt-build path never fires the SDK; the responses list
+# stays empty.
+# ---------------------------------------------------------------------------
+@dataclass
+class _Usage:
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+
+
+@dataclass
+class _TextBlock:
+    type: str
+    text: str
+
+
+@dataclass
+class _Resp:
+    content: list[Any]
+    stop_reason: str
+    usage: _Usage
+    model: str
+
+
+class _Msgs:
+    def __init__(self, responses: list[_Resp]) -> None:
+        self._responses = responses
+
+    async def create(self, **kwargs: Any) -> _Resp:
+        return self._responses.pop(0)
+
+
+class _Sdk:
+    """Fake AsyncAnthropic — only ``.messages.create`` is exercised, and
+    only if the test fires the SDK (the prompt-build path doesn't)."""
+
+    def __init__(self, responses: list[_Resp] | None = None) -> None:
+        self.messages = _Msgs(responses or [])
 
 
 def _make_sdk_orchestrator() -> Orchestrator:
     """Build an Orchestrator whose client passes
     ``isinstance(self._client, ToolingLlmClient)`` — the SDK-path
     discriminator. Post-story-61-9 this is the only viable narrator
-    backend.
-
-    Story 119-3: ``AnthropicSdkClient()`` takes no args — the legacy ``sdk=``
-    injection is gone (the transport is the late-bound module-level ``query``
-    seam). The prompt-build path these tests drive never fires ``query``, so
-    no fake stream is installed here."""
-    client = AnthropicSdkClient()
+    backend."""
+    sdk = _Sdk()
+    client = AnthropicSdkClient(sdk=sdk)
     assert isinstance(client, ToolingLlmClient), (
         "AnthropicSdkClient must satisfy the ToolingLlmClient protocol — "
         "otherwise the backend-gate discriminator misroutes."

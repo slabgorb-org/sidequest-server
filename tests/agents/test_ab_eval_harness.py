@@ -110,6 +110,7 @@ class FakeLlmClient:
             supports_sessions=False,
             supports_tools=False,
             max_context_tokens=8192,
+            supports_streaming=False,
         )
 
     async def send_with_model(self, prompt: str, model: str) -> ClaudeResponse:

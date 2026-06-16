@@ -10,17 +10,6 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field, field_validator
 
-# Authored OCEAN content uses short keys (O/C/E/A/N) on a 0..1 scale (ADR-042 /
-# #318); runtime OceanProfile uses full keys on 0..10. Module-level so pydantic v2
-# doesn't reinterpret an underscore-prefixed class attr as a ModelPrivateAttr.
-_AUTHORED_KEY_MAP = {
-    "O": "openness",
-    "C": "conscientiousness",
-    "E": "extraversion",
-    "A": "agreeableness",
-    "N": "neuroticism",
-}
-
 
 class DramaThresholds(BaseModel):
     """Genre-tunable breakpoints for pacing decisions.
@@ -62,34 +51,6 @@ class OceanProfile(BaseModel):
     @classmethod
     def clamp_dimension(cls, v: float) -> float:
         return max(0.0, min(10.0, float(v)))
-
-    @classmethod
-    def from_authored(cls, authored: dict[str, float]) -> OceanProfile:
-        """Normalize an authored OCEAN dict (short keys, 0..1) to a runtime profile.
-
-        Authored content uses short keys (``O/C/E/A/N``) on a 0..1 scale (ADR-042
-        / #318). Runtime ``OceanProfile`` uses full keys on 0..10. Unknown keys
-        raise — a typo in authored content is an authoring error, not a silent
-        default (No Silent Fallbacks). Out-of-range values (outside 0..1) also
-        raise: an author who writes ``5`` thinking 0..10 must be told, not have
-        it silently clamped by the runtime ``clamp_dimension`` validator. Missing
-        dimensions keep the 5.0 center.
-        """
-        kwargs: dict[str, float] = {}
-        for key, raw in authored.items():
-            if key not in _AUTHORED_KEY_MAP:
-                raise ValueError(
-                    f"ocean: unknown authored key {key!r}; expected one of "
-                    f"{sorted(_AUTHORED_KEY_MAP)}"
-                )
-            value = float(raw)
-            if not 0.0 <= value <= 1.0:
-                raise ValueError(
-                    f"ocean: authored value for key {key!r} is {value}; "
-                    f"expected 0..1 (authored OCEAN scale)"
-                )
-            kwargs[_AUTHORED_KEY_MAP[key]] = value * 10.0
-        return cls(**kwargs)
 
 
 class OceanDimension(StrEnum):

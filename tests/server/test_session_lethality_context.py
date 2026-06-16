@@ -37,9 +37,7 @@ def test_build_turn_context_populates_lethality_policy_from_pack():
         player_name="TestHero",
         player_id="player:TestHero",
         snapshot=snap,
-        repository=MagicMock(),
-        dungeon_repository=MagicMock(),
-        telemetry_sink=MagicMock(),
+        store=MagicMock(),
         genre_pack=pack,
         orchestrator=MagicMock(),
     )
@@ -48,8 +46,7 @@ def test_build_turn_context_populates_lethality_policy_from_pack():
 
     assert ctx.lethality_policy is not None
     assert ctx.lethality_policy.genre_key == "caverns_and_claudes"
-    # WWN port (2026-06-12): caverns is lethal_for_this_genre (permadeath).
-    assert ctx.lethality_policy.verdicts_on_zero_hp.pc == "dead"
+    assert ctx.lethality_policy.verdicts_on_zero_hp.pc == "humiliated"
 
 
 def test_build_turn_context_populates_empty_cores_when_no_pcs_or_npcs():
@@ -67,9 +64,7 @@ def test_build_turn_context_populates_empty_cores_when_no_pcs_or_npcs():
         player_name="TestHero",
         player_id="player:TestHero",
         snapshot=snap,
-        repository=MagicMock(),
-        dungeon_repository=MagicMock(),
-        telemetry_sink=MagicMock(),
+        store=MagicMock(),
         genre_pack=pack,
         orchestrator=MagicMock(),
     )

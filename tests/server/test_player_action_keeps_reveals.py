@@ -71,7 +71,6 @@ async def test_barrier_fire_does_not_clear_peer_reveals(
         PlayerActionMessage(
             payload=PlayerActionPayload(
                 action=NonBlankString.model_validate('I face the warden and say "Open the gate."'),
-                round=0,
             ),
             player_id="p1",
         )
@@ -80,7 +79,6 @@ async def test_barrier_fire_does_not_clear_peer_reveals(
         PlayerActionMessage(
             payload=PlayerActionPayload(
                 action=NonBlankString.model_validate("I watch the walls."),
-                round=0,
             ),
             player_id="p2",
         )

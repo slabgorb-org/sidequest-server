@@ -16,12 +16,12 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from sidequest.foundation.reference_anchors import reference_url_for_journal_entry
 from sidequest.protocol.messages import (
     JournalResponseMessage,
     JournalResponsePayload,
 )
 from sidequest.protocol.models import FactCategory, JournalEntry
+from sidequest.server.reference_anchors import reference_url_for_journal_entry
 from sidequest.server.session_helpers import _error_msg
 from sidequest.telemetry.spans import SPAN_JOURNAL_REPLAY, tracer
 from sidequest.telemetry.spans.reference import (

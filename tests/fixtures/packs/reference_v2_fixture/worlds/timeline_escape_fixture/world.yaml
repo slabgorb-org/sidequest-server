@@ -1,6 +1,0 @@
-name: timeline_escape_fixture
-description: >-
-  Story 65-12 CWE-79 world. One legend whose `era` carries HTML-special
-  characters. The verbatim temporal value must be HTML-escaped when interpolated
-  into the rendered chip — the raw "<swords>" must never appear unescaped in the
-  Timeline section.

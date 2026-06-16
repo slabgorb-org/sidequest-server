@@ -24,7 +24,7 @@ def test_valid_projection_yaml_prints_table(tmp_path: Path) -> None:
   - kind: NARRATION
     redact_fields:
       - field: text
-        unless: is_self()
+        unless: is_gm()
         mask: null
 """
     )
@@ -32,7 +32,7 @@ def test_valid_projection_yaml_prints_table(tmp_path: Path) -> None:
     assert result.returncode == 0, f"stderr={result.stderr!r} stdout={result.stdout!r}"
     assert "NARRATION" in result.stdout
     assert "text" in result.stdout
-    assert "is_self" in result.stdout
+    assert "is_gm" in result.stdout
 
 
 def test_invalid_projection_yaml_exits_nonzero(tmp_path: Path) -> None:

@@ -140,18 +140,6 @@ def test_emit_sends_message_when_room_has_manifest(tmp_path, monkeypatch):
     assert isinstance(sent_msg, LocationDescriptionMessage)
     assert sent_msg.type == MessageType.LOCATION_DESCRIPTION
     assert sent_msg.payload.region_id == "test_room"
-    # BUG-LOW (2026-06-02 playtest): header must show the authored display
-    # name, not the snake_case room id. Room-YAML path sources it from the
-    # room's ``name`` (TacticalGridPayload.room_name).
-    assert sent_msg.payload.region_name == "Test Square"
-    # Location-tab POI landscape (2026-06-04): built from the region_id VERBATIM
-    # (no slugify) so the URL matches the underscore R2 object key. The UI
-    # hides it on a 404, so emitting it unconditionally is safe.
-    assert sent_msg.payload.poi_image_url is not None
-    assert (
-        "genre_packs/test_pack/worlds/test_world/assets/poi/test_room.png"
-        in sent_msg.payload.poi_image_url
-    )
     assert len(sent_msg.payload.entities) == 2
     by_id = {e.id: e for e in sent_msg.payload.entities}
     assert by_id["square_well"].tier == "real_object"
@@ -272,9 +260,6 @@ def test_emit_uses_cartography_fallback_when_no_room_yaml(tmp_path, monkeypatch)
     sent_msg = call_args.args[0] if call_args.args else call_args.kwargs.get("msg")
     assert isinstance(sent_msg, LocationDescriptionMessage)
     assert sent_msg.payload.region_id == "glenross_pub"
-    # BUG-LOW (2026-06-02 playtest): region-mode header shows the authored
-    # ``Region.name`` ("The Glenross Pub"), not the slug ("glenross_pub").
-    assert sent_msg.payload.region_name == "The Glenross Pub"
     assert sent_msg.payload.prose == "A low-beamed taproom with a fire in the grate."
     assert sent_msg.payload.terrain == "building"
     by_id = {e.id: e for e in sent_msg.payload.entities}
@@ -290,9 +275,7 @@ def test_emit_fires_no_source_when_neither_path_resolves(tmp_path, monkeypatch):
     when the lie detector is firing — silent skip would mask a real
     content gap. Mirrors the watcher contract documented on the helper.
     """
-    from sidequest.server.websocket_handlers import (
-        map_emit as wsh,  # patches _watcher_publish where the helper now binds it
-    )
+    from sidequest.server import websocket_session_handler as wsh
     from sidequest.server.websocket_session_handler import (
         _maybe_emit_location_description,
     )

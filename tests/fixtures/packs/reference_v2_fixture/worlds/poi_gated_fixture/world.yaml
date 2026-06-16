@@ -1,8 +1,0 @@
-name: poi_gated_fixture
-description: >-
-  Isolated test world for story 65-8 — manifest-gated POI images. Two locations
-  are both authored as history.yaml POIs (so both are "authored"), but only one
-  (harbor-light) has its image key in tests/fixtures/r2_manifest.json. The
-  other (sunken-vault) is authored-but-absent: it must render text-only once the
-  R2-manifest existence gate lands. Pre-gate (63-8 authorship gate) it would
-  wrongly emit a broken <img> — that is the bug 65-8 closes.

@@ -32,15 +32,3 @@ class AuthoredNpc(BaseModel):
     distinguishing_features: list[str] = Field(default_factory=list)
     history_seeds: list[str] = Field(default_factory=list)
     initial_disposition: int = Field(default=0, ge=-100, le=100)
-    location_tags: list[str] = Field(default_factory=list)
-    """Lowercase location/biome substrings anchoring this NPC's placement.
-
-    Optional. When set, the Monster Manual surfaces this NPC as "nearby (not yet
-    met)" ONLY where one of these tags matches the current location (substring,
-    case-insensitive, either direction). When empty, the NPC is *unplaced* and
-    eligible everywhere (legacy behavior). Carried through to
-    ``ManualNpc.location_tags`` at seed time — see
-    ``sidequest.server.dispatch.pregen.seed_manual``. Fixes the wry_whimsy/oz
-    bug where authored companions never surfaced at the right spot because
-    placement was ignored until an NPC had already been narrated.
-    """

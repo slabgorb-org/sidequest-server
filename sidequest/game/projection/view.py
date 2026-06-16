@@ -12,6 +12,7 @@ from typing import Protocol
 
 
 class GameStateView(Protocol):
+    def is_gm(self, player_id: str) -> bool: ...
     def seat_of(self, player_id: str) -> str | None: ...
     def character_of(self, player_id: str) -> str | None: ...
     def zone_of(self, character_id: str) -> str | None: ...
@@ -37,11 +38,15 @@ class SessionGameStateView:
     MP seat-assignment (sprint 2) will feed the multi-player case.
     """
 
+    gm_player_id: str | None
     player_id_to_character: dict[str, str] = field(default_factory=dict)
     party_id: str | None = None
     seat_assignments: dict[str, str] = field(default_factory=dict)
     character_zones: dict[str, str] = field(default_factory=dict)
     hidden_characters: set[str] = field(default_factory=set)
+
+    def is_gm(self, player_id: str) -> bool:
+        return self.gm_player_id is not None and player_id == self.gm_player_id
 
     def seat_of(self, player_id: str) -> str | None:
         return self.seat_assignments.get(player_id)

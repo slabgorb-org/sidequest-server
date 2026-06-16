@@ -27,12 +27,12 @@ from sidequest.genre import (
     GenrePack,
     NpcArchetype,
     TropeDefinition,
+    World,
     load_genre_pack,
 )
 from sidequest.genre.archetype import ResolutionSource, resolve_archetype
 from sidequest.genre.models.archetype_constraints import ArchetypeConstraints
 from sidequest.genre.models.archetype_funnels import ArchetypeFunnels
-from sidequest.genre.models.character import spawnable_archetypes
 from sidequest.genre.models.npc_traits import NpcTrait
 from sidequest.genre.names import build_from_culture
 from sidequest.genre.names.generator import has_stem_collision
@@ -289,36 +289,20 @@ def legacy_axis_fallback(
     pack: GenrePack, args: argparse.Namespace, rng: random.Random
 ) -> tuple[str, str, str | None, str, str]:
     """Populate axis fields from the old-style archetype selection."""
-    # World-over-genre resolution (the SAME rule the main path uses at
-    # generate_npc_block): a world that declares its own archetypes REPLACES
-    # the genre set. Reading ``pack.archetypes`` raw here validated explicit
-    # ``--archetype`` requests and random spawns against the GENRE tier even
-    # when ``--world`` was passed — a tier mismatch with every other archetype
-    # consumer (playtest 2026-06-07, blackthorn_moor).
-    effective, _source = pack.effective_archetypes(args.world)
     if args.archetype:
         archetype = next(
-            (a for a in effective if a.name.lower() == args.archetype.lower()),
+            (a for a in pack.archetypes if a.name.lower() == args.archetype.lower()),
             None,
         )
         if archetype is None:
-            available = ", ".join(a.name for a in effective)
+            available = ", ".join(a.name for a in pack.archetypes)
             print(
                 f"Archetype '{args.archetype}' not found. Available: {available}",
                 file=sys.stderr,
             )
             sys.exit(1)
     else:
-        spawnable = spawnable_archetypes(effective)
-        if not spawnable:
-            world_clause = f" world '{args.world}'" if args.world else ""
-            print(
-                f"sidequest-namegen: no spawnable archetypes for genre '{args.genre}'"
-                f"{world_clause} — all archetypes are named_individual (specific people)",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        archetype = rng.choice(spawnable)
+        archetype = rng.choice(pack.archetypes)
 
     return (
         args.jungian or "",
@@ -560,13 +544,21 @@ def generate_npc(
     corpus_dir = genre_dir / "corpus"
     corpus_fallbacks = [genre_dir.parent.parent / "corpus" / "shared"]
 
-    # Shared world-over-genre resolution (GenrePack.effective_*). The SAME
-    # helper Monster-Manual seeding (pregen.seed_manual) uses, so a seeded NPC's
-    # culture tag always resolves against the set the name generator validates
-    # against — preventing the perseus_cloud divergence (session 894) from
-    # recurring if either call site is edited.
-    effective_cultures, cultures_source = pack.effective_cultures(args.world)
-    effective_archetypes, archetypes_source = pack.effective_archetypes(args.world)
+    world_opt: World | None = pack.worlds.get(args.world) if args.world else None
+
+    if world_opt is not None and world_opt.cultures:
+        effective_cultures = list(world_opt.cultures)
+        cultures_source = "world"
+    else:
+        effective_cultures = list(pack.cultures)
+        cultures_source = "genre"
+
+    if world_opt is not None and world_opt.archetypes:
+        effective_archetypes = list(world_opt.archetypes)
+        archetypes_source = "world"
+    else:
+        effective_archetypes = list(pack.archetypes)
+        archetypes_source = "genre"
 
     if not effective_cultures:
         print(
@@ -616,16 +608,7 @@ def generate_npc(
             None,
         )
     if archetype is None:
-        spawnable = spawnable_archetypes(effective_archetypes)
-        if not spawnable:
-            print(
-                _empty_pool_message(
-                    "spawnable archetypes", "archetypes.yaml", args.genre, args.world
-                ),
-                file=sys.stderr,
-            )
-            sys.exit(2)
-        archetype = rng.choice(spawnable)
+        archetype = rng.choice(effective_archetypes)
 
     generator = build_from_culture(culture, corpus_dir, rng, fallback_dirs=corpus_fallbacks)
     name = ""

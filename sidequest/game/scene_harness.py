@@ -1,8 +1,7 @@
 """Scene-harness fixture hydrator (ADR-092 §Implementation).
 
 Reads a YAML fixture from ``scenarios/fixtures/{name}.yaml`` and hydrates
-it into a :class:`GameSnapshot` the save repository (``PgSaveRepository``,
-ADR-115) can persist.
+it into a :class:`GameSnapshot` the existing ``SqliteStore`` can persist.
 The dev-gated HTTP route in :mod:`sidequest.server.scene_harness_router`
 wraps this hydrator; this module owns no I/O beyond the single fixture
 read.
@@ -33,17 +32,16 @@ from pydantic import ValidationError
 
 from sidequest.game.character import Character, KnownFact
 from sidequest.game.creature_core import CreatureCore
-from sidequest.game.encounter import EncounterActor, EncounterMetric, StructuredEncounter
+from sidequest.game.encounter import EncounterMetric, StructuredEncounter
 from sidequest.game.scenario_state import (
     ScenarioRole,
     ScenarioState,
 )
 from sidequest.game.session import GameSnapshot, Npc
-from sidequest.game.wwn_magic import EffortPool, SpellcastingState
 from sidequest.genre.models.scenario import ClueGraph
 from sidequest.magic.state import MagicState
 from sidequest.protocol.models import AbilityDefinition
-from sidequest.telemetry.spans import magic_state_hydrated_span, wwn_magic_hydrated_span
+from sidequest.telemetry import watcher_hub as _hub
 
 logger = logging.getLogger(__name__)
 
@@ -311,87 +309,7 @@ def _hydrate_character(data: dict[str, Any]) -> Character:
     if isinstance(hp, int) and isinstance(max_hp, int):
         core_kwargs["hp"] = {"current": hp, "max": max_hp, "base_max": max_hp}
 
-    # Hydrate WWN spellcasting (story 90-4, epic 90 finding 3). A fixture
-    # ``spellcasting:`` block seeds ``CreatureCore.spellcasting`` so a
-    # deterministic fixture can fire ``wwn.spell.cast`` (the counterpart to
-    # 90-3's live free-play proof). Like known_facts/abilities this is
-    # save-bearing: a malformed shape (non-mapping) or an extra/typo'd key
-    # (SpellcastingState ``extra="forbid"``) fails loud (No Silent Fallbacks)
-    # rather than silently dropping the block. Omitting it leaves
-    # ``core.spellcasting`` at the CreatureCore default (None) — non-casters
-    # are unaffected.
-    spellcasting_raw = data.get("spellcasting")
-    if spellcasting_raw is not None:
-        if not isinstance(spellcasting_raw, dict):
-            raise FixtureValidationError(
-                f"character.spellcasting must be a YAML mapping, "
-                f"got {type(spellcasting_raw).__name__}"
-            )
-        try:
-            core_kwargs["spellcasting"] = SpellcastingState(**spellcasting_raw)
-        except (ValidationError, TypeError) as exc:
-            # TypeError covers a non-string YAML key (``1: foo`` -> the
-            # ``**spellcasting_raw`` splat raises "keywords must be strings") —
-            # re-wrap so the boundary returns FixtureValidationError (HTTP 422),
-            # never a raw TypeError (HTTP 500). (90-7 fast-follow.)
-            raise FixtureValidationError(
-                f"character.spellcasting validation failed — {exc}"
-            ) from exc
-
-    # Hydrate WWN Effort (story 90-7, the dropped half of 90-4). An ``effort:``
-    # block is a mapping keyed by class-source (High Mage, Vowed, ...); each
-    # value seeds one ``EffortPool`` whose ``source`` is DERIVED FROM THE KEY
-    # (WWN SRD §1.4.4 — Effort from one source cannot fuel another, so the cast
-    # spine reads ``core.effort.get(source)``). The key is authoritative: any
-    # stray in-value ``source`` is stripped so it cannot diverge from the key
-    # and make the cast-time lookup silently miss. Save-bearing like
-    # spellcasting — a non-mapping block, a non-mapping pool value, a bad field
-    # type, or an ``extra="forbid"`` typo fails loud (No Silent Fallbacks).
-    raw_effort = data.get("effort")
-    if raw_effort is not None:
-        if not isinstance(raw_effort, dict):
-            raise FixtureValidationError(
-                f"character.effort must be a YAML mapping keyed by source, "
-                f"got {type(raw_effort).__name__}"
-            )
-        effort: dict[str, EffortPool] = {}
-        for source, pool_raw in raw_effort.items():
-            if not isinstance(pool_raw, dict):
-                raise FixtureValidationError(
-                    f"character.effort[{source!r}] must be a YAML mapping, "
-                    f"got {type(pool_raw).__name__}"
-                )
-            pool_kwargs = {k: v for k, v in pool_raw.items() if k != "source"}
-            try:
-                effort[str(source)] = EffortPool(source=str(source), **pool_kwargs)
-            except (ValidationError, TypeError) as exc:
-                # TypeError covers a non-string YAML key under the pool (``1:
-                # foo`` -> the ``**pool_kwargs`` splat raises "keywords must be
-                # strings") — re-wrap as FixtureValidationError (HTTP 422), never
-                # a raw TypeError (HTTP 500). (90-7 fast-follow.)
-                raise FixtureValidationError(
-                    f"character.effort[{source!r}] validation failed — {exc}"
-                ) from exc
-        core_kwargs["effort"] = effort
-
     core = CreatureCore(**core_kwargs)
-
-    # OTEL (story 90-7, re-routed by 90-8): when a fixture stages WWN crunch —
-    # spellcasting OR Effort — emit the lie-detector so the GM panel can confirm
-    # the deterministic fixture seeded real mechanics rather than the narrator
-    # improvising them (CLAUDE.md OTEL Observability Principle). A ROUTED span
-    # (SPAN_ROUTES → state_transition/magic), not a raw publish_event, so the
-    # typed Subsystems feed sees it — the raw event_type was outside the UI
-    # union and reached only the dashboard RAW console (90-7 Reviewer finding).
-    # Silent for non-casters (no noise on the canonical dial fixtures).
-    if core.spellcasting is not None or core.effort:
-        wwn_magic_hydrated_span(
-            actor=core.name,
-            has_spellcasting=core.spellcasting is not None,
-            prepared=len(core.spellcasting.prepared) if core.spellcasting else 0,
-            casts_per_day=core.spellcasting.casts_per_day if core.spellcasting else 0,
-            effort_sources=sorted(core.effort),
-        )
 
     # Hydrate known_facts (story 50-19, ADR-092 follow-on).
     #
@@ -660,18 +578,22 @@ def _hydrate_magic_state(raw: Any, *, fixture_name: str) -> MagicState:
             f"fixture {fixture_name!r}: magic_state validation failed — {exc}"
         ) from exc
 
-    # Routed span (story 90-8, replacing 50-22's raw publish_event): the
-    # SPAN_ROUTES translation carries this into the typed GM-panel Subsystems
-    # feed; the raw event_type was outside the UI union and reached only the
-    # dashboard RAW console. Test harnesses intercept via the documented
-    # ``spans.tracer`` monkeypatch seam (Span.open's lazy default lookup).
-    magic_state_hydrated_span(
-        fixture=fixture_name,
-        world_slug=magic_state.config.world_slug,
-        genre_slug=magic_state.config.genre_slug,
-        ledger_bars=len(magic_state.ledger),
-        confrontations=len(magic_state.confrontations),
-        control_tier_actors=len(magic_state.control_tier),
+    # Module-qualified call (not a bound import) so the standard
+    # ``_capture_events`` test harness — which monkeypatches
+    # ``watcher_hub.publish_event`` — intercepts this event, matching the
+    # established ``scene_harness_router`` emitter convention.
+    _hub.publish_event(
+        "magic.state_hydrated",
+        {
+            "fixture": fixture_name,
+            "world_slug": magic_state.config.world_slug,
+            "genre_slug": magic_state.config.genre_slug,
+            "ledger_bars": len(magic_state.ledger),
+            "confrontations": len(magic_state.confrontations),
+            "control_tier_actors": len(magic_state.control_tier),
+        },
+        component="magic",
+        severity="info",
     )
     return magic_state
 
@@ -734,36 +656,9 @@ def _hydrate_encounter(raw: Any, *, fixture_name: str) -> StructuredEncounter:
             )
         return override.get("threshold", _DEFAULT_METRIC_THRESHOLD)
 
-    # WWN hp_depletion seeding (story 90-4, epic 90 finding 3). A fixture may
-    # declare ``win_condition`` (default "dial_threshold"), ``category``
-    # (default ""), and an ``actors:`` list so it can stand up a WWN
-    # hp_depletion combat that seats player/opponent actors — the cast/strike
-    # spine resolves its defender via the opposite-side actor, so an
-    # actor-less encounter has no defender. The non-list / non-mapping guards
-    # fail loud directly; closed-Literal rejections (an invalid win_condition
-    # or an invalid actor ``side``) surface through the StructuredEncounter /
-    # EncounterActor constructors and are re-wrapped below.
-    actors_raw = raw.get("actors")
-    if actors_raw is not None and not isinstance(actors_raw, list):
-        raise FixtureValidationError(
-            f"fixture {fixture_name!r}: encounter.actors must be a YAML list, "
-            f"got {type(actors_raw).__name__}"
-        )
-    if isinstance(actors_raw, list):
-        for index, entry in enumerate(actors_raw):
-            if not isinstance(entry, dict):
-                raise FixtureValidationError(
-                    f"fixture {fixture_name!r}: encounter.actors[{index}] must be a "
-                    f"YAML mapping, got {type(entry).__name__}"
-                )
-
     try:
-        actors = [EncounterActor(**entry) for entry in (actors_raw or [])]
         return StructuredEncounter(
             encounter_type=encounter_type,
-            win_condition=raw.get("win_condition", "dial_threshold"),
-            category=raw.get("category", ""),
-            actors=actors,
             player_metric=EncounterMetric(
                 name="player",
                 current=0,

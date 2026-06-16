@@ -17,7 +17,7 @@ import pytest
 # conftest fixtures; this file imports the helper at module scope, so we
 # load ``session_handler`` first by hand.
 import sidequest.server.session_handler  # noqa: F401 — ordering side-effect
-from sidequest.server.websocket_handlers.opening_helpers import (
+from sidequest.server.websocket_session_handler import (
     _populate_opening_directive_on_chargen_complete,
 )
 

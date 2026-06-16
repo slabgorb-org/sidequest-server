@@ -1,1 +1,1 @@
-"""Audio pipeline for the two-lane ambient music and SFX system."""
+"""Audio pipeline for the three-lane ambient music, SFX, and voice system."""

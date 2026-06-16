@@ -1085,103 +1085,28 @@ def test_skip_span_fires_on_ambiguous_pronouns_conflicting(otel_capture):
 
 
 def test_skip_span_fires_on_honorific_ambiguous_pronouns(otel_capture):
-    """The honorific skip path must fire the skip span with reason=
+    """The honorific skip path (Mrs. Hardin appearing with no subject
+    pronoun nearby) must fire the skip span with reason=
     ``ambiguous_pronouns_honorific``. Distinguishing the honorific
     reason tag from the role reason tag lets Sebastien see which path
-    bit its tongue.
-
-    Updated for the 2026-06-07 purge/mint-deadlock fix: GENDERED
-    honorifics (Mrs/Mr/Sir/Lady/Mother/Father/...) now fall back to the
-    title's own pronouns when the window is ambiguous, so the skip path
-    only survives for NEUTRAL titles (Dr/Reverend/Captain/Sergeant)."""
+    bit its tongue."""
     from sidequest.server.session_helpers import _auto_mint_prose_only_npcs
 
     snapshot = GameSnapshot()
     _auto_mint_prose_only_npcs(
         snapshot=snapshot,
-        narration_text="Dr. Hardin said nothing. The wind howled.",
+        narration_text="Mrs. Hardin said nothing. The wind howled.",
         emitted_mentions=[],
         turn_num=3,
     )
     skip_spans = _skipped_spans(otel_capture, expected_reason="ambiguous_pronouns_honorific")
     assert len(skip_spans) == 1, (
-        "Honorific-path skip (Dr. Hardin — a NEUTRAL title — with no "
-        "subject pronoun within the local window) must fire a skip span "
-        "with reason='ambiguous_pronouns_honorific'."
+        "Honorific-path skip (Mrs. Hardin with no subject pronoun within "
+        "the local window) must fire a skip span with reason="
+        "'ambiguous_pronouns_honorific'."
     )
     attrs = skip_spans[0].attributes or {}
     assert "hardin" in attrs.get("npc_name", "").casefold()
-
-
-def test_gendered_honorific_falls_back_to_title_pronouns(otel_capture):
-    """sq-playtest 2026-06-07 purge/mint deadlock (five_points-4 t28-31):
-    "Mother Demus" was named in narration four consecutive turns while
-    the minter skipped her every turn on window ambiguity — she existed
-    in prose and nowhere in state. A gendered honorific declares its own
-    pronouns; reading the title is not guessing (AC2's prohibition).
-    """
-    from sidequest.server.session_helpers import _auto_mint_prose_only_npcs
-
-    snapshot = GameSnapshot()
-    _auto_mint_prose_only_npcs(
-        snapshot=snapshot,
-        narration_text="Mother Demus bars the door. The street empties.",
-        emitted_mentions=[],
-        turn_num=28,
-    )
-    member = next((m for m in snapshot.npc_pool if m.name == "Mother Demus"), None)
-    assert member is not None, (
-        "gendered honorific with ambiguous window must mint via title fallback; "
-        f"pool: {[(m.name, m.pronouns) for m in snapshot.npc_pool]}"
-    )
-    assert member.pronouns == "she/her"
-    spans = _minted_spans(otel_capture, expected_name="Mother Demus")
-    assert len(spans) == 1
-    assert (spans[0].attributes or {}).get("pronoun_source") == "honorific_fallback", (
-        "the GM panel must see the pronouns came from the title, not the window"
-    )
-    assert _skipped_spans(otel_capture, expected_reason="ambiguous_pronouns_honorific") == []
-
-
-def test_gendered_bare_role_falls_back_to_role_pronouns(otel_capture):
-    """barsoom-4 t6-9: bare-role "Father" skipped four consecutive turns on
-    window ambiguity. father/mother/son/daughter/brother/sister declare
-    their own pronouns; article roles (the doctor, ...) still skip."""
-    from sidequest.server.session_helpers import _auto_mint_prose_only_npcs
-
-    snapshot = GameSnapshot()
-    _auto_mint_prose_only_npcs(
-        snapshot=snapshot,
-        narration_text="Father kneels at the shrine. The incense curls upward.",
-        emitted_mentions=[],
-        turn_num=6,
-    )
-    member = _pool_member(snapshot, role="father")
-    assert member is not None, (
-        "gendered bare role with ambiguous window must mint via role fallback; "
-        f"pool: {[(m.name, m.role, m.pronouns) for m in snapshot.npc_pool]}"
-    )
-    assert member.pronouns == "he/him"
-    spans = _minted_spans(otel_capture, expected_role="father")
-    assert (spans[0].attributes or {}).get("pronoun_source") == "role_fallback"
-
-
-def test_window_inference_still_wins_over_fallback(otel_capture):
-    """When the window DOES resolve pronouns, the fallback must not fire —
-    a clean window inference outranks the title (and keeps the
-    pre-existing behavior byte-identical on unambiguous prose)."""
-    from sidequest.server.session_helpers import _auto_mint_prose_only_npcs
-
-    snapshot = GameSnapshot()
-    _auto_mint_prose_only_npcs(
-        snapshot=snapshot,
-        narration_text="Mother Demus bars the door. She works the bolt home.",
-        emitted_mentions=[],
-        turn_num=28,
-    )
-    spans = _minted_spans(otel_capture, expected_name="Mother Demus")
-    assert len(spans) == 1
-    assert (spans[0].attributes or {}).get("pronoun_source") == "window_inference"
 
 
 def test_skip_span_fires_on_gender_paired_conflict(otel_capture):
@@ -1254,11 +1179,6 @@ def test_possessive_only_pronoun_does_not_mint(otel_capture, caplog):
     group would silently start minting on possessive-only prose, which is
     exactly the Glenross 'Mrs. Gow laid him after' shape that the
     subject-only design was built to refuse.
-
-    Updated for the 2026-06-07 purge/mint-deadlock fix: gendered roles
-    (father/mother/...) now mint via role-pronoun fallback regardless of
-    the window, so this pin moved to an ARTICLE role (the doctor) where
-    window inference remains the only pronoun source.
     """
     from sidequest.server.session_helpers import _auto_mint_prose_only_npcs
 
@@ -1266,11 +1186,11 @@ def test_possessive_only_pronoun_does_not_mint(otel_capture, caplog):
     with caplog.at_level(logging.WARNING):
         _auto_mint_prose_only_npcs(
             snapshot=snapshot,
-            narration_text="The doctor set his bag down on the table. The door was locked.",
+            narration_text="Father set his hat down on the table. The door was locked.",
             emitted_mentions=[],
             turn_num=2,
         )
-    assert _pool_member(snapshot, role="doctor") is None, (
+    assert _pool_member(snapshot, role="father") is None, (
         "Possessive-only prose ('his', no 'he' subject) must NOT mint. "
         "Subject-only window is the documented design (forward window scans "
         "subjects, not possessives) — this test pins that contract."
@@ -1284,7 +1204,7 @@ def test_possessive_only_pronoun_does_not_mint(otel_capture, caplog):
     matched_warn = [
         r
         for r in caplog.records
-        if r.levelno >= logging.WARNING and "doctor" in r.getMessage().casefold()
+        if r.levelno >= logging.WARNING and "father" in r.getMessage().casefold()
     ]
     assert matched_warn, (
         "AC2 'warn (log) + skip mint': a WARNING-level log must name the "

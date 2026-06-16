@@ -12,11 +12,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from sidequest.game.fate_sheet import FateSheet
 from sidequest.game.rig_composure_pool import RigComposurePool
 from sidequest.game.status import Status, migrate_legacy_statuses
-from sidequest.game.system_strain import SystemStrainPool
-from sidequest.game.wwn_magic import EffortPool, SpellcastingState
 
 
 class HpPool(BaseModel):
@@ -118,26 +115,11 @@ class CreatureCore(BaseModel):
     inventory: Inventory = Field(default_factory=Inventory)
     statuses: list[Status] = Field(default_factory=list)
     hp: HpPool = Field(default_factory=lambda: HpPool(current=10, max=10, base_max=10))
-    system_strain: SystemStrainPool | None = None
-    effort: dict[str, EffortPool] = Field(default_factory=dict)
-    spellcasting: SpellcastingState | None = None
-    armor_class: int = 10  # SWN ascending AC; unarmored = 10. Seeded from content armor.
-    # Generic trait hooks (story 103-2, build plan §D-B): world-tier stock
-    # trait sets override Move / modify the Trauma Target for ANY creature —
-    # no per-stock special cases. None/0 = the engine defaults stand.
-    move: int | None = None  # meters per move action; None = ruleset default
-    trauma_target_mod: int = 0  # delta to the trauma target rolled against this creature
     # Vessel-attached composure pool (Epic 53, story 53-2). None for any
     # character without a rig in inventory; populated by
     # ``sidequest.game.vessel_tags.bind_rig_pool_from_inventory`` at
     # chargen-loadout completion and round-tripped through the save file.
     rig_pool: RigComposurePool | None = None
-    # Fate Core facet (ADR-144 F1b). None for every non-Fate creature; populated
-    # for a Fate-bound pack's creatures. Carried ALONGSIDE the d20 stats/HpPool
-    # (mirrors system_strain/spellcasting/rig_pool — an optional facet), so it
-    # round-trips through GameSnapshot.model_dump_json with no Alembic migration.
-    # Rules + spans live on FateRulesetModule; this is inert data.
-    fate_sheet: FateSheet | None = None
     # P2-deferred: advancement tracking (epic 39-8, mechanical progression)
     acquired_advancements: list[str] = Field(default_factory=list)
 

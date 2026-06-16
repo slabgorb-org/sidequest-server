@@ -1,6 +1,6 @@
 """Verify that audio paths are URL-resolved at GenrePack load time.
 
-Wires :func:`sidequest.foundation.asset_urls.resolve_asset_url` into the audio
+Wires :func:`sidequest.server.asset_urls.resolve_asset_url` into the audio
 loader so the UI receives full URLs (not bare relative paths) for every
 path-bearing field on ``AudioConfig``:
 
@@ -126,29 +126,3 @@ def test_faction_themes_resolved_when_present(monkeypatch: pytest.MonkeyPatch) -
             assert f"genre_packs/{pack_dir.name}/" in ft.track.path
     # No assertion if no pack uses faction_themes — fine.
     _ = saw_any
-
-
-def test_shared_assets_track_resolves_without_slug(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("SIDEQUEST_ASSET_BASE_URL", raising=False)
-    from sidequest.genre.loader import _resolve_audio_urls
-    from sidequest.genre.models.audio import AudioConfig, MixerConfig, MoodTrack
-
-    cfg = AudioConfig(
-        mood_tracks={
-            "exploration": [
-                MoodTrack(
-                    path="assets/audio/classical_pd/Satie - Gymnopedie No.1.ogg",
-                    title="Gymnopédie No.1",
-                    bpm=60,
-                ),
-                MoodTrack(path="audio/music/local.ogg", title="Local", bpm=90),
-            ]
-        },
-        mixer=MixerConfig(music_volume=0.4, sfx_volume=0.7, crossfade_default_ms=3000),
-    )
-    _resolve_audio_urls(cfg, genre_slug="wry_whimsy")
-    shared, local = cfg.mood_tracks["exploration"]
-    assert shared.path == (
-        "https://cdn.slabgorb.com/genre_packs/assets/audio/classical_pd/Satie - Gymnopedie No.1.ogg"
-    )
-    assert local.path == "https://cdn.slabgorb.com/genre_packs/wry_whimsy/audio/music/local.ogg"

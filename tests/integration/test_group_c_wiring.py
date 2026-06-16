@@ -22,7 +22,6 @@ from sidequest.agents.lethality_arbiter import LethalityArbiter
 from sidequest.agents.orchestrator import (
     Orchestrator,
 )
-from sidequest.agents.subsystems import BankResult
 from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.game.session import GameSnapshot
@@ -63,9 +62,7 @@ async def test_arbiter_is_invoked_on_real_prompt_build_path():
             turn_manager=TurnManager(interaction=1),
             characters=[character],
         ),
-        repository=MagicMock(),
-        dungeon_repository=MagicMock(),
-        telemetry_sink=MagicMock(),
+        store=MagicMock(),
         genre_pack=load_genre_pack(CONTENT_GENRE_PACKS / "caverns_and_claudes"),
         orchestrator=MagicMock(),
     )
@@ -76,7 +73,6 @@ async def test_arbiter_is_invoked_on_real_prompt_build_path():
         cross_player=[],
         confidence_global=1.0,
     )
-    ctx.bank_result = BankResult()
 
     original_arbitrate = LethalityArbiter.arbitrate
     calls: list[object] = []

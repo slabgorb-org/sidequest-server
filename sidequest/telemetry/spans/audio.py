@@ -9,8 +9,14 @@ from typing import Any
 
 from opentelemetry import trace
 
-from ._core import SPAN_ROUTES, SpanRoute
+from ._core import FLAT_ONLY_SPANS, SPAN_ROUTES, SpanRoute
 from .span import Span
+
+# Music director (Rust port artifact — agent not reimplemented)
+SPAN_MUSIC_EVALUATE = "music_evaluate"
+SPAN_MUSIC_CLASSIFY_MOOD = "music_classify_mood"
+
+FLAT_ONLY_SPANS.update({SPAN_MUSIC_EVALUATE, SPAN_MUSIC_CLASSIFY_MOOD})
 
 # Audio backend lifecycle + per-turn dispatch
 SPAN_AUDIO_BACKEND_ENABLED = "audio.backend_enabled"

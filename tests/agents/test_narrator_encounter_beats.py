@@ -7,7 +7,6 @@ from sidequest.game.encounter import (
     EncounterMetric,
     StructuredEncounter,
 )
-from sidequest.game.encounter_tag import EncounterTag
 from sidequest.genre.models.rules import (
     BeatDef,
     ConfrontationDef,
@@ -55,47 +54,6 @@ def test_build_encounter_context_lists_beats_and_actors() -> None:
     # Actors must be listed
     assert "Rux" in composed
     assert "Goblin" in composed
-
-
-def test_encounter_context_emits_tag_gate_when_tags_present() -> None:
-    """Playtest 2026-06-10: scene tags are engine-tracked persistent state the
-    engine does not yet spend (EncounterTag v1). The narrator must be told NOT
-    to narrate a tag being burned/transferred/consumed, or it desyncs prose
-    from the stored tag the player can still spend."""
-    narrator = NarratorAgent()
-    reg = PromptRegistry()
-    enc = _enc()
-    enc.tags = [
-        EncounterTag(
-            text="Positional Advantage",
-            created_by="Groucho",
-            target="unknown_dark_contact",
-            leverage=2,
-            fleeting=False,
-            created_turn=2,
-        )
-    ]
-    narrator.build_encounter_context(
-        reg, encounter=enc, cdef=_cdef(), encounter_summary="stub summary"
-    )
-    composed = reg.compose(narrator.name())
-    # The tag itself is surfaced...
-    assert "Positional Advantage" in composed
-    # ...and the gate constrains the narrator from fabricating its consumption.
-    assert "TAGS_ARE_ENGINE_STATE" in composed
-    for forbidden in ("spent", "consumed", "transferred", "burned"):
-        assert forbidden in composed
-
-
-def test_encounter_context_omits_tag_gate_when_no_tags() -> None:
-    """No tags → no gate text (keep the prompt lean; nothing to constrain)."""
-    narrator = NarratorAgent()
-    reg = PromptRegistry()
-    narrator.build_encounter_context(
-        reg, encounter=_enc(), cdef=_cdef(), encounter_summary="stub summary"
-    )
-    composed = reg.compose(narrator.name())
-    assert "TAGS_ARE_ENGINE_STATE" not in composed
 
 
 def test_build_encounter_context_without_cdef_falls_back_to_generic() -> None:

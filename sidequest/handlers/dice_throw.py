@@ -7,11 +7,7 @@ import time
 from typing import TYPE_CHECKING
 
 from sidequest.server.session_handler import _State
-from sidequest.server.session_helpers import (
-    _build_turn_context,
-    _emit_unbound_rejection_event,
-    _error_msg,
-)
+from sidequest.server.session_helpers import _build_turn_context, _error_msg
 from sidequest.telemetry.phase_timing import PhaseTimings
 
 if TYPE_CHECKING:
@@ -61,9 +57,6 @@ class DiceThrowHandler:
                 "session.message_rejected_unbound type=DICE_THROW state=%s",
                 session._state.name,
             )
-            # Story 67-7 (AC5): surface the rejection to the GM panel so a
-            # genuine unbound guard is distinguishable from reconnect churn.
-            _emit_unbound_rejection_event("DICE_THROW", session._state.name)
             return [
                 _error_msg(
                     "Cannot process DICE_THROW: not in Playing state",
@@ -102,173 +95,9 @@ class DiceThrowHandler:
         character_name = character.core.name if character is not None else "Unknown"
         stats: dict[str, int] = dict(character.stats) if character is not None else {}
 
-        # Task 14 — dogfight player-throw consumption. When a dogfight narration
-        # turn stashed a PendingDogfightShot (player has a gun solution), the
-        # next DICE_THROW from the player resolves all shots (player + NPC) against
-        # pre-shot frame HP and re-enters narration. This path is EXCLUSIVE of the
-        # normal dispatch_dice_throw beat path — the beat was already applied in the
-        # sealed-letter dispatch. We consume and clear the stash here so it cannot
-        # double-fire on a second DICE_THROW.
-        from sidequest.game.dogfight_shot import (  # noqa: PLC0415
-            PendingDogfightShot,
-        )
-
-        pending_df = getattr(sd, "pending_dogfight_shot", None)
-        # isinstance (not `is not None`): a real stash is always a
-        # PendingDogfightShot, and this is immune to MagicMock-based test
-        # doubles whose auto-attribute for pending_dogfight_shot is truthy.
-        if isinstance(pending_df, PendingDogfightShot):
-            sd.pending_dogfight_shot = None
-
-            from sidequest.game.dice import generate_dice_seed  # noqa: PLC0415
-            from sidequest.game.dogfight_shot import (  # noqa: PLC0415
-                frame_hp_resolver,
-                resolve_dogfight_shots,
-            )
-            from sidequest.protocol.dice import (  # noqa: PLC0415
-                DiceResultPayload,
-                DieGroupResult,
-                DieSides,
-                DieSpec,
-                RollOutcome,
-                ThrowParams,
-            )
-            from sidequest.protocol.messages import DiceResultMessage  # noqa: PLC0415
-            from sidequest.telemetry.watcher_hub import (  # noqa: PLC0415
-                publish_event as _watcher_publish,
-            )
-
-            player_face = sum(payload.face)  # single d20 → its value
-            d20_by_shooter = {
-                pending_df.player_shooter_role: player_face,
-                **pending_df.held_npc_d20s,
-            }
-            enc = snapshot.encounter
-            if enc is None:
-                return [_error_msg("dogfight pending shot: encounter no longer active")]
-
-            shot_res = resolve_dogfight_shots(
-                encounter=enc,
-                gun_solutions=pending_df.gun_solutions,
-                d20_by_shooter=d20_by_shooter,
-                edge_resolver=frame_hp_resolver(enc),
-            )
-
-            # Broadcast the DiceResult so the client shows the settled die +
-            # hit/miss outcome before the narrator describes the shot.
-            player_total = player_face + pending_df.player_modifier
-            _df_outcome = (
-                RollOutcome.Success
-                if player_total >= pending_df.player_target_number
-                else RollOutcome.Fail
-            )
-            _df_seed = generate_dice_seed(
-                f"{sd.genre_slug}:{sd.world_slug}:{sd.player_id}",
-                snapshot.turn_manager.interaction,
-            )
-            _throw_params = getattr(payload, "throw_params", None) or ThrowParams(
-                velocity=(0.0, 4.0, -1.0),
-                angular=(0.5, 0.5, 0.5),
-                position=(0.5, 0.5),
-            )
-            _df_result_payload = DiceResultPayload(
-                request_id=payload.request_id,
-                rolling_player_id=rolling_player_id,
-                character_name=pending_df.player_actor_name,
-                rolls=[
-                    DieGroupResult(
-                        spec=DieSpec(sides=DieSides.D20, count=1),
-                        faces=list(payload.face) or [player_face],
-                    )
-                ],
-                modifier=pending_df.player_modifier,
-                total=player_total,
-                difficulty=pending_df.player_target_number,
-                outcome=_df_outcome,
-                seed=_df_seed,
-                throw_params=_throw_params,
-            )
-            if session._room is not None:
-                session._room.broadcast(
-                    DiceResultMessage(payload=_df_result_payload, player_id="server"),
-                    exclude_socket_id=None,
-                )
-
-            if shot_res.depletion is not None:
-                from sidequest.server.narration_apply import (
-                    _build_resolution_signal,  # noqa: PLC0415
-                )
-
-                snapshot.pending_resolution_signal = _build_resolution_signal(enc)
-
-            _watcher_publish(
-                "state_transition",
-                {
-                    "field": "dogfight",
-                    "op": "player_throw_resolved",
-                    "player_face": player_face,
-                    "player_total": player_total,
-                    "player_hit": _df_outcome == RollOutcome.Success,
-                    "npc_shots": len(pending_df.held_npc_d20s),
-                    "shots_total": len(pending_df.gun_solutions),
-                },
-                component="encounter",
-            )
-
-            # Anchor the narrator to the ACTUAL mechanical outcome — never let
-            # it improvise hit/miss/damage (lie-detector / no-improvisation
-            # doctrine). Build a terse per-shot factual line from shot_res.shots,
-            # using post-ablation frame HP for the "hull X/Y" readout, and set
-            # both enc.narrator_hints (consumed by the prompt) and a structured
-            # [DOGFIGHT_SHOT_RESOLVED] replay text. The narrator renders prose;
-            # it does not get to decide what happened.
-            _hp_after = frame_hp_resolver(enc)
-
-            def _hull(name: str) -> str:
-                core = _hp_after(name)
-                if core is None:
-                    return "hull ?/?"
-                return f"hull {core.hp.current}/{core.hp.max}"
-
-            _shot_lines: list[str] = []
-            for s in shot_res.shots:
-                # "your"/"you" framing is from the rolling player's seat: the
-                # player is the shooter on a source=player shot, the target on
-                # an NPC shot.
-                if s.source == "player":
-                    shooter_label = "Your laser"
-                    target_label = s.target_name
-                else:
-                    shooter_label = f"{s.shooter_name}'s laser"
-                    target_label = "your hull"
-                if s.hit:
-                    _shot_lines.append(
-                        f"{shooter_label}: HIT, {s.applied} dmg to {target_label} "
-                        f"({_hull(s.target_name)})"
-                    )
-                else:
-                    _shot_lines.append(f"{shooter_label}: MISS")
-            _shot_summary = "; ".join(_shot_lines) if _shot_lines else "no shots resolved"
-            # Surface the same factual lines to the narrator prompt.
-            enc.narrator_hints = list(enc.narrator_hints) + _shot_lines
-
-            replay_text = f"[DOGFIGHT_SHOT_RESOLVED] {_shot_summary}"
-            with timings.phase("lore_retrieval"):
-                lore_context = await session._retrieve_lore_for_turn(sd, replay_text)
-            with timings.phase("turn_context_build"):
-                turn_context = _build_turn_context(
-                    sd, lore_context=lore_context, room=session._room
-                )
-            turn_context.phase_timings = timings
-            # Story 91-2: the replay carries a mechanical outcome already
-            # applied above — no new player intent to classify. Suppress the
-            # pre-narrator router pass (the [COST-1] 8x/turn driver).
-            return await session._execute_narration_turn(
-                sd, replay_text, turn_context, suppress_intent_router=True
-            )
-
         room_broadcast = None
-        emit_confrontation = None
+        connected_player_ids: list[str] | None = None
+        per_recipient_emit = None
         if session._room is not None:
             # Wrap the room's broadcast to a simple callable the dispatcher
             # can invoke without knowing about SessionRoom. exclude=None so
@@ -280,24 +109,34 @@ class DiceThrowHandler:
 
             room_broadcast = _broadcast
 
-            # Story 59-20: the mid-turn CONFRONTATION goes through the single
-            # emit_event(per_recipient_payload=...) supplier (the same seam
-            # 59-16 uses post-narration). The handler owns emit_event, so we
-            # hand the dispatcher a thin callable: it builds the union payload
-            # + per-recipient supplier and calls back here to fan out. The
-            # canonical union is persisted to the EventLog only; each socket
-            # receives one class-filtered frame (no union, no overlay race).
-            def _emit_confrontation(
-                union_payload: object,
-                supplier: object,  # Callable[[str], object | None]
-            ) -> None:
-                session._emit_event(
-                    "CONFRONTATION",
-                    union_payload,
-                    per_recipient_payload=supplier,  # type: ignore[arg-type]
-                )
+            # Story 49-7: per-PC CONFRONTATION overlay. Capture the room
+            # at handler entry so the dispatcher can fan a class-filtered
+            # CONFRONTATION to each connected player after the canonical
+            # full-union broadcast above. ``getattr`` with callable guards
+            # because a couple of older stub-room test fixtures
+            # (e.g. _StubRoom in test_dice_throw_*) don't expose the full
+            # SessionRoom API — those fixtures keep the legacy single-
+            # broadcast behavior and don't engage the per-PC overlay.
+            connected_player_ids_fn = getattr(session._room, "connected_player_ids", None)
+            socket_for_player_fn = getattr(session._room, "socket_for_player", None)
+            queue_for_socket_fn = getattr(session._room, "queue_for_socket", None)
+            if (
+                callable(connected_player_ids_fn)
+                and callable(socket_for_player_fn)
+                and callable(queue_for_socket_fn)
+            ):
+                connected_player_ids = list(connected_player_ids_fn())
 
-            emit_confrontation = _emit_confrontation
+                def _per_recipient_emit(pid: str, m: object) -> None:
+                    sid = socket_for_player_fn(pid)
+                    if sid is None:
+                        return
+                    q = queue_for_socket_fn(sid)
+                    if q is None:
+                        return
+                    q.put_nowait(m)
+
+                per_recipient_emit = _per_recipient_emit
 
         try:
             outcome = dispatch_dice_throw(
@@ -312,7 +151,8 @@ class DiceThrowHandler:
                 round_number=snapshot.turn_manager.interaction,
                 room_broadcast=room_broadcast,
                 snapshot=snapshot,
-                emit_confrontation=emit_confrontation,
+                connected_player_ids=connected_player_ids,
+                per_recipient_emit=per_recipient_emit,
             )
         except DiceDispatchError as exc:
             logger.warning("dice.dispatch_error error=%s", exc)
@@ -383,16 +223,6 @@ class DiceThrowHandler:
                 "scene_end",
                 turn=snapshot.turn_manager.interaction,
             )
-            # Ping-pong 2026-06-07 ("MP confrontation DESYNC"): stash the
-            # clear for the inline narration re-entry below. The emit seam in
-            # ``_execute_narration_turn`` captures ``prior_live`` after the
-            # narrator runs — too late to see THIS resolution — so without
-            # the stash no ``CONFRONTATION {active: false}`` frame is ever
-            # broadcast and each client is left to its own NARRATION_END
-            # heuristic (which forks per-seat in MP). Take semantics: the
-            # seam consumes it.
-            if encounter is not None:
-                sd.pending_confrontation_clear = encounter.encounter_type
 
         # Persist the resolved outcome so follow-up narrator runs can use it
         # (Rust parity: pending_roll_outcome). Stashed on session_data for
@@ -425,14 +255,10 @@ class DiceThrowHandler:
                 room=session._room,
             )
         turn_context.phase_timings = timings
-        # Story 91-2: the dice dispatch above already applied the beat — the
-        # replay text is a mechanical result, not a new player intent.
-        # Suppress the pre-narrator router pass (the [COST-1] 8x/turn driver).
         return await session._execute_narration_turn(
             sd,
             outcome.replay_action_text,
             turn_context,
-            suppress_intent_router=True,
         )
 
 

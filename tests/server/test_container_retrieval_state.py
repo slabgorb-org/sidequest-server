@@ -45,6 +45,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 from sidequest.agents.orchestrator import NarrationTurnResult
 from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore, Inventory
+from sidequest.game.persistence import SqliteStore
 from sidequest.game.session import GameSnapshot
 from sidequest.game.turn import TurnManager
 from sidequest.genre.loader import load_genre_pack
@@ -345,7 +346,7 @@ def _build_minimal_sd(snap: GameSnapshot, pack):
     tests/integration/test_group_c_wiring.py."""
     from unittest.mock import MagicMock
 
-    from sidequest.game.repository import SaveRepository
+    from sidequest.game.persistence import SqliteStore
     from sidequest.server.session_handler import _SessionData
 
     return _SessionData(
@@ -354,9 +355,7 @@ def _build_minimal_sd(snap: GameSnapshot, pack):
         player_name="Rux",
         player_id="player:rux",
         snapshot=snap,
-        repository=MagicMock(spec=SaveRepository),
-        dungeon_repository=MagicMock(),
-        telemetry_sink=MagicMock(),
+        store=SqliteStore.open_in_memory(),
         genre_pack=pack,
         orchestrator=MagicMock(),
     )
@@ -460,48 +459,15 @@ def test_room_state_injected_resets_count_on_room_change(
 
 
 # ---------------------------------------------------------------------------
-# AC #5 — Round-trip persistence via the save repository (ADR-115 F1: PG).
+# AC #5 — Round-trip persistence via SqliteStore.
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def pg_repo(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
-    """A real PgSaveRepository on a per-worker throwaway PG db (ADR-115 F1)."""
-    import psycopg
-
-    from sidequest.game import db_pool
-    from sidequest.server.session_state import _build_pg_repos_for_slug
-
-    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
-    with psycopg.connect(plain, autocommit=True) as conn:
-        rows = conn.execute(
-            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
-            "AND tablename <> 'alembic_version'"
-        ).fetchall()
-        if rows:
-            names = ", ".join(f'"{r[0]}"' for r in rows)
-            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
-    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
-    db_pool.close_pool()
-    repo, _dungeon, _sink = _build_pg_repos_for_slug(
-        db_pool.get_pool(),
-        slug="container-roundtrip",
-        mode="solo",
-        genre_slug="caverns_and_claudes",
-        world_slug="mawdeep",
-    )
-    try:
-        yield repo
-    finally:
-        db_pool.close_pool()
-
-
-def test_room_states_round_trip_via_save_repository(
+def test_room_states_round_trip_via_sqlite_store(
     vault_snapshot,
     cac_pack,
-    pg_repo,
 ) -> None:
-    """AC #5: ``repository.save → load`` preserves ``room_states`` (PG)."""
+    """AC #5: ``SqliteStore.save → load`` preserves ``room_states``."""
     # Land a retrieval so room_states has content to round-trip.
     _apply_narration_result_to_snapshot(
         vault_snapshot,
@@ -511,10 +477,16 @@ def test_room_states_round_trip_via_save_repository(
         room=room_for(vault_snapshot),
     )
 
-    pg_repo.init_session()
-    pg_repo.save(vault_snapshot)
+    store = SqliteStore.open_in_memory()
+    # Initialize the slot's session_meta so the load path can reconstruct
+    # SessionMeta. Mirror the pattern used by the live session handler.
+    store.init_session(
+        genre_slug=vault_snapshot.genre_slug,
+        world_slug=vault_snapshot.world_slug,
+    )
+    store.save(vault_snapshot)
 
-    loaded = pg_repo.load()
+    loaded = store.load()
     assert loaded is not None
     rs = loaded.snapshot.room_states["mawdeep:vault"]
     cs = rs.containers["tin_box"]

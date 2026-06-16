@@ -22,7 +22,6 @@ surfaced through OTEL attributes, never masked.
 from __future__ import annotations
 
 import logging
-import math
 from dataclasses import dataclass
 
 from opentelemetry import trace
@@ -79,11 +78,6 @@ class EmbedWorkerResult:
     failed_text_too_large: int = 0
     skipped_daemon_unavailable: bool = False
     skipped_empty_queue: bool = False
-    # Story 75-15: the embedding model the daemon reported on the first
-    # successful reply this run. Surfaced so the GM panel can confirm the SAME
-    # real model embedded the corpus that retrieval queries with — a
-    # hash-fallback embedder would show a different (or missing) model name.
-    embedding_model: str | None = None
 
     @property
     def failed(self) -> int:
@@ -105,7 +99,6 @@ class EmbedWorkerResult:
             "failed_text_too_large": self.failed_text_too_large,
             "skipped_daemon_unavailable": self.skipped_daemon_unavailable,
             "skipped_empty_queue": self.skipped_empty_queue,
-            "embedding_model": self.embedding_model,
         }
 
 
@@ -234,15 +227,11 @@ async def embed_pending_fragments(
                     "lore_embedding.worker text_too_large fragment=%s content_bytes=%d error=%s",
                     frag_id,
                     len(frag.content.encode("utf-8")),
-                    type(exc).__name__,
+                    exc,
                 )
                 continue
 
             embedding = response["embedding"]
-            if result.embedding_model is None:
-                # Story 75-15: record the model the daemon reported so the
-                # worker's telemetry can prove which embedder filled the corpus.
-                result.embedding_model = response.get("model")
             if expected_dim is None:
                 expected_dim = len(embedding)
             written = lore_store.update_embedding(frag_id, embedding, expected_dim=expected_dim)
@@ -311,30 +300,6 @@ async def retrieve_lore_context(
 
         if not query_text.strip() or lore_store.is_empty():
             span.set_attribute("lore.outcome", "empty_query_or_store")
-            # Story 75-15 (AC5): emit a panel-visible event for the empty case
-            # too, so the GM panel distinguishes "store empty" from "retrieval
-            # never ran" (pre-fix this returned before any watcher publish).
-            from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
-
-            _watcher_publish(
-                "lore_retrieval",
-                {
-                    "selected": [],
-                    "rejected": [],
-                    "selected_count": 0,
-                    "total_fragments": len(lore_store),
-                    "budget": int(top_k),
-                    "tokens_used": 0,
-                    "min_similarity": float(min_similarity),
-                    "outcome": "empty_query_or_store",
-                    "peak_similarity": None,
-                    "embedding_model": None,
-                    "context_hint": (
-                        query_text[:80] + "…" if len(query_text) > 80 else query_text
-                    ),
-                },
-                component="lore",
-            )
             return None
 
         if client is None:
@@ -373,57 +338,6 @@ async def retrieve_lore_context(
             return None
 
         query_embedding = response["embedding"]
-        # Story 75-15 (AC2): the daemon reports which model produced the
-        # embedding. Carry it onto the watcher event so a degenerate /
-        # hash-fallback embedder is detectable on the GM panel instead of
-        # silently starving retrieval.
-        embedding_model = response.get("model")
-        span.set_attribute("lore.embedding_model", str(embedding_model))
-
-        # Story 75-15 (AC2, No Silent Fallbacks): a zero-magnitude query
-        # embedding is the degenerate / hash-fallback smell — cosine scores 0.0
-        # against every fragment, indistinguishable from "nothing relevant".
-        # Surface it loudly and bail rather than masking a broken embedder.
-        # `math.isfinite` guard catches NaN/Inf elements too — `== 0.0` alone
-        # would NOT (NaN != 0.0), letting a corrupt embedding poison the cosine
-        # math + peak_similarity. Treat non-finite and zero-magnitude alike.
-        sum_sq = math.fsum(float(v) * float(v) for v in query_embedding)
-        query_magnitude = math.sqrt(sum_sq) if math.isfinite(sum_sq) else float("nan")
-        if not math.isfinite(query_magnitude) or query_magnitude == 0.0:
-            span.set_attribute("lore.outcome", "degenerate_embedding")
-            logger.warning(
-                "lore_embedding.retrieve degenerate_embedding model=%s query_len=%d",
-                embedding_model,
-                len(query_text),
-            )
-            from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
-
-            _watcher_publish(
-                "lore_retrieval",
-                {
-                    "selected": [],
-                    "rejected": [],
-                    "selected_count": 0,
-                    "total_fragments": len(lore_store),
-                    "budget": int(top_k),
-                    "tokens_used": 0,
-                    "min_similarity": float(min_similarity),
-                    "outcome": "degenerate_embedding",
-                    # Story 75-15 rework rt2 (Reviewer [EDGE]): None, not a
-                    # fabricated 0.0 — the magnitude guard fires before any cosine
-                    # is computed, so there is no measured peak. Matches the
-                    # empty-store branch; lets the panel tell "degenerate, nothing
-                    # computed" from "best candidate scored exactly 0.0".
-                    "peak_similarity": None,
-                    "embedding_model": embedding_model,
-                    "context_hint": (
-                        query_text[:80] + "…" if len(query_text) > 80 else query_text
-                    ),
-                },
-                component="lore",
-            )
-            return None
-
         # Re-queue any fragments whose stored embedding dimension differs
         # from the current model's. Without this, cosine_similarity would
         # silently return 0.0 for every mismatched fragment forever —
@@ -469,13 +383,6 @@ async def retrieve_lore_context(
         selected_payload = [_frag_payload(s, f) for s, f in hits]
         rejected_payload = [_frag_payload(s, f) for s, f in rejected]
         tokens_used = sum(f["tokens"] for f in selected_payload)
-        # Story 75-15 (AC5): the panel needs the peak similarity vs the floor to
-        # diagnose a sub-floor starve (gulliver peak 0.1499 vs floor 0.15), and
-        # an explicit outcome to tell "nothing cleared the floor" from "ok".
-        # `all_hits` is sorted descending, so [0] is the best candidate the
-        # store could offer — selected or not.
-        peak_similarity = float(all_hits[0][0]) if all_hits else None
-        outcome = "ok" if hits else "no_hits_above_threshold"
         _watcher_publish(
             "lore_retrieval",
             {
@@ -490,16 +397,11 @@ async def retrieve_lore_context(
                 "budget": int(top_k),
                 "tokens_used": int(tokens_used),
                 "min_similarity": float(min_similarity),
-                "outcome": outcome,
-                "peak_similarity": peak_similarity,
-                "embedding_model": embedding_model,
                 "context_hint": (query_text[:80] + "…" if len(query_text) > 80 else query_text),
             },
             component="lore",
         )
 
-        if peak_similarity is not None:
-            span.set_attribute("lore.peak_similarity", peak_similarity)
         if not hits:
             span.set_attribute("lore.outcome", "no_hits_above_threshold")
             return None

@@ -17,14 +17,12 @@ import pytest
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from opentelemetry.trace import StatusCode
 
 import sidequest.telemetry.spans as spans_module
 from sidequest.agents.subsystems import SubsystemOutput, get_registered, run_dispatch_bank
 from sidequest.agents.subsystems.movement import run_movement_dispatch
 from sidequest.dungeon.region_graph.model import RegionEdge, RegionGraph, RegionNode
 from sidequest.game.session import GameSnapshot
-from sidequest.genre.models.world import NavigationMode
 from sidequest.protocol.dispatch import (
     DispatchPackage,
     PlayerDispatch,
@@ -110,13 +108,6 @@ def _snapshot(pc_regions: dict[str, str], seats: dict[str, str], **kw) -> GameSn
     )
 
 
-def _pack_with_world(world_slug: str, mode: NavigationMode):
-    """Duck-typed GenrePack stand-in (content-free): the movement handler's
-    region-mode gate reads only ``pack.worlds[slug].cartography.navigation_mode``."""
-    world = types.SimpleNamespace(cartography=types.SimpleNamespace(navigation_mode=mode))
-    return types.SimpleNamespace(worlds={world_slug: world})
-
-
 def _dispatch(
     direction: str = "", exit_descriptor: str = "", key: str = "mv1"
 ) -> SubsystemDispatch:
@@ -124,7 +115,6 @@ def _dispatch(
         subsystem="movement",
         params={"direction": direction, "exit_descriptor": exit_descriptor},
         idempotency_key=key,
-        confidence=1.0,
         visibility=VisibilityTag(visible_to="all"),
     )
 
@@ -476,72 +466,6 @@ def test_no_dungeon_store_fail_loud(capture_spans):
 
 
 # ---------------------------------------------------------------------------
-# 10a — region-mode world has no DungeonStore by design → clean defer, not an
-#        error (sq-playtest 2026-06-02: movement 7 events / 7 errors in oz).
-# ---------------------------------------------------------------------------
-
-
-def test_region_mode_world_defers_cleanly(capture_spans):
-    # A cartography region-mode world (the wry_whimsy/oz family) carries NO
-    # dungeon store — travel is resolved by the narration_apply heading→region
-    # path (#577), not this procedural-dungeon navigator. The handler must
-    # recognize the mode and step aside with a non-error movement.region_mode
-    # span, NOT fire movement.unresolved/no_dungeon_store on every move.
-    pack = _pack_with_world("beneath_sunden", NavigationMode.region)
-    snap = _snapshot({"Susan": "munchkin_country"}, {"s1": "Susan"})
-    out = _run(
-        run_movement_dispatch(
-            _dispatch(direction="toward_exit", exit_descriptor="the green streets"),
-            snapshot=snap,
-            player_name="Susan",
-            dungeon_store=None,
-            palette=None,
-            pack=pack,
-        )
-    )
-    # Clean defer: no error, no narrator surface directive, no patch.
-    assert "error" not in out.data
-    assert out.data["resolved_via"] == "region_mode_deferred"
-    assert out.directives == []
-    assert snap.pc_regions["Susan"] == "munchkin_country"  # handler applied no patch
-    # Observable, NON-error span (the GM-panel de-noise vs. movement.unresolved).
-    region_mode = _spans_named(capture_spans, "movement.region_mode")
-    assert len(region_mode) == 1
-    assert region_mode[0].attributes["pc_name"] == "Susan"
-    assert region_mode[0].attributes["from_region"] == "munchkin_country"
-    assert region_mode[0].attributes["world_slug"] == "beneath_sunden"
-    assert region_mode[0].status.status_code != StatusCode.ERROR
-    # The dungeon-assumption error must NOT fire for a region-mode world.
-    assert not _spans_named(capture_spans, "movement.unresolved")
-
-
-# ---------------------------------------------------------------------------
-# 10b — the defer must NOT over-broaden: a room_graph world genuinely missing
-#        its store is real config drift and STILL fails loud (No Silent
-#        Fallbacks).
-# ---------------------------------------------------------------------------
-
-
-def test_room_graph_world_no_store_still_fails_loud(capture_spans):
-    pack = _pack_with_world("beneath_sunden", NavigationMode.room_graph)
-    snap = _snapshot({"Rux": "a"}, {"s1": "Rux"})
-    out = _run(
-        run_movement_dispatch(
-            _dispatch(direction="deeper"),
-            snapshot=snap,
-            player_name="Rux",
-            dungeon_store=None,
-            palette=_FakePalette(),
-            pack=pack,
-        )
-    )
-    assert out.data["error"] == "no_dungeon_store"
-    assert not _spans_named(capture_spans, "movement.region_mode")
-    unresolved = _spans_named(capture_spans, "movement.unresolved")
-    assert unresolved[0].attributes["reason"] == "no_dungeon_store"
-
-
-# ---------------------------------------------------------------------------
 # 11 — seated PC missing pc_regions entry → fail loud (no_pc_region).
 # ---------------------------------------------------------------------------
 
@@ -775,50 +699,6 @@ def test_wiring_bank_invokes_movement(capture_spans):
 
 
 # ---------------------------------------------------------------------------
-# 22a — wiring: the bank signature-filters ``pack`` from context into the
-#        movement handler, so a region-mode world defers end-to-end (no
-#        no_dungeon_store error through the real bank, the way the
-#        intent_router_pass context delivers it).
-# ---------------------------------------------------------------------------
-
-
-def test_wiring_bank_region_mode_defers(capture_spans):
-    pack = _pack_with_world("beneath_sunden", NavigationMode.region)
-    snap = _snapshot({"Susan": "munchkin_country"}, {"s1": "Susan"})
-    package = DispatchPackage(
-        turn_id="t1",
-        per_player=[
-            PlayerDispatch(
-                player_id="Susan",
-                raw_action="head down the green streets toward the palace",
-                dispatch=[_dispatch(direction="toward_exit")],
-            )
-        ],
-        confidence_global=0.9,
-    )
-    _run(
-        run_dispatch_bank(
-            package,
-            context={
-                "snapshot": snap,
-                "player_name": "Susan",
-                # Region-mode worlds thread no dungeon_store/palette; pack is
-                # the discriminator. Bank signature-filters all of these.
-                "dungeon_store": None,
-                "palette": None,
-                "pack": pack,
-                "npcs_present": [],
-            },
-        )
-    )
-    # The bank reached run_movement_dispatch with pack → clean region-mode
-    # defer, no dungeon-assumption error.
-    assert snap.pc_regions["Susan"] == "munchkin_country"
-    assert _spans_named(capture_spans, "movement.region_mode")
-    assert not _spans_named(capture_spans, "movement.unresolved")
-
-
-# ---------------------------------------------------------------------------
 # 23 — wiring: intent_router_pass threads dungeon_store+palette+player_name.
 # ---------------------------------------------------------------------------
 
@@ -853,9 +733,7 @@ def test_wiring_intent_router_pass_threads_context(capture_spans, monkeypatch):
 
     # _build_state_summary touches pack — stub it to a plain string.
     monkeypatch.setattr(
-        intent_router_pass,
-        "_build_state_summary",
-        lambda snapshot, *, pack, dungeon_store=None, palette=None: "summary",
+        intent_router_pass, "_build_state_summary", lambda snapshot, *, pack: "summary"
     )
 
     _run(
@@ -900,312 +778,3 @@ def test_success_returns_no_directives(capture_spans):
         )
     )
     assert out.directives == []
-
-
-# ---------------------------------------------------------------------------
-# Story 59-12 — surface→deep handoff: bind a surface-bound PC onto a live
-# dungeon-graph node so run_movement_dispatch resolves the descent.
-#
-# Repro (RED): a fresh beneath_sunden PC is bound by init_region_location to
-# the SURFACE cartography region 'ropefoot' (cartography.starting_region) —
-# which is NOT a node of the procedural dungeon RegionGraph. The dungeon
-# attach seam (session_integration) only binds the graph entrance when
-# current_region is blank, and the per-turn projection treats a surface
-# cartography region as the "surface lane" (returns None, no re-seed). So when
-# the player descends, region_for() returns 'ropefoot', project_region() is
-# called with a non-graph region, and the descent never crosses surface→deep.
-#
-# These tests assert the DESIGN-AGNOSTIC contract: a surface-bound PC who
-# dispatches `deeper` ends up bound to a REAL dungeon-graph node, the descent
-# resolves (movement.resolved fires — the OTEL lie-detector), and the move is
-# mechanically backed by the per-PC WorldStatePatch path. They do NOT pin the
-# target to a specific node (entrance vs first deep node) — that is the Dev /
-# Architect seam decision flagged in Delivery Findings.
-# ---------------------------------------------------------------------------
-
-_SURFACE_REGION = "ropefoot"  # beneath_sunden cartography.starting_region
-
-
-def _surface_to_deep_graph() -> RegionGraph:
-    """A minimal procedural dungeon graph. Note: the SURFACE region
-    'ropefoot' is deliberately ABSENT — it is a cartography region, never a
-    graph node (the whole point of the surface→deep gap)."""
-    return _graph_with(
-        [("entrance", 0.0), ("deep_1", 5.0)],
-        [("entrance", "deep_1", "shaft", False)],
-    )
-
-
-def test_surface_bound_pc_descends_onto_dungeon_graph(capture_spans):
-    """AC1 — a PC bound to the surface region 'ropefoot' dispatching `deeper`
-    is rebound onto a live dungeon-graph node and the descent resolves.
-
-    RED today: region_for() returns 'ropefoot' (non-empty, passes the
-    no_pc_region guard), then project_region(graph, 'ropefoot', ...) raises
-    ValueError because 'ropefoot' is not a graph node — the descent crashes
-    instead of crossing surface→deep.
-    """
-    g = _surface_to_deep_graph()
-    store = _FakeStore(g)
-    snap = _snapshot({"Rux": _SURFACE_REGION}, {"s1": "Rux"})
-    out = _run(
-        run_movement_dispatch(
-            _dispatch(direction="deeper"),
-            snapshot=snap,
-            player_name="Rux",
-            dungeon_store=store,
-            palette=_FakePalette(),
-        )
-    )
-    # The descent resolved (no honest-surface unresolved error).
-    assert out.data.get("error") is None, f"descent failed: {out.data}"
-    # …onto a REAL dungeon-graph node (design-agnostic: entrance OR deeper).
-    assert out.data.get("to_region") in g.nodes, (
-        f"resolved to non-graph node {out.data.get('to_region')!r}"
-    )
-    # …and the PC's per-PC region is rebound off the surface onto the graph.
-    assert snap.pc_regions["Rux"] in g.nodes, (
-        f"PC still stranded on non-graph region {snap.pc_regions['Rux']!r}"
-    )
-    resolved = _spans_named(capture_spans, "movement.resolved")
-    assert len(resolved) == 1
-    # …via the surface→deep handoff specifically — proves the engine took the
-    # rebind path, not a coincidental in-graph resolve.
-    assert resolved[0].attributes["resolved_via"] == "surface_descent"
-
-
-def test_surface_descent_is_mechanically_backed_through_bank(capture_spans):
-    """AC2 + AC4 — drive the descent through the REAL dispatch bank (the
-    production invocation path) and assert the surface→deep crossing is
-    mechanically backed, not improvised.
-
-    The bank swallows per-handler exceptions into error spans, so the RED
-    failure here is the production-observable one: the descent silently
-    no-ops — no movement.resolved span fires and the PC stays stranded on the
-    surface region (the Illusionism failure the GM panel must catch).
-
-    Post-fix contract: movement.resolved fires AND a per-PC
-    frontier.region_transition span proves the WorldStatePatch path advanced
-    THIS PC onto a real dungeon-graph node.
-    """
-    g = _surface_to_deep_graph()
-    store = _FakeStore(g)
-    snap = _snapshot({"Rux": _SURFACE_REGION}, {"s1": "Rux"})
-    package = DispatchPackage(
-        turn_id="t1",
-        per_player=[
-            PlayerDispatch(
-                player_id="Rux",
-                raw_action="I climb down into the dark",
-                dispatch=[_dispatch(direction="deeper")],
-            )
-        ],
-        confidence_global=0.9,
-    )
-    _run(
-        run_dispatch_bank(
-            package,
-            context={
-                "snapshot": snap,
-                "player_name": "Rux",
-                "dungeon_store": store,
-                "palette": _FakePalette(),
-                "npcs_present": [],
-            },
-        )
-    )
-    # The engine resolved the descent (lie-detector: not the narrator).
-    assert _spans_named(capture_spans, "movement.resolved"), (
-        "no movement.resolved — descent silently no-opped (Illusionism)"
-    )
-    # The PC crossed surface→deep onto a real dungeon-graph node.
-    assert snap.pc_regions["Rux"] in g.nodes, (
-        f"PC still on surface region {snap.pc_regions['Rux']!r} after descent"
-    )
-    # The crossing is backed by the per-PC region-transition path.
-    transitions = _spans_named(capture_spans, "frontier.region_transition")
-    assert transitions, "no frontier.region_transition — descent not mechanically backed"
-    last = transitions[-1]
-    assert last.attributes["pc_name"] == "Rux"
-    assert last.attributes["to_region"] in g.nodes
-
-
-# ---------------------------------------------------------------------------
-# sq-playtest 2026-06-12 (beneath_sunden-6, turns 6-7): "I go deeper, into
-# the heart of the dungeon" — the router passed the player's words through
-# as exit_descriptor (per its verbatim contract), and the descriptor branch
-# treated the unmatched FLAVOR phrase as a veto: it returned no-match
-# without ever consulting direction="deeper", so an unambiguous descent was
-# refused twice and the players gave up. A descriptor that matches NOTHING
-# must fall back to the direction resolution; a descriptor that matches
-# AMBIGUOUSLY (several real ways tie) still refuses — "which corridor?" is
-# an honest question, but "no such way" for "go deeper" is a stonewall.
-# ---------------------------------------------------------------------------
-
-
-def test_unmatched_descriptor_falls_back_to_direction(capture_spans):
-    g = _graph_with(
-        [("entrance", 0.0), ("a", 1.0), ("deep_room", 5.0)],
-        [
-            ("entrance", "a", "corridor", False),
-            ("a", "deep_room", "corridor", False),
-        ],
-    )
-    store = _FakeStore(g)
-    snap = _snapshot({"Rux": "a"}, {"s1": "Rux"})
-    out = _run(
-        run_movement_dispatch(
-            _dispatch(direction="deeper", exit_descriptor="the heart of the dungeon"),
-            snapshot=snap,
-            player_name="Rux",
-            dungeon_store=store,
-            palette=_FakePalette(),
-        )
-    )
-    assert out.data.get("to_region") == "deep_room", (
-        f"flavor descriptor vetoed an unambiguous 'deeper': {out.data}"
-    )
-    assert snap.pc_regions["Rux"] == "deep_room"
-    resolved = _spans_named(capture_spans, "movement.resolved")
-    assert resolved[0].attributes["resolved_via"] == "descriptor_fallback_depth_delta"
-
-
-def test_unmatched_descriptor_without_direction_still_refuses(capture_spans):
-    g = _graph_with(
-        [("entrance", 0.0), ("a", 1.0), ("deep_room", 5.0)],
-        [
-            ("entrance", "a", "corridor", False),
-            ("a", "deep_room", "corridor", False),
-        ],
-    )
-    store = _FakeStore(g)
-    snap = _snapshot({"Rux": "a"}, {"s1": "Rux"})
-    out = _run(
-        run_movement_dispatch(
-            _dispatch(direction="", exit_descriptor="the shimmering portal"),
-            snapshot=snap,
-            player_name="Rux",
-            dungeon_store=store,
-            palette=_FakePalette(),
-        )
-    )
-    assert out.data.get("error") == "no_candidate_edges", (
-        "an unmappable way with NO coarse direction must still refuse loudly"
-    )
-    assert snap.pc_regions["Rux"] == "a", "refusal must not move the PC"
-
-
-def test_ambiguous_descriptor_still_refuses_even_with_direction(capture_spans):
-    # Two corridors tie on the descriptor token — "which corridor?" is the
-    # honest answer; direction must NOT silently pick one.
-    g = _graph_with(
-        [("entrance", 0.0), ("a", 1.0), ("corridor_x", 5.0), ("corridor_y", 5.0)],
-        [
-            ("entrance", "a", "corridor", False),
-            ("a", "corridor_x", "corridor", False),
-            ("a", "corridor_y", "corridor", False),
-        ],
-    )
-    store = _FakeStore(g)
-    snap = _snapshot({"Rux": "a"}, {"s1": "Rux"})
-    out = _run(
-        run_movement_dispatch(
-            _dispatch(direction="deeper", exit_descriptor="the corridor"),
-            snapshot=snap,
-            player_name="Rux",
-            dungeon_store=store,
-            palette=_FakePalette(),
-        )
-    )
-    assert out.data.get("error") == "ambiguous_descriptor"
-    assert snap.pc_regions["Rux"] == "a"
-
-
-# ---------------------------------------------------------------------------
-# Bearings (sq-playtest 2026-06-13): a player who NAMES a direction resolves
-# to the single exit that leaves the region that way — directions are
-# first-class input, no longer refused.
-# ---------------------------------------------------------------------------
-
-
-def test_named_bearing_resolves_the_four_way_corridor_tie(capture_spans):
-    # The exact playtest bug: from 'entrance' three corridors + one shaft.
-    # "the corridor ahead" tied 4 ways and the move was refused. Now the
-    # narrator names them by bearing and the player picks one — "I go <that
-    # corridor's bearing>" resolves to exactly that edge.
-    g = _graph_with(
-        [("entrance", 0.0), ("r0", 1.0), ("r1", 1.0), ("r2", 2.0), ("deep", 3.0)],
-        [
-            ("entrance", "r0", "corridor", False),
-            ("entrance", "r1", "corridor", False),
-            ("entrance", "r2", "corridor", False),
-            ("entrance", "deep", "shaft", False),
-        ],
-    )
-    from sidequest.dungeon.region_projection import assign_bearings
-
-    bearings = assign_bearings(g, "entrance")
-    # pick a real corridor bearing the generator assigned (not the shaft's down)
-    corridor_bearing = bearings["r1"]
-    store = _FakeStore(g)
-    snap = _snapshot({"Rux": "entrance"}, {"s1": "Rux"})
-    out = _run(
-        run_movement_dispatch(
-            _dispatch(exit_descriptor=f"I head {corridor_bearing}"),
-            snapshot=snap,
-            player_name="Rux",
-            dungeon_store=store,
-            palette=_FakePalette(),
-        )
-    )
-    assert out.data.get("error") is None, f"named bearing refused: {out.data}"
-    assert out.data["to_region"] == "r1"
-    assert snap.pc_regions["Rux"] == "r1"
-    resolved = _spans_named(capture_spans, "movement.resolved")
-    assert resolved[0].attributes["resolved_via"] == "bearing"
-
-
-def test_named_down_resolves_the_shaft(capture_spans):
-    g = _graph_with(
-        [("entrance", 0.0), ("r0", 1.0), ("deep", 3.0)],
-        [
-            ("entrance", "r0", "corridor", False),
-            ("entrance", "deep", "shaft", False),
-        ],
-    )
-    store = _FakeStore(g)
-    snap = _snapshot({"Rux": "entrance"}, {"s1": "Rux"})
-    out = _run(
-        run_movement_dispatch(
-            _dispatch(exit_descriptor="I climb down the shaft"),
-            snapshot=snap,
-            player_name="Rux",
-            dungeon_store=store,
-            palette=_FakePalette(),
-        )
-    )
-    assert out.data["to_region"] == "deep"
-    resolved = _spans_named(capture_spans, "movement.resolved")
-    assert resolved[0].attributes["resolved_via"] == "bearing"
-
-
-def test_unresolved_directive_forbids_advancing_the_room(capture_spans):
-    # When a move IS genuinely unresolved, the must_narrate directive is an
-    # explicit GM instruction NOT to advance the title/room — the narrator
-    # must not paper over the refusal with a confabulated corridor.
-    snap = _snapshot({"Rux": "a"}, {"s1": "Rux"})
-    out = _run(
-        run_movement_dispatch(
-            _dispatch(direction="deeper"),
-            snapshot=snap,
-            player_name="Rux",
-            dungeon_store=None,  # → no_dungeon_store unresolved
-            palette=_FakePalette(),
-        )
-    )
-    assert out.data["error"] == "no_dungeon_store"
-    assert len(out.directives) == 1
-    payload = out.directives[0].payload
-    assert "MOVEMENT REFUSED" in payload
-    assert "has NOT moved" in payload
-    assert "Do NOT change the location title" in payload

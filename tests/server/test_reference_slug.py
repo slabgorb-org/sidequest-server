@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from sidequest.foundation.reference_slug import slugify
+from sidequest.server.reference_slug import slugify
 
 
 @pytest.mark.parametrize(
@@ -19,7 +19,7 @@ from sidequest.foundation.reference_slug import slugify
         ("   Aunt Pemberton   ", "aunt-pemberton"),
         ("Lady Of The Hall", "lady-of-the-hall"),
         ("history.yaml", "history-yaml"),
-        ("naïve", "naive"),  # Story 101-8: NFKD-fold (was "na-ve"; ï→i)
+        ("naïve", "na-ve"),
         ("", ""),
     ],
 )

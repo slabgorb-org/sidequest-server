@@ -36,20 +36,14 @@
       - Ironlung
       - Fuseborn
     given_name:
-      corpora: []
+      corpora:
+      - corpus: english.txt
+        weight: 1.0
+      - corpus: german.txt
+        weight: 1.0
       lookback: 2
       reject_files: []
-      word_list:
-      - Volt
-      - Sprocket
-      - Diode
-      - Gasket
-      - Flux
-      - Rivet
-      - Solder
-      - Cinder
-      - Bolt
-      - Wattle
+      word_list: []
     place_noun:
       corpora: []
       lookback: 2
@@ -103,20 +97,14 @@
       - Saplimb
       - Fernwalk
     given_name:
-      corpora: []
+      corpora:
+      - corpus: finnish.txt
+        weight: 1.0
+      - corpus: hungarian.txt
+        weight: 1.0
       lookback: 2
       reject_files: []
-      word_list:
-      - Bramble
-      - Fern
-      - Moss
-      - Thistle
-      - Briar
-      - Sorrel
-      - Hazel
-      - Yarrow
-      - Nettle
-      - Aspen
+      word_list: []
     place_noun:
       corpora: []
       lookback: 2
@@ -158,31 +146,21 @@
       - blind
       - cold
     given_name:
-      corpora: []
+      corpora:
+      - corpus: polish.txt
+        weight: 1.0
+      - corpus: swedish.txt
+        weight: 1.0
       lookback: 2
       reject_files: []
-      word_list:
-      - Yarek
-      - Mirsk
-      - Stovan
-      - Petra
-      - Kolya
-      - Vask
-      - Dunya
-      - Ostro
-      - Lenka
-      - Borys
+      word_list: []
     patronymic:
-      corpora: []
+      corpora:
+      - corpus: polish.txt
+        weight: 1.0
       lookback: 2
       reject_files: []
-      word_list:
-      - Vad
-      - Mir
-      - Stov
-      - Pek
-      - Olen
-      - Bor
+      word_list: []
     place_noun:
       corpora: []
       lookback: 2
@@ -239,20 +217,14 @@
       - Kappa
       - Zed
     given_name:
-      corpora: []
+      corpora:
+      - corpus: french.txt
+        weight: 1.0
+      - corpus: english.txt
+        weight: 1.0
       lookback: 3
       reject_files: []
-      word_list:
-      - Aubin
-      - Marcell
-      - Renne
-      - Corwin
-      - Estel
-      - Dorian
-      - Calix
-      - Verel
-      - Soren
-      - Pell
+      word_list: []
     place_noun:
       corpora: []
       lookback: 2

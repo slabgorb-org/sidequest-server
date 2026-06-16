@@ -14,45 +14,10 @@ import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from fastapi.testclient import TestClient
 
 from sidequest.agents.claude_client import ClaudeResponse
 from sidequest.server.app import create_app
-
-
-@pytest.fixture(autouse=True)
-def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
-    """Bind the process pool to a per-worker throwaway PG db (ADR-115 F1)."""
-    import psycopg
-
-    from sidequest.game import db_pool
-
-    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
-    with psycopg.connect(plain, autocommit=True) as conn:
-        rows = conn.execute(
-            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
-            "AND tablename <> 'alembic_version'"
-        ).fetchall()
-        if rows:
-            names = ", ".join(f'"{r[0]}"' for r in rows)
-            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
-    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
-    db_pool.close_pool()
-    yield
-    db_pool.close_pool()
-
-
-def _load_pg(slug: str):
-    """Load the saved session for ``slug`` from Postgres (ADR-115 F1)."""
-    from sidequest.game import db_pool
-    from sidequest.server.session_state import _build_pg_repos_for_slug
-
-    repo, _d, _s = _build_pg_repos_for_slug(
-        db_pool.get_pool(), slug=slug, mode="solo", genre_slug="", world_slug=""
-    )
-    return repo.load()
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -287,9 +252,12 @@ def test_e2e_session_is_persisted_after_action(tmp_path):
             ws.receive_text()  # NARRATION
             ws.receive_text()  # NARRATION_END
 
-    # After context manager exits (disconnect), the save must be loadable
-    # from Postgres by the slug (ADR-115 F1: the SQLite save layer is gone).
-    assert _load_pg(slug) is not None, f"Save not found in Postgres for slug {slug}"
+    # After context manager exits (disconnect), save should exist at the
+    # slug-keyed path (Story 45-26: legacy /genre/world/player layout gone).
+    from sidequest.game.persistence import db_path_for_slug
+
+    expected_db = db_path_for_slug(saves_dir, slug)
+    assert expected_db.exists(), f"Save file not found at {expected_db}"
 
 
 def test_e2e_second_action_calls_client_twice(tmp_path):
@@ -468,8 +436,14 @@ def test_e2e_npc_registry_populated_after_action(tmp_path):
             ws.receive_text()  # NARRATION
             ws.receive_text()  # NARRATION_END
 
-    # Load the save from Postgres (ADR-115 F1) and verify NPC registry.
-    saved = _load_pg(slug)
+    # Load the save (slug-keyed layout) and verify NPC registry.
+    from sidequest.game.persistence import SqliteStore, db_path_for_slug
+
+    db = db_path_for_slug(saves_dir, slug)
+    assert db.exists()
+    store = SqliteStore.open(str(db))
+    saved = store.load()
+    store.close()
 
     assert saved is not None
     # The canned narration includes "The Keeper" as an NPC.

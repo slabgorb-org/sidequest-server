@@ -39,6 +39,7 @@ from sidequest.game.encounter import (
     EncounterMetric,
     StructuredEncounter,
 )
+from sidequest.game.persistence import SqliteStore
 from sidequest.game.session import GameSnapshot, Npc, RoomState
 from sidequest.game.turn import TurnManager
 from sidequest.genre.loader import load_genre_pack
@@ -138,9 +139,7 @@ def _projection_payload(snap: GameSnapshot, *, player_name: str = "Alice") -> di
         player_name=player_name,
         player_id=f"player:{player_name.lower()}",
         snapshot=snap,
-        repository=MagicMock(),
-        dungeon_repository=MagicMock(),
-        telemetry_sink=MagicMock(),
+        store=MagicMock(),
         genre_pack=pack,
         orchestrator=MagicMock(),
     )
@@ -161,53 +160,21 @@ def _projection_npc_names(snap: GameSnapshot, *, player_name: str = "Alice") -> 
     return names
 
 
-@pytest.fixture(autouse=True)
-def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
-    """Bind the process pool to a per-worker throwaway PG db, clean per test
-    (ADR-115 F1: ToolContext.repository is a real PgSaveRepository)."""
-    import psycopg
-
-    from sidequest.game import db_pool
-
-    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
-    with psycopg.connect(plain, autocommit=True) as conn:
-        rows = conn.execute(
-            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
-            "AND tablename <> 'alembic_version'"
-        ).fetchall()
-        if rows:
-            names = ", ".join(f'"{r[0]}"' for r in rows)
-            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
-    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
-    db_pool.close_pool()
-    yield
-    db_pool.close_pool()
+def _store_with(snapshot: GameSnapshot) -> SqliteStore:
+    store = SqliteStore.open_in_memory()
+    store.initialize()
+    store.init_session(genre_slug=snapshot.genre_slug, world_slug=snapshot.world_slug)
+    store.save(snapshot)
+    return store
 
 
-def _store_with(snapshot: GameSnapshot):
-    """Build a real PgSaveRepository and persist the snapshot (ADR-115 F1)."""
-    from sidequest.game import db_pool
-    from sidequest.server.session_state import _build_pg_repos_for_slug
-
-    repo, _dungeon, _sink = _build_pg_repos_for_slug(
-        db_pool.get_pool(),
-        slug="npc-scene-predicate",
-        mode="solo",
-        genre_slug=snapshot.genre_slug,
-        world_slug=snapshot.world_slug,
-    )
-    repo.init_session()
-    repo.save(snapshot)
-    return repo
-
-
-def _tool_ctx(store, *, perspective_pc: str = "Alice") -> ToolContext:
+def _tool_ctx(store: SqliteStore, *, perspective_pc: str = "Alice") -> ToolContext:
     return ToolContext(
         world_id="w",
         session_id="s",
         perspective_pc=perspective_pc,
         turn_number=1,
-        repository=store,
+        store=store,
         otel_span=MagicMock(),
         perception_filter=NarratorPerceptionFilter(),
     )

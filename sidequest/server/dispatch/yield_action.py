@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sidequest.game.encounter_classifier import yield_side_for
 from sidequest.game.resolution_signal import ResolutionSignal
 from sidequest.game.session import GameSnapshot
 from sidequest.game.status import Status
@@ -181,9 +180,6 @@ def handle_yield(
         turn=snapshot.turn_manager.interaction,
     )
 
-    # Story 59-33: derive yield_side from the outcome (never hand-set) →
-    # "player" for a player yield (a LOSS — orthogonal to victory credit).
-    yield_side = yield_side_for("yielded")
     snapshot.pending_resolution_signal = ResolutionSignal(
         encounter_type=enc.encounter_type,
         outcome="yielded",
@@ -191,7 +187,6 @@ def handle_yield(
         final_opponent_metric=enc.opponent_metric.current,
         yielded_actors=tuple(yielded_names),
         edge_refreshed=edge_refreshed,
-        yield_side=yield_side,
     )
 
     with encounter_yield_resolved_span(
@@ -216,7 +211,6 @@ def handle_yield(
         outcome="yielded",
         final_player_metric=enc.player_metric.current,
         final_opponent_metric=enc.opponent_metric.current,
-        yield_side=yield_side,
     ):
         pass
     _watcher_publish(

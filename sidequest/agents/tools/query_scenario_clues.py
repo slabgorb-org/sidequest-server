@@ -82,7 +82,7 @@ async def query_scenario_clues(
     args: QueryScenarioCluesArgs,
     ctx: ToolContext,
 ) -> ToolResult:
-    session = ctx.repository.load()
+    session = ctx.store.load()
     if session is None:
         return ToolResult.error("no active session", recoverable=False)
     snapshot = session.snapshot

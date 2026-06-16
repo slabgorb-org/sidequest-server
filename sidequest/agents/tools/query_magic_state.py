@@ -88,7 +88,7 @@ class QueryMagicStateArgs(BaseModel):
     category=ToolCategory.READ,
 )
 async def query_magic_state(args: QueryMagicStateArgs, ctx: ToolContext) -> ToolResult:
-    session = ctx.repository.load()
+    session = ctx.store.load()
     if session is None:
         return ToolResult.error("no active session", recoverable=False)
 

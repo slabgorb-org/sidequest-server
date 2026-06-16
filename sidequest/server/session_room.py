@@ -18,8 +18,7 @@ from threading import RLock
 from typing import TYPE_CHECKING, Any
 
 import sidequest.telemetry.watcher_hub as _hub
-from sidequest.game.persistence import GameMode
-from sidequest.game.repository import SaveRepository
+from sidequest.game.persistence import GameMode, SqliteStore
 from sidequest.game.session import GameSnapshot
 from sidequest.orbital.loader import (
     OrbitalContent,
@@ -162,19 +161,14 @@ class SessionRoom:
     # rather than tied to a single socket lifecycle.
     _player_sockets: dict[str, set[str]] = field(default_factory=dict)
     _seated: dict[str, _Seat] = field(default_factory=dict)
-    # player_id -> resolved player identity (Cf-Access email or dev Host).
-    # Room-only and ephemeral (Story 67-6, ADR-119): re-resolved every
-    # connect, never persisted to the snapshot/save. PARTY_STATUS reads it
-    # so peer identity is the human, not the character name.
-    _player_identities: dict[str, str] = field(default_factory=dict)
     _lock: RLock = field(default_factory=RLock, repr=False)
     # socket_id -> asyncio.Queue for per-socket outbound message fan-out (MP-02 Task 4)
     _outbound_queues: dict[str, asyncio.Queue[Any]] = field(default_factory=dict)
     # Canonical world state (ADR-037 Python port). The room owns the
-    # GameSnapshot and SaveRepository for its slug; every WS session bound
+    # GameSnapshot and SqliteStore for its slug; every WS session bound
     # to the room reads/writes the same in-memory snapshot reference.
     _snapshot: GameSnapshot | None = field(default=None, repr=False)
-    _store: SaveRepository | None = field(default=None, repr=False)
+    _store: SqliteStore | None = field(default=None, repr=False)
     _session: Session | None = field(default=None, init=False, repr=False)
     # Canonical narrator orchestrator (ADR-067 — single persistent narrator
     # session per slug). Each WS session bound to this room uses the
@@ -210,15 +204,10 @@ class SessionRoom:
     # never orphans the table's turn. Cleared on drain (per-turn reset point)
     # exactly like ``_pending_actions``.
     _crash_released: set[str] = field(default_factory=set)
-    # Table confrontations: seats that folded/went out drop from the barrier
-    # denominator for the REST of the hand (multiple decision points), unlike
-    # crash-release which is per-interaction. Cleared only at table teardown
-    # via ``clear_table_folds()`` — NOT in ``drain_pending_actions``.
-    _table_folded_player_ids: set[str] = field(default_factory=set)
 
     # ------------------------------------------------------------------
     # Canonical world state (ADR-037 Python port). The room owns the
-    # GameSnapshot and SaveRepository; every WS session bound to this slug
+    # GameSnapshot and SqliteStore; every WS session bound to this slug
     # reads and writes the same in-memory snapshot reference.
     # ------------------------------------------------------------------
 
@@ -226,10 +215,8 @@ class SessionRoom:
         self,
         *,
         snapshot: GameSnapshot,
-        store: SaveRepository,
+        store: SqliteStore,
         world_dir: Path | None = None,
-        ruleset: str | None = None,
-        region_id: str | None = None,
     ) -> None:
         """Bind canonical snapshot + store to the room. Idempotent.
 
@@ -240,43 +227,20 @@ class SessionRoom:
         defense for any path that does retry the bind.
 
         ``world_dir`` is the resolved path to the bound world. When
-        provided, attempts to load the orbital tier and exposes it via
-        ``room.session.orbital_content``. Worlds without an orbital tier
-        (no ``systems/`` dir and no ``orbits.yaml``) bind cleanly with
+        provided, attempts to load the orbital tier (``orbits.yaml`` +
+        optional ``chart.yaml``) and exposes it via
+        ``room.session.orbital_content``. Worlds without an orbital
+        tier (no ``orbits.yaml``) bind cleanly with
         ``orbital_content=None``; malformed orbital data fails loud.
-
-        ``region_id`` selects the per-system file for a two-scale world
-        (ADR-141 / Story 98-2): ``systems/<region_id>.yaml`` is loaded for
-        the party's current system. When ``None``, it falls back to
-        ``snapshot.current_region`` (set on resume; empty on a fresh snapshot,
-        in which case the connect handler passes ``cartography.starting_region``
-        explicitly). Single-system worlds ignore it.
-        ``world_dir`` also drives ``init_world_magic_state`` (Story 90-2)
-        so ``snapshot.magic_state`` is populated for magic worlds before
-        any character commits — idempotent and a no-op for non-magic worlds.
-
-        ``ruleset`` is the bound pack's ruleset slug (``pack.rules.ruleset``,
-        e.g. ``"wwn"``). Threaded onto the ``Session`` so scene-end can
-        gate the WWN Effort reclaim on it. ``None`` when the pack declares
-        no ruleset.
         """
         orbital_content: OrbitalContent | None = None
         if world_dir is not None:
-            resolved_region = region_id or (snapshot.current_region or None)
             try:
-                orbital_content = load_orbital_content(world_dir, region_id=resolved_region)
+                orbital_content = load_orbital_content(world_dir)
             except OrbitalContentMissingError:
-                # The orbital tier is optional, so this catch is intentionally
-                # broad. It fires for two cases: (1) a non-orbital world —
-                # caverns_and_claudes, tea_and_murder, etc. — with no systems/
-                # dir and no orbits.yaml (the common, legitimate case); and
-                # (2, since 98-2) a multi-system world whose resolved region has
-                # no systems/<region_id>.yaml (a content authoring bug). Both
-                # bind without orbital content here. NOTE: an *invalid* (path-
-                # like) region raises ValueError from the loader, NOT
-                # OrbitalContentMissingError, so it is deliberately NOT caught —
-                # it surfaces loudly. Narrowing case (2) into a typed connect
-                # error is deferred to 98-3/98-5 (bind-time multi-system reach).
+                # Orbital tier is optional — caverns_and_claudes,
+                # tea_and_murder, etc. have no orbits.yaml. Bind without
+                # orbital content; chart UI will not be available.
                 orbital_content = None
                 _log.debug(
                     "session.no_orbital_tier slug=%s world_dir=%s",
@@ -288,27 +252,7 @@ class SessionRoom:
                 return
             self._snapshot = snapshot
             self._store = store
-            self._session = Session(snapshot, orbital_content=orbital_content, ruleset=ruleset)
-            # Story 90-2: instantiate world-scope magic_state at bind time so
-            # the narrator has a valid MagicState to validate against from the
-            # first turn — even before any character commits. Idempotent and a
-            # clean no-op for non-magic worlds. ``world_dir`` is
-            # ``<pack>/worlds/<world_slug>``, so the pack source dir and world
-            # slug derive directly from it. The import is function-local to
-            # avoid a startup-order hazard: session_room is imported very early,
-            # while magic_init transitively reaches sidequest.game.ruleset.native
-            # → sidequest.server.dispatch (a cross-layer chain). It is NOT a
-            # strict module cycle (magic_init does not import session_room), so
-            # if startup import order is later proven safe this can move to the
-            # top level.
-            if world_dir is not None:
-                from sidequest.server.magic_init import init_world_magic_state
-
-                init_world_magic_state(
-                    snapshot=snapshot,
-                    genre_pack_source_dir=world_dir.parent.parent,
-                    world_slug=world_dir.name,
-                )
+            self._session = Session(snapshot, orbital_content=orbital_content)
 
     @property
     def snapshot(self) -> GameSnapshot | None:
@@ -316,8 +260,8 @@ class SessionRoom:
         return self._snapshot
 
     @property
-    def store(self) -> SaveRepository | None:
-        """Canonical SaveRepository for the slug, or None before first bind."""
+    def store(self) -> SqliteStore | None:
+        """Canonical SqliteStore for the slug, or None before first bind."""
         return self._store
 
     @property
@@ -538,10 +482,6 @@ class SessionRoom:
                     # Last socket gone — clear bookkeeping and proceed
                     # with presence-clearing side effects below.
                     self._player_sockets.pop(player_id, None)
-                    # Story 67-6: ephemeral identity is room-only; clear it
-                    # when the player's last socket closes so we don't leak
-                    # stale identity across reconnects.
-                    self._player_identities.pop(player_id, None)
                 else:
                     # Other live sockets exist for this player — do NOT
                     # clear `_connected[player_id]` and do NOT abandon
@@ -696,16 +636,6 @@ class SessionRoom:
         with self._lock:
             self._seated.pop(player_id, None)
 
-    def set_player_identity(self, player_id: str, identity: str) -> None:
-        # Called from the connect path (Story 67-6 Task 4) to bind the
-        # per-socket resolved identity.
-        with self._lock:
-            self._player_identities[player_id] = identity
-
-    def get_player_identity(self, player_id: str) -> str | None:
-        with self._lock:
-            return self._player_identities.get(player_id)
-
     def connected_player_ids(self) -> list[str]:
         with self._lock:
             return list(self._connected.keys())
@@ -788,32 +718,9 @@ class SessionRoom:
         with self._lock:
             self._crash_released.add(player_id)
 
-    def mark_table_folded(self, player_id: str) -> None:
-        """Drop a folded/out table seat from the barrier denominator until the
-        hand ends. Idempotent — calling with the same player_id multiple times
-        has no additional effect.
-
-        Unlike crash-release (which is cleared on every ``drain_pending_actions``
-        call), table folds persist across decision points for the life of the
-        hand and are only cleared by ``clear_table_folds()`` at table teardown.
-        """
-        with self._lock:
-            self._table_folded_player_ids.add(player_id)
-
-    def clear_table_folds(self) -> None:
-        """Restore all folded seats to the barrier denominator.
-
-        Call at table confrontation teardown (when the hand ends and the
-        encounter resolves) so the room is ready for a fresh hand.
-        """
-        with self._lock:
-            self._table_folded_player_ids.clear()
-
     def effective_barrier_count(self) -> int:
-        """The submit-and-wait barrier denominator: PLAYING peers minus
-        crash-released seats (this interaction only, Story 67-1) AND minus
-        table-folded seats (for the life of the hand, Task 14). A seat in both
-        sets is subtracted once (the sets are unioned before counting).
+        """The submit-and-wait barrier denominator: PLAYING peers minus those
+        crash-released this interaction (Story 67-1).
 
         This is the ONE source of truth for "how many submissions does the
         barrier need". Both the normal submission path (`player_action.py`)
@@ -825,9 +732,10 @@ class SessionRoom:
         open), so `playing_player_count()` alone would keep counting it.
         """
         with self._lock:
-            playing = sum(1 for seat in self._seated.values() if seat.state == LobbyState.PLAYING)
-            released = self._crash_released | self._table_folded_player_ids
-            raw = playing - len(released)
+            playing = sum(
+                1 for seat in self._seated.values() if seat.state == LobbyState.PLAYING
+            )
+            raw = playing - len(self._crash_released)
         # Review finding [SEC] (2026-05-26): surface an underflow rather than
         # let recheck_barrier's `<= 0` guard silently freeze the interaction.
         # With crash-release bound to the sending socket this should not occur
@@ -836,10 +744,10 @@ class SessionRoom:
         # negative value signals state corruption and must not pass quietly.
         if raw < 0:
             _log.warning(
-                "session.effective_barrier_underflow slug=%s playing=%d released=%d",
+                "session.effective_barrier_underflow slug=%s playing=%d crash_released=%d",
                 self.slug,
                 playing,
-                len(released),
+                len(self._crash_released),
             )
         return max(0, raw)
 
@@ -980,45 +888,8 @@ class SessionRoom:
                 for sid, q in self._outbound_queues.items()
                 if sid != exclude_socket_id
             ]
-            # Story 67-2: an intended recipient is a player in ``_connected``
-            # (minus the excluded socket). A connected player whose socket has
-            # NO outbound queue is a mid-broadcast drop — the transient churn
-            # state that silently stranded a sealed peer at "Composing" because
-            # the seal frame rode this path and vanished with no log, no event.
-            # Surface it LOUDLY (CLAUDE.md No Silent Fallbacks + OTEL
-            # lie-detector). Distinct from the event-sourced
-            # ``emitters._deliver_fanout`` path 67-1 already instrumented.
-            dropped = [
-                (pid, sid)
-                for pid, sid in self._connected.items()
-                if sid != exclude_socket_id and sid not in self._outbound_queues
-            ]
         for _sid, _pid, q in targets:
             q.put_nowait(msg)
-        if dropped:
-            msg_type = str(getattr(msg, "type", ""))
-            for pid, sid in dropped:
-                _log.warning(
-                    "broadcast.recipient_dropped slug=%s recipient_player_id=%s "
-                    "socket_id=%s type=%s reason=queue_missing",
-                    self.slug,
-                    pid,
-                    sid,
-                    msg_type,
-                )
-                _watcher_publish(
-                    "state_transition",
-                    {
-                        "field": "broadcast.recipient_dropped",
-                        "recipient_player_id": pid,
-                        "socket_id": sid,
-                        "type": msg_type,
-                        "reason": "queue_missing",
-                        "slug": self.slug,
-                    },
-                    component="broadcast",
-                    severity="warning",
-                )
         return [(sid, pid) for sid, pid, _q in targets]
 
 

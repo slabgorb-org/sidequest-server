@@ -104,17 +104,10 @@ class ToolingLlmClient(Protocol):
         model: str,
         max_iterations: int = 8,
         max_tokens: int = 4096,
+        on_text_delta: Callable[[str], None] | None = None,
         session_id: str | None = None,
-        tool_choice: dict[str, Any] | None = None,
     ) -> ToolingResult:
         """Drive one narrator turn through the tool-use loop.
-
-        ``tool_choice`` (aside-rides-the-cache, 2026-06-07): forwarded
-        verbatim to the API when set (e.g. ``{"type": "none"}`` lets a
-        read-only caller present the narrator's exact cached tools array —
-        preserving the cache prefix — while forbidding tool calls). ``None``
-        omits the field entirely so existing callers' request payloads stay
-        byte-identical.
 
         ``session_id`` (Story 61-followup-D §C.1): opaque session
         identifier forwarded from ``TurnContext.session_id``. The

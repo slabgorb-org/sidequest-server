@@ -1,17 +1,10 @@
 """Smoke test against the live tea_and_murder genre pack.
 
 This is the FIXTURE-vs-LIVE separation called out in repo conventions: this
-test asserts the JSON projection API returns 200 against the actually-shipping
-content and that critical spoiler files do not leak across the projection
-boundary. It does not assert specific content of any class or culture — that's
-a content-team deliverable, not a server concern.
-
-Story 100-12 (Phase 4 cutover) repointed these from the retired server-rendered
-HTML routes (``/reference/{rules,lore}/*``) to the surviving JSON projection API
-(``/reference/api/{rules,lore}/*``). The leak guard is now structural: keeper /
-EXCLUDED file stems (``npcs``, ``seed_tropes``, ``tropes``, ``prompts``) must
-never appear as a projected section id — the reference_visibility firewall +
-EXCLUDED_FILES keep them out by construction.
+test asserts the route returns 200 against the actually-shipping content and
+that critical spoiler files do not leak. It does not assert specific content
+of any class or culture — that's a content-team deliverable, not a server
+concern.
 """
 
 import os
@@ -56,35 +49,33 @@ def client(monkeypatch):
     return TestClient(create_app(genre_pack_search_paths=[repo_relative]))
 
 
-# Story 96-1: ``test_rules_route_against_live_tea_and_murder`` was RETIRED here
-# rather than rewritten. It was doubly stale: (1) content-coupled — it asserted
-# the live tea_and_murder pack ships archetypes/classes sections, which is a
-# content requirement the content validator owns, not a server-test concern;
-# (2) route-retired — it drove the server-rendered HTML route
-# ``/reference/rules/{pack}``, deleted in the 100-12 SPA cutover. The surviving
-# behavior (rules JSON projection renders classes/archetypes sections and
-# firewalls keeper fields) is pinned fixture-first by
-# ``tests/server/test_reference_rules_projection.py`` (story 100-6).
-
-_KEEPER_STEMS = {"npcs", "seed_tropes", "tropes", "prompts"}
+def test_rules_route_against_live_tea_and_murder(client):
+    r = client.get("/reference/rules/tea_and_murder")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/html")
+    # Spec ACs: archetypes and classes are non-optional for tea_and_murder.
+    # Task 15: both stems have presenters, so <h1>{filename}</h1> is suppressed;
+    # assert on the stable section anchor ids instead.
+    assert 'id="file-archetypes"' in r.text
+    assert 'id="file-classes"' in r.text
 
 
 def test_live_lore_does_not_leak_npcs_or_seed_tropes(client):
-    r = client.get("/reference/api/lore/tea_and_murder/glenross")
+    r = client.get("/reference/lore/tea_and_murder/glenross")
     assert r.status_code == 200
-    doc = r.json()
-    assert "sections" in doc
-    # Keeper / EXCLUDED file stems must never surface as a projected section id.
-    section_ids = {s.get("id") for s in doc["sections"]}
-    leaked = section_ids & _KEEPER_STEMS
-    assert not leaked, f"keeper file stems leaked into lore projection: {leaked}"
+    # File-level exclusion (v1) — even if files exist they must not render.
+    # The renderer emits each rendered file as a `<section class="file" ...>`
+    # with an `<h1>{filename}</h1>` heading (see reference_renderer.py). We
+    # assert that no such file-section is emitted for spoiler files, rather
+    # than a substring match (which would false-positive on prose that
+    # references a path, e.g. a manifest description listing
+    # `worlds/<world>/npcs.yaml — 12 NPCs`).
+    assert "<h1>npcs.yaml</h1>" not in r.text
+    assert "<h1>seed_tropes.yaml</h1>" not in r.text
 
 
 def test_live_rules_does_not_leak_seed_tropes(client):
-    r = client.get("/reference/api/rules/tea_and_murder")
+    r = client.get("/reference/rules/tea_and_murder")
     assert r.status_code == 200
-    doc = r.json()
-    assert "sections" in doc
-    section_ids = {s.get("id") for s in doc["sections"]}
-    leaked = section_ids & _KEEPER_STEMS
-    assert not leaked, f"keeper file stems leaked into rules projection: {leaked}"
+    assert "<h1>seed_tropes.yaml</h1>" not in r.text
+    assert "<h1>prompts.yaml</h1>" not in r.text

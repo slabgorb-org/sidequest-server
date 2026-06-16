@@ -1,11 +1,8 @@
 """Dogfight sealed-letter resolution spans.
 
-ADR-077 (per the dogfight × SWN resolution work). Five spans live below:
-confrontation_started, maneuver_committed, cell_resolved, plus shot_attempted
-(hit resolution) and shot_damage (damage ablation). Four remain deferred —
-gun_solution_fired, energy_depleted, skill_tier_resolved, ace_instinct_used —
-because they need subsystems that don't exist yet. The two SWN shot spans are
-additions to the live set; the deferred list is unchanged.
+ADR-077 prescribes 7 spans. Three live below; the four deferred
+(gun_solution_fired, energy_depleted, skill_tier_resolved, ace_instinct_used)
+need subsystems that don't exist yet.
 """
 
 from __future__ import annotations
@@ -58,51 +55,6 @@ SPAN_ROUTES[SPAN_DOGFIGHT_CELL_RESOLVED] = SpanRoute(
             "extend_and_return_triggered",
             False,
         ),
-    },
-)
-SPAN_DOGFIGHT_SHOT_ATTEMPTED = "dogfight.shot_attempted"
-SPAN_ROUTES[SPAN_DOGFIGHT_SHOT_ATTEMPTED] = SpanRoute(
-    event_type="state_transition",
-    component="dogfight",
-    extract=lambda span: {
-        "field": "dogfight",
-        "op": "shot_attempted",
-        "shooter": (span.attributes or {}).get("shooter", ""),
-        "target": (span.attributes or {}).get("target", ""),
-        "d20_total": (span.attributes or {}).get("d20_total", 0),
-        "target_ac": (span.attributes or {}).get("target_ac", 0),
-        "hit": (span.attributes or {}).get("hit", False),
-        "geometry_modifier": (span.attributes or {}).get("geometry_modifier", 0),
-        "source": (span.attributes or {}).get("source", ""),
-    },
-)
-SPAN_DOGFIGHT_SHOT_DAMAGE = "dogfight.shot_damage"
-SPAN_ROUTES[SPAN_DOGFIGHT_SHOT_DAMAGE] = SpanRoute(
-    event_type="state_transition",
-    component="dogfight",
-    extract=lambda span: {
-        "field": "dogfight",
-        "op": "shot_damage",
-        "shooter": (span.attributes or {}).get("shooter", ""),
-        "target": (span.attributes or {}).get("target", ""),
-        "dice": (span.attributes or {}).get("dice", ""),
-        "armor_piercing": (span.attributes or {}).get("armor_piercing", 0),
-        "armor_negated": (span.attributes or {}).get("armor_negated", 0),
-        "applied": (span.attributes or {}).get("applied", 0),
-        "target_hp_after": (span.attributes or {}).get("target_hp_after", 0),
-    },
-)
-SPAN_DOGFIGHT_WEAPON_RESOLVED = "dogfight.weapon_resolved"
-SPAN_ROUTES[SPAN_DOGFIGHT_WEAPON_RESOLVED] = SpanRoute(
-    event_type="state_transition",
-    component="dogfight",
-    extract=lambda span: {
-        "field": "dogfight",
-        "op": "weapon_resolved",
-        "source": (span.attributes or {}).get("source", ""),
-        "weapon_id": (span.attributes or {}).get("weapon_id", ""),
-        "armor_piercing": (span.attributes or {}).get("armor_piercing", 0),
-        "dice": (span.attributes or {}).get("dice", ""),
     },
 )
 
@@ -165,93 +117,6 @@ def dogfight_cell_resolved_span(
             "red_maneuver": red_maneuver,
             "blue_maneuver": blue_maneuver,
             "extend_and_return_triggered": extend_and_return_triggered,
-            **attrs,
-        },
-        tracer_override=_tracer,
-    ) as span:
-        yield span
-
-
-@contextmanager
-def dogfight_shot_attempted_span(
-    *,
-    shooter: str,
-    target: str,
-    d20_total: int,
-    target_ac: int,
-    hit: bool,
-    geometry_modifier: int,
-    source: str,
-    _tracer: trace.Tracer | None = None,
-    **attrs: Any,
-) -> Iterator[trace.Span]:
-    with Span.open(
-        SPAN_DOGFIGHT_SHOT_ATTEMPTED,
-        {
-            "shooter": shooter,
-            "target": target,
-            "d20_total": d20_total,
-            "target_ac": target_ac,
-            "hit": hit,
-            "geometry_modifier": geometry_modifier,
-            "source": source,
-            **attrs,
-        },
-        tracer_override=_tracer,
-    ) as span:
-        yield span
-
-
-@contextmanager
-def dogfight_weapon_resolved_span(
-    *,
-    source: str,
-    weapon_id: str,
-    armor_piercing: int,
-    dice: str,
-    _tracer: trace.Tracer | None = None,
-    **attrs: Any,
-) -> Iterator[trace.Span]:
-    """The dogfight resolved its ship weapon from ``source`` (story 114-15). The
-    GM-panel lie-detector for "the dogfight used a real ship weapon with its
-    armor_piercing" rather than Claude improvising one."""
-    with Span.open(
-        SPAN_DOGFIGHT_WEAPON_RESOLVED,
-        {
-            "source": source,
-            "weapon_id": weapon_id,
-            "armor_piercing": armor_piercing,
-            "dice": dice,
-            **attrs,
-        },
-        tracer_override=_tracer,
-    ) as span:
-        yield span
-
-
-@contextmanager
-def dogfight_shot_damage_span(
-    *,
-    shooter: str,
-    target: str,
-    dice: str,
-    armor_piercing: int,
-    armor_negated: int,
-    applied: int,
-    target_hp_after: int,
-    _tracer: trace.Tracer | None = None,
-    **attrs: Any,
-) -> Iterator[trace.Span]:
-    with Span.open(
-        SPAN_DOGFIGHT_SHOT_DAMAGE,
-        {
-            "shooter": shooter,
-            "target": target,
-            "dice": dice,
-            "armor_piercing": armor_piercing,
-            "armor_negated": armor_negated,
-            "applied": applied,
-            "target_hp_after": target_hp_after,
             **attrs,
         },
         tracer_override=_tracer,

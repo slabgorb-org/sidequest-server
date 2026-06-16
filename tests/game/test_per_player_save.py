@@ -27,14 +27,14 @@ class _FakeEventLog:
 
 
 class _FakeFilterAllowAll:
-    def project(self, *, envelope, view, player_id, tx=None, event_seq=None):
+    def project(self, *, envelope, view, player_id):
         from sidequest.game.projection_filter import FilterDecision
 
         return FilterDecision(include=True, payload_json=envelope.payload_json)
 
 
 class _FakeFilterP1Only:
-    def project(self, *, envelope, view, player_id, tx=None, event_seq=None):
+    def project(self, *, envelope, view, player_id):
         from sidequest.game.projection_filter import FilterDecision
 
         if player_id == "p1":

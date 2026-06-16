@@ -81,7 +81,6 @@ def emit_chart_label_strategy(
     arc_available_px: float | None,
     text_width_px: float,
     path_circumference_px: float | None,
-    textpath_upright_flip: bool = False,
 ) -> None:
     """Emit one chart.label_strategy span per labeled body per render (ADR-094).
 
@@ -90,9 +89,6 @@ def emit_chart_label_strategy(
       arc_available_px = -1.0 when not radial
       path_circumference_px = -1.0 when not textpath
     OTEL discourages None in attrs; sentinels keep the schema stable.
-
-    textpath_upright_flip: True iff this textpath label received the ADR-094
-      far-arc 180° upright flip. Always False for non-textpath strategies.
     """
     with Span.open(
         SPAN_CHART_LABEL_STRATEGY,
@@ -108,7 +104,6 @@ def emit_chart_label_strategy(
             "path_circumference_px": -1.0
             if path_circumference_px is None
             else float(path_circumference_px),
-            "textpath_upright_flip": bool(textpath_upright_flip),
         },
     ):
         pass

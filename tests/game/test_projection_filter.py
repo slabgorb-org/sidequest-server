@@ -12,7 +12,7 @@ def _env(kind: str = "NARRATION", payload: str = '{"text":"hi"}', seq: int = 1) 
 
 
 def _view() -> SessionGameStateView:
-    return SessionGameStateView(player_id_to_character={"alice": "alice_char"})
+    return SessionGameStateView(gm_player_id="gm", player_id_to_character={"alice": "alice_char"})
 
 
 def test_pass_through_includes_everything_for_everyone():

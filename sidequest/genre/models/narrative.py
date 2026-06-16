@@ -111,32 +111,6 @@ class OpeningTrigger(BaseModel):
     backgrounds: list[str] = Field(default_factory=list)
 
 
-class QuestSeed(BaseModel):
-    """Machine-readable quest behind an authored hook (ADR-146 §1).
-
-    The structured form of ``tone.complication``: when the player accepts this
-    offer, the engine mints a ``QuestEntry`` from these fields deterministically
-    (no narrator tool call required). ``quest_id``/``title``/``objective`` map
-    1:1 onto ``QuestEntry`` (session.py) and ``RecordQuestArgs`` — minting is a
-    straight copy, not a re-derivation. ``stakes`` feeds ``active_stakes``
-    (fill-don't-clobber); ``anchor`` flows into ``quest_anchors``; ``giver`` is
-    the role naming the job so the router's acceptance detection has context for
-    *which* offer a "yes" answers.
-
-    ``extra="forbid"``: a typo'd sub-field fails loud at world load (the whole
-    point of making the hook a typed field rather than a free-form passthrough).
-    """
-
-    model_config = {"extra": "forbid"}
-
-    quest_id: str
-    title: str
-    objective: str
-    stakes: str = ""
-    anchor: str | None = None
-    giver: str = ""
-
-
 class OpeningTone(BaseModel):
     model_config = {"extra": "forbid"}
 
@@ -145,12 +119,6 @@ class OpeningTone(BaseModel):
     complication: str = ""
     sensory_layers: dict[str, str] = Field(default_factory=dict)
     avoid_at_all_costs: list[str] = Field(default_factory=list)
-    # ADR-146 §1: the structured quest behind the authored hook. Optional —
-    # authoring a seed is opt-in ("Neutral"); an opening with no quest_seed
-    # behaves exactly as today (narrator-discretion minting). Typed (not a
-    # passthrough) so a misspelled sub-field fails loud at world load, and the
-    # ``extra="forbid"`` above rejects a misspelled ``quest_seed`` key too.
-    quest_seed: QuestSeed | None = None
 
 
 _PER_PC_BEAT_KEYS = frozenset({"background", "drive", "race", "class"})

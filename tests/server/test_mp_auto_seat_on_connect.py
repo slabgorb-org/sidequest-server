@@ -48,7 +48,7 @@ import pytest
 
 from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore, Inventory
-from sidequest.game.persistence import GameMode
+from sidequest.game.persistence import GameMode, SqliteStore, db_path_for_slug, upsert_game
 from sidequest.game.session import GameSnapshot
 from sidequest.protocol.messages import (
     SessionEventMessage,
@@ -60,52 +60,6 @@ from sidequest.server.session_room import LobbyState, RoomRegistry
 _GENRE = "space_opera"
 _WORLD = "coyote_star"
 _CONTENT_SEARCH_PATH = Path(__file__).resolve().parents[3] / "sidequest-content" / "genre_packs"
-
-
-@pytest.fixture(autouse=True)
-def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
-    """Bind the process pool to a per-worker throwaway PG db, clean per test.
-
-    Slug-connect (ADR-115 D2) loads the authoritative snapshot from PG via
-    db_pool.get_pool(); seed and connect must share one isolated database.
-    """
-    import psycopg
-
-    from sidequest.game import db_pool
-
-    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
-    with psycopg.connect(plain, autocommit=True) as conn:
-        rows = conn.execute(
-            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
-            "AND tablename <> 'alembic_version'"
-        ).fetchall()
-        if rows:
-            names = ", ".join(f'"{r[0]}"' for r in rows)
-            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
-    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
-    db_pool.close_pool()
-    yield
-    db_pool.close_pool()
-
-
-def _seed_pg_for_slug(
-    slug: str,
-    snap: GameSnapshot,
-    *,
-    mode: GameMode = GameMode.MULTIPLAYER,
-) -> None:
-    """Mirror a seeded snapshot into PG — the store the slug-resume path loads."""
-    from sidequest.game import db_pool
-    from sidequest.server.session_state import _build_pg_repos_for_slug
-
-    repo, _dungeon, _sink = _build_pg_repos_for_slug(
-        db_pool.get_pool(),
-        slug=slug,
-        mode=str(mode),
-        genre_slug=_GENRE,
-        world_slug=_WORLD,
-    )
-    repo.save(snap)
 
 
 def _make_handler(save_dir: Path) -> WebSocketSessionHandler:
@@ -153,6 +107,17 @@ def _seed_mp_game_with_characters(
     plus a player_seats entry — matching the post-chargen save
     shape that the connect handler reads to set ``has_character``.
     """
+    db = db_path_for_slug(tmp_path, slug)
+    db.parent.mkdir(parents=True, exist_ok=True)
+    store = SqliteStore(db)
+    store.initialize()
+    upsert_game(
+        store,
+        slug=slug,
+        mode=GameMode.MULTIPLAYER,
+        genre_slug=_GENRE,
+        world_slug=_WORLD,
+    )
     snap = GameSnapshot(genre_slug=_GENRE, world_slug=_WORLD, location="Far Landing")
     chars: list[Character] = []
     for player_id, char_name in seats:
@@ -172,24 +137,28 @@ def _seed_mp_game_with_characters(
         )
         snap.player_seats[player_id] = char_name
     snap.characters = chars
-    _seed_pg_for_slug(slug, snap, mode=GameMode.MULTIPLAYER)
+    store.init_session(_GENRE, _WORLD)
+    store.save(snap)
+    store.close()
     return tmp_path
 
 
 def _seed_mp_game_no_characters(tmp_path: Path, slug: str) -> Path:
-    """Register an empty MP session in Postgres — the new-MP-player fixture
-    used to confirm explicit PLAYER_SEAT is preserved (ADR-115 F1).
+    """Seed an MP save with no characters yet — the new-MP-player
+    fixture used to confirm explicit PLAYER_SEAT is preserved.
     """
-    from sidequest.game import db_pool
-    from sidequest.server.session_state import _build_pg_repos_for_slug
-
-    _build_pg_repos_for_slug(
-        db_pool.get_pool(),
+    db = db_path_for_slug(tmp_path, slug)
+    db.parent.mkdir(parents=True, exist_ok=True)
+    store = SqliteStore(db)
+    store.initialize()
+    upsert_game(
+        store,
         slug=slug,
-        mode=str(GameMode.MULTIPLAYER),
+        mode=GameMode.MULTIPLAYER,
         genre_slug=_GENRE,
         world_slug=_WORLD,
     )
+    store.close()
     return tmp_path
 
 

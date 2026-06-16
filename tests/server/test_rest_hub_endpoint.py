@@ -13,34 +13,14 @@ from fastapi.testclient import TestClient
 
 from sidequest.game.persistence import (
     GameMode,
+    SqliteStore,
+    db_path_for_slug,
+    upsert_game,
 )
 from sidequest.game.world_save import Hireling, WorldSave
 from sidequest.server.app import create_app
 
 _CONTENT_SEARCH_PATH = Path(__file__).resolve().parents[3] / "sidequest-content" / "genre_packs"
-
-
-@pytest.fixture(autouse=True)
-def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
-    """Bind the process pool to a per-worker throwaway PG db, clean per test
-    (ADR-115 F1: the /hub endpoint reads world_save from Postgres)."""
-    import psycopg
-
-    from sidequest.game import db_pool
-
-    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
-    with psycopg.connect(plain, autocommit=True) as conn:
-        rows = conn.execute(
-            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
-            "AND tablename <> 'alembic_version'"
-        ).fetchall()
-        if rows:
-            names = ", ".join(f'"{r[0]}"' for r in rows)
-            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
-    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
-    db_pool.close_pool()
-    yield
-    db_pool.close_pool()
 
 
 @pytest.fixture()
@@ -54,20 +34,13 @@ def content_client(tmp_path: Path) -> TestClient:
     return TestClient(app)
 
 
-def _seed_game(save_dir: Path, slug: str, genre: str, world: str):
-    """Register the session in Postgres and return the PgSaveRepository
-    (ADR-115 F1 — the REST hub endpoint reads world_save from PG)."""
-    from sidequest.game import db_pool
-    from sidequest.server.session_state import _build_pg_repos_for_slug
-
-    repo, _dungeon, _sink = _build_pg_repos_for_slug(
-        db_pool.get_pool(),
-        slug=slug,
-        mode=str(GameMode.SOLO),
-        genre_slug=genre,
-        world_slug=world,
-    )
-    return repo
+def _seed_game(save_dir: Path, slug: str, genre: str, world: str) -> SqliteStore:
+    db = db_path_for_slug(save_dir, slug)
+    db.parent.mkdir(parents=True, exist_ok=True)
+    store = SqliteStore(db)
+    store.initialize()
+    upsert_game(store, slug=slug, mode=GameMode.SOLO, genre_slug=genre, world_slug=world)
+    return store
 
 
 def test_hub_endpoint_404_when_slug_missing(content_client: TestClient) -> None:

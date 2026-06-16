@@ -15,7 +15,7 @@ from sidequest.genre.resolver import LayeredMerge
 
 
 class ArchetypeResolved(LayeredMerge):
-    """Archetype value produced by the two-tier shim (world funnel → genre fallback).
+    """Archetype value after four-tier resolution.
 
     Port of Rust ArchetypeResolved struct (archetype/resolved.rs).
 

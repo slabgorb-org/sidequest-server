@@ -19,7 +19,6 @@ square across the temple") crosses the threshold and resolves the encounter.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -29,25 +28,6 @@ from tests._helpers.session_room import room_for
 REF_SAVE = (
     Path.home() / ".sidequest" / "saves" / "games" / "2026-04-25-dungeon_survivor" / "save.db"
 )
-
-
-def _encounter_events(repo) -> list[dict]:
-    """Read ordered ENCOUNTER_* event rows back from a SaveRepository as dicts.
-
-    ADR-115 F1: replaces the SqliteStore-bound ``query_encounter_events`` free
-    function with a repository ``read_events_since`` read over Postgres.
-    """
-    rows = repo.read_events_since(since_seq=0)
-    return [
-        {
-            "seq": r.seq,
-            "kind": r.kind,
-            "payload": json.loads(r.payload_json),
-            "created_at": r.created_at,
-        }
-        for r in rows
-        if r.kind.startswith("ENCOUNTER_")
-    ]
 
 
 @pytest.mark.integration
@@ -70,6 +50,7 @@ def test_dungeon_survivor_resolves_to_opponent_victory(
         NarrationTurnResult,
         NpcMention,
     )
+    from sidequest.game.persistence import query_encounter_events
     from sidequest.protocol.dice import RollOutcome
     from sidequest.server.dispatch.encounter_lifecycle import (
         instantiate_encounter_from_trigger,
@@ -126,7 +107,7 @@ def test_dungeon_survivor_resolves_to_opponent_victory(
     )
 
     # The events table records the corrected outcome.
-    events = _encounter_events(store)
+    events = query_encounter_events(store)
     resolved_rows = [e for e in events if e["kind"] == "ENCOUNTER_RESOLVED"]
     assert resolved_rows, "expected at least one ENCOUNTER_RESOLVED row"
     outcome = resolved_rows[-1]["payload"].get("outcome")
@@ -151,6 +132,7 @@ def test_dungeon_survivor_timeline_actors_have_side_attribution(
         NarrationTurnResult,
         NpcMention,
     )
+    from sidequest.game.persistence import query_encounter_events
     from sidequest.protocol.dice import RollOutcome
     from sidequest.server.dispatch.encounter_lifecycle import (
         instantiate_encounter_from_trigger,
@@ -185,7 +167,7 @@ def test_dungeon_survivor_timeline_actors_have_side_attribution(
         )
         _apply_narration_result_to_snapshot(snap, result, "Sam", pack=pack, room=room_for(snap))
 
-    events = _encounter_events(store)
+    events = query_encounter_events(store)
     beat_rows = [e for e in events if e["kind"] == "ENCOUNTER_BEAT_APPLIED"]
     assert beat_rows, "expected at least one ENCOUNTER_BEAT_APPLIED row"
     for event in beat_rows:

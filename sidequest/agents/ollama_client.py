@@ -87,6 +87,7 @@ class OllamaClient:
             supports_sessions=False,
             supports_tools=False,
             max_context_tokens=16_384,
+            supports_streaming=False,
         )
 
     def _resolve_model(self, hint: str) -> str:

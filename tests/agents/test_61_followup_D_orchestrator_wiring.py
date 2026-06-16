@@ -65,10 +65,8 @@ class _SessionIdRecordingSpy:
         model: str,
         max_iterations: int = 8,
         max_tokens: int = 4096,
+        on_text_delta: Callable[[str], None] | None = None,
         session_id: str | None = None,
-        # Absorb forward-added client kwargs (Story 82-9: iteration_cap, caller)
-        # so this orchestrator-wiring double tracks the real signature.
-        **_kwargs: object,
     ) -> ToolingResult:
         self.recorded_session_ids.append(session_id)
         if self.raise_on_call is not None:

@@ -35,9 +35,8 @@ from sidequest.agents.tools.resolve_location_entity import (
     ResolveLocationEntityArgs,
     resolve_location_entity,
 )
+from sidequest.game.persistence import SqliteStore
 from sidequest.protocol.models import LocationEntity, LocationEntityBinding
-
-from .conftest import make_mock_repository
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -63,10 +62,10 @@ def _build_ctx(
     entities: list[LocationEntity] | None = None,
     world_id: str = "glenross",
 ) -> ToolContext:
-    """Build a real ToolContext with a mock SaveRepository (PG interface) and
-    a stubbed GenrePack whose ``worlds[world_id].cartography.regions[region_id]``
-    has the supplied entities."""
-    repo = make_mock_repository()
+    """Build a real ToolContext with a real SqliteStore and a stubbed
+    GenrePack whose ``worlds[world_id].cartography.regions[region_id]`` has
+    the supplied entities."""
+    store = SqliteStore(tmp_path / "save.db")
 
     region = MagicMock()
     region.entities = entities if entities is not None else _authored()
@@ -82,7 +81,7 @@ def _build_ctx(
         session_id="test-session",
         perspective_pc=None,
         turn_number=3,
-        repository=repo,
+        store=store,
         otel_span=MagicMock(),
         perception_filter=NarratorPerceptionFilter(),
         genre_pack=genre_pack,
@@ -189,7 +188,9 @@ async def test_proactive_miss_returns_not_found(tmp_path: Path) -> None:
     assert result.message is not None
     assert "the dragon" in result.message
     # And no row was minted.
-    assert ctx.repository.list_location_promotions(region_id="the_glenross_arms") == []
+    assert (
+        ctx.store.list_location_promotions(save_id="default", region_id="the_glenross_arms") == []
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -213,7 +214,7 @@ async def test_player_initiated_miss_mints(tmp_path: Path) -> None:
     assert payload["entity"]["tier"] == "yes_and"
     assert payload["entity"]["provenance"] == "yes_and_minted"
     # And the row hit the store.
-    rows = ctx.repository.list_location_promotions(region_id="the_glenross_arms")
+    rows = ctx.store.list_location_promotions(save_id="default", region_id="the_glenross_arms")
     assert len(rows) == 1
     assert rows[0].label == "the antique sextant"
 
@@ -237,7 +238,7 @@ async def test_flavor_only_mechanical_engagement_promotes(tmp_path: Path) -> Non
     assert payload["mode_outcome"] == "promoted"
     assert payload["entity"]["tier"] == "yes_and"
     assert payload["entity"]["provenance"] == "yes_and_promoted"
-    rows = ctx.repository.list_location_promotions(region_id="the_glenross_arms")
+    rows = ctx.store.list_location_promotions(save_id="default", region_id="the_glenross_arms")
     assert len(rows) == 1
     assert rows[0].entity_id == "cobwebs"
     assert rows[0].provenance == "yes_and_promoted"
@@ -262,7 +263,9 @@ async def test_unknown_region_returns_not_found(tmp_path: Path) -> None:
     result = await resolve_location_entity(args, ctx)
     assert result.status is ToolResultStatus.NOT_FOUND
     # Critically, no promotions written for the bogus region.
-    assert ctx.repository.list_location_promotions(region_id="nonexistent_region") == []
+    assert (
+        ctx.store.list_location_promotions(save_id="default", region_id="nonexistent_region") == []
+    )
 
 
 async def test_missing_genre_pack_returns_not_found(tmp_path: Path) -> None:
@@ -270,12 +273,13 @@ async def test_missing_genre_pack_returns_not_found(tmp_path: Path) -> None:
     than try to operate on an empty manifest. (Production wires ctx.genre_pack
     at session handler construction — a None here is a wiring bug, not a
     runtime branch.)"""
+    store = SqliteStore(tmp_path / "save.db")
     ctx = ToolContext(
         world_id="glenross",
         session_id="s",
         perspective_pc=None,
         turn_number=1,
-        repository=make_mock_repository(),
+        store=store,
         otel_span=MagicMock(),
         perception_filter=NarratorPerceptionFilter(),
         genre_pack=None,

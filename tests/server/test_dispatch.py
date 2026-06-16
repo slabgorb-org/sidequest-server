@@ -66,24 +66,13 @@ def test_apply_location_added_to_discovered_regions_once():
 
 
 def test_apply_quest_updates():
-    """A stale ``quest_updates`` key on the raw game_patch is auto-forwarded into
-    snapshot.quest_log (Story 77-4 No-Silent-Fallbacks guard).
-
-    The typed ``quest_updates`` lane was retired (ADR-137 AC-3); record_quest is
-    the clean home. A narrator that still emits the key has its status update
-    forwarded — never dropped — via the narration-apply guard, landing as a
-    status-bearing QuestEntry. (Full guard contract incl. the loud
-    ``quest.updates.legacy_emitted`` span lives in
-    tests/game/test_quest_updates_retirement.py.)"""
+    """Quest updates from game_patch are merged into snapshot.quest_log."""
     snapshot = GameSnapshot(genre_slug="test", world_slug="test")
-    result = _make_result(
-        narration="Quest started.",
-        game_patch_dict={"quest_updates": {"find_crystal": "active"}},
-    )
+    result = _make_result(narration="Quest started.", quest_updates={"find_crystal": "active"})
 
     _apply_narration_result_to_snapshot(snapshot, result, "player", room=room_for(snapshot))
 
-    assert snapshot.quest_log["find_crystal"].status == "active"
+    assert snapshot.quest_log["find_crystal"] == "active"
 
 
 def test_apply_lore_established_no_duplicates():
@@ -126,18 +115,19 @@ def test_apply_npc_pool_new_npc():
     assert snapshot.npc_pool[0].drawn_from == "narrator_invented"
 
 
-def test_apply_npc_pool_existing_overwrites_role_and_fills_pronouns():
-    """Wave 2A (story 45-47): existing pool members are not duplicated.
+def test_apply_npc_pool_existing_is_additive_only():
+    """Wave 2A (story 45-47): existing pool members are not duplicated, and
+    canonical fields are frozen.
 
-    Story 72-7 REVERSES the old 37-44 "canonical frozen" discipline: a
-    disagreeing narrator re-mention now **overwrites** the canonical role /
-    pronouns of a *narrator-sourced* member (``drawn_from`` !=
-    ``world_authored``) — the authoritative-drift fix for the Frandrew /
-    session-894 Sitä-minutta path. Drift is still detected and emitted as
-    ``npc.reinvented`` (now carrying ``applied=True``).
+    Story 37-44 reviewer discipline: once a canonical field (role, pronouns,
+    appearance) is set, a narrator re-mention MUST NOT overwrite it — that
+    was the exact drift path (Frandrew she/her captain → he/him grease
+    monkey). Narrator-driven reinterpretation is detected by
+    ``_detect_npc_identity_drift`` and logged as ``npc.reinvented``, but the
+    canonical value stays.
 
-    Fields still empty on the existing member are filled additively
-    (first-time population is not drift).
+    Fields that are still empty on the existing pool member CAN be filled
+    in additively (first-time population is not drift).
     """
     from sidequest.agents.orchestrator import NpcMention
     from sidequest.game.npc_pool import NpcPoolMember
@@ -158,8 +148,8 @@ def test_apply_npc_pool_existing_overwrites_role_and_fills_pronouns():
     # Still 1 entry (no duplicate)
     assert len(snapshot.npc_pool) == 1
     member = snapshot.npc_pool[0]
-    # 72-7: canonical role is overwritten by the disagreeing re-mention.
-    assert member.role == "barkeep"
+    # Canonical role is frozen — not overwritten by narrator re-interpretation
+    assert member.role == "stranger"
     # Pronouns were empty on the existing member, so the additive-update
     # path fills them in on first assertion.
     assert member.pronouns == "she/her"

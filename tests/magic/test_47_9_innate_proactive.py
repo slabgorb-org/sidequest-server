@@ -785,39 +785,11 @@ def test_dispatch_seam_extracts_magic_working_and_fires_span(
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def pg_repo(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
-    """A real PgSaveRepository on a per-worker throwaway PG db (ADR-115 F1)."""
-    import psycopg
-
-    from sidequest.game import db_pool
-    from sidequest.server.session_state import _build_pg_repos_for_slug
-
-    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
-    with psycopg.connect(plain, autocommit=True) as conn:
-        rows = conn.execute(
-            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
-            "AND tablename <> 'alembic_version'"
-        ).fetchall()
-        if rows:
-            names = ", ".join(f'"{r[0]}"' for r in rows)
-            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
-    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
-    db_pool.close_pool()
-    repo, _dungeon, _sink = _build_pg_repos_for_slug(
-        db_pool.get_pool(), slug="magic-roundtrip", mode="solo",
-        genre_slug="space_opera", world_slug="coyote_star",
-    )
-    try:
-        yield repo
-    finally:
-        db_pool.close_pool()
-
-
-def test_save_load_roundtrip_preserves_working_log_and_sanity(pg_repo):
+def test_save_load_roundtrip_preserves_working_log_and_sanity():
     """After apply_magic_working, the snapshot serializes and deserializes via
-    the save repository with working_log entries and sanity bar value preserved
-    (AC7, regression-protection — this contract must continue to hold post-47-9)."""
+    SqliteStore with working_log entries and sanity bar value preserved (AC7,
+    regression-protection — this contract must continue to hold post-47-9)."""
+    from sidequest.game.persistence import SqliteStore
     from sidequest.game.session import GameSnapshot
     from sidequest.server.narration_apply import apply_magic_working
 
@@ -851,12 +823,14 @@ def test_save_load_roundtrip_preserves_working_log_and_sanity(pg_repo):
     assert pre_log_len == 1
     assert pre_sanity == pytest.approx(0.82)
 
-    # Roundtrip via the same code path production uses (PgSaveRepository).
-    pg_repo.init_session()
-    pg_repo.save(snapshot)
-    saved = pg_repo.load()
+    # Roundtrip via the same code path production uses (in-memory store mirrors
+    # the SQLite file path; only the sqlite3 connection differs).
+    store = SqliteStore.open_in_memory()
+    store.init_session("space_opera", "coyote_star")
+    store.save(snapshot)
+    saved = store.load()
 
-    assert saved is not None, "repository.load() must rehydrate the saved session"
+    assert saved is not None, "SqliteStore.load() must rehydrate the saved session"
     assert saved.snapshot.magic_state is not None
     assert len(saved.snapshot.magic_state.working_log) == pre_log_len
     loaded_log_entry = saved.snapshot.magic_state.working_log[0]

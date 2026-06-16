@@ -45,14 +45,6 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from collections.abc import Mapping
-
-# Spaced separators that introduce a descriptive epithet after a place
-# name in a narrator scene heading ("Edo — The Shogunate's Capital").
-# The region IDENTITY is the leading place; the epithet is flavor. Only
-# *spaced* separators count — a bare hyphen inside a slug ("north-gate")
-# is a word boundary, not an epithet boundary.
-_HEADING_EPITHET_SEPARATORS = (" — ", " – ", " ― ", " - ", ": ")
 
 # Cap chosen so legitimate proper-noun-phrase region names pass while
 # narrator prose paragraphs are blocked. 80 chars matches the longest
@@ -145,69 +137,4 @@ def canonicalize_region_name(name: str) -> str:
     return _NON_ALNUM_RE.sub("-", lowered).strip("-")
 
 
-def leading_place_segment(name: str) -> str:
-    """Return the place-name portion of a ``Place — Epithet`` heading.
-
-    Narrator scene headings follow a ``Place — Descriptor`` convention
-    (e.g. ``"Edo — The Shogunate's Capital"``); the region IDENTITY is the
-    leading place and the epithet is descriptive flavor. Splits on the
-    first *spaced* em/en-dash/hyphen or ``": "``. When no such separator
-    is present the whole (stripped) name is the place.
-
-    >>> leading_place_segment("Edo — The Shogunate's Capital")
-    'Edo'
-    >>> leading_place_segment("The Iga Mountains")
-    'The Iga Mountains'
-    >>> leading_place_segment("north-gate")
-    'north-gate'
-    """
-    earliest = len(name)
-    for sep in _HEADING_EPITHET_SEPARATORS:
-        idx = name.find(sep)
-        if idx != -1:
-            earliest = min(earliest, idx)
-    return name[:earliest].strip()
-
-
-def resolve_known_region_id(name: str, known_regions: Mapping[str, str]) -> str | None:
-    """Resolve a narrator heading to a known cartography region id, or ``None``.
-
-    ``known_regions`` maps cartography ``region_id`` → display ``name``
-    (i.e. ``{rid: region.name for rid, region in cartography.regions.items()}``).
-    The candidate ``name`` is matched — full form first, then its
-    :func:`leading_place_segment` — against the canonicalized region ids
-    *and* display names. On a match the cartography **region id** is
-    returned (the slug the map graph keys on), so an epithet-decorated
-    heading of a known place (``"Edo — The Shogunate's Capital"``) resolves
-    to its region (``"edo"``) instead of forking a duplicate
-    ``discovered_regions`` entry beside the bare slug seeded at
-    ``region.init``.
-
-    Returns ``None`` when neither the full name nor the leading place is a
-    known region — the caller then keeps the raw surface form, preserving
-    narrator-invented sub-area forking (story 45-17). Also ``None`` for an
-    empty map, so worlds without cartography fall through unchanged.
-    """
-    if not known_regions:
-        return None
-    canon_to_id: dict[str, str] = {}
-    for rid, display in known_regions.items():
-        canon_to_id.setdefault(canonicalize_region_name(rid), rid)
-        if display:
-            canon_to_id.setdefault(canonicalize_region_name(display), rid)
-
-    full_slug = canonicalize_region_name(name)
-    if full_slug in canon_to_id:
-        return canon_to_id[full_slug]
-    lead_slug = canonicalize_region_name(leading_place_segment(name))
-    if lead_slug in canon_to_id:
-        return canon_to_id[lead_slug]
-    return None
-
-
-__all__ = [
-    "canonicalize_region_name",
-    "leading_place_segment",
-    "resolve_known_region_id",
-    "validate_region_name",
-]
+__all__ = ["canonicalize_region_name", "validate_region_name"]

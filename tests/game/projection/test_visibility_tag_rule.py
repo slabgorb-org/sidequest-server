@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from sidequest.game.projection.envelope import MessageEnvelope
 from sidequest.game.projection.genre_stage import GenreRuleStage
 from sidequest.game.projection.rules import load_rules_from_yaml_str
@@ -25,6 +27,7 @@ def _env(kind: str, payload: dict, seq: int = 1) -> MessageEnvelope:
 def test_excludes_when_player_not_in_visible_to():
     stage = GenreRuleStage(load_rules_from_yaml_str(YAML))
     view = SessionGameStateView(
+        gm_player_id=None,
         player_id_to_character={"p1": "c1", "p2": "c2"},
     )
     payload = {"text": "Alice sneaks.", "_visibility": {"visible_to": ["p1"]}}
@@ -35,6 +38,7 @@ def test_excludes_when_player_not_in_visible_to():
 def test_includes_when_player_in_visible_to():
     stage = GenreRuleStage(load_rules_from_yaml_str(YAML))
     view = SessionGameStateView(
+        gm_player_id=None,
         player_id_to_character={"p1": "c1", "p2": "c2"},
     )
     payload = {"text": "Alice sneaks.", "_visibility": {"visible_to": ["p1"]}}
@@ -45,6 +49,7 @@ def test_includes_when_player_in_visible_to():
 def test_all_means_all():
     stage = GenreRuleStage(load_rules_from_yaml_str(YAML))
     view = SessionGameStateView(
+        gm_player_id=None,
         player_id_to_character={"p1": "c1", "p2": "c2"},
     )
     payload = {"text": "Dawn breaks.", "_visibility": {"visible_to": "all"}}
@@ -55,6 +60,7 @@ def test_all_means_all():
 def test_missing_visibility_falls_through_to_pass_through():
     stage = GenreRuleStage(load_rules_from_yaml_str(YAML))
     view = SessionGameStateView(
+        gm_player_id=None,
         player_id_to_character={"p1": "c1"},
     )
     payload = {"text": "No viz key."}
@@ -65,6 +71,7 @@ def test_missing_visibility_falls_through_to_pass_through():
 def test_fidelity_transform_strips_visual_spans_for_blinded():
     stage = GenreRuleStage(load_rules_from_yaml_str(YAML))
     view = SessionGameStateView(
+        gm_player_id=None,
         player_id_to_character={"p1": "c1"},
     )
     payload = {
@@ -86,11 +93,62 @@ def test_fidelity_transform_strips_visual_spans_for_blinded():
     assert "s2" in span_ids  # audio_only kept
 
 
-# Story 96-1: the two per-shipping-pack sweeps that used to live here
-# (``test_every_shipping_pack_projection_has_visibility_tag_rule`` and
-# ``test_every_shipping_pack_projection_has_secret_note_rule``) were content
-# validation wearing a server-test costume — they iterated LIVE packs and went
-# red on content-only changes. The requirement (every pack routes NARRATION +
-# SECRET_NOTE through visibility_tag) moved into the ``pf validate pack``
-# content gate via ``validate_visibility_coverage`` — see
-# ``tests/cli/validate/test_pack_validator_projection_visibility.py``.
+@pytest.mark.parametrize(
+    "pack",
+    [
+        "caverns_and_claudes",
+        "elemental_harmony",
+        "heavy_metal",
+        "mutant_wasteland",
+        "space_opera",
+        "spaghetti_western",
+    ],
+)
+def test_every_shipping_pack_projection_has_visibility_tag_rule(pack):
+    from sidequest.game.projection.rules import (
+        VisibilityTagRule,
+        load_rules_from_yaml_path,
+    )
+    from tests._helpers.genre_paths import find_pack_path
+
+    path = find_pack_path(pack) / "projection.yaml"
+    assert path.exists(), f"missing: {path}"
+    rules = load_rules_from_yaml_path(path)
+    narration_rules = [r for r in rules.rules if r.kind == "NARRATION"]
+    assert any(isinstance(r, VisibilityTagRule) for r in narration_rules), (
+        f"{pack}/projection.yaml must have a visibility_tag rule for NARRATION"
+    )
+
+
+@pytest.mark.parametrize(
+    "pack",
+    [
+        "caverns_and_claudes",
+        "elemental_harmony",
+        "heavy_metal",
+        "mutant_wasteland",
+        "space_opera",
+        "spaghetti_western",
+    ],
+)
+def test_every_shipping_pack_projection_has_secret_note_rule(pack):
+    """Group G Task 6 — every pack must route SECRET_NOTE through visibility_tag.
+
+    SECRET_NOTE carries per-recipient dispatches redacted from the narrator
+    prompt (Task 5). Without a visibility_tag rule for the kind, the
+    ProjectionFilter would pass-through — defeating the whole structural-
+    hiding pair. The rule has the same shape as the NARRATION one.
+    """
+    from sidequest.game.projection.rules import (
+        VisibilityTagRule,
+        load_rules_from_yaml_path,
+    )
+    from tests._helpers.genre_paths import find_pack_path
+
+    path = find_pack_path(pack) / "projection.yaml"
+    assert path.exists(), f"missing: {path}"
+    rules = load_rules_from_yaml_path(path)
+    secret_rules = [r for r in rules.rules if r.kind == "SECRET_NOTE"]
+    assert any(isinstance(r, VisibilityTagRule) for r in secret_rules), (
+        f"{pack}/projection.yaml must have a visibility_tag rule for SECRET_NOTE"
+    )

@@ -44,7 +44,6 @@ from sidequest.server.session_handler import (
 )
 from sidequest.server.session_room import RoomRegistry
 from sidequest.telemetry.watcher_hub import WatcherHub, watcher_hub
-from tests._helpers.doubles import FakeSocket
 
 
 def _make_eligible_result(**kwargs):
@@ -88,8 +87,16 @@ async def bound_hub() -> WatcherHub:
     return watcher_hub
 
 
-async def _capture(hub: WatcherHub) -> FakeSocket:
-    sock = FakeSocket()
+class _FakeSocket:
+    def __init__(self) -> None:
+        self.events: list[dict[str, Any]] = []
+
+    async def send_json(self, data: dict[str, Any]) -> None:
+        self.events.append(data)
+
+
+async def _capture(hub: WatcherHub) -> _FakeSocket:
+    sock = _FakeSocket()
     await hub.subscribe(sock)  # type: ignore[arg-type]
     return sock
 
@@ -146,9 +153,7 @@ def _make_session_data(
         player_name="Rux",
         player_id=player_id,
         snapshot=snap,
-        repository=MagicMock(),
-        dungeon_repository=MagicMock(),
-        telemetry_sink=MagicMock(),
+        store=MagicMock(),
         genre_pack=MagicMock(),
         orchestrator=MagicMock(),
         # R2 migration Task 20: production slug-connect always populates

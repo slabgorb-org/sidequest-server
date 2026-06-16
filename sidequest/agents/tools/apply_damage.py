@@ -65,7 +65,7 @@ class ApplyDamageArgs(BaseModel):
     category=ToolCategory.WRITE,
 )
 async def apply_damage(args: ApplyDamageArgs, ctx: ToolContext) -> ToolResult:
-    session = ctx.repository.load()
+    session = ctx.store.load()
     if session is None:
         return ToolResult.error("no active session", recoverable=False)
 
@@ -80,7 +80,7 @@ async def apply_damage(args: ApplyDamageArgs, ctx: ToolContext) -> ToolResult:
     core.apply_hp_delta(-args.amount)
     target_hp_after = core.hp.current
 
-    ctx.repository.save(snapshot)
+    ctx.store.save(snapshot)
 
     ctx.otel_span.set_attribute("tool.damage.target", args.target)
     ctx.otel_span.set_attribute("tool.damage.amount", args.amount)

@@ -16,7 +16,16 @@ from typing import Any
 import pytest
 
 from sidequest.telemetry.watcher_hub import WatcherHub
-from tests._helpers.doubles import FakeSocket
+
+
+class _FakeSocket:
+    """Records every event a hub broadcast or replay sent us."""
+
+    def __init__(self) -> None:
+        self.events: list[dict[str, Any]] = []
+
+    async def send_json(self, data: dict[str, Any]) -> None:
+        self.events.append(data)
 
 
 class _DyingSocket:
@@ -55,7 +64,7 @@ async def test_replay_sends_all_buffered_events(fresh_hub: WatcherHub) -> None:
     for i in range(5):
         fresh_hub.publish({"event_type": "test", "fields": {"i": i}})
     await _drain()
-    sock = FakeSocket()
+    sock = _FakeSocket()
     count = await fresh_hub.replay(sock)  # type: ignore[arg-type]
     assert count == 5
     assert [e["fields"]["i"] for e in sock.events] == [0, 1, 2, 3, 4]
@@ -68,7 +77,7 @@ async def test_replay_buffer_caps_at_maxlen(fresh_hub: WatcherHub) -> None:
     for i in range(2001):
         fresh_hub.publish({"event_type": "test", "fields": {"i": i}})
     await _drain(n=20)
-    sock = FakeSocket()
+    sock = _FakeSocket()
     count = await fresh_hub.replay(sock)  # type: ignore[arg-type]
     assert count == 2000
     # First buffered i is 1, last is 2000 — i=0 was evicted.
@@ -106,7 +115,7 @@ async def test_buffer_holds_serialized_form_not_raw_event(
         }
     )
     await _drain()
-    sock = FakeSocket()
+    sock = _FakeSocket()
     await fresh_hub.replay(sock)  # type: ignore[arg-type]
     assert len(sock.events) == 1
     # ``datetime`` should have been coerced to an ISO string by
@@ -135,8 +144,8 @@ async def test_replay_does_not_drain_buffer(fresh_hub: WatcherHub) -> None:
     for i in range(4):
         fresh_hub.publish({"event_type": "test", "fields": {"i": i}})
     await _drain()
-    first = FakeSocket()
-    second = FakeSocket()
+    first = _FakeSocket()
+    second = _FakeSocket()
     await fresh_hub.replay(first)  # type: ignore[arg-type]
     await fresh_hub.replay(second)  # type: ignore[arg-type]
     assert len(first.events) == 4

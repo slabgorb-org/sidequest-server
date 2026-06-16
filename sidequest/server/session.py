@@ -14,8 +14,6 @@ from __future__ import annotations
 from collections import deque
 from typing import TYPE_CHECKING
 
-from sidequest.game.ruleset.registry import get_ruleset_module
-from sidequest.game.ruleset.without_number import WithoutNumberRulesetModule
 from sidequest.orbital.beats import StoryBeat, StoryBeatKind, advance_clock_via_beat
 from sidequest.orbital.clock import Clock
 from sidequest.orbital.render import Scope
@@ -23,7 +21,6 @@ from sidequest.server.status_clear import clear_scratch_on_scene_end
 
 if TYPE_CHECKING:
     from sidequest.game.session import GameSnapshot
-    from sidequest.orbital.course import PlottedCourse
     from sidequest.orbital.loader import OrbitalContent
 
 
@@ -46,15 +43,9 @@ class Session:
         snapshot: GameSnapshot,
         *,
         orbital_content: OrbitalContent | None = None,
-        ruleset: str | None = None,
     ) -> None:
         self._snapshot = snapshot
         self._orbital_content = orbital_content
-        # Bound ruleset slug (e.g. "wwn"), threaded in by SessionRoom.bind_world
-        # from the loaded genre pack. None on construction paths that don't bind
-        # a ruleset (unit tests, pre-pack reconnect) — the scene-end Effort
-        # reclaim hook gates strictly on this, so those paths are untouched.
-        self._ruleset = ruleset
         # Orbital scope is transient session UI state — defaults to system
         # root on each connect rather than persisting across reconnects.
         self._orbital_scope: Scope | None = None
@@ -86,20 +77,6 @@ class Session:
         semantically.
         """
         clear_scratch_on_scene_end(self._snapshot, reason=reason, turn=turn)
-        # WN-family scene-boundary Effort reclaim (SRD §1.4.4 / §6). The Effort
-        # engine is shared WN-family crunch (Story 102-6 lifted it to the base),
-        # so a swn psychic's scene-committed Effort reclaims at scene end exactly
-        # as a wwn caster's does. Gated on the bound module being an
-        # ``WithoutNumberRulesetModule`` (swn/cwn/awn/wwn) so native sessions are completely
-        # untouched. ``reclaim_scene_effort`` drops only ``scene`` commitments and
-        # is a no-op for cores with none, so iterating every PC core is safe. It
-        # emits one ``{ruleset}.effort.reclaim`` span per pool touched (GM-panel
-        # lie detector). The day/long-rest reclaim TRIGGER is deferred to Plan 3.
-        if self._ruleset:
-            module = get_ruleset_module(self._ruleset)
-            if isinstance(module, WithoutNumberRulesetModule):
-                for char in self._snapshot.characters:
-                    module.reclaim_scene_effort(core=char.core)
         self.advance_via_beat(StoryBeat(kind=StoryBeatKind.ENCOUNTER, trigger=f"scene-{reason}"))
 
     # ------------------------------------------------------------------
@@ -123,16 +100,6 @@ class Session:
     @orbital_scope.setter
     def orbital_scope(self, scope: Scope) -> None:
         self._orbital_scope = scope
-
-    @property
-    def plotted_course(self) -> PlottedCourse | None:
-        """The snapshot's persistent course state, surfaced as a clean accessor.
-
-        Exposed so the orbital tier can read the course off a narrow Protocol
-        surface instead of reaching through the private ``_snapshot`` (ADR-147
-        honest-layering; see ``sidequest.orbital.intent.OrbitalIntentSession``).
-        """
-        return self._snapshot.plotted_course
 
     @property
     def recent_body_mentions(self) -> deque[str]:
@@ -162,62 +129,3 @@ class Session:
     def party_body_id(self) -> str | None:
         """Party's orbital body id (from ``orbits.yaml``), or ``None``."""
         return self._snapshot.party_body_id
-
-    def bind_region_scope(self, region_id: str, *, trigger: str) -> bool:
-        """Re-center the orrery on the body matching ``region_id``.
-
-        Story 95-1: the per-location orrery follows the party's location. The
-        join is an identity join — a body whose id equals the cartography
-        region id (region ``yula`` -> body ``yula``), by construction of the
-        sector ``orbits.yaml`` (content#383). The anchor body is typically a
-        system star in a sector world (perseus_cloud), but may be any body
-        type the region centers on (coyote_star's ``far_landing`` is a
-        ``habitat``) — the mechanism centers on the location, not on a star
-        specifically.
-
-        On a MATCH the party's ``party_body_id`` and ``orbital_scope`` re-center
-        on that body and an ``orbital.scope_bind`` span fires (the GM-panel
-        lie-detector record that the chart moved); returns ``True``.
-
-        ``trigger`` is ``"init"`` (bind-on-connect from
-        ``cartography.starting_region``) or ``"relocation"`` (a pc_region
-        change). The two differ only on the NO-MATCH path:
-
-          - ``"init"`` raises :class:`RegionScopeBindError` — a blank/foreign
-            starting_region must fail loud (No Silent Fallbacks), never silently
-            fall back to the system root and leave the chart un-centered.
-          - ``"relocation"`` leaves scope/``party_body_id`` unchanged, emits an
-            ``orbital.scope_bind_skipped`` span (a loud skip, never a silent
-            miss), and returns ``False``.
-
-        A world with no orbital tier (``orbital_content is None``) is a clean
-        no-op skip (returns ``False``, no crash) — caverns_and_claudes /
-        tea_and_murder etc. relocate normally with no chart to re-center.
-        """
-        from sidequest.orbital.render import Scope
-        from sidequest.orbital.scope_bind import RegionScopeBindError
-        from sidequest.telemetry.spans.scope_bind import (
-            emit_scope_bind,
-            emit_scope_bind_skipped,
-        )
-
-        if self._orbital_content is None:
-            # Non-orbital world: nothing to re-center. Clean no-op.
-            return False
-
-        if region_id in self._orbital_content.orbits.bodies:
-            self._snapshot.party_body_id = region_id
-            self.orbital_scope = Scope(center_body_id=region_id)
-            emit_scope_bind(region_id=region_id, body_id=region_id, trigger=trigger)
-            return True
-
-        # No body matching the region id.
-        reason = f"no orbital body matching region {region_id!r}"
-        if trigger == "init":
-            raise RegionScopeBindError(
-                f"starting region {region_id!r} has no matching orbital body in "
-                "the bound content; refusing to silently fall back to the system "
-                "root (No Silent Fallbacks)"
-            )
-        emit_scope_bind_skipped(region_id=region_id, reason=reason)
-        return False

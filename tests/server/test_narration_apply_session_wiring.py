@@ -50,7 +50,6 @@ opponent_metric to threshold and ``apply_beat`` flips
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock
 
 from sidequest.agents.orchestrator import BeatSelection, NarrationTurnResult, NpcMention
 from sidequest.game.encounter import (
@@ -58,8 +57,7 @@ from sidequest.game.encounter import (
     EncounterMetric,
     StructuredEncounter,
 )
-from sidequest.game.persistence import GameMode
-from sidequest.game.repository import SaveRepository
+from sidequest.game.persistence import GameMode, SqliteStore
 from sidequest.game.session import GameSnapshot
 from sidequest.game.turn import TurnManager
 from sidequest.protocol.dice import RollOutcome
@@ -74,7 +72,7 @@ def _make_room(tmp_path: Path) -> tuple[SessionRoom, GameSnapshot]:
         world_slug="test_world",
         turn_manager=TurnManager(),
     )
-    room.bind_world(snapshot=snap, store=MagicMock(spec=SaveRepository))
+    room.bind_world(snapshot=snap, store=SqliteStore(tmp_path / "t.db"))
     return room, snap
 
 

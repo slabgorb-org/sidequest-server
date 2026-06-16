@@ -2,20 +2,18 @@
 
 from __future__ import annotations
 
-import uuid
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
-from sidequest.game import db_pool
 from sidequest.game.encounter import EncounterMetric, StructuredEncounter
 from sidequest.game.location_view import (
     active_overlays_for,
     get_location_manifest,
     get_location_prose,
 )
-from sidequest.game.pg import sessions
-from sidequest.game.pg.promotions import PgPromotionStore
+from sidequest.game.persistence import SqliteStore
 from sidequest.protocol.models import (
     EncounterLocationOverlay,
     LocationEntity,
@@ -86,15 +84,8 @@ def test_active_overlays_for_empty_when_encounter_has_no_overlay():
 
 
 @pytest.fixture
-def store(monkeypatch, migrated_db: str):
-    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
-    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
-    db_pool.close_pool()
-    pool = db_pool.get_pool()
-    slug = f"locview_{uuid.uuid4().hex[:8]}"
-    sid = sessions.ensure_session(pool, slug=slug, mode="solo", genre_slug="g", world_slug="w")
-    yield PgPromotionStore(pool, session_id=sid)
-    db_pool.close_pool()
+def store(tmp_path: Path) -> SqliteStore:
+    return SqliteStore(tmp_path / "save.db")
 
 
 def test_get_location_manifest_no_overlay(store):
@@ -105,6 +96,7 @@ def test_get_location_manifest_no_overlay(store):
         authored=_authored(),
         snapshot=snapshot,
         store=store,
+        save_id="default",
     )
     assert [e.id for e in manifest] == ["bar", "cobwebs"]
 
@@ -117,6 +109,7 @@ def test_get_location_manifest_with_overlay(store):
         authored=_authored(),
         snapshot=snapshot,
         store=store,
+        save_id="default",
     )
     assert [e.id for e in manifest] == ["bar", "cobwebs", "overturned_table"]
 

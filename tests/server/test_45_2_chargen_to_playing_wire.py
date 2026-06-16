@@ -29,6 +29,9 @@ import pytest
 
 from sidequest.game.persistence import (
     GameMode,
+    SqliteStore,
+    db_path_for_slug,
+    upsert_game,
 )
 from sidequest.protocol import GameMessage
 from sidequest.protocol.messages import (
@@ -42,49 +45,19 @@ CONTENT_ROOT = Path(__file__).resolve().parents[3] / "sidequest-content" / "genr
 
 
 def _seed_mp_save(tmp_path: Path, slug: str, genre: str, world: str) -> None:
-    """Register an empty MP session in Postgres (ADR-115 F1 — connect reads PG)."""
-    from sidequest.game import db_pool
-    from sidequest.server.session_state import _build_pg_repos_for_slug
-
-    _build_pg_repos_for_slug(
-        db_pool.get_pool(),
+    """Mirror tests/server/test_seat_claim.py:_seed — empty MP save row."""
+    db = db_path_for_slug(tmp_path, slug)
+    db.parent.mkdir(parents=True, exist_ok=True)
+    store = SqliteStore(db)
+    store.initialize()
+    upsert_game(
+        store,
         slug=slug,
-        mode=str(GameMode.MULTIPLAYER),
+        mode=GameMode.MULTIPLAYER,
         genre_slug=genre,
         world_slug=world,
     )
-
-
-@pytest.fixture(autouse=True)
-def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
-    """Point the process-global pool at a per-worker throwaway PG database.
-
-    Under ADR-115 D2 the slug-connect path resolves the authoritative game
-    row and snapshot from Postgres via ``db_pool.get_pool()``. This test seeds
-    an empty MP save (no character) so connect sees has_character=False and
-    enters Creating — the precondition for walking chargen to the
-    seat→PLAYING transition. A clean per-test PG database guarantees connect
-    doesn't resume a leaked snapshot from a prior fixed-slug run.
-    """
-    import psycopg
-
-    from sidequest.game import db_pool
-
-    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
-    # migrated_db is session-scoped (shared per xdist worker); TRUNCATE the
-    # per-test state so a sibling test's fixed-slug row can't be resumed here.
-    with psycopg.connect(plain, autocommit=True) as conn:
-        rows = conn.execute(
-            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
-            "AND tablename <> 'alembic_version'"
-        ).fetchall()
-        if rows:
-            names = ", ".join(f'"{r[0]}"' for r in rows)
-            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
-    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
-    db_pool.close_pool()
-    yield
-    db_pool.close_pool()
+    store.close()
 
 
 @pytest.mark.asyncio

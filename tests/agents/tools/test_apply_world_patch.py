@@ -21,6 +21,7 @@ from sidequest.agents.tool_registry import (
 )
 from sidequest.agents.tooling_protocol import ToolUseBlock
 from sidequest.agents.tools import apply_world_patch as _apply_world_patch_module  # noqa: F401
+from sidequest.game.persistence import SqliteStore
 from sidequest.game.session import GameSnapshot
 from sidequest.game.turn import TurnManager
 
@@ -34,19 +35,21 @@ def _build_snapshot() -> GameSnapshot:
     )
 
 
-def _store_with(snapshot: GameSnapshot):
-    from tests.agents.tools.conftest import pg_store_with
+def _store_with(snapshot: GameSnapshot) -> SqliteStore:
+    store = SqliteStore.open_in_memory()
+    store.initialize()
+    store.init_session(genre_slug=snapshot.genre_slug, world_slug=snapshot.world_slug)
+    store.save(snapshot)
+    return store
 
-    return pg_store_with(snapshot)
 
-
-def _make_ctx(store, *, session_id: str = "s") -> ToolContext:
+def _make_ctx(store: SqliteStore, *, session_id: str = "s") -> ToolContext:
     return ToolContext(
         world_id="testworld",
         session_id=session_id,
         perspective_pc="Alice",
         turn_number=3,
-        repository=store,
+        store=store,
         otel_span=MagicMock(),
         perception_filter=NarratorPerceptionFilter(),
     )
@@ -153,13 +156,8 @@ async def test_current_region_path_applies() -> None:
     assert reloaded.snapshot.current_region == "Tin Quarter"
 
 
-async def test_active_stakes_path_rejected_set_stakes_is_typed_home() -> None:
-    # Story 77-4 (ADR-137 AC-3): ``/active_stakes`` was retired from this escape
-    # hatch — ``set_stakes`` is its typed home now (covered by
-    # tests/agents/tools/test_set_stakes.py). The escape hatch must reject it
-    # recoverably and must NOT clobber snapshot state.
+async def test_active_stakes_path_applies() -> None:
     snap = _build_snapshot()
-    stakes_before = snap.active_stakes
     store = _store_with(snap)
     ctx = _make_ctx(store)
 
@@ -171,14 +169,10 @@ async def test_active_stakes_path_rejected_set_stakes_is_typed_home() -> None:
         },
         ctx,
     )
-    assert r.status is ToolResultStatus.ERROR_RECOVERABLE
-    assert r.message is not None
-    assert "/active_stakes" in r.message
-    # Escape hatch did not write — set_stakes remains the only writer.
+    assert r.status is ToolResultStatus.OK
     reloaded = store.load()
     assert reloaded is not None
-    assert reloaded.snapshot.active_stakes == stakes_before
-    assert reloaded.snapshot.active_stakes != "rescue the merchant before dawn"
+    assert reloaded.snapshot.active_stakes == "rescue the merchant before dawn"
 
 
 # ---------------------------------------------------------------------------
@@ -267,9 +261,8 @@ async def test_empty_reason_rejected_by_args_model() -> None:
 
 
 async def test_no_active_session_returns_fatal_error() -> None:
-    from tests.agents.tools.conftest import pg_empty_store
-
-    store = pg_empty_store()
+    store = SqliteStore.open_in_memory()
+    store.initialize()
     # No init_session/save → load() returns None.
     ctx = _make_ctx(store)
 

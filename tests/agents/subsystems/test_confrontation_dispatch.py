@@ -86,7 +86,6 @@ def _confrontation_dispatch(
         subsystem="confrontation",
         params={"type": enc_type},
         idempotency_key=idempotency_key,
-        confidence=1.0,
         visibility=_open_viz(),
     )
 

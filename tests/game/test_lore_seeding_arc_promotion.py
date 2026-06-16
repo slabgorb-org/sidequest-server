@@ -42,11 +42,8 @@ def _snapshot(round_value: int = 7) -> GameSnapshot:
     """Build a fresh snapshot with the turn manager pre-bumped to a
     known round so the helper-stamped ``round`` field is testable."""
     return GameSnapshot(
-        # Story 74-5: opaque label strings only — the arc-promotion seeder
-        # never loads a pack from these, so use the synthetic-fixture slugs to
-        # keep the lore-seeding suite free of any real-pack names.
-        genre_slug="test_genre",
-        world_slug="flickering_reach",
+        genre_slug="caverns_and_claudes",
+        world_slug="sunken_keep",
         turn_manager=TurnManager(interaction=10, round=round_value),
     )
 

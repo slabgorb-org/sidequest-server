@@ -24,11 +24,8 @@ from sidequest.game.character import Character
 from sidequest.game.vessel_tags import bind_rig_pool_from_inventory
 from sidequest.genre.models.inventory import CatalogItem, InventoryConfig
 from sidequest.telemetry.spans import (
-    SPAN_CHARGEN_STARTING_EQUIPMENT_MISSING,
     SPAN_CHARGEN_STARTING_KIT_DEDUP_EVALUATED,
     SPAN_CHARGEN_STARTING_KIT_DEDUP_FIRED,
-    chargen_armor_equipped_span,
-    chargen_armor_unresolved_span,
 )
 
 logger = logging.getLogger(__name__)
@@ -54,7 +51,7 @@ def _item_dict_from_catalog(catalog_item: CatalogItem) -> dict:
     Mirrors the Rust ``Item`` JSON shape (connect.rs:1795-1812).
     """
     rarity = catalog_item.rarity.strip() or "common"
-    item_dict: dict = {
+    return {
         "id": catalog_item.id,
         "name": catalog_item.name,
         "description": catalog_item.description,
@@ -69,12 +66,6 @@ def _item_dict_from_catalog(catalog_item: CatalogItem) -> dict:
         "uses_remaining": catalog_item.resource_ticks,
         "state": "Carried",
     }
-    # Story 106-4: carry the consumable heal effect onto the inventory dict so
-    # the consume seam (narration_apply._apply_consumable_heal) can apply it.
-    # Without this the kit-rolled Potion of Mending heals nothing.
-    if catalog_item.heal_amount:
-        item_dict["heal_amount"] = catalog_item.heal_amount
-    return item_dict
 
 
 def _upgrade_hint_items_from_catalog(
@@ -189,30 +180,6 @@ def apply_starting_loadout(
         gold_key = _match_class(list(inventory_config.starting_gold.keys()), class_name)
         equipment_ids = inventory_config.starting_equipment[equipment_key] if equipment_key else []
         gold = inventory_config.starting_gold[gold_key] if gold_key else 0
-
-        # No Silent Fallbacks (playtest 2026-06-07, five_points): an
-        # inventory.yaml that declares no loadout for this class used to
-        # complete chargen silently with an empty inventory — the PLAYER
-        # discovered the content gap. Make it loud at chargen time so the
-        # GM panel surfaces the defect the turn it happens.
-        if equipment_key is None and gold_key is None:
-            declared = sorted(inventory_config.starting_equipment.keys())
-            logger.warning(
-                "chargen.starting_equipment_missing class=%s genre=%s world=%s "
-                "declared_classes=%s — inventory.yaml has no starting_equipment/"
-                "starting_gold entry for this class; character ships with an "
-                "empty loadout (content gap)",
-                class_name,
-                genre,
-                world,
-                declared,
-            )
-            with _tracer.start_as_current_span(SPAN_CHARGEN_STARTING_EQUIPMENT_MISSING) as gap:
-                gap.set_attribute("class_name", class_name)
-                gap.set_attribute("declared_classes", ",".join(declared))
-                gap.set_attribute("genre", genre)
-                gap.set_attribute("world", world)
-                gap.set_attribute("player_id", player_id)
         catalog_by_id = {item.id: item for item in inventory_config.item_catalog}
 
         # Upgrade builder-produced item_hint dicts (from chargen scene
@@ -317,120 +284,3 @@ def apply_starting_loadout(
         )
 
     return (items_added, gold)
-
-
-def equip_starting_armor(
-    character: Character,
-    inventory_config: InventoryConfig | None,
-    *,
-    genre: str = "",
-    world: str = "",
-    player_id: str = "",
-) -> int:
-    """Equip the kit-rolled armor and derive ``core.armor_class`` from content.
-
-    Story 106-1 (WWN combat hardening). The kit-roll loop (builder.py) appends
-    every item ``equipped: False`` and nothing recomputes ``armor_class``, so
-    every Warrior fought at the unarmored base AC 10 even with Leather Armor in
-    the pack. This post-loadout step flips the equipped flag on armor-category
-    items and recomputes ``character.core.armor_class`` from the equipped armor's
-    catalog ``armor_class`` — the value is **sourced from content (WWN SRD)**,
-    never an invented engine constant.
-
-    WWN uses best-armor AC (a torso piece sets AC; armor is not additive), so the
-    derived AC is the maximum catalog ``armor_class`` among the equipped armor
-    pieces. The multi-piece combination/shield-bonus rule is deferred (story
-    scope); today ``warrior_kit`` rolls a single armor piece.
-
-    No Silent Fallback: an armor item whose catalog entry declares no
-    ``armor_class`` (or has no catalog entry) is NOT equipped/derived — it emits
-    a loud ``chargen.armor_unresolved`` span so the content gap surfaces at
-    chargen instead of the PC silently fighting at the unraised AC. A character
-    with no armor item at all is legitimately unarmored: no spans, AC unchanged
-    (the unarmored default, normally 10 — but a world override may pre-seed it).
-
-    Returns the resulting ``core.armor_class`` (for logging/assertion).
-    """
-    core = character.core
-    ac_before = int(core.armor_class)
-
-    armor_items = [
-        item
-        for item in core.inventory.items
-        if str(item.get("category", "")).strip().lower() == "armor"
-    ]
-    if not armor_items:
-        # Legitimately unarmored — not a content gap. Stay silent, AC unchanged.
-        return ac_before
-
-    catalog_by_id: dict[str, CatalogItem] = (
-        {item.id: item for item in inventory_config.item_catalog}
-        if inventory_config is not None
-        else {}
-    )
-
-    pc_name = core.name
-    valued: list[tuple[dict, int]] = []
-    for item in armor_items:
-        item_id = str(item.get("id", ""))
-        item_name = str(item.get("name", ""))
-        catalog_item = catalog_by_id.get(item_id)
-        catalog_ac = catalog_item.armor_class if catalog_item is not None else None
-        if catalog_ac is None:
-            reason = "no_catalog_entry" if catalog_item is None else "catalog_armor_class_missing"
-            logger.warning(
-                "chargen.armor_unresolved item=%s pc=%s genre=%s world=%s reason=%s "
-                "— equipped armor has no catalog armor_class to derive from; the PC "
-                "is NOT silently left at AC 10 (content gap surfaced at chargen)",
-                item_id,
-                pc_name,
-                genre,
-                world,
-                reason,
-            )
-            with chargen_armor_unresolved_span(
-                item_id=item_id,
-                item_name=item_name,
-                reason=reason,
-                pc_name=pc_name,
-                genre=genre,
-                world=world,
-                player_id=player_id,
-            ):
-                pass
-            continue
-        valued.append((item, int(catalog_ac)))
-
-    if not valued:
-        # Armor present but none had a derivable value — already surfaced loudly.
-        return ac_before
-
-    ac_after = max(ac for _, ac in valued)
-    core.armor_class = ac_after
-
-    for item, catalog_ac in valued:
-        item["equipped"] = True
-        with chargen_armor_equipped_span(
-            item_id=str(item.get("id", "")),
-            item_name=str(item.get("name", "")),
-            armor_class=catalog_ac,
-            ac_before=ac_before,
-            ac_after=ac_after,
-            equipped_after=True,
-            pc_name=pc_name,
-            genre=genre,
-            world=world,
-            player_id=player_id,
-        ):
-            pass
-
-    logger.info(
-        "chargen.armor_equipped pc=%s ac %d -> %d (equipped %d armor piece(s)) genre=%s world=%s",
-        pc_name,
-        ac_before,
-        ac_after,
-        len(valued),
-        genre,
-        world,
-    )
-    return ac_after

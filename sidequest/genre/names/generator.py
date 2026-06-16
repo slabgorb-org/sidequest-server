@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import logging
 import random
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -180,43 +179,6 @@ def has_stem_collision(name: str) -> bool:
     return False
 
 
-# A bracketed segment — ``(version)``, ``[tag]``, ``{x}`` — is never a valid
-# part of a generated name: no culture ``person_pattern`` emits brackets, and
-# the Markov chain filters to letters, so any bracket is junk that leaked from
-# stale generator output or raw corpus text (playtest 2026-06-10: a cached
-# coyote_star manual held ``Vesper (version)``).
-_BRACKETED_SEGMENT = re.compile(r"[(\[{][^)\]}]*[)\]}]")
-_STRAY_BRACKET = re.compile(r"[(){}\[\]]")
-
-
-def sanitize_display_name(name: str) -> str:
-    """Strip bracketed-annotation junk from a display name.
-
-    ``Vesper (version)`` → ``Vesper``. Deliberately conservative: only
-    bracket characters and the text they enclose are removed, because that is
-    the one thing no culture pattern ever emits. Everything else is kept —
-    commas and quotes because Broken Drift mints ``Hush, off Tether`` (drift
-    marker) and ``Quija 'Salt'`` (quoted callsign) on purpose, and digits
-    because sci-fi designations (``Unit 7``, ``Sentinel-9``) carry them.
-    Returns ``""`` if nothing legible survives (caller decides how to handle
-    an empty name).
-
-    Boundary guard, not a generator fix: the Markov chain already filters to
-    letters, so clean generation can't emit this junk — but the Monster
-    Manual is a long-lived on-disk cache that can hold names minted by older
-    code, so we cleanse where names enter game state.
-    """
-    if not name:
-        return ""
-    cleaned = _BRACKETED_SEGMENT.sub(" ", name)
-    cleaned = _STRAY_BRACKET.sub(" ", cleaned)
-    # Drop a comma/semicolon a removed bracket left dangling
-    # (``Vesper (version),`` → ``Vesper``) without touching interior commas.
-    cleaned = re.sub(r"\s+([,;])", r"\1", cleaned)
-    cleaned = " ".join(cleaned.split()).strip(" ,;-")
-    return cleaned
-
-
 def _titlecase_name(name: str) -> str:
     """Title-case a name, keeping small words lowercase."""
     small_words = {"de", "of", "the", "and", "le", "la", "von", "van", "du", "des"}
@@ -296,7 +258,8 @@ def _resolve_corpus_file(filename: str, corpus_dir: Path, fallback_dirs: list[Pa
         if candidate.exists():
             return candidate
     raise FileNotFoundError(
-        f"Corpus file '{filename}' not found in {corpus_dir} or fallback dirs {fallback_dirs}"
+        f"Corpus file '{filename}' not found in {corpus_dir} "
+        f"or fallback dirs {fallback_dirs}"
     )
 
 
@@ -337,7 +300,9 @@ def build_from_culture(
         word_list: list[str] = list(slot_config.word_list or [])
 
         if slot_config.names_file:
-            names_path = _resolve_corpus_file(slot_config.names_file, corpus_dir, _fallbacks)
+            names_path = _resolve_corpus_file(
+                slot_config.names_file, corpus_dir, _fallbacks
+            )
             word_list = [
                 line.strip()
                 for line in names_path.read_text(encoding="utf-8").splitlines()
@@ -348,7 +313,9 @@ def build_from_culture(
             chain = MarkovChain(lookback=lookback, rng=rng)
 
             for corpus_ref in slot_config.corpora:
-                corpus_path = _resolve_corpus_file(corpus_ref.corpus, corpus_dir, _fallbacks)
+                corpus_path = _resolve_corpus_file(
+                    corpus_ref.corpus, corpus_dir, _fallbacks
+                )
 
                 cache_key = (corpus_ref.corpus, lookback)
                 if cache_key not in chain_cache:

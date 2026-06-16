@@ -158,6 +158,16 @@ def test_barrier_span_names() -> None:
     assert SPAN_BARRIER_RESOLVED == "barrier.resolved"
 
 
+def test_music_span_names() -> None:
+    from sidequest.telemetry.spans import (
+        SPAN_MUSIC_CLASSIFY_MOOD,
+        SPAN_MUSIC_EVALUATE,
+    )
+
+    assert SPAN_MUSIC_EVALUATE == "music_evaluate"
+    assert SPAN_MUSIC_CLASSIFY_MOOD == "music_classify_mood"
+
+
 def test_persistence_span_names() -> None:
     from sidequest.telemetry.spans import (
         SPAN_PERSISTENCE_DELETE,
@@ -286,11 +296,13 @@ def test_misc_agent_span_names() -> None:
     from sidequest.telemetry.spans import (
         SPAN_COMPOSE,
         SPAN_CONTINUITY_LLM_VALIDATION,
+        SPAN_INVENTORY_EXTRACTION,
         SPAN_RAG_PROSE_CLEANUP,
         SPAN_SCRIPT_TOOL_PROMPT_INJECTED,
         SPAN_WORLD_MATERIALIZED,
     )
 
+    assert SPAN_INVENTORY_EXTRACTION == "inventory.extraction"
     assert SPAN_CONTINUITY_LLM_VALIDATION == "continuity.llm_validation"
     assert SPAN_COMPOSE == "compose"
     assert SPAN_WORLD_MATERIALIZED == "world.materialized"
@@ -613,6 +625,8 @@ def test_span_name_drift_regression() -> None:
         spans.SPAN_TROPE_EVALUATE_TRIGGERS,
         spans.SPAN_BARRIER_ACTIVATED,
         spans.SPAN_BARRIER_RESOLVED,
+        spans.SPAN_MUSIC_EVALUATE,
+        spans.SPAN_MUSIC_CLASSIFY_MOOD,
         spans.SPAN_PERSISTENCE_SAVE,
         spans.SPAN_PERSISTENCE_LOAD,
         spans.SPAN_PERSISTENCE_DELETE,
@@ -628,6 +642,7 @@ def test_span_name_drift_regression() -> None:
         spans.SPAN_COMPUTE_DELTA,
         spans.SPAN_MERCHANT_CONTEXT_INJECTED,
         spans.SPAN_MERCHANT_TRANSACTION,
+        spans.SPAN_INVENTORY_EXTRACTION,
         spans.SPAN_CONTINUITY_LLM_VALIDATION,
         spans.SPAN_COMPOSE,
         spans.SPAN_WORLD_MATERIALIZED,

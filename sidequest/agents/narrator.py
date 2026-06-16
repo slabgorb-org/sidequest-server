@@ -10,7 +10,6 @@ from former separate agents (CreatureSmith, Dialectician, Ensemble).
 
 from __future__ import annotations
 
-import functools
 import os
 from typing import TYPE_CHECKING, Any
 
@@ -56,6 +55,7 @@ __all__ = [
     "NARRATOR_POV_RULES",
     "NarratorAgent",
     "narrator_output_format_text",
+    "is_streaming_enabled",
     "_render_time_skip_context",
 ]
 
@@ -69,39 +69,18 @@ def narrator_output_format_text() -> str:
     return NARRATOR_OUTPUT_ONLY
 
 
-@functools.cache
-def resolve_narrator_iteration_cap() -> int | None:
-    """Resolve the operator's soft tool-loop ``iteration_cap`` for narrator turns.
+# ---------------------------------------------------------------------------
+# Feature flag
+# ---------------------------------------------------------------------------
 
-    Story 82-9: 71-40 added the ``iteration_cap`` kwarg but left it with no
-    production caller. This toggle lets an operator switch it on without a code
-    change via ``SIDEQUEST_NARRATOR_ITERATION_CAP``.
 
-    Story 82-11: memoized via ``functools.cache`` — the env of a running server
-    process is fixed at boot, so per-turn re-read bought nothing in production
-    while re-paying the parse+validate on every narrator turn. First call parses
-    and caches; tests that mutate the env must call
-    ``resolve_narrator_iteration_cap.cache_clear()``. Note ``functools.cache``
-    does NOT cache exceptions, so an invalid value re-raises on every call —
-    fail-loud is preserved, not one-shot.
+def is_streaming_enabled() -> bool:
+    """True when the narrator should use the streaming claude_client path.
 
-    Fail-loud (CLAUDE.md "No Silent Fallbacks", mirroring the
-    ``SIDEQUEST_SESSION_COST_CEILING_USD`` parser): unset → ``None`` (no cap, the
-    loop runs to the hard ``max_iterations`` ceiling); a valid positive int → that
-    cap; a non-integer or non-positive value raises ``ValueError`` rather than
-    silently disabling the throttle (a cap of 0 would "throttle" before the first
-    iteration; a typo must not vanish).
+    Gated by SIDEQUEST_NARRATOR_STREAMING env var. Default off to preserve
+    existing synchronous behavior until the full streaming pipeline ships.
     """
-    raw = os.environ.get("SIDEQUEST_NARRATOR_ITERATION_CAP")
-    if raw is None:
-        return None
-    cap = int(raw)  # raises ValueError on a non-integer value — fail loud.
-    if cap <= 0:
-        raise ValueError(
-            f"SIDEQUEST_NARRATOR_ITERATION_CAP={raw!r} must be a positive integer "
-            "(a non-positive cap would throttle before the first iteration)."
-        )
-    return cap
+    return os.environ.get("SIDEQUEST_NARRATOR_STREAMING", "0") == "1"
 
 
 # ---------------------------------------------------------------------------
@@ -481,27 +460,6 @@ class NarratorAgent(BaseAgent):
                 )
                 or "  (none)"
             )
-            # Tag-handling gate (playtest 2026-06-10): scene tags are engine-
-            # tracked persistent state, NOT a resource the narrator adjudicates.
-            # The engine does not yet spend leverage (EncounterTag v1 —
-            # docs/superpowers/specs/2026-04-25-dual-track-momentum-design.md),
-            # so a tag stays in play, owned by its creator, until the engine
-            # removes it. Without this gate the LLM narrates tags being "burned"
-            # or flipping to the opponent on a failed roll (the contact "now
-            # holds Positional Advantage"), desyncing prose from the stored tag
-            # the player can still spend next beat.
-            tag_gate_text = (
-                "TAGS_ARE_ENGINE_STATE\n"
-                "The tags above are persistent scene state the engine owns and "
-                "tracks. Reference a tag as fiction — the positioning or "
-                "advantage it represents — but DO NOT narrate it being spent, "
-                "consumed, transferred, burned, lost, or changing owner: the "
-                "engine has not done so and the tag is still in play for its "
-                "creator. `leverage` is engine bookkeeping; never claim a tag "
-                "granted or cost a bonus unless a resolved beat says so.\n"
-                if encounter.tags
-                else ""
-            )
             # Resolution-mode gate (combat fairness, 2026-04-26).
             # When the active confrontation is opposed_check, the engine
             # rolls dice for both sides and derives the outcome tier from
@@ -543,7 +501,6 @@ class NarratorAgent(BaseAgent):
                 f"Actors — emit a beat_selection for every non-withdrawn "
                 f"non-neutral actor:\n" + "\n".join(actor_lines) + "\n"
                 f"Encounter tags:\n{tag_lines}\n"
-                f"{tag_gate_text}"
                 f"</encounter-live>"
             )
             registry.register_section(

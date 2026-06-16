@@ -113,7 +113,7 @@ class CommitKnownFactArgs(BaseModel):
     category=ToolCategory.WRITE,
 )
 async def commit_known_fact(args: CommitKnownFactArgs, ctx: ToolContext) -> ToolResult:
-    session = ctx.repository.load()
+    session = ctx.store.load()
     if session is None:
         return ToolResult.error("no active session", recoverable=False)
 
@@ -142,7 +142,7 @@ async def commit_known_fact(args: CommitKnownFactArgs, ctx: ToolContext) -> Tool
         category=FactCategory(args.category),
     )
     pc.known_facts.append(fact)
-    ctx.repository.save(snapshot)
+    ctx.store.save(snapshot)
 
     ctx.otel_span.set_attribute("tool.belief.fact_id", fact.fact_id)
     ctx.otel_span.set_attribute("tool.belief.confidence", args.confidence)

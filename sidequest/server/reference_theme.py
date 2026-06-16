@@ -63,13 +63,12 @@ def _require_str(value: Any, key_path: str, pack: str) -> str:
     return str(value)
 
 
-def _read_theme_yaml(pack_dir: Path) -> tuple[Any, str]:
-    """Load ``<pack_dir>/theme.yaml`` and return ``(parsed_data, pack_name)``.
+def load_reference_theme(pack_dir: Path) -> ReferenceTheme:
+    """Load ``<pack_dir>/theme.yaml`` and return a ReferenceTheme.
 
-    The shared file-load boundary for every theme consumer (``load_reference_theme``
-    chrome metadata and ``build_theme_tokens`` CSS-var projection). Every
-    absent/malformed path surfaces as ``MissingThemeFieldError`` with a
-    ``sidequest.reference.theme_missing`` ERROR span — never a silent fallback.
+    Raises ``MissingThemeFieldError`` if the file is absent, unparseable, or
+    missing any of: archetype, primary, accent, background, web_font_family,
+    display_font_family, dinkus.glyph.{light,medium,heavy}.
     """
     pack = pack_dir.name
     theme_path = pack_dir / "theme.yaml"
@@ -80,23 +79,12 @@ def _read_theme_yaml(pack_dir: Path) -> tuple[Any, str]:
         try:
             data = yaml.safe_load(fh) or {}
         except yaml.YAMLError as exc:
-            # Honor the contract: every missing/broken theme.yaml path surfaces
-            # as MissingThemeFieldError, not the raw yaml error.
+            # Honor the docstring contract: every missing/broken theme.yaml
+            # path surfaces as MissingThemeFieldError, not the raw yaml error.
             with reference_theme_missing_span(pack=pack, field="theme.yaml"):
                 raise MissingThemeFieldError(
                     f"theme.yaml for pack {pack!r} is malformed: {exc}"
                 ) from exc
-    return data, pack
-
-
-def load_reference_theme(pack_dir: Path) -> ReferenceTheme:
-    """Load ``<pack_dir>/theme.yaml`` and return a ReferenceTheme.
-
-    Raises ``MissingThemeFieldError`` if the file is absent, unparseable, or
-    missing any of: archetype, primary, accent, background, web_font_family,
-    display_font_family, dinkus.glyph.{light,medium,heavy}.
-    """
-    data, pack = _read_theme_yaml(pack_dir)
     glyph = (data.get("dinkus") or {}).get("glyph") or {}
     return ReferenceTheme(
         archetype=_require_str(data.get("archetype"), "archetype", pack),
@@ -147,7 +135,6 @@ PACK_LABELS: dict[str, str] = {
     "road_warrior": "Road Warrior",
     "spaghetti_western": "Spaghetti Western",
     "tea_and_murder": "Tea and Murder",
-    "wry_whimsy": "Wry Whimsy",
 }
 
 
@@ -167,7 +154,6 @@ PACK_BLURBS: dict[str, str] = {
     "road_warrior": "the tank reads empty and the horizon doesn't",
     "spaghetti_western": "a long ride, a quiet town, an open grave",
     "tea_and_murder": "the kettle is on and someone won't see breakfast",
-    "wry_whimsy": "the door home never opens from this side",
 }
 
 
@@ -268,14 +254,6 @@ PACK_EPIGRAPHS: dict[str, dict[str, str]] = {
         ),
         "attrib": "On the well-set table",
     },
-    "wry_whimsy": {
-        "body": (
-            "You fell, stepped, or were blown through, and the land on the "
-            "other side has rules. The rules have loopholes, the loopholes "
-            "have opinions, and getting home is the easy part."
-        ),
-        "attrib": "On arrivals",
-    },
 }
 
 
@@ -346,10 +324,6 @@ PACK_TOC: dict[str, list[dict[str, str]]] = {
         {"num": "I", "id": "reckoning", "label": "The House"},
         {"num": "II", "id": "bearing", "label": "Bearing & Make"},
     ],
-    "wry_whimsy": [
-        {"num": "I", "id": "reckoning", "label": "The Crossing"},
-        {"num": "II", "id": "bearing", "label": "Bearing & Make"},
-    ],
 }
 
 
@@ -380,12 +354,11 @@ DEFAULT_RULES_TOC: list[dict[str, str]] = [
 # in a single ``<section id="{toc.id}">…</section>`` so the TOC link
 # resolves to the correct anchor.
 #
-# Story 63-11: a section whose mapped stems render nothing (missing file,
-# or a presenter that suppressed present-but-empty data) is dropped — both
-# the empty ``<section>`` and its TOC entry — so no dangling nav link points
-# at an empty anchor. File stems not referenced here still render at the end
-# of the page in their own ``<section class="file">`` wrappers so content is
-# never lost — see ``_wrap_sections_by_toc`` in ``reference_renderer.py``.
+# Missing files in a pack → the section renders empty (no entries
+# dropped from the TOC). File stems not referenced here render at the
+# end of the page in their own ``<section class="file">`` wrappers so
+# content is never lost — see ``_section_for_stem`` in
+# ``reference_renderer.py``.
 TOC_TO_FILES: dict[str, list[str]] = {
     "reckoning": ["lore", "world", "history"],
     "bearing": [

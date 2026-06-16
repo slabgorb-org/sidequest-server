@@ -42,7 +42,7 @@ import pytest
 
 from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore, Inventory
-from sidequest.game.persistence import GameMode
+from sidequest.game.persistence import GameMode, SqliteStore, db_path_for_slug, upsert_game
 from sidequest.game.session import GameSnapshot
 from sidequest.protocol.messages import (
     SessionEventMessage,
@@ -54,66 +54,6 @@ from sidequest.server.session_room import LobbyState, RoomRegistry
 _GENRE = "caverns_and_claudes"
 _WORLD = "grimvault"
 _CONTENT_SEARCH_PATH = Path(__file__).resolve().parents[3] / "sidequest-content" / "genre_packs"
-
-
-@pytest.fixture(autouse=True)
-def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
-    """Bind the process pool to a per-worker throwaway PG db, clean per test.
-
-    Slug-connect (ADR-115 D2) loads the authoritative snapshot from PG via
-    db_pool.get_pool(); seed and connect must share one isolated database.
-    """
-    import psycopg
-
-    from sidequest.game import db_pool
-
-    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
-    with psycopg.connect(plain, autocommit=True) as conn:
-        rows = conn.execute(
-            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
-            "AND tablename <> 'alembic_version'"
-        ).fetchall()
-        if rows:
-            names = ", ".join(f'"{r[0]}"' for r in rows)
-            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
-    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
-    db_pool.close_pool()
-    yield
-    db_pool.close_pool()
-
-
-def _seed_pg_for_slug(
-    slug: str,
-    snap: GameSnapshot,
-    *,
-    mode: GameMode = GameMode.SOLO,
-) -> None:
-    """Mirror a seeded snapshot into PG — the store the slug-resume path loads."""
-    from sidequest.game import db_pool
-    from sidequest.server.session_state import _build_pg_repos_for_slug
-
-    repo, _dungeon, _sink = _build_pg_repos_for_slug(
-        db_pool.get_pool(),
-        slug=slug,
-        mode=str(mode),
-        genre_slug=_GENRE,
-        world_slug=_WORLD,
-    )
-    repo.save(snap)
-
-
-def _ensure_pg_session(slug: str, *, mode: GameMode) -> None:
-    """Register the PG session row without a snapshot (ADR-115 F1)."""
-    from sidequest.game import db_pool
-    from sidequest.server.session_state import _build_pg_repos_for_slug
-
-    _build_pg_repos_for_slug(
-        db_pool.get_pool(),
-        slug=slug,
-        mode=str(mode),
-        genre_slug=_GENRE,
-        world_slug=_WORLD,
-    )
 
 
 def _make_handler(save_dir: Path) -> WebSocketSessionHandler:
@@ -130,11 +70,17 @@ def _make_handler(save_dir: Path) -> WebSocketSessionHandler:
 
 
 def _seed_solo_game(tmp_path: Path, slug: str, *, with_character: bool) -> Path:
-    """Register a SOLO session in Postgres (ADR-115 F1 — connect reads PG).
-
-    ``with_character=False`` registers the session row only (no snapshot →
-    chargen); ``with_character=True`` also persists a snapshot carrying one PC.
-    """
+    db = db_path_for_slug(tmp_path, slug)
+    db.parent.mkdir(parents=True, exist_ok=True)
+    store = SqliteStore(db)
+    store.initialize()
+    upsert_game(
+        store,
+        slug=slug,
+        mode=GameMode.SOLO,
+        genre_slug=_GENRE,
+        world_slug=_WORLD,
+    )
     if with_character:
         core = CreatureCore(
             name="Parsley",
@@ -151,15 +97,25 @@ def _seed_solo_game(tmp_path: Path, slug: str, *, with_character: bool) -> Path:
         snap = GameSnapshot(genre_slug=_GENRE, world_slug=_WORLD, location="Far Landing")
         snap.characters = [char]
         snap.player_seats["parsley-pid"] = "Parsley"
-        _seed_pg_for_slug(slug, snap, mode=GameMode.SOLO)
-    else:
-        _ensure_pg_session(slug, mode=GameMode.SOLO)
+        store.init_session(_GENRE, _WORLD)
+        store.save(snap)
+    store.close()
     return tmp_path
 
 
 def _seed_mp_game(tmp_path: Path, slug: str) -> Path:
-    """Register an empty MP session in Postgres (no snapshot → chargen)."""
-    _ensure_pg_session(slug, mode=GameMode.MULTIPLAYER)
+    db = db_path_for_slug(tmp_path, slug)
+    db.parent.mkdir(parents=True, exist_ok=True)
+    store = SqliteStore(db)
+    store.initialize()
+    upsert_game(
+        store,
+        slug=slug,
+        mode=GameMode.MULTIPLAYER,
+        genre_slug=_GENRE,
+        world_slug=_WORLD,
+    )
+    store.close()
     return tmp_path
 
 

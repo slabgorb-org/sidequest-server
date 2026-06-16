@@ -343,6 +343,15 @@ class SceneResult:
     # setting the mechanical class_hint — so the starting-loadout class match
     # keeps resolving to the pack default. Symmetric with background_label.
     freeform_class_label: str | None = None
+    # Display-only origin label derived from freeform text on a race/origin-
+    # selecting scene (every canned choice carries race_hint, but the freeform
+    # path carries none). Feeds origin_label + the player-facing background, and
+    # — for a Fate pack, where race is itself a display label — the {race} slot,
+    # WITHOUT setting the mechanical race_hint (which keeps resolving to the pack
+    # default). Symmetric with freeform_class_label. The drop this repairs: a
+    # free-text origin ("A Spanish painter…") left origin_label/background empty
+    # and race polluted with the default high-concept (sq-playtest 2026-06-16).
+    freeform_race_label: str | None = None
     # Optional source-scene id. Populated by paths that need to identify
     # which scene produced this result without indexing back through the
     # scene list (e.g. the_story's StoryInput dispatch). Older paths leave
@@ -1461,6 +1470,14 @@ class CharacterBuilder:
             # with free text). Last-wins, display-only.
             if result.freeform_class_label is not None:
                 acc.class_label = result.freeform_class_label
+            # Freeform origin display label (race/origin-selecting scene answered
+            # with free text). Fills BOTH the origin_label slot and the
+            # player-facing background — both empty on the freeform path before
+            # this (the dropped-free-text bug). Display-only; race_hint untouched,
+            # so the freeform background grants no skills (DD-5). Last-wins.
+            if result.freeform_race_label is not None:
+                acc.race_label = result.freeform_race_label
+                acc.background_label = result.freeform_race_label
             if eff.race_hint is not None:
                 acc.race_hint = eff.race_hint
                 # Capture the chosen origin LABEL when picked from a choice
@@ -2043,6 +2060,33 @@ class CharacterBuilder:
                     },
                 )
 
+        # Origin/race-selecting scene answered with free text: every canned
+        # choice carries a race_hint, but the freeform answer carries none.
+        # Capture the player's words as a display-only origin label (Yes-And /
+        # the Zork problem — the open NL path must persist). The mechanical
+        # race_hint still resolves to the pack default, so no mechanical
+        # advantage; this only fills origin_label/background (both empty on the
+        # freeform path before this) and, for Fate, the display {race}. The label
+        # is article-stripped by derive_class_label, so it never produces the
+        # doubled-article slug the preset path's _is_origin_display_label guards.
+        freeform_race_label: str | None = None
+        is_race_scene = bool(scene.choices) and all(
+            c.mechanical_effects.race_hint for c in scene.choices
+        )
+        if is_race_scene:
+            derived = derive_class_label(text)
+            if derived:
+                freeform_race_label = derived
+                trace.get_current_span().add_event(
+                    "chargen.freeform_race_label_derived",
+                    {
+                        "action": "freeform_race_label_derived",
+                        "scene_id": scene.id,
+                        "label": derived,
+                        "severity": "info",
+                    },
+                )
+
         self._results.append(
             SceneResult(
                 input_type=FreeformInput(text=text),
@@ -2051,6 +2095,7 @@ class CharacterBuilder:
                 anchors_added=anchors,
                 choice_description=None,
                 freeform_class_label=freeform_class_label,
+                freeform_race_label=freeform_race_label,
                 # Story 93-1: stamp the source scene so freeform_answer_texts()
                 # can exclude the name-entry scene from the archetype-inference
                 # fodder without re-deriving result→scene alignment.
@@ -2514,7 +2559,13 @@ class CharacterBuilder:
                 _fate_cfg = self._rules.ruleset_config()
                 _fate_hc = getattr(_fate_cfg, "default_high_concept", "") or ""
             _fate_label = _fate_hc or "Adventurer"
-            race_str = acc.race_hint or _fate_label
+            # Prefer the captured origin label (preset race_hint, or a free-text
+            # origin's display label) over the High-Concept fallback. A free-text
+            # origin used to leave race_hint empty and fall straight to the HC,
+            # so a "Spanish painter" PC read race="Disbarred Lawyer…" — the shared
+            # default high-concept (sq-playtest 2026-06-16). The HC fallback still
+            # applies only when there is genuinely no origin at all.
+            race_str = acc.race_hint or acc.race_label or _fate_label
             class_str = acc.class_hint or _fate_label
         else:
             race_str = acc.race_hint or self._default_race or "Human"

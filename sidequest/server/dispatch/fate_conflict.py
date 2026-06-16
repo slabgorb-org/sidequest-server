@@ -748,6 +748,21 @@ def dispatch_fate_action(
     # at runtime by ``test_player_action_is_mechanically_inert``.
     if payload.player_action and payload.player_action.strip():
         fate_flavor_rider_span(actor=actor_name, affected_mechanics=False, _tracer=_tracer)
+        # Story 118-6 (freeform-text-rides-the-tile): the typed flourish rides into
+        # the narrator's prose as COLOR only ("the chandelier swing for free" — Rule
+        # of Cool / Yes And, no mechanical advantage). It is sanitized at THIS seam
+        # because ``narrator_hints`` reach the narrator prompt UNSANITIZED via
+        # ``render_encounter_summary`` — the same ADR-047 boundary the 116-4
+        # [HIGH][SEC] fix applies to ``aspect.text`` and the seal site applies to
+        # ``payload.skill``, NOT the raw dice self-action path. The rider stays
+        # mechanically inert: it is appended as a hint string and is never consulted
+        # by ``resolve_action`` below (``test_player_action_is_mechanically_inert``).
+        # Gate the append on the SANITIZED result, not the pre-sanitization strip:
+        # an all-injection rider (e.g. ``<system></system>``) sanitizes to "" and
+        # must NOT append a contentless "(flourish):" line (Reviewer 118-6 LOW).
+        sanitized_rider = sanitize_player_text(payload.player_action)
+        if sanitized_rider:
+            encounter.narrator_hints.append(f"{actor_name} (flourish): {sanitized_rider}")
 
     # Optional pre-roll invoke (+2 for 'bonus', a reroll for 'reroll' — F1b). The
     # KIND is the client's ``invoke_mode`` (Story 118-10): the dispatch threads the
@@ -755,6 +770,7 @@ def dispatch_fate_action(
     # reroll half of F3d. ``invoke_aspect`` fails loud on an unknown mode, but the
     # Literal on ``FateActionPayload.invoke_mode`` already rejects one at the wire.
     invoke_bonus = 0
+    invoked_reroll = False
     if payload.invoke_aspect:
         invoke_bonus = ruleset.invoke_aspect(
             sheet=core.fate_sheet,
@@ -763,23 +779,46 @@ def dispatch_fate_action(
             actor=actor_name,
             _tracer=_tracer,
         )
+        # Whether an invocation actually fired with mode='reroll' — the gate for the
+        # reroll below. Keyed on a real invocation, never the bare wire flag, so a
+        # reroll cannot happen without the free invoke / fate point it costs.
+        invoked_reroll = payload.invoke_mode == "reroll"
 
     # All three proactive actions seal the attacker's 4dF roll now (mirrors WN
     # sealing the to-hit at commit); concede already returned above. Defense is
     # reactive — the engine rolls it for the target at resolution, never a
     # committed action (there is no full_defense — not in the Fate SRD).
     rating = core.fate_sheet.skills.get(payload.skill, 0)
+    opposition = Opposition(
+        value=payload.difficulty,
+        kind="active" if payload.target is not None else "passive",
+    )
     outcome = ruleset.resolve_action(
         skill_rating=rating,
-        opposition=Opposition(
-            value=payload.difficulty,
-            kind="active" if payload.target is not None else "passive",
-        ),
+        opposition=opposition,
         rng=rng,
         invoke_bonus=invoke_bonus,
         actor=actor_name,
         _tracer=_tracer,
     )
+    # Story 118-6 AC#1 (F3d reroll execution): ``invoke_aspect`` returns 0 for
+    # 'reroll' — "the reroll itself is the caller's job" (fate.py:280). Perform it
+    # HERE: re-roll the 4dF and KEEP the new outcome (SRD — a reroll REPLACES, it is
+    # not take-better). The second ``resolve_action`` emits its own
+    # ``fate.action_resolved`` span, so the GM panel sees the kept reroll rather than
+    # the discarded first roll — without this the ``fate.aspect.invoked{mode='reroll'}``
+    # span would report a reroll the engine never performed (the Illusionism the
+    # OTEL lie-detector exists to catch). ``invoke_bonus`` is 0 for a reroll, so the
+    # re-roll carries no +2.
+    if invoked_reroll:
+        outcome = ruleset.resolve_action(
+            skill_rating=rating,
+            opposition=opposition,
+            rng=rng,
+            invoke_bonus=invoke_bonus,
+            actor=actor_name,
+            _tracer=_tracer,
+        )
     ladder_total, dice = outcome.ladder_total, outcome.dice
 
     seal_fate_commit(

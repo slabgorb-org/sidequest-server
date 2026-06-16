@@ -146,8 +146,7 @@ def test_wn_family_genre_unprovenanced_among_verbatim_still_rejected(tmp_path: P
         f"must name the unprovenanced offender; error was: {message!r}"
     )
     assert "srd_blade_120_3" not in message, (
-        "the legal verbatim item must NOT be reported as an offender; "
-        f"error was: {message!r}"
+        f"the legal verbatim item must NOT be reported as an offender; error was: {message!r}"
     )
 
 

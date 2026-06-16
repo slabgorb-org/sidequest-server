@@ -48,6 +48,11 @@ _WORLD = "the_circuit"  # the live road_warrior world (personal weapons live her
 
 _OPPONENT_AC = 8  # low so face=20 beats it under either native or cwn attack math
 
+# Story 114-13: the personal-weapon guard widens to accept the verbatim CWN
+# weapon categories (114-5) alongside the legacy bespoke "weapon" string. A
+# personal weapon is any of these categories that is NOT a mounted/rig weapon.
+_PERSONAL_WEAPON_CATEGORIES = frozenset({"weapon", "melee_weapon", "ranged_weapon"})
+
 
 def _has_real_content() -> bool:
     return GENRE_PACKS_DIR.is_dir()
@@ -328,7 +333,9 @@ def test_road_warrior_personal_weapons_carry_damage_specs() -> None:
     assert resolved is not None
     catalog = resolved.item_catalog
     personal_weapons = [
-        item for item in catalog if item.category == "weapon" and "mounted" not in item.tags
+        item
+        for item in catalog
+        if item.category in _PERSONAL_WEAPON_CATEGORIES and "mounted" not in item.tags
     ]
     assert personal_weapons, "road_warrior must declare personal weapons in its resolved catalog"
 
@@ -370,7 +377,7 @@ def test_road_warrior_combat_classes_start_with_a_personal_weapon() -> None:
         loadout = starting.get(class_name, [])
         has_damaging_weapon = any(
             (item := catalog_by_id.get(item_id)) is not None
-            and item.category == "weapon"
+            and item.category in _PERSONAL_WEAPON_CATEGORIES
             and "mounted" not in item.tags
             and item.damage is not None
             for item_id in loadout

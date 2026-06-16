@@ -92,6 +92,19 @@ SPAN_ROUTES[SPAN_DOGFIGHT_SHOT_DAMAGE] = SpanRoute(
         "target_hp_after": (span.attributes or {}).get("target_hp_after", 0),
     },
 )
+SPAN_DOGFIGHT_WEAPON_RESOLVED = "dogfight.weapon_resolved"
+SPAN_ROUTES[SPAN_DOGFIGHT_WEAPON_RESOLVED] = SpanRoute(
+    event_type="state_transition",
+    component="dogfight",
+    extract=lambda span: {
+        "field": "dogfight",
+        "op": "weapon_resolved",
+        "source": (span.attributes or {}).get("source", ""),
+        "weapon_id": (span.attributes or {}).get("weapon_id", ""),
+        "armor_piercing": (span.attributes or {}).get("armor_piercing", 0),
+        "dice": (span.attributes or {}).get("dice", ""),
+    },
+)
 
 
 @contextmanager
@@ -182,6 +195,33 @@ def dogfight_shot_attempted_span(
             "hit": hit,
             "geometry_modifier": geometry_modifier,
             "source": source,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def dogfight_weapon_resolved_span(
+    *,
+    source: str,
+    weapon_id: str,
+    armor_piercing: int,
+    dice: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """The dogfight resolved its ship weapon from ``source`` (story 114-15). The
+    GM-panel lie-detector for "the dogfight used a real ship weapon with its
+    armor_piercing" rather than Claude improvising one."""
+    with Span.open(
+        SPAN_DOGFIGHT_WEAPON_RESOLVED,
+        {
+            "source": source,
+            "weapon_id": weapon_id,
+            "armor_piercing": armor_piercing,
+            "dice": dice,
             **attrs,
         },
         tracer_override=_tracer,

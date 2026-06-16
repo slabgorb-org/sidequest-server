@@ -1,0 +1,24 @@
+# Genre-tier inventory for the SWN test pack.
+#
+# Story 114-15: the dogfight ship weapon (multifocal_laser) is native-subsystem
+# config, resolved by the dogfight against the genre-tier `ship_weapons` collection
+# ONLY (never the personal item_catalog). It lives here at the genre tier — mirroring
+# the real space_opera pack — so the dogfight integration tests exercise the
+# production resolution path. The personal item_catalog stays at the world tier
+# (worlds/test_world/inventory.yaml).
+ship_weapons:
+  - id: multifocal_laser
+    name: "Multifocal Laser"
+    description: Strike-fighter-mounted rotary laser array with adaptive focusing optics. Cycles through focal lengths to punch through hull plating.
+    category: weapon
+    value: 8000
+    weight: 40.0
+    rarity: rare
+    power_level: 3
+    tags: [ranged, energy, vehicle-mounted, ship-weapon, armor-piercing]
+    lore: Standard fitment on Hegemonic interceptors. The multifocal drum rotates three lens sets per burst — one will find the gap.
+    narrative_weight: 0.3
+    damage: {dice: "1d4", bonus: 0, armor_piercing: 20}
+    provenance:
+      mode: bespoke
+      license: na

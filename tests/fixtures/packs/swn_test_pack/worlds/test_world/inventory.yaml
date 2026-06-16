@@ -77,18 +77,9 @@ item_catalog:
     # Story 71-24: blunt-channel melee weapon needs a damage spec to ablate HP.
     damage: {dice: "1d6", bonus: 0}
 
-  - id: multifocal_laser
-    name: "Multifocal Laser"
-    description: Strike-fighter-mounted rotary laser array with adaptive focusing optics. Cycles through focal lengths to punch through hull plating.
-    category: weapon
-    value: 8000
-    weight: 40.0
-    rarity: rare
-    power_level: 3
-    tags: [ranged, energy, vehicle-mounted, ship-weapon, armor-piercing]
-    lore: Standard fitment on Hegemonic interceptors. The multifocal drum rotates three lens sets per burst — one will find the gap.
-    narrative_weight: 0.3
-    damage: {dice: "1d4", bonus: 0, armor_piercing: 20}
+  # NOTE: multifocal_laser (the dogfight ship weapon) moved to the genre-tier
+  # ship_weapons collection in ../../inventory.yaml (story 114-15) — it is
+  # native-subsystem config, not personal gear, so it is NOT in this item_catalog.
 
   # --- ARMOR ---
   - id: flight_suit

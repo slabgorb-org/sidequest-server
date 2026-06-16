@@ -36,6 +36,7 @@ from sidequest.game.dogfight_shot import (
     GunSolution,
     PendingDogfightShot,
     build_dogfight_shot_inputs,
+    build_dogfight_weapon_lookup,
     frame_hp_resolver,
     resolve_dogfight_shots,
 )
@@ -5369,9 +5370,11 @@ def _apply_narration_result_to_snapshot(
                 pc_pilot_skill = int((cdef.player_default_stats or {}).get("pilot_skill", 0))
                 pc_attack_bonus = int((cdef.player_default_stats or {}).get("attack_bonus", 0))
 
-                # Epic 94: resolve inventory world-first so the dogfight weapon
-                # lookup hits the world-tier item_catalog (genre tier is None for
-                # migrated packs like space_opera).
+                # Story 114-15: the dogfight resolves its ship weapon from the
+                # genre-tier ``ship_weapons`` collection (carried through the world
+                # merge by resolve_inventory), NOT the personal item_catalog — a ship
+                # weapon is native-subsystem config, kept off the personal-gear
+                # surface. build_dogfight_weapon_lookup emits the weapon_resolved span.
                 from sidequest.server.dispatch.inventory_resolve import resolve_inventory
 
                 _dogfight_inventory = resolve_inventory(pack, snapshot.world_slug)
@@ -5382,18 +5385,7 @@ def _apply_narration_result_to_snapshot(
                     pc_stats=pc_char.stats,
                     pc_pilot_skill=pc_pilot_skill,
                     pc_attack_bonus=pc_attack_bonus,
-                    weapon_lookup=lambda wid: next(
-                        (
-                            i
-                            for i in (
-                                _dogfight_inventory.item_catalog
-                                if _dogfight_inventory is not None
-                                else []
-                            )
-                            if i.id == wid
-                        ),
-                        None,
-                    ),
+                    weapon_lookup=build_dogfight_weapon_lookup(_dogfight_inventory),
                 )
 
                 sl_outcome = resolve_sealed_letter_lookup(

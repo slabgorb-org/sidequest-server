@@ -16,11 +16,12 @@ from typing import Any
 from sidequest.game.creature_core import HpPool
 from sidequest.game.hp_depletion import HpDepletionResult, check_hp_depletion
 from sidequest.game.ruleset.resolution import AttackRollParams
-from sidequest.genre.models.inventory import DamageSpec
+from sidequest.genre.models.inventory import CatalogItem, DamageSpec, InventoryConfig
 from sidequest.genre.models.rules import GeometryModifiers
 from sidequest.telemetry.spans.dogfight import (
     dogfight_shot_attempted_span,
     dogfight_shot_damage_span,
+    dogfight_weapon_resolved_span,
 )
 
 # ---------------------------------------------------------------------------
@@ -281,6 +282,38 @@ def _resolve_weapon(
     if item is None or getattr(item, "damage", None) is None:
         raise ValueError(f"dogfight {who} weapon id {weapon_id!r} not found / has no damage spec")
     return item.damage, getattr(item, "name", weapon_id)
+
+
+def build_dogfight_weapon_lookup(
+    resolved_inventory: InventoryConfig | None,
+) -> Callable[[str], CatalogItem | None]:
+    """Build the dogfight weapon-resolution callable (story 114-15).
+
+    The dogfight (ADR-077) resolves ``player_weapon`` / ``opponent_weapon`` ids
+    against the genre-tier ``ship_weapons`` collection ONLY — never the personal
+    ``item_catalog`` (a ship weapon is native-subsystem config, kept off the
+    personal-gear surface). Returns ``None`` for an unknown id so ``_resolve_weapon``
+    fails loud (No Silent Fallbacks). Each successful resolution emits the
+    ``dogfight.weapon_resolved`` OTEL span carrying source / weapon id / armor_piercing
+    so the GM panel can confirm the dogfight used a real ship weapon.
+    """
+    ship_weapons = resolved_inventory.ship_weapons if resolved_inventory is not None else []
+
+    def _lookup(weapon_id: str) -> CatalogItem | None:
+        item = next((w for w in ship_weapons if w.id == weapon_id), None)
+        if item is not None:
+            ap = item.damage.armor_piercing if item.damage is not None else 0
+            dice = item.damage.dice if item.damage is not None else ""
+            with dogfight_weapon_resolved_span(
+                source="ship_weapons",
+                weapon_id=weapon_id,
+                armor_piercing=ap,
+                dice=dice,
+            ):
+                pass
+        return item
+
+    return _lookup
 
 
 def _require_stat(stats: dict[str, int], key: str, who: str) -> int:

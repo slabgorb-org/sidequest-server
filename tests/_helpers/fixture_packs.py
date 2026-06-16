@@ -12,10 +12,12 @@ Fixture packs live under ``tests/fixtures/genre_packs/``:
 
 - ``swn_test_pack`` — minimal Stars Without Number pack (ruleset: swn)
   with firefight / melee / dogfight ConfrontationDefs and a single world
-  ``test_world`` whose world-tier ``inventory.yaml`` carries the weapons
-  the combat tests contract on (``blaster_sidearm``, ``multifocal_laser``).
-  The world-tier catalog exercises the production REPLACE path in
-  ``resolve_inventory`` — the same shape live migrated packs use.
+  ``test_world`` whose world-tier ``inventory.yaml`` carries the personal
+  weapon the combat tests contract on (``blaster_sidearm``). The dogfight
+  ship weapon ``multifocal_laser`` lives in the genre-tier ``ship_weapons``
+  collection (story 114-15), resolved by the dogfight lookup. The world-tier
+  catalog exercises the production merge path in ``resolve_inventory`` — the
+  same shape live migrated packs use.
 - ``wwn_test_pack`` — minimal Worlds Without Number pack (ruleset: wwn)
   whose ``test_world`` authors world-tier caster Callings (``Psychic``,
   ``Gadgeteer``) for the world-tier chargen seeding tests.

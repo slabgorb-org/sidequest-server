@@ -10,9 +10,10 @@ d20 and damage dice for determinism, and asserts:
 The NPC shooter can also score a hit — we pin the opponent d20 to a miss so the
 player's HP stays intact and the assertion is clean about which actor took damage.
 
-Story 96-1: drives the ``swn_test_pack`` FIXTURE (world-tier ``multifocal_laser``
-catalog in ``test_world``) instead of live space_opera content. No environment
-skip — fixture packs ship with the suite.
+Story 96-1: drives the ``swn_test_pack`` FIXTURE instead of live space_opera
+content. The dogfight ship weapon ``multifocal_laser`` lives in the genre-tier
+``ship_weapons`` collection (story 114-15), resolved by the dogfight lookup. No
+environment skip — fixture packs ship with the suite.
 """
 
 from __future__ import annotations

@@ -102,6 +102,24 @@ class FateRulesetModule(RulesetModule):
             refresh=sheet.refresh,
             _tracer=_tracer,
         )
+        # 114-10: compile the pack's shared signature starting gear onto the sheet
+        # (the coat, the badge, the hat — design K-i). Emitted AFTER the
+        # chargen.seeded span so that span's aspect_count reflects the seeded
+        # HC/trouble aspects only; gear aspects/stunts carry source_gear and the
+        # refresh debit (if any) rides the fate.gear_compiled span. No-op when the
+        # pack authors no default gear.
+        if cfg.gear:
+            from sidequest.game.ruleset.fate_gear import compile_gear_onto_sheet
+
+            compile_gear_onto_sheet(
+                sheet,
+                archetype="(default)",
+                gear_ids=list(cfg.gear),
+                gear_defs=list(cfg.gear_catalog),
+                base_refresh=cfg.base_refresh,
+                free_stunts=cfg.free_stunts,
+                _tracer=_tracer,
+            )
         return ChargenResources(fate_sheet=sheet)
 
     def apply_fate_chargen(self, *, rules, choices, _tracer=None):

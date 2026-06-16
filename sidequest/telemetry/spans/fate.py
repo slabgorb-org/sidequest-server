@@ -496,6 +496,27 @@ SPAN_ROUTES["fate.chargen.completed"] = SpanRoute(
         "refresh": (span.attributes or {}).get("refresh", 0),
     },
 )
+# --- 114-10: chargen gear-compile span (GM panel = lie detector) -------------
+# The engine materialized a character's starting gear onto its FateSheet at
+# chargen — the GM-panel evidence that gear actually fired (aspects/stunts placed,
+# refresh debited by stunt-gear) rather than the narrator improvising an item.
+# Literal key (no SPAN_* constant) — the routing-completeness lint only inspects
+# SPAN_* module constants (the F2a/F2d/F4a precedent).
+SPAN_ROUTES["fate.gear_compiled"] = SpanRoute(
+    event_type="state_transition",
+    component="fate",
+    extract=lambda span: {
+        "field": "gear_compiled",
+        "actor": (span.attributes or {}).get("actor", ""),
+        "archetype": (span.attributes or {}).get("archetype", ""),
+        # gear_ids names WHICH gear fired — the GM panel (lie detector) needs it,
+        # not just the aspect/stunt counts, to verify the right gear materialized.
+        "gear_ids": (span.attributes or {}).get("gear_ids", ""),
+        "aspects_placed": (span.attributes or {}).get("aspects_placed", 0),
+        "stunts_added": (span.attributes or {}).get("stunts_added", 0),
+        "refresh_debited": (span.attributes or {}).get("refresh_debited", 0),
+    },
+)
 
 
 def fate_exchange_committed_span(
@@ -806,6 +827,42 @@ def fate_chargen_completed_span(
         pass
 
 
+def fate_gear_compiled_span(
+    *,
+    archetype: str,
+    aspects_placed: int,
+    stunts_added: int,
+    permission_aspects: int,
+    refresh_before: int,
+    refresh_after: int,
+    refresh_debited: int,
+    actor: str = "",
+    gear_ids: str = "",
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``fate.gear_compiled`` — a character's starting gear was materialized
+    onto its FateSheet at chargen (114-10). The GM-panel evidence that gear fired:
+    which aspects/stunts were placed and how much refresh the stunt-gear debited
+    (the whole balance story). ``gear_ids`` is a comma-joined list of the compiled
+    GearDef ids."""
+    attributes: dict[str, Any] = {
+        "field": "gear_compiled",
+        "actor": actor,
+        "archetype": archetype,
+        "gear_ids": gear_ids,
+        "aspects_placed": aspects_placed,
+        "stunts_added": stunts_added,
+        "permission_aspects": permission_aspects,
+        "refresh_before": refresh_before,
+        "refresh_after": refresh_after,
+        "refresh_debited": refresh_debited,
+        **attrs,
+    }
+    with Span.open("fate.gear_compiled", attributes, tracer_override=_tracer):
+        pass
+
+
 __all__ = [
     "SPAN_FATE_PROJECTION_EMITTED",
     "fate_action_classified_span",
@@ -827,6 +884,7 @@ __all__ = [
     "fate_exchange_committed_span",
     "fate_exchange_order_span",
     "fate_exchange_resolved_span",
+    "fate_gear_compiled_span",
     "fate_narration_mismatch_span",
     "fate_opponent_decided_span",
     "fate_point_delta_span",

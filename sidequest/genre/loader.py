@@ -40,7 +40,7 @@ from sidequest.genre.models.character import (
 )
 from sidequest.genre.models.chassis import ChassisClassesConfig
 from sidequest.genre.models.culture import Culture
-from sidequest.genre.models.inventory import InventoryConfig
+from sidequest.genre.models.inventory import GearDef, InventoryConfig
 from sidequest.genre.models.items import WorldItemsCatalog
 from sidequest.genre.models.legends import Legend
 from sidequest.genre.models.lore import Lore, WorldLore
@@ -63,7 +63,7 @@ from sidequest.genre.models.premises import PremisesFile, WitnessedActsFile
 from sidequest.genre.models.progression import ProgressionConfig
 from sidequest.genre.models.psionics import PsionicDisciplineCatalog
 from sidequest.genre.models.rigs_world import ChassisInstanceConfig, RigsWorldConfig
-from sidequest.genre.models.rules import RulesConfig, WinCondition
+from sidequest.genre.models.rules import FateConfig, RulesConfig, WinCondition
 from sidequest.genre.models.scenario import ScenarioNpc, ScenarioPack
 from sidequest.genre.models.theme import GenreTheme
 from sidequest.genre.models.tropes import SeedTrope, TropeDefinition
@@ -760,6 +760,65 @@ def _validate_genre_baseline_no_bespoke(ruleset: str, inventory: InventoryConfig
         "genre tier, or move genuinely-unique gear to the world tier "
         "(worlds/<world>/inventory.yaml)."
     )
+
+
+def _load_gear(path: Path) -> list[GearDef]:
+    """Load a ``gear.yaml`` (a top-level list of GearDef) from ``path``. Absent
+    file → empty list (legitimate absence, not a silent fallback); a present but
+    malformed file fails loud via pydantic. Mirrors the archetypes.yaml pattern."""
+    raw = _load_yaml_raw_optional(path)
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise GenreLoadError(path=path, detail="gear.yaml must be a list of GearDef")
+    return [GearDef.model_validate(g) for g in raw]
+
+
+def _validate_fate_gear(
+    *,
+    rules: RulesConfig,
+    has_inventory: bool,
+    gear: list[GearDef],
+) -> None:
+    """Fail loud on a paradigm-mismatched or unbalanced Fate gear pack (114-10,
+    design §Validator). Three checks: no inventory.yaml under fate; every default
+    gear id resolves; the pack's refresh invariant balances. No-op for non-fate
+    packs except the inventory check (which clears them)."""
+    # Local import of the validator helpers only (cli.validate has no genre.loader
+    # dependency, but cli/* is a heavy package — defer it to keep loader import-light).
+    from sidequest.cli.validate.fate_gear import (
+        check_dangling_gear_ids,
+        check_no_inventory_under_fate,
+        check_refresh_invariant,
+    )
+
+    errors: list[str] = []
+    inv_err = check_no_inventory_under_fate(ruleset=rules.ruleset, has_inventory=has_inventory)
+    if inv_err is not None:
+        errors.append(inv_err)
+
+    cfg = rules.ruleset_config()
+    if rules.ruleset == "fate" and isinstance(cfg, FateConfig):
+        available = {g.id for g in gear}
+        selected = set(cfg.gear)
+        errors.extend(
+            check_dangling_gear_ids(
+                archetype="(default)", referenced_ids=cfg.gear, available_ids=available
+            )
+        )
+        total_stunts = sum(len(g.grants_stunts) for g in gear if g.id in selected)
+        refresh_err = check_refresh_invariant(
+            archetype="(default)",
+            authored_refresh=cfg.refresh,
+            base_refresh=cfg.base_refresh,
+            free_stunts=cfg.free_stunts,
+            total_stunts=total_stunts,
+        )
+        if refresh_err is not None:
+            errors.append(refresh_err)
+
+    if errors:
+        raise PackError("Fate gear validation failed: " + "; ".join(errors))
 
 
 def _validate_class_filter_refs(rules: RulesConfig, classes: list[ClassDef]) -> None:
@@ -1990,6 +2049,20 @@ def load_genre_pack(path: Path | str) -> GenrePack:
         path / "inventory.yaml", InventoryConfig
     )
 
+    # === Genre-tier gear.yaml — OPTIONAL (114-10, Fate gear model) ===
+    # The lightweight Fate analogue of inventory. Absent → []; present-but-malformed
+    # fails loud. Injected into the FateConfig below so the chargen seed can compile
+    # the pack's signature gear without the builder needing the whole GenrePack.
+    genre_gear: list[GearDef] = _load_gear(path / "gear.yaml")
+    if rules.ruleset == "fate" and rules.fate is not None:
+        rules.fate.gear_catalog = list(genre_gear)
+    # Fail loud on a paradigm-mismatched (inventory under fate) or unbalanced pack.
+    _validate_fate_gear(
+        rules=rules,
+        has_inventory=(path / "inventory.yaml").exists(),
+        gear=genre_gear,
+    )
+
     # Genre-tier openings.yaml is dead. Per the canned-openings design
     # (§1, locked decision #2), all openings now live at the world tier
     # (worlds/{slug}/openings.yaml), and the genre-tier file is deleted.
@@ -2391,6 +2464,7 @@ def load_genre_pack(path: Path | str) -> GenrePack:
         scenarios=scenarios,
         drama_thresholds=drama_thresholds,
         inventory=inventory,
+        gear=genre_gear,
         openings=openings,
         backstory_tables=backstory_tables,
         equipment_tables=equipment_tables,

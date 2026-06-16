@@ -25,7 +25,9 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-AspectKind = Literal["high_concept", "trouble", "character", "situation", "consequence", "boost"]
+AspectKind = Literal[
+    "high_concept", "trouble", "character", "situation", "consequence", "boost", "permission"
+]
 ConsequenceLevel = Literal["mild", "moderate", "severe", "extreme"]
 StressTrackName = Literal["physical", "mental"]
 
@@ -35,23 +37,34 @@ CONSEQUENCE_VALUES: dict[str, int] = {"mild": 2, "moderate": 4, "severe": 6, "ex
 
 class Aspect(BaseModel):
     """A free-text Fate aspect. ``free_invokes`` is the count of unused free
-    invocations on it (create-advantage and consequences grant these)."""
+    invocations on it (create-advantage and consequences grant these).
+
+    ``source_gear`` is the ``id`` of the ``GearDef`` this aspect was compiled
+    from at chargen (``None`` for hand-authored, non-gear aspects) — the
+    traceability the GM-panel lie-detector and "you lost the coat" beats need
+    (ADR-144 gear model, A2-i)."""
 
     model_config = {"extra": "forbid"}
 
     text: str
     kind: AspectKind
     free_invokes: int = 0
+    source_gear: str | None = None
 
 
 class Stunt(BaseModel):
     """A named stunt. The mechanical effect is authored as content (F2/F4); the
-    engine spine in F1 only needs to carry the name/description."""
+    engine spine in F1 only needs to carry the name/description.
+
+    ``source_gear`` is the ``id`` of the ``GearDef`` this stunt was compiled from
+    at chargen (``None`` for hand-authored stunts) — the same gear traceability
+    carried on ``Aspect`` (ADR-144 gear model, A2-i)."""
 
     model_config = {"extra": "forbid"}
 
     name: str
     description: str = ""
+    source_gear: str | None = None
 
 
 class StressBox(BaseModel):

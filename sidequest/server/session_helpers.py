@@ -212,6 +212,12 @@ _BOUNDED_BY_CONSTRUCTION: tuple[str, ...] = (
     "pc_regions",
     "chassis_autofire_cooldowns",
     "chassis_registry",
+    # 117-3 added ``pending_quest_offers: dict[str, QuestSeed]`` keyed on
+    # ``quest_id`` (resume-safe offer ledger, session.py:846) but never
+    # categorized it — story 123-1 classifies it here under category (d):
+    # the key domain (quest ids) is a finite gameplay quantity, exactly
+    # like ``quest_log``.
+    "pending_quest_offers",
     "player_seats",
     "quest_log",
     "resources",

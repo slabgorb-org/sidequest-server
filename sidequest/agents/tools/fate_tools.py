@@ -76,11 +76,18 @@ async def propose_fate_compel(args: ProposeFateCompelArgs, ctx: ToolContext) -> 
     # conflict (the one the end-of-turn ``room.save`` writes — the advance_confrontation
     # discipline), NOT a fresh ``repository.load()`` copy that the save would clobber. The
     # persisted PendingCompel rides the next FATE_STATE projection to the player's
-    # accept/refuse control. With no active conflict there is nowhere to attach (the F3e
-    # surface is conflict-scoped) — offer_compel still fires the span, it just isn't
-    # actionable. ``ctx.snapshot`` is the conflict-turn snapshot; on a non-conflict offer
-    # it may be absent, which is the not-actionable path (no silent state loss — the offer
-    # was never persistable to begin with).
+    # accept/refuse control. ``offer_compel`` itself fires the span unconditionally and
+    # only skips persistence when there is no UNRESOLVED conflict to attach to.
+    #
+    # ``ctx.snapshot`` is None on TWO distinct origins — they are NOT the same path:
+    #   (1) a non-conflict / legacy / fixture turn with no encounter to attach to — benign;
+    #       the offer was never persistable, the span still fires, the control just isn't
+    #       actionable. This is the expected not-actionable path.
+    #   (2) a None snapshot DURING A LIVE CONFLICT — the span fires but the PendingCompel is
+    #       dropped and the player never gets the accept/refuse control. That is a WIRING
+    #       BUG, not a benign default. The live path threads ``ctx.snapshot`` today so this
+    #       does not occur in production; if it ever surfaces it must be investigated, never
+    #       swallowed (No Silent Fallbacks).
     encounter = ctx.snapshot.encounter if ctx.snapshot is not None else None
     module.offer_compel(
         aspect_text=args.aspect_text,

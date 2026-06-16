@@ -153,7 +153,14 @@ def build_fate_state_payload(snapshot: GameSnapshot) -> FateStatePayload:
             # surface can render its accept/refuse control. Display text is raw
             # (the UI escapes it), consistent with the rest of this builder.
             pending_compels=[
-                FatePendingCompel(aspect=c.aspect, target=c.target, reason=c.reason)
+                FatePendingCompel(
+                    aspect=c.aspect,
+                    target=c.target,
+                    reason=c.reason,
+                    # The SRD accept reward (+1) travels to the player surface so the
+                    # Accept control shows a real delta, not a hardcoded literal.
+                    offered_delta=c.offered_delta,
+                )
                 for c in enc.pending_compels
             ],
         )

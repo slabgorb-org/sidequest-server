@@ -1049,8 +1049,11 @@ class FatePendingCompel(BaseModel):
 
     The player-facing projection of ``StructuredEncounter.pending_compels``:
     ``aspect`` the compelled aspect, ``target`` the compelled PC, ``reason`` the
-    proposed complication the player reads before deciding. The fate-point
-    economics (+1 accept / -1 refuse) are SRD-fixed and rendered by the client.
+    proposed complication the player reads before deciding. ``offered_delta`` is the
+    SRD accept reward (+1) the player gains by accepting — carried on the wire so the
+    Accept control renders a real, server-sourced delta instead of a hardcoded label.
+    Refuse is the separate SRD-fixed −1 cost, a client-rendered constant (there is no
+    stored refuse field — the cost is never variable).
     """
 
     model_config = {"extra": "forbid"}
@@ -1058,6 +1061,7 @@ class FatePendingCompel(BaseModel):
     aspect: str
     target: str
     reason: str = ""
+    offered_delta: int = 1
 
 
 class FateConflictEntry(BaseModel):

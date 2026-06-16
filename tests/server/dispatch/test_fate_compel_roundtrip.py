@@ -133,6 +133,25 @@ def test_no_pending_compels_before_any_offer():
     assert payload.conflict.pending_compels == []
 
 
+def test_offer_on_a_resolved_encounter_fires_span_but_persists_nothing():
+    # The offer_compel guard `encounter is not None and not encounter.resolved`: a
+    # resolved conflict is over, so its compels would be stale fiction. The offered span
+    # STILL fires (the GM panel sees WHAT was offered), but nothing is persisted — the
+    # projection's `not enc.resolved` gate would drop it anyway. This pins the resolved
+    # branch so the guard can't be silently removed (without it, compels from finished
+    # conflicts would start surfacing in the projection).
+    enc, _hero, snap, ruleset = _setup(fate_points=1)
+    enc.resolved = True
+    exporter, tracer = _otel()
+
+    ruleset.offer_compel(
+        encounter=enc, aspect_text=ASPECT, actor="Hero", reason="too late", _tracer=tracer
+    )
+
+    assert "fate.compel.offered" in _names(exporter), "the offer span fires even when resolved"
+    assert enc.pending_compels == [], "a resolved conflict persists no pending compel"
+
+
 # --- accept -------------------------------------------------------------------
 
 
@@ -215,3 +234,20 @@ def test_accepting_a_compel_that_was_never_offered_fails_loud():
         _dispatch(_accept(), enc=enc, snap=snap, ruleset=ruleset)
 
     assert hero.core.fate_sheet.fate_points == 1, "no point is earned for a phantom compel"
+
+
+def test_refusing_a_compel_that_was_never_offered_fails_loud():
+    # The refuse leg of the phantom guard, mirroring the accept case above. Both verbs
+    # share resolve_compel's `find_pending_compel is None -> raise`, but the refuse
+    # routing is exercised independently so a future divergence can't silently let a
+    # never-offered refusal through. fate_points=1 isolates the PHANTOM path from the
+    # refuse-at-0 economy path: the raise must come from the missing offer (before any
+    # spend), so no fate point is paid and no decline span fires.
+    enc, hero, snap, ruleset = _setup(fate_points=1)
+    exporter, tracer = _otel()
+
+    with pytest.raises(FateConflictError):
+        _dispatch(_refuse(), enc=enc, snap=snap, ruleset=ruleset, tracer=tracer)
+
+    assert hero.core.fate_sheet.fate_points == 1, "no point is paid for a phantom compel"
+    assert "fate.compel.refused" not in _names(exporter), "no decline span on a phantom refusal"

@@ -193,7 +193,11 @@ class PendingCompel(BaseModel):
     projection can surface it to the player and the accept/refuse round-trip can
     resolve it. ``target`` is the compelled PC, ``aspect`` the compelled aspect
     (verbatim), ``reason`` the complication the narrator proposed. ``offered_delta``
-    is the fate point the player GAINS by accepting (SRD: +1); refusing pays one.
+    is the SRD accept reward (+1) the player GAINS by accepting — projected onto
+    ``FatePendingCompel`` (``fate_projection``) so the player surface renders a real,
+    server-sourced delta instead of a hardcoded label that could drift from the SRD.
+    Refusing is the separate SRD-fixed −1, a client-rendered constant (it has no
+    stored field — there is only one cost, never a variable one).
     """
 
     model_config = {"extra": "forbid"}

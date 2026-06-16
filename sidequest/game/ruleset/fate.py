@@ -315,11 +315,14 @@ class FateRulesetModule(RulesetModule):
         including ``reason``, the proposed complication, so the lie-detector sees
         WHAT was offered, not merely THAT something was.
 
-        ADR-144 F3e closes the F2b deferral: when an active ``encounter`` is given,
-        PERSIST the offer as a PendingCompel so it survives to the FATE_STATE
-        projection and the player can accept/refuse it. With no active conflict
-        there is nowhere to persist (the F3e player surface is conflict-scoped) —
-        the offer still fires its span, it just isn't actionable in the UI."""
+        ADR-144 F3e closes the F2b deferral: when an UNRESOLVED ``encounter`` is
+        given (the explicit guard is ``encounter is not None and not
+        encounter.resolved``), PERSIST the offer as a PendingCompel so it survives to
+        the FATE_STATE projection and the player can accept/refuse it. A None
+        encounter (no active conflict) OR a resolved one (the conflict is over — its
+        compels would be stale fiction, dropped wholesale by the projection's
+        ``not enc.resolved`` gate) skips persistence: the offer still fires its span,
+        it just isn't actionable in the UI."""
         fate_compel_offered_span(actor=actor, aspect=aspect_text, reason=reason, _tracer=_tracer)
         if encounter is not None and not encounter.resolved:
             encounter.add_pending_compel(target=actor, aspect=aspect_text, reason=reason)

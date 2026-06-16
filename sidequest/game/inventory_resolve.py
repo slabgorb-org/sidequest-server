@@ -207,8 +207,14 @@ def resolve_inventory(
     merged_catalog, counts = merge_inventory_catalog(baseline_catalog, world_inv.item_catalog)
 
     # Catalog merges; currency / starting_equipment / starting_gold replace from
-    # the world wholesale.
-    resolved = world_inv.model_copy(update={"item_catalog": merged_catalog})
+    # the world wholesale. ``ship_weapons`` is genre-tier-only (story 114-15) — carry
+    # it from the genre baseline so a world that ships its own inventory.yaml (and so
+    # hits this merge path, which model_copies from the WORLD config) still inherits
+    # the dogfight ship weapon instead of silently dropping it.
+    genre_ship_weapons = pack.inventory.ship_weapons if pack.inventory is not None else []
+    resolved = world_inv.model_copy(
+        update={"item_catalog": merged_catalog, "ship_weapons": list(genre_ship_weapons)}
+    )
 
     _emit_inventory_merged(world_slug=world_slug or "", config=resolved, counts=counts)
     return resolved

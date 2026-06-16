@@ -67,9 +67,7 @@ class TestGenreShipWeaponHome:
         assert weapon.damage.armor_piercing == 20, "AP 20 is load-bearing for the dogfight"
         assert weapon.provenance is not None and weapon.provenance.mode == "bespoke"
 
-    def test_multifocal_laser_not_in_genre_item_catalog(
-        self, space_opera_pack: GenrePack
-    ) -> None:
+    def test_multifocal_laser_not_in_genre_item_catalog(self, space_opera_pack: GenrePack) -> None:
         # AC1: the ship weapon is NOT on the personal item_catalog surface.
         assert space_opera_pack.inventory is not None
         ids = {i.id for i in space_opera_pack.inventory.item_catalog}

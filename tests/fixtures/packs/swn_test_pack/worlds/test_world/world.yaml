@@ -2,10 +2,12 @@ name: Test World
 slug: test_world
 description: >-
   Synthetic fixture world for story 96-1. Carries the world-tier inventory
-  catalog (blaster_sidearm, multifocal_laser — values frozen from live
-  space_opera/coyote_star at the time of the epic 94 repoint) so server
-  tests exercise the resolve_inventory world-REPLACE path without coupling
-  to live content. Not a playable world.
+  catalog (blaster_sidearm — values frozen from live space_opera/coyote_star
+  at the time of the epic 94 repoint) so server tests exercise the
+  resolve_inventory world-tier merge path without coupling to live content. The
+  dogfight ship weapon multifocal_laser moved to the genre-tier ship_weapons
+  collection (story 114-15) and is no longer in this world catalog. Not a
+  playable world.
 axis_snapshot:
   scale: 0.3
   tone: 0.5

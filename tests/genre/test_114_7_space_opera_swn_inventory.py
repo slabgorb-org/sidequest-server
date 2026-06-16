@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import pytest
 
+from sidequest.game.dogfight_shot import build_dogfight_weapon_lookup
 from sidequest.genre.loader import load_genre_pack
 from sidequest.server.dispatch.inventory_resolve import resolve_inventory
 from tests._helpers.genre_paths import PackNotFound, find_pack_path
@@ -292,34 +293,45 @@ def _confrontation_weapon_ids(pack) -> set[str]:
 
 def test_confrontation_weapon_ids_resolve_in_every_world():
     """REGRESSION: every weapon id a rules.yaml confrontation references must resolve in
-    EACH world's merged catalog — the dogfight (`dogfight_shot.py`) looks the id up in
-    ``resolve_inventory(pack, world).item_catalog``. De-triplication must not drop a wired
-    confrontation weapon from any world."""
+    EACH world — the dogfight (`dogfight_shot.py`) looks the id up via
+    ``build_dogfight_weapon_lookup(resolve_inventory(pack, world))``, which resolves the
+    genre-tier ``ship_weapons`` collection. Story 114-15 moved the ship weapon there from
+    the per-world ``item_catalog``; de-triplication must not drop a wired confrontation
+    weapon from any world."""
     pack = _load_pack()
     weapon_ids = _confrontation_weapon_ids(pack)
     assert weapon_ids, "precondition: space_opera rules.yaml must name >=1 confrontation weapon"
     for slug in _WORLDS:
         resolved = resolve_inventory(pack, slug)
         assert resolved is not None, f"resolve_inventory must return a catalog for {slug!r}"
-        resolved_ids = {i.id for i in resolved.item_catalog}
-        missing = weapon_ids - resolved_ids
-        assert not missing, (
-            f"world {slug!r}: confrontation weapon id(s) {sorted(missing)} do not resolve in the "
-            "merged catalog — the dogfight weapon_lookup would fail to find them"
-        )
+        lookup = build_dogfight_weapon_lookup(resolved)
+        for wid in sorted(weapon_ids):
+            assert lookup(wid) is not None, (
+                f"world {slug!r}: confrontation weapon id {wid!r} does not resolve via the "
+                "dogfight ship_weapons lookup — the dogfight weapon_lookup would fail to find it"
+            )
 
 
 def test_multifocal_laser_stays_a_ship_weapon_with_armor_piercing():
     """REGRESSION (the rejected bug): `multifocal_laser` is the dogfight SHIP weapon. The
     dogfight applies ``effective_armor_after_ap(armor, armor_piercing)`` against an opponent
-    seeded with ``armor: 5`` — the weapon's armor_piercing is load-bearing. Resolving the id
-    must yield a weapon WITH ``armor_piercing > 0``; re-pointing it to an AP-0 personal sidearm
-    silently corrupts the Fighter Duel's damage model."""
+    seeded with ``armor: 5`` — the weapon's armor_piercing is load-bearing. Story 114-15 moved
+    it from the per-world ``item_catalog`` into the genre-tier ``ship_weapons`` collection; it
+    must still resolve via the dogfight lookup for every world WITH ``armor_piercing > 0``, and
+    must NOT leak back onto the personal ``item_catalog`` surface."""
     pack = _load_pack()
     for slug in _WORLDS:
         resolved = resolve_inventory(pack, slug)
-        item = next((i for i in resolved.item_catalog if i.id == "multifocal_laser"), None)
-        assert item is not None, f"world {slug!r}: multifocal_laser must resolve (it is the dogfight weapon)"
+        assert resolved is not None
+        # It is a ship weapon, not personal gear — must NOT be in the personal item_catalog.
+        assert not any(i.id == "multifocal_laser" for i in resolved.item_catalog), (
+            f"world {slug!r}: multifocal_laser must NOT be in the personal item_catalog "
+            "(it is the dogfight ship weapon — story 114-15)"
+        )
+        item = build_dogfight_weapon_lookup(resolved)("multifocal_laser")
+        assert item is not None, (
+            f"world {slug!r}: multifocal_laser must resolve via the dogfight lookup"
+        )
         assert item.damage is not None, f"{slug}: multifocal_laser must carry a damage spec"
         assert item.damage.armor_piercing > 0, (
             f"{slug}: multifocal_laser is the dogfight SHIP weapon and must keep its armor_piercing "

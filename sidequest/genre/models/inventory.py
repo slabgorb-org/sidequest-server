@@ -259,6 +259,11 @@ class InventoryConfig(BaseModel):
 
     currency: CurrencyConfig | None = None
     item_catalog: list[CatalogItem] = Field(default_factory=list)
+    # Genre-tier-only ship/vehicle weapons referenced by native subsystems (the
+    # dogfight, ADR-077) — NOT personal gear, so they live OFF item_catalog and are
+    # exempt from the ADR-145 D3 genre-baseline-no-bespoke check (story 114-15). The
+    # dogfight resolves player_weapon/opponent_weapon against this collection only.
+    ship_weapons: list[CatalogItem] = Field(default_factory=list)
     starting_equipment: dict[str, list[str]] = Field(default_factory=dict)
     starting_gold: dict[str, int] = Field(default_factory=dict)
     philosophy: InventoryPhilosophy | None = None

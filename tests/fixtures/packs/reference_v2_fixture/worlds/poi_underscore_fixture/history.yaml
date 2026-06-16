@@ -1,0 +1,23 @@
+history: >-
+  A world whose POIs are authored with underscore slugs, the way oz authors
+  munchkin_country. The R2 landscape keys are the same underscore form.
+chapters:
+  - label: The Underscore Marches
+    description: >-
+      Two POIs with underscore slugs. munchkin_country has its landscape image
+      on R2 (underscore key in the fixture manifest); emerald_void does not.
+    points_of_interest:
+      - name: The Munchkin Country
+        slug: munchkin_country
+        region: munchkin_country
+        type: country
+        description: >-
+          An authored POI with an UNDERSCORE slug whose landscape image IS on R2
+          under the verbatim underscore key (.../poi/munchkin_country.png).
+      - name: The Emerald Void
+        slug: emerald_void
+        region: emerald_void
+        type: expanse
+        description: >-
+          An authored POI with an UNDERSCORE slug whose image is NOT on R2 — it
+          must render text-only (no landscape card), even after the gate fix.

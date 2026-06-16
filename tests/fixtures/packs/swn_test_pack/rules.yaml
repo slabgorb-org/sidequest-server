@@ -1,0 +1,638 @@
+stat_generation: point_buy
+point_buy_budget: 27
+magic_level: none
+
+ability_score_names:
+  - Physique
+  - Reflex
+  - Intellect
+  - Cunning
+  - Resolve
+  - Influence
+
+ruleset: swn
+swn:
+  attribute_map:
+    STRENGTH: Physique
+    CONSTITUTION: Resolve
+    DEXTERITY: Reflex
+    INTELLIGENCE: Intellect
+    WISDOM: Cunning
+    CHARISMA: Influence
+
+allowed_classes:
+  - Officer
+  - Operative
+  - Pilot
+  - Engineer
+  - Medic
+  - Smuggler
+  - Diplomat
+  - Soldier
+
+allowed_races:
+  - Coreworlder
+  - Colonial
+  - Spacer
+  - Uplifted
+  - Xeno
+  - Synthetic
+
+
+stat_display_fields:
+  - hp
+  - max_hp
+  - armor
+
+
+default_class: Smuggler
+default_race: Spacer
+race_label: Origin
+class_label: Role
+default_location: "The crew quarters of a beat-up freighter docked at a station you can't afford to stay at"
+default_time_of_day: ship_time
+
+custom_rules:
+  lethality: moderate
+  injury_system: temporary
+  rest_variant: standard
+  encumbrance: none
+  ship_combat: >-
+    Ship-to-ship combat is tactical and crew-driven, not a minigame. Each crew
+    member contributes from their station: Pilot maneuvers, Engineer manages
+    power and repairs, Officer calls targets and coordinates, Soldier operates
+    weapons, Operative runs electronic warfare. Describe actions cinematically —
+    sparks flying, hull groaning, crew shouting over alarms. Resolution is fast:
+    each round is one decisive action per station, not granular subsystem rolls.
+    Mechanically, Ship Combat runs on the SWN ruleset: the ship's HULL is an
+    ablative HP pool, attacks roll against the enemy ship's armor class, and a
+    side is beaten when its hull reaches zero (hp_depletion). Shields, engines,
+    and weapons remain condition tracks that degrade narratively. Keep the
+    telling cinematic — the hull pool is the spine beneath the story, not a
+    number to recite at the table.
+  crew_bonds: >-
+    Crew relationships matter mechanically. When you act to protect or support
+    a crewmate you have a bond with, you get advantage on the roll. Bonds form
+    through shared experience — surviving a fight together, a meaningful
+    conversation, pulling someone out of danger. The narrator tracks bond
+    strength organically. This is the Chambers/Firefly principle: the crew
+    is the point.
+  cultural_friction: >-
+    Origins aren't just stat blocks — they're worldviews. A Coreworlder and
+    a Colonial see the same situation differently. When cultural background
+    would create tension or misunderstanding, the narrator leans into it.
+    This isn't combat — it's roleplaying fuel. The best scenes come from
+    people who respect each other but genuinely don't understand each other's
+    assumptions.
+  the_ship: >-
+    The ship is a crewmember, not inventory. Every crew's ship has a name, a
+    personality, a history, and quirks — systems that run hot, a cargo bay
+    door that sticks, an engine that hums a certain way when she's happy.
+    The narrator treats the ship as a character: she can be hurt, healed,
+    upgraded, and mourned. Crew members have relationships with the ship
+    just as they do with each other. If the ship has an AI, it is a full
+    character with opinions, feelings, and bonds — not a tool. Losing your
+    ship is not a resource loss. It is a death in the family.
+
+    Ship Block (parallel to road_warrior's Car-acter Sheet Rig Block):
+    Ship Name (player-chosen), Ship Class (world-defined — freighter,
+    corvette, shuttle, etc.), Hull (the ablative HP pool that decides Ship
+    Combat under the SWN ruleset), Condition Tracks (shields, engines, weapons
+    — narrative degradation), Quirks (what makes her her),
+    AI Personality (if present — full character with opinions and bonds),
+    Scars (narrative history of damage and repairs), Berths (crew capacity).
+    Detailed sheet structure TBD in char_creation step.
+  found_family: >-
+    The crew is the emotional core of every campaign. Space opera is not
+    about lone heroes — it's about people who chose each other, or were
+    thrown together and chose to stay. The narrator actively creates moments
+    for crew bonding: shared meals, downtime conversations, arguments that
+    reveal character, small kindnesses under pressure. These scenes are not
+    filler between action — they ARE the story. A campaign where the crew
+    doesn't feel like family has failed, regardless of how many space
+    battles it had.
+  xeno_flexibility: >-
+    The Xeno origin is a genre-level slot that worlds fill with specific
+    species. Each world defines its own alien cultures with unique biology,
+    social structures, and naming patterns. At the genre level, Xeno means
+    "nonhuman sapient" — the world decides what that looks like. Alien
+    species should feel genuinely alien, not humans with prosthetics.
+
+encounter_base_tension:
+  random: 0.10
+  ambush: 0.30
+  boss: 0.40
+  final: 0.50
+
+# ── Confrontations ──────────────────────────────────────────
+confrontations:
+  - type: negotiation
+    label: "Diplomatic Negotiation"
+    # Spec 2026-05-20 confrontation-intent-validator
+    intent_verbs: [haggle, bargain, barter, offer, deal, price, sell, buy, negotiate]
+    on_intent_mismatch: warn
+    category: social
+    player_metric:
+      name: leverage
+      starting: 0
+      threshold: 10
+    opponent_metric:
+      name: leverage
+      starting: 0
+      threshold: 10
+    beats:
+      - id: persuade
+        label: "Make Your Case"
+        kind: strike
+        base: 2
+        # Playtest 2026-05-03 [BUG] — Edge meters never advanced from
+        # failed rolls. DEFAULT_DELTAS gives every strike beat
+        # ``Fail: 0/0`` per the dual-track-momentum spec; the player saw
+        # three Fails in a row with both dials flat, no mechanical signal
+        # of pressure even as the narrator's prose escalated. Both
+        # negotiation metrics start at 0, so the existing
+        # ``own: -N`` precedent (ship_combat::boost) is invisible — need
+        # ``opponent: +N`` to advance the opposing leverage dial toward
+        # threshold. Conservative numbers: Fail = +1, CritFail = +2 so a
+        # full chain of failures still leaves headroom for narrative
+        # recovery before resolution at threshold=10.
+        deltas:
+          crit_fail:
+            opponent: 2
+          fail:
+            opponent: 1
+        stat_check: Influence
+        effect: "opponent considers your argument"
+        narrator_hint: "Show the NPC weighing the player's words."
+      - id: threaten
+        label: "Threaten"
+        kind: strike
+        base: 3
+        # ``risk: faction reputation -1 if it fails`` — the prose has
+        # always promised a consequence on Fail, but the engine wrote
+        # ``0/0``. Match the threaten flavor: a hollow threat hands the
+        # opponent more leverage than a missed persuasion. CritFail
+        # honors the ``consequence: NPC becomes hostile`` text with a
+        # bigger swing.
+        deltas:
+          crit_fail:
+            opponent: 3
+          fail:
+            opponent: 1
+        stat_check: Resolve
+        risk: "faction reputation -1 if it fails"
+        consequence: "NPC becomes hostile on critical failure"
+        narrator_hint: "Escalate tension. The threat should feel dangerous."
+      # concede_point: gives ground to reveal the opponent's real goal — angle (leverage creation)
+      - id: concede_point
+        label: "Concede a Point"
+        kind: angle
+        target_tag: "Real Goal Revealed"
+        # angle's default Tie/Success grant tags but Fail does nothing.
+        # In a negotiation, conceding a point that doesn't yield
+        # information is *gifting* the opponent leverage. Mirror the
+        # strike numbers so the four beats give consistent failure
+        # feedback.
+        deltas:
+          crit_fail:
+            opponent: 2
+          fail:
+            opponent: 1
+        stat_check: Influence
+        effect: "opponent disposition +5, reveals their real goal"
+        narrator_hint: "Strategic retreat. Player gives ground to gain information."
+      - id: walk_away
+        label: "Walk Away"
+        kind: push
+        # push's default CritFail is ``own: -1`` (backslide on the
+        # player's dial); add ``opponent: +N`` for the same visibility
+        # reason as the strike beats. Failing to walk away from a
+        # negotiation is the opponent reeling you back to the table —
+        # they win positional ground.
+        deltas:
+          crit_fail:
+            opponent: 2
+          fail:
+            opponent: 1
+        stat_check: Resolve
+        consequence: "deal collapses, reputation intact"
+        narrator_hint: "Player leaves the negotiation table. No treaty."
+    mood: tension
+  - type: ship_combat
+    label: "Ship Combat"
+    # Spec 2026-05-20 confrontation-intent-validator
+    intent_verbs: [fire, broadside, ram, board, evade, cannon]
+    on_intent_mismatch: reprompt
+    category: combat
+    # ship_combat resolves via attack-vs-AC + hp_depletion under the SWN
+    # ruleset (Task 8). Win on a side's combatant reaching 0 HP; no dials.
+    resolution_mode: beat_selection
+    win_condition: hp_depletion
+    opponent_default_stats:
+      Intellect: 10
+      Reflex: 10
+      Resolve: 10
+      Cunning: 10
+      # Reserved combat-seed keys (not ability scores) — seed the enemy
+      # ship's runtime CreatureCore for hp_depletion. hp = HULL pool;
+      # armor_class = ship's ascending AC the attack rolls against.
+      # Calibrated (Task 11): raider-frigate, mid-band ship AC 14. Hull 30 lasts
+      # ~3-4 solid hits — broadside 2d6 (avg 7) / close_range 3d6 (avg 10.5),
+      # accounting for misses vs AC 14 at a +2-skill L1 gunner. A satisfying
+      # handful of rounds, not a one-salvo kill.
+      hp: 30
+      armor_class: 14
+      dexterity: 10  # SWN P4 initiative (1d8+DEX); placeholder, feel-calibrate in playtest
+    beats:
+      - id: broadside
+        label: "Broadside"
+        kind: strike
+        base: 2
+        stat_check: Intellect
+        attack_bonus: 1
+        combat_skill: 1
+        # ship_combat hull is HP under SWN hp_depletion (Task 8). Strike beats
+        # must declare damage_channel=strike so the dispatch damage path fires
+        # and ablates the enemy ship's hull pool. Ship guns aren't carried
+        # inventory items, so the damage dice live on the beat as a
+        # damage_override (priority-1 "natural attack" path in
+        # resolve_damage_spec_from_beat_and_actor). Calibrated (Task 11): 2d6
+        # (avg 7) — the workhorse volley. ~4-5 hits to chew through hull 30.
+        damage_channel: strike
+        damage_override: {dice: "2d6", bonus: 0}
+        effect: "full weapons volley at current range"
+        narrator_hint: "All guns fire. The bridge shakes with each salvo."
+      # evasive_maneuver: reduce incoming, open distance — defensive sustain
+      - id: evasive_maneuver
+        label: "Evasive Maneuver"
+        kind: brace
+        base: 1
+        stat_check: Reflex
+        effect: "reduce incoming damage, open distance"
+        narrator_hint: "Hard burn on the maneuvering thrusters. The ship groans under G-forces."
+      - id: close_range
+        label: "Close Range"
+        kind: strike
+        base: 3
+        stat_check: Resolve
+        attack_bonus: 1
+        combat_skill: 1
+        # Killing-blow strike: heavier dice than broadside, more risk. Same
+        # damage_channel/damage_override seam as broadside (see note above).
+        # Calibrated (Task 11): 3d6 (avg 10.5) — the closing kill-shot that
+        # ends a hull-30 frigate in ~3 hits if it lands, at the cost of the
+        # "shields take double if it fails" risk below.
+        damage_channel: strike
+        damage_override: {dice: "3d6", bonus: 0}
+        risk: "overextended — shields take double if it fails"
+        narrator_hint: "Push engines to maximum. Close the gap for a killing blow."
+      # target_systems: scan for a weakness — sets up a leverage tag for follow-on attack
+      - id: target_systems
+        label: "Target Systems"
+        kind: angle
+        target_tag: "Ship Weakness Exposed"
+        stat_check: Cunning
+        reveals: ship_weakness
+        narrator_hint: "Scan for a weakness. Engines, weapons, life support — pick your target."
+      - id: disengage
+        label: "Disengage"
+        kind: push
+        stat_check: Reflex
+        # resolution beat — see combat::retreat. ship_combat is hp_depletion too,
+        # so without this the only exit was hull-to-0.
+        resolution: true
+        consequence: "break contact — escape to hyperspace or retreat"
+        narrator_hint: "Full power to engines. The stars blur as the ship makes its escape."
+    secondary_stats:
+      - name: shields
+        source_stat: Intellect
+        spendable: false
+      - name: hull
+        source_stat: Physique
+        spendable: false
+      - name: engines
+        source_stat: Reflex
+        spendable: false
+      - name: weapons
+        source_stat: Cunning
+        spendable: false
+    mood: combat
+
+  - type: combat
+    label: Firefight
+    # Spec 2026-05-20 confrontation-intent-validator
+    # Story 71-24: melee-flavored verbs (strike, swing, stab) moved to the new
+    # `melee` type below so a knife-fight no longer matches the ranged blaster
+    # bank. Firefight keeps ranged + generic combat verbs only.
+    intent_verbs: [attack, fight, kill, slay, shoot, hit]
+    on_intent_mismatch: reprompt
+    category: combat
+    # Personal combat resolves via attack-vs-AC + hp_depletion under the SWN
+    # ruleset (Task 8). Win on a side's combatant reaching 0 HP; no dials.
+    resolution_mode: beat_selection
+    win_condition: hp_depletion
+    # Opponent stats calibrated to mod +0 per ADR-093 (was 12 / mod +1).
+    opponent_default_stats:
+      Physique: 10
+      Reflex: 10
+      Resolve: 10
+      # Reserved combat-seed keys (not ability scores) — seed the
+      # opponent's runtime CreatureCore for hp_depletion. hp = HP pool;
+      # armor_class = SWN ascending AC the attack rolls against.
+      # Calibrated (Task 11): basic corsair/raider mook. AC 12 = SWN
+      # light/partial armor; a +2-skill L1 shooter hits on ~8+ (~65%). HP 7
+      # is SWN mook-fragile — a 1d6 blaster (avg 3.5) drops it in ~2 hits, or
+      # an overload 2d6 (avg 7) can one-shot it. ~2-3 successful hits to drop.
+      hp: 7
+      armor_class: 12
+      dexterity: 13  # SWN P4 initiative (1d8+DEX); placeholder, feel-calibrate in playtest
+    # Opponent reprisal damage. `shoot` (the strike beat the enemy borrows for
+    # its to-hit) resolves damage from the ACTOR's inventory — which the seeded
+    # mook has none of — so without this the enemy hits but deals 0 HP and the
+    # player never takes damage (playtest 67-10). 1d6 = a basic corsair blaster,
+    # matching the PC's Sidearm Blaster. Read only on the opponent's turn, so it
+    # never caps the player's own weapon.
+    opponent_damage: {dice: "1d6", bonus: 0}
+    # Personal combat (not ship_combat). Shoot-outs in corridors, station
+    # bars, airlock standoffs. HP on character state.
+    beats:
+      - id: shoot
+        label: Shoot
+        kind: strike
+        base: 2
+        stat_check: Physique
+        damage_channel: strike
+        attack_bonus: 1
+        combat_skill: 1
+        effect: "Target takes damage this round"
+        narrator_hint: Blaster bolts sear the corridor. Sparks off bulkheads.
+      - id: take_cover
+        label: Take Cover
+        kind: brace
+        base: 1
+        stat_check: Resolve
+        effect: "Reduce incoming damage behind cargo or hull"
+        narrator_hint: Drop behind crates, return fire around the corner.
+      - id: overload
+        label: Overload Weapon
+        kind: strike
+        base: 4
+        attack_bonus: 1
+        combat_skill: 1
+        # Calibrated (Task 11): the "dump shot" must out-damage a normal shoot
+        # (1d6 blaster from inventory). damage_override 2d6 (avg 7) ablates via
+        # the same strike damage_channel — enough to one-shot a 7-HP mook on a
+        # hit, justifying the "-2 momentum on any failure" risk in deltas below.
+        damage_channel: strike
+        damage_override: {dice: "2d6", bonus: 0}
+        deltas:
+          # Both Fail and CritFail dock the player — the prose promises a
+          # consequence "on failure" without distinguishing tier, and the
+          # playtest 2026-04-25 [P0] caught the mismatch (Fail rolled, no
+          # momentum docked, button surface lied to the player).
+          fail:
+            own: -2
+          crit_fail:
+            own: -2
+        stat_check: Physique
+        risk: "Weapon jams — lose 2 momentum on any failure"
+        effect: "Target takes massive damage from the dump shot"
+        narrator_hint: Crank the power cell past safe limits.
+      - id: retreat
+        label: Fall Back
+        kind: push
+        stat_check: Reflex
+        # resolution beat: the engine ends the confrontation when this resolves
+        # (beat_kinds.apply_beat, ungated by win_condition). Without the flag the
+        # prose ``consequence`` is inert and combat has no voluntary exit —
+        # hp_depletion combat could only end by a kill, a hard soft-lock
+        # (playtest 67-10 / 59-26 "unexitable").
+        resolution: true
+        consequence: "Combat ends — seal a bulkhead, reach the airlock"
+        narrator_hint: Covering fire, sprinting for the bulkhead, slam it shut.
+    mood: combat
+
+  - type: melee
+    label: Melee
+    # Story 71-24: personal-melee bank, DISTINCT from the ranged Firefight
+    # (`combat`) bank and the ship_combat/dogfight vehicle banks. Melee verbs
+    # route HERE, not into Firefight's blaster beats — a vibroblade duel no
+    # longer surfaces "Blaster bolts sear the corridor". Resolves through the
+    # same SWN attack-vs-AC + hp_depletion path (ADR-114 ablative HP) as
+    # Firefight, so a melee fight depletes HP exactly the way a shoot-out does.
+    # Genre-tier (not a perseus_cloud override): personal-melee crunch is
+    # mechanics, inherited by every space_opera world ("Crunch in the Genre").
+    intent_verbs: [swing, stab, strike, slash, lunge, grapple, thrust, parry, hack, cleave, melee]
+    on_intent_mismatch: reprompt
+    category: combat
+    resolution_mode: beat_selection
+    win_condition: hp_depletion
+    # Calibrated to the Firefight baseline: a basic corsair/raider mook at close
+    # quarters. Same hp 7 / AC 12 / 1d6 reprisal as the ranged bank — no separate
+    # melee balancing pass this sprint. Reserved combat-seed keys (hp/armor_class)
+    # seed the opponent's runtime CreatureCore for hp_depletion; dexterity seeds
+    # 1d8+DEX initiative (SWN P4 — no silent +0 fallback).
+    opponent_default_stats:
+      Physique: 10
+      Reflex: 10
+      Resolve: 10
+      hp: 7
+      armor_class: 12
+      dexterity: 13
+    # Opponent reprisal damage, mirroring Firefight: the enemy borrows the strike
+    # beat for its to-hit, which resolves damage from the ACTOR's inventory — the
+    # seeded mook has none — so without this the enemy hits for 0. 1d6 = a basic
+    # blade/club. Read only on the opponent's turn, so it never caps the player's
+    # own weapon.
+    opponent_damage: {dice: "1d6", bonus: 0}
+    # Knife fights, vibroblade duels, boarding-axe brawls in corridors and station
+    # bars. HP on character state, ablated through the strike damage_channel.
+    beats:
+      - id: slash
+        label: Slash
+        kind: strike
+        base: 2
+        stat_check: Physique
+        damage_channel: strike
+        attack_bonus: 1
+        combat_skill: 1
+        effect: "Target takes damage this round"
+        narrator_hint: A blade flashes in — sparks where edge meets bulkhead.
+      - id: parry
+        label: Parry
+        kind: brace
+        base: 1
+        stat_check: Reflex
+        effect: "Turn the incoming blow aside, reduce damage taken"
+        narrator_hint: Catch the strike on a forearm guard, deflect it wide.
+      - id: overhand
+        label: Overhand Strike
+        kind: strike
+        base: 4
+        attack_bonus: 1
+        combat_skill: 1
+        # The committed swing: out-damages a basic slash (mirrors Firefight's
+        # `overload` dump shot). 2d6 (avg 7) ablates via the same strike channel —
+        # enough to drop a 7-HP mook on a hit, justifying the failure-momentum cost.
+        damage_channel: strike
+        damage_override: {dice: "2d6", bonus: 0}
+        deltas:
+          # Both Fail and CritFail dock momentum — the prose promises a
+          # consequence "on failure" without distinguishing tier (mirrors the
+          # Firefight overload calibration).
+          fail:
+            own: -2
+          crit_fail:
+            own: -2
+        stat_check: Physique
+        risk: "Overcommit — lose 2 momentum on any failure"
+        effect: "Target takes heavy damage from the committed swing"
+        narrator_hint: Both hands on the haft, a downward blow with all your weight.
+      - id: withdraw
+        label: Break Away
+        kind: push
+        stat_check: Reflex
+        # Voluntary melee exit (parity with Firefight's `retreat` resolution beat).
+        # Without it an hp_depletion melee could only end on a kill — a soft-lock
+        # (cf. playtest 67-10 / 59-26 "unexitable"). Distinct id from ship_combat's
+        # `disengage` and Firefight's `retreat` — this is its own bank.
+        resolution: true
+        consequence: "Combat ends — break contact, put a bulkhead between you"
+        narrator_hint: Shove off, spin clear, and sprint for the hatch.
+    mood: combat
+  - type: chase
+    label: Spaceflight Pursuit
+    # Spec 2026-05-20 confrontation-intent-validator
+    intent_verbs: [chase, pursue, flee, run, escape, follow]
+    on_intent_mismatch: reprompt
+    category: movement
+    player_metric:
+      name: separation
+      starting: 0
+      threshold: 7
+    opponent_metric:
+      name: pursuit
+      starting: 0
+      threshold: 7
+    beats:
+      - id: burn
+        label: Full Burn
+        kind: push
+        base: 2
+        stat_check: Reflex
+        narrator_hint: Engines flare blue-white. The hull groans under acceleration.
+      - id: asteroid_thread
+        label: Thread the Field
+        kind: push
+        base: 3
+        deltas:
+          crit_fail:
+            own: -2
+        stat_check: Cunning
+        risk: "Impact — take hull damage on failure"
+      # ecm: deploy countermeasures that confuse sensors — sets up a leverageable misdirection
+      - id: ecm
+        label: ECM Decoys
+        kind: angle
+        target_tag: "Sensor Confusion"
+        stat_check: Cunning
+        effect: "Deploy countermeasures to confuse pursuit sensors"
+      - id: microjump
+        label: Microjump
+        kind: push
+        stat_check: Reflex
+        # resolution beat — see combat::retreat. The chase dial could otherwise
+        # only end by reaching threshold; this is the clean voluntary exit.
+        resolution: true
+        consequence: "Chase ends — short hyperspace hop, gone"
+    mood: tension
+
+  - type: dogfight
+    label: Fighter Duel
+    # Spec 2026-05-20 confrontation-intent-validator
+    intent_verbs: [dogfight, intercept, pursue, engage, lock, missile, gun]
+    on_intent_mismatch: reprompt
+    category: combat
+    resolution_mode: sealed_letter_lookup
+    # Sealed-letter simultaneous-commit dogfight (story 38-4). Each pilot
+    # privately commits to a maneuver per turn; the engine looks up the
+    # (red, blue) pair in the interaction table and applies the two
+    # descriptor deltas to each pilot's view. Table lives in its own file
+    # adjacent to this one — see dogfight/interactions_mvp.yaml.
+    # SWN statline (Task 5): opponent seeded with SWN-calibrated pilot stats.
+    # Geometry modifiers feed the sealed-letter lookup — aspect/range bonuses
+    # adjust attack_bonus at resolution time.
+    win_condition: dial_threshold
+    opponent_weapon: multifocal_laser
+    player_weapon: multifocal_laser
+    opponent_default_stats:
+      Physique: 10
+      Reflex: 10
+      Intellect: 10
+      Cunning: 10
+      Resolve: 10
+      # Reserved combat-seed keys (not ability scores) — SWN strike-fighter frame + gunnery
+      hp: 8
+      armor_class: 16
+      armor: 5  # SWN ship flat damage soak (distinct from worn-armor mitigation and from armor_class); AP reduces it
+      dexterity: 12  # SWN P4 initiative (1d8+DEX); placeholder, feel-calibrate in playtest
+      pilot_skill: 1
+      attack_bonus: 1
+    # PC strike-fighter frame (HP/AC/armor/gunnery defaults). The pilot's real DEX/attributes + Pilot skill come from the character sheet at instantiation.
+    player_default_stats:
+      hp: 8
+      armor_class: 16
+      armor: 5  # SWN ship flat damage soak (distinct from worn-armor mitigation and from armor_class); AP reduces it
+      pilot_skill: 0
+      attack_bonus: 0
+    geometry_modifiers:
+      aspect:
+        tail_on: 2
+        quartering: 1
+        crossing: -1
+        head_on: -2
+      range:
+        gun: 2
+        close: 0
+        medium: -2
+        far: -4
+    player_metric:
+      name: energy
+      starting: 0
+      threshold: 30
+    opponent_metric:
+      name: energy
+      starting: 0
+      threshold: 30
+    beats:
+      # straight/throttle_up: hold vector, recover energy — push (sustain/distance goal)
+      - id: straight
+        label: Throttle Up
+        kind: push
+        base: 5
+        stat_check: Reflex
+        narrator_hint: Hold vector. Engines at full burn. Recover energy.
+      # bank/break_right: defensive break to avoid incoming fire — brace
+      - id: bank
+        label: Break Right
+        kind: brace
+        base: 5
+        stat_check: Reflex
+        narrator_hint: Hard starboard break. Costs energy, breaks the merge geometry.
+      # loop/vertical_reversal: repositioning maneuver to get behind opponent — angle
+      - id: loop
+        label: Vertical Reversal
+        kind: angle
+        target_tag: "Positional Advantage"
+        stat_check: Reflex
+        narrator_hint: Full vertical loop — catch them from behind on the exit.
+      # kill_rotation: flip 180 on attitude jets for a rear-shot opportunity — angle (attack setup)
+      - id: kill_rotation
+        label: Kill Rotation
+        kind: angle
+        target_tag: "Rear Arc"
+        stat_check: Reflex
+        narrator_hint: Flip 180 on attitude jets. Back-shot on inertia.
+    interaction_table:
+      _from: dogfight/interactions_mvp.yaml
+    mood: tense

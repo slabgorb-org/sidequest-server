@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from sidequest.game.persistence import GameMode, SqliteStore, db_path_for_slug, upsert_game
+from sidequest.game.persistence import GameMode
 from sidequest.game.session import GameSnapshot
 from sidequest.protocol.messages import (
     SessionEventMessage,
@@ -22,6 +22,58 @@ from sidequest.protocol.messages import (
 )
 from sidequest.server.session_handler import WebSocketSessionHandler
 from sidequest.server.session_room import RoomRegistry
+
+# Use a genre pack that exists in the content repo.
+_GENRE = "caverns_and_claudes"
+_WORLD = "grimvault"
+
+
+@pytest.fixture(autouse=True)
+def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
+    """Bind the process pool to a per-worker throwaway PG db, clean per test.
+
+    Slug-connect (ADR-115 D2) loads the authoritative snapshot from PG via
+    db_pool.get_pool(); seed and connect must share one isolated database.
+    """
+    import psycopg
+
+    from sidequest.game import db_pool
+
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    with psycopg.connect(plain, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+            "AND tablename <> 'alembic_version'"
+        ).fetchall()
+        if rows:
+            names = ", ".join(f'"{r[0]}"' for r in rows)
+            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+    yield
+    db_pool.close_pool()
+
+
+def _seed_pg_for_slug(
+    slug: str,
+    snap: GameSnapshot,
+    *,
+    mode: GameMode = GameMode.MULTIPLAYER,
+    genre_slug: str = _GENRE,
+    world_slug: str = _WORLD,
+) -> None:
+    """Mirror a seeded snapshot into PG — the store the slug-resume path loads."""
+    from sidequest.game import db_pool
+    from sidequest.server.session_state import _build_pg_repos_for_slug
+
+    repo, _dungeon, _sink = _build_pg_repos_for_slug(
+        db_pool.get_pool(),
+        slug=slug,
+        mode=str(mode),
+        genre_slug=genre_slug,
+        world_slug=world_slug,
+    )
+    repo.save(snap)
 
 
 def _make_handler(save_dir: Path, search_paths: list[Path]) -> WebSocketSessionHandler:
@@ -44,9 +96,6 @@ def _make_handler(save_dir: Path, search_paths: list[Path]) -> WebSocketSessionH
     return handler
 
 
-# Use a genre pack that exists in the content repo.
-_GENRE = "caverns_and_claudes"
-_WORLD = "grimvault"
 _SLUG = "2026-04-22-grimvault-test"
 
 # Resolve the content search path relative to this file so tests work from
@@ -58,13 +107,22 @@ _CONTENT_SEARCH_PATH = Path(__file__).resolve().parents[3] / "sidequest-content"
 
 @pytest.fixture
 def seeded_game(tmp_path: Path) -> Path:
-    slug = _SLUG
-    db = db_path_for_slug(tmp_path, slug)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore(db)
-    store.initialize()
-    upsert_game(store, slug=slug, mode=GameMode.MULTIPLAYER, genre_slug=_GENRE, world_slug=_WORLD)
-    store.close()
+    """Register an empty MP session in Postgres (no snapshot → chargen).
+
+    ADR-115 F1: connect resolves the bootstrap row from PG. ``_build_pg_
+    repos_for_slug`` ensures the session row without persisting a snapshot,
+    so connect sees has_character=False and enters Creating.
+    """
+    from sidequest.game import db_pool
+    from sidequest.server.session_state import _build_pg_repos_for_slug
+
+    _build_pg_repos_for_slug(
+        db_pool.get_pool(),
+        slug=_SLUG,
+        mode=str(GameMode.MULTIPLAYER),
+        genre_slug=_GENRE,
+        world_slug=_WORLD,
+    )
     return tmp_path
 
 
@@ -161,6 +219,51 @@ async def test_slug_connect_emits_theme_css(seeded_game: Path):
 
 
 @pytest.mark.asyncio
+async def test_slug_connect_rewrites_font_urls_to_cdn(
+    seeded_game: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Font (and asset) url()s in the genre CSS are routed through the
+    asset_urls seam before the theme_css event is emitted, so the browser
+    pulls fonts from R2 (CDN) — never from the raw /genre/ mount and never
+    from fonts.googleapis.com.
+
+    This is the wiring guard for the rewrite_theme_css_asset_urls integration
+    in connect.py: loader reads the pack CSS, connect rewrites it, UI receives
+    cdn URLs. Default (no SIDEQUEST_ASSET_BASE_URL) = CDN mode.
+    """
+    monkeypatch.delenv("SIDEQUEST_ASSET_BASE_URL", raising=False)
+    handler = _make_handler(seeded_game, [_CONTENT_SEARCH_PATH])
+    msg = SessionEventMessage(
+        type="SESSION_EVENT",
+        player_id="alice",
+        payload=SessionEventPayload(event="connect", game_slug=_SLUG),
+    )
+    outbound = await handler.handle_message(msg)
+
+    theme_msgs = [
+        m
+        for m in outbound
+        if getattr(m, "type", None) == "SESSION_EVENT"
+        and getattr(getattr(m, "payload", None), "event", None) == "theme_css"
+    ]
+    assert theme_msgs, "no theme_css event emitted"
+    css = theme_msgs[0].payload.css
+
+    # No Google Fonts anywhere — the genre pack must self-host.
+    assert "fonts.googleapis.com" not in css, (
+        "genre CSS still references Google Fonts after rewrite"
+    )
+    # caverns_and_claudes ships at least one self-hosted @font-face; after the
+    # rewrite its src must point at the CDN, not the raw /genre/ mount.
+    assert "https://cdn.slabgorb.com/genre_packs/assets/fonts/" in css, (
+        "expected font url() rewritten to the CDN asset seam"
+    )
+    assert "url('/genre/assets/fonts/" not in css and "url(/genre/assets/fonts/" not in css, (
+        "raw /genre/ font mount survived the rewrite"
+    )
+
+
+@pytest.mark.asyncio
 async def test_connect_by_unknown_slug_errors(seeded_game: Path):
     handler = _make_handler(seeded_game, [_CONTENT_SEARCH_PATH])
     msg = SessionEventMessage(
@@ -188,11 +291,6 @@ async def test_slug_connect_resumes_saved_snapshot(tmp_path: Path):
     from sidequest.game.creature_core import CreatureCore, Inventory
 
     slug = "2026-04-22-resume-test"
-    db = db_path_for_slug(tmp_path, slug)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore(db)
-    store.initialize()
-    upsert_game(store, slug=slug, mode=GameMode.MULTIPLAYER, genre_slug=_GENRE, world_slug=_WORLD)
 
     # Build a minimal character and save a snapshot that contains it.
     core = CreatureCore(
@@ -204,9 +302,7 @@ async def test_slug_connect_resumes_saved_snapshot(tmp_path: Path):
     char = Character(core=core, char_class="Fighter", race="Human", backstory="A wandering fighter")
     snap = GameSnapshot(genre_slug=_GENRE, world_slug=_WORLD, location="Entrance")
     snap.characters = [char]
-    store.init_session(_GENRE, _WORLD)
-    store.save(snap)
-    store.close()
+    _seed_pg_for_slug(slug, snap, mode=GameMode.MULTIPLAYER)
 
     handler = _make_handler(tmp_path, [_CONTENT_SEARCH_PATH])
     msg = SessionEventMessage(
@@ -311,11 +407,6 @@ async def test_slug_connect_routes_new_player_to_chargen_when_seat_taken(tmp_pat
     from sidequest.game.creature_core import CreatureCore, Inventory
 
     slug = "2026-04-25-multiseat-test"
-    db = db_path_for_slug(tmp_path, slug)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore(db)
-    store.initialize()
-    upsert_game(store, slug=slug, mode=GameMode.MULTIPLAYER, genre_slug=_GENRE, world_slug=_WORLD)
 
     core = CreatureCore(
         name="Laverne",
@@ -327,9 +418,7 @@ async def test_slug_connect_routes_new_player_to_chargen_when_seat_taken(tmp_pat
     snap = GameSnapshot(genre_slug=_GENRE, world_slug=_WORLD, location="Entrance")
     snap.characters = [char]
     snap.player_seats = {"P1": "Laverne"}
-    store.init_session(_GENRE, _WORLD)
-    store.save(snap)
-    store.close()
+    _seed_pg_for_slug(slug, snap, mode=GameMode.MULTIPLAYER)
 
     handler = _make_handler(tmp_path, [_CONTENT_SEARCH_PATH])
     msg = SessionEventMessage(
@@ -364,11 +453,6 @@ async def test_slug_connect_resumes_seated_player_by_id(tmp_path: Path):
     from sidequest.game.creature_core import CreatureCore, Inventory
 
     slug = "2026-04-25-resume-seated-test"
-    db = db_path_for_slug(tmp_path, slug)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore(db)
-    store.initialize()
-    upsert_game(store, slug=slug, mode=GameMode.MULTIPLAYER, genre_slug=_GENRE, world_slug=_WORLD)
 
     core = CreatureCore(
         name="Laverne",
@@ -380,9 +464,7 @@ async def test_slug_connect_resumes_seated_player_by_id(tmp_path: Path):
     snap = GameSnapshot(genre_slug=_GENRE, world_slug=_WORLD, location="Entrance")
     snap.characters = [char]
     snap.player_seats = {"P1": "Laverne"}
-    store.init_session(_GENRE, _WORLD)
-    store.save(snap)
-    store.close()
+    _seed_pg_for_slug(slug, snap, mode=GameMode.MULTIPLAYER)
 
     handler = _make_handler(tmp_path, [_CONTENT_SEARCH_PATH])
     msg = SessionEventMessage(
@@ -419,11 +501,6 @@ async def test_slug_connect_chargen_gate_logs_branch_decision(tmp_path: Path, ca
     from sidequest.game.creature_core import CreatureCore, Inventory
 
     slug = "2026-04-25-gate-log-test"
-    db = db_path_for_slug(tmp_path, slug)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore(db)
-    store.initialize()
-    upsert_game(store, slug=slug, mode=GameMode.MULTIPLAYER, genre_slug=_GENRE, world_slug=_WORLD)
 
     core = CreatureCore(
         name="Laverne",
@@ -435,9 +512,7 @@ async def test_slug_connect_chargen_gate_logs_branch_decision(tmp_path: Path, ca
     snap = GameSnapshot(genre_slug=_GENRE, world_slug=_WORLD, location="Entrance")
     snap.characters = [char]
     snap.player_seats = {"P1": "Laverne"}
-    store.init_session(_GENRE, _WORLD)
-    store.save(snap)
-    store.close()
+    _seed_pg_for_slug(slug, snap, mode=GameMode.MULTIPLAYER)
 
     handler = _make_handler(tmp_path, [_CONTENT_SEARCH_PATH])
     msg = SessionEventMessage(
@@ -484,11 +559,6 @@ async def test_mp_legacy_save_routes_new_joiner_to_chargen(tmp_path: Path, caplo
     from sidequest.game.creature_core import CreatureCore, Inventory
 
     slug = "2026-04-25-mp-legacy-no-seats"
-    db = db_path_for_slug(tmp_path, slug)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore(db)
-    store.initialize()
-    upsert_game(store, slug=slug, mode=GameMode.MULTIPLAYER, genre_slug=_GENRE, world_slug=_WORLD)
 
     core = CreatureCore(
         name="Laverne",
@@ -501,9 +571,7 @@ async def test_mp_legacy_save_routes_new_joiner_to_chargen(tmp_path: Path, caplo
     snap.characters = [char]
     # Crucial: empty player_seats simulates pre-binding chargen save.
     snap.player_seats = {}
-    store.init_session(_GENRE, _WORLD)
-    store.save(snap)
-    store.close()
+    _seed_pg_for_slug(slug, snap, mode=GameMode.MULTIPLAYER)
 
     handler = _make_handler(tmp_path, [_CONTENT_SEARCH_PATH])
     # Squiggy connects with their own display name (UI sends displayName as
@@ -569,11 +637,6 @@ async def test_mp_legacy_save_resumes_original_player_by_name(tmp_path: Path, ca
     from sidequest.game.creature_core import CreatureCore, Inventory
 
     slug = "2026-04-25-mp-legacy-backfill"
-    db = db_path_for_slug(tmp_path, slug)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore(db)
-    store.initialize()
-    upsert_game(store, slug=slug, mode=GameMode.MULTIPLAYER, genre_slug=_GENRE, world_slug=_WORLD)
 
     core = CreatureCore(
         name="Laverne",
@@ -585,9 +648,7 @@ async def test_mp_legacy_save_resumes_original_player_by_name(tmp_path: Path, ca
     snap = GameSnapshot(genre_slug=_GENRE, world_slug=_WORLD, location="Entrance")
     snap.characters = [char]
     snap.player_seats = {}
-    store.init_session(_GENRE, _WORLD)
-    store.save(snap)
-    store.close()
+    _seed_pg_for_slug(slug, snap, mode=GameMode.MULTIPLAYER)
 
     handler = _make_handler(tmp_path, [_CONTENT_SEARCH_PATH])
     msg = SessionEventMessage(
@@ -666,13 +727,6 @@ async def test_mp_joiner_suppresses_opening_seed(
     from sidequest.game.creature_core import CreatureCore, Inventory
 
     slug = f"2026-04-26-mp-joiner-opening-suppressed-{world_slug}"
-    db = db_path_for_slug(tmp_path, slug)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore(db)
-    store.initialize()
-    upsert_game(
-        store, slug=slug, mode=GameMode.MULTIPLAYER, genre_slug=genre_slug, world_slug=world_slug
-    )
 
     # Seat the host so the joiner sees a populated snapshot. player_seats
     # populated → the gate's ``player_seats`` branch fires (joiner absent
@@ -688,9 +742,13 @@ async def test_mp_joiner_suppresses_opening_seed(
     snap = GameSnapshot(genre_slug=genre_slug, world_slug=world_slug, location=location)
     snap.characters = [char]
     snap.player_seats = {"host-id": "Host"}
-    store.init_session(genre_slug, world_slug)
-    store.save(snap)
-    store.close()
+    _seed_pg_for_slug(
+        slug,
+        snap,
+        mode=GameMode.MULTIPLAYER,
+        genre_slug=genre_slug,
+        world_slug=world_slug,
+    )
 
     handler = _make_handler(tmp_path, [_CONTENT_SEARCH_PATH])
     msg = SessionEventMessage(
@@ -904,11 +962,6 @@ async def test_slug_connect_backfills_seat_confirmed_for_existing_seats(tmp_path
     from sidequest.game.creature_core import CreatureCore, Inventory
 
     slug = "2026-05-02-seat-backfill-test"
-    db = db_path_for_slug(tmp_path, slug)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore(db)
-    store.initialize()
-    upsert_game(store, slug=slug, mode=GameMode.MULTIPLAYER, genre_slug=_GENRE, world_slug=_WORLD)
 
     laverne = Character(
         core=CreatureCore(name="Laverne", description="d", personality="p", inventory=Inventory()),
@@ -925,9 +978,7 @@ async def test_slug_connect_backfills_seat_confirmed_for_existing_seats(tmp_path
     snap = GameSnapshot(genre_slug=_GENRE, world_slug=_WORLD, location="Entrance")
     snap.characters = [laverne, shirley]
     snap.player_seats = {"P1": "Laverne", "P2": "Shirley"}
-    store.init_session(_GENRE, _WORLD)
-    store.save(snap)
-    store.close()
+    _seed_pg_for_slug(slug, snap, mode=GameMode.MULTIPLAYER)
 
     handler = _make_handler(tmp_path, [_CONTENT_SEARCH_PATH])
     msg = SessionEventMessage(

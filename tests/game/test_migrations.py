@@ -48,18 +48,45 @@ def test_legacy_fixture_loads_without_error() -> None:
     assert "world_slug" in migrated
 
 
-def test_sqlite_store_load_calls_migrate(tmp_path: Path) -> None:
-    """End-to-end: SqliteStore.load runs migrate_legacy_snapshot before validate."""
-    from sidequest.game.persistence import SqliteStore
+@pytest.fixture
+def pg_repo(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
+    """A real PgSaveRepository on a per-worker throwaway PG db (ADR-115 F1)."""
+    import psycopg
+
+    from sidequest.game import db_pool
+    from sidequest.server.session_state import _build_pg_repos_for_slug
+
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    with psycopg.connect(plain, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+            "AND tablename <> 'alembic_version'"
+        ).fetchall()
+        if rows:
+            names = ", ".join(f'"{r[0]}"' for r in rows)
+            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+    repo, _dungeon, _sink = _build_pg_repos_for_slug(
+        db_pool.get_pool(), slug="migration-load", mode="solo",
+        genre_slug="caverns_and_claudes", world_slug="rookhollow",
+    )
+    try:
+        yield repo
+    finally:
+        db_pool.close_pool()
+
+
+def test_save_load_runs_migrate(pg_repo) -> None:
+    """End-to-end: the save repository's load runs migrate_legacy_snapshot
+    before pydantic validation (ADR-115 F1: PgSnapshot.load)."""
     from sidequest.game.session import GameSnapshot
 
-    store = SqliteStore(tmp_path / "save.db")
-    store.init_session(genre_slug="caverns_and_claudes", world_slug="rookhollow")
-
+    pg_repo.init_session()
     canonical = GameSnapshot(genre_slug="caverns_and_claudes", world_slug="rookhollow")
-    store.save(canonical)
+    pg_repo.save(canonical)
 
-    loaded = store.load()
+    loaded = pg_repo.load()
     assert loaded is not None
     assert loaded.snapshot.genre_slug == "caverns_and_claudes"
 

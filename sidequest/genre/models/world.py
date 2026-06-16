@@ -235,6 +235,33 @@ class Route(BaseModel):
     danger: str | None = None
     waypoints: list[str] = Field(default_factory=list)
     difficulty: str | None = None
+    # --- ADR-141 inter-system jump mechanics (Story 98-5) ---------------------
+    # Additive, optional, typed jump-cost annotation the bound ruleset
+    # (space_opera → SWN, ADR-117) reads when adjudicating a campaign-scale jump
+    # across this edge. Authored by C2 (Story 98-4); absent on a bare adjacency
+    # (the ruleset then computes an explicit, OTEL-logged default). Distinct from
+    # the narrative ``danger`` descriptor above: ``hazard`` is mechanical crunch,
+    # ``danger`` is free-text flavor — flavor must never silently drive mechanics.
+    jump_fuel: int | None = Field(
+        default=None,
+        description="Drive fuel loads this jump consumes (SWN spike-drive). "
+        "None → the ruleset's default fuel cost for the edge.",
+    )
+    transit_days: int | None = Field(
+        default=None,
+        description="Subjective transit time of the jump in days. "
+        "None → the ruleset's default transit time.",
+    )
+    drive_rating_min: int | None = Field(
+        default=None,
+        description="Minimum spike-drive rating to jump this edge unstrained. "
+        "A ship below it still crosses but burns an extra fuel load (not a block).",
+    )
+    hazard: str | None = Field(
+        default=None,
+        description="Mechanical hazard tag the ruleset applies on the jump "
+        "(distinct from the narrative ``danger`` descriptor). None → no hazard.",
+    )
 
 
 class CartographyConfig(BaseModel):
@@ -256,6 +283,16 @@ class CartographyConfig(BaseModel):
     map_style: str = ""
     map_resolution: list[int] | None = None
     navigation_mode: NavigationMode = NavigationMode.region
+    # Player-map disclosure policy (sq-playtest 2026-06-07: perseus_cloud's
+    # full 35-system sector catalog — secret systems included — rendered at
+    # discovered=1). ``public`` (default): the whole region catalog ships to
+    # the client, correct for small worlds whose map is common knowledge (a
+    # town, a neighborhood). ``fog``: only discovered regions ship with full
+    # lore; regions adjacent to a discovered one ship name-only (the
+    # explorable frontier); everything else is absent from the wire.
+    # Content-expressible per world in cartography.yaml — no engine change
+    # needed to make a new world spoiler-safe.
+    discovery_mode: Literal["public", "fog"] = "public"
     regions: dict[str, Region] = Field(default_factory=dict)
     routes: list[Route] = Field(default_factory=list)
     rooms: list[RoomDef] | None = None

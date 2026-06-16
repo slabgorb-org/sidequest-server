@@ -23,7 +23,6 @@ from sidequest.agents.tool_registry import (
 )
 from sidequest.agents.tooling_protocol import ToolUseBlock
 from sidequest.agents.tools import generate_name as _generate_name_module  # noqa: F401
-from sidequest.game.persistence import SqliteStore
 from sidequest.genre.names.generator import NameGenerator, SlotGenerator
 
 # ---------------------------------------------------------------------------
@@ -31,23 +30,25 @@ from sidequest.genre.names.generator import NameGenerator, SlotGenerator
 # ---------------------------------------------------------------------------
 
 
-def _store() -> SqliteStore:
-    s = SqliteStore.open_in_memory()
-    s.initialize()
-    return s
+def _store():
+    from unittest.mock import MagicMock
+
+    from sidequest.game.repository import SaveRepository
+
+    return MagicMock(spec=SaveRepository)
 
 
 def _make_ctx(
     *,
     name_generators: dict[str, NameGenerator] | None = None,
-    store: SqliteStore | None = None,
+    store: object | None = None,
 ) -> ToolContext:
     return ToolContext(
         world_id="w",
         session_id="s",
         perspective_pc="Alice",
         turn_number=1,
-        store=store if store is not None else _store(),
+        repository=store if store is not None else _store(),
         otel_span=MagicMock(),
         perception_filter=NarratorPerceptionFilter(),
         name_generators=name_generators,

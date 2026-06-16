@@ -1,0 +1,496 @@
+# Heavy Metal — Callings (Classes)
+#
+# Faithful WWN 3-chassis port (Warrior / Expert / Mage), per
+# docs/superpowers/specs/2026-06-05-heavy-metal-wwn-classes-chargen-design.md
+# (read the 2026-06-05 AMENDMENT — casters ship REAL magic, not Effort-only).
+# Template: genre_packs/elemental_harmony/classes.yaml.
+#
+# The Mage chassis is expressed as three caster Callings — Necromancer,
+# Elementalist, Pact-born — each carrying FULL wwn_magic (Effort sources +
+# cast tables + starting_prepared spells that resolve in spells_wwn.yaml).
+#
+# Design contract (heavy_metal uses standard ABBREVIATION ability names —
+# STR/DEX/CON/INT/WIS/CHA in rules.yaml ability_score_names):
+#   - prime_requisite uses the ABBREVIATION (STR, DEX, INT, CHA, ...).
+#   - caster wwn_magic.effort_sources.governing_attr uses the CANONICAL WWN
+#     KEY (INTELLIGENCE / CHARISMA), mapped to the pack abbreviation by
+#     rules.yaml wwn.attribute_map (INTELLIGENCE→INT, CHARISMA→CHA).
+#
+# class_label in rules.yaml: "Calling".
+#
+# cast_spell is NOT listed in any class's encounter_beat_choices — the
+# rules.yaml combat (Blade-work) class_filter [Necromancer, Elementalist,
+# Pact-born] is the ONLY gate that offers it, so the WWN cast resource gate
+# fires correctly (mirrors EH's class_filter pattern on cast_spell).
+#
+# Required-but-inert fields follow the space_opera / EH convention:
+#   - minimum_score: 9 — point_buy pack, no roll-minimum gate.
+#   - kit_table: <id>_kit — descriptive placeholder; starting equipment is
+#     keyed by display_name in inventory.yaml, not via a class_kit path.
+#   - jungian_default: archetype tag per class narrative posture.
+#
+# saving_throws (B/X B26 table) is authored on EVERY class — once the pack
+# ships a spell catalog, the loader validator requires it so save-bearing
+# spells can resolve.
+#
+# Per ADR-095: one signature ability per class. The Warrior carries the WWN
+# Warrior pair (Killing Blow + Veteran's Luck), both gated on warrior: true.
+
+# ── Warrior chassis ──────────────────────────────────────────────────────────
+
+- id: warrior
+  display_name: Warrior
+  rpg_role: tank
+  jungian_default: hero
+  minimum_score: 9
+  kit_table: warrior_kit
+  prime_requisite: STR
+  flavor: >-
+    The Warrior fights because a debt, a house, or a person stands behind
+    them, and they have decided the fight stops here. This gives them a
+    quality difficult to explain to anyone who has not met it: a settled
+    absence of urgency about their own survival, the bearing of someone who
+    long ago finished negotiating the price of their own life and is no
+    longer interested in renegotiating it.
+  encounter_beat_choices:
+    - strike
+    - brace
+    - committed_blow
+    - break_contact
+    - argue
+    - press_obligation
+    - yield
+    - withdraw
+    - run
+    - read_the_ground
+    - vanish
+  # WWN Warrior archetype. No magic_access, no wwn_magic.
+  # warrior: true gates the Killing Blow + Veteran's Luck dispatch seams in
+  # sidequest-server dice.py.
+  warrior: true
+  saving_throws:
+    death_ray_or_poison: 12
+    magic_wands: 13
+    paralysis_or_stone: 14
+    dragon_breath: 15
+    rods_staves_spells: 16
+  abilities:
+    - name: "Killing Blow"
+      genre_description: >-
+        A Warrior who has your measure will, at the moment the fight pivots,
+        put everything available into a single committed strike. Not an act
+        of rage — an act of completion. The body executes what the mind
+        decided three moves ago, and the decision was made without heat.
+      mechanical_effect: >-
+        Once per scene, on a successful strike beat, deal bonus damage equal
+        to half your character level (minimum 1, rounded down). This is the
+        WWN Warrior Killing Blow (SRD §1.5.18). Requires warrior: true.
+      involuntary: false
+    - name: "Veteran's Luck"
+      genre_description: >-
+        Warriors develop a quality that looks from the outside like luck and
+        is in fact the accumulated consequence of having survived situations
+        that were statistically unwinnable. When the odds turn against them,
+        something shifts slightly in the wrong direction for whatever is
+        trying to kill them.
+      mechanical_effect: >-
+        Once per scene, convert a missed attack that targeted you into a
+        near-miss instead — you suffer no damage or secondary effect from
+        the attack. This is the WWN Warrior Veteran's Luck (SRD §1.5.18).
+        Requires warrior: true.
+      involuntary: false
+
+# ── Expert chassis ───────────────────────────────────────────────────────────
+
+- id: expert
+  display_name: Expert
+  rpg_role: skirmisher
+  jungian_default: explorer
+  minimum_score: 9
+  kit_table: expert_kit
+  prime_requisite: DEX
+  flavor: >-
+    The Expert has been into the old ruins and the older accounts and come
+    back from both. Their competence is earned, not inherited: they read the
+    ledger of a fight the way other people read a face, find the exit in a
+    room that has no obvious exit, and know which silences in a strata-site
+    are safe to walk through and which are not.
+  encounter_beat_choices:
+    - strike
+    - brace
+    - break_contact
+    - argue
+    - yield
+    - withdraw
+    - run
+    - read_the_ground
+    - cut_through
+    - vanish
+  saving_throws:
+    death_ray_or_poison: 13
+    magic_wands: 14
+    paralysis_or_stone: 13
+    dragon_breath: 16
+    rods_staves_spells: 15
+  abilities:
+    - name: "Read the Ledger"
+      genre_description: >-
+        When the Expert recognizes what they are dealing with — an unfamiliar
+        technique, a creature type, the shape of a negotiation going wrong —
+        they do not just know the theory. They know the theory's gap: the
+        weakness the practitioner assumes no one will have read about,
+        because it was not in the texts everyone read.
+      mechanical_effect: >-
+        Once per confrontation, spend your beat in study to identify a single
+        weakness or exploitable tag on the opponent. The next strike that
+        targets that tag resolves at advantage. Works against any opponent
+        with a discernible technique or pattern — not against random violence.
+      involuntary: false
+
+# ── Mage chassis: Necromancer ────────────────────────────────────────────────
+
+- id: necromancer
+  display_name: Necromancer
+  rpg_role: control
+  jungian_default: magician
+  minimum_score: 9
+  kit_table: necromancer_kit
+  prime_requisite: INT
+  flavor: >-
+    To the Necromancer, magic is the accounting of death — what the body
+    owes, collected early. They do not raise the dead so much as audit them:
+    every living thing carries an unpaid balance, and the Necromancer has
+    learned to read the column and, when pressed, to call the figure due.
+    The working is bargained and Effort-paid, not a tidy list of spells; the
+    cost is carried in the body and in System Strain.
+  encounter_beat_choices:
+    - strike
+    - brace
+    - break_contact
+    - argue
+    - press_obligation
+    - yield
+    - withdraw
+    - run
+    - read_the_ground
+    - vanish
+  magic_access: wwn
+  # governing_attr INTELLIGENCE → INT (rules.yaml attribute_map).
+  wwn_magic:
+    effort_sources:
+      - source: necromancer
+        governing_attr: INTELLIGENCE
+        relevant_skill: Magic
+        starting_skill_level: 1
+    casts_per_day_by_level:
+      "1": 2
+    max_spell_level_by_level:
+      "1": 1
+    prepared_by_level:
+      "1": 2
+    starting_prepared:
+      - sleepless_tithe
+      - wracking_bolt
+    partial: false
+  saving_throws:
+    death_ray_or_poison: 13
+    magic_wands: 14
+    paralysis_or_stone: 13
+    dragon_breath: 16
+    rods_staves_spells: 15
+  abilities:
+    - name: "Call the Figure Due"
+      genre_description: >-
+        The Necromancer can, at a cost, read a living thing's account aloud
+        — and a debt named is a debt that begins to collect. Decay quickens;
+        the unquiet stir; the body remembers it is borrowed. This is not
+        cruelty. It is bookkeeping, performed out loud, in front of the
+        debtor.
+      mechanical_effect: >-
+        Spend 1 Effort (Effort-1) to inflict a creeping dread or decay effect
+        on a single target within near range — the narrator adjudicates the
+        bespoke effect (a -1 penalty as composure fails, or visible decay on
+        an object or the unliving). Once per scene. Cannot activate at Effort 0.
+      involuntary: false
+
+# ── Mage chassis: Elementalist ───────────────────────────────────────────────
+
+- id: elementalist
+  display_name: Elementalist
+  rpg_role: striker
+  jungian_default: artist
+  minimum_score: 9
+  kit_table: elementalist_kit
+  prime_requisite: INT
+  flavor: >-
+    The Elementalist practises the daylight workings of the forge cities —
+    fire, slag, and stone called up out of season and out of place. It is a
+    trade before it is a mystery, and like every trade in the guild quarters
+    it scars the craftsman: the residue of the working settles into the
+    hands, the lungs, the eye. They pay, a little, every time they practise,
+    and they have accepted this as the terms of the work.
+  encounter_beat_choices:
+    - strike
+    - brace
+    - committed_blow
+    - break_contact
+    - argue
+    - yield
+    - withdraw
+    - run
+    - cut_through
+    - vanish
+  magic_access: wwn
+  # governing_attr INTELLIGENCE → INT (rules.yaml attribute_map).
+  wwn_magic:
+    effort_sources:
+      - source: elementalist
+        governing_attr: INTELLIGENCE
+        relevant_skill: Magic
+        starting_skill_level: 1
+    casts_per_day_by_level:
+      "1": 2
+    max_spell_level_by_level:
+      "1": 1
+    prepared_by_level:
+      "1": 2
+    starting_prepared:
+      - foundation_of_flame
+      - sculpt_earth
+    partial: false
+  saving_throws:
+    death_ray_or_poison: 13
+    magic_wands: 14
+    paralysis_or_stone: 13
+    dragon_breath: 16
+    rods_staves_spells: 15
+  abilities:
+    - name: "Stoke the Working"
+      genre_description: >-
+        The Elementalist can force a working past its safe tolerance — open
+        the forge-gate wider than the craft permits — and the element answers
+        bigger. The cost lands in the body that served as the gate: burns
+        even when the working lands perfectly, a residue that does not wash
+        off for days.
+      mechanical_effect: >-
+        When you cast a spell or take a strike beat, spend 1 Effort (Effort-1)
+        and accept 1 System Strain to boost the effect by one step (damage die
+        up one size, or duration extended one round). Cannot activate at
+        Effort 0.
+      involuntary: false
+
+# ── Mage chassis: Pact-born ──────────────────────────────────────────────────
+
+- id: pact_born
+  display_name: Pact-born
+  rpg_role: dps
+  jungian_default: outlaw
+  minimum_score: 9
+  kit_table: pact_born_kit
+  prime_requisite: CHA
+  flavor: >-
+    The Pact-born does not learn power; they bargain for it, and the bargain
+    has become their public identity. One of the 999 Crimson Gods holds the
+    other end, or an inherited covenant signed before they were born, or a
+    thing met once in a red-lit alley. They carry what they bought with the
+    weight of someone who knows exactly what they owe — and the monkey's-paw
+    cost is carried in narration and System Strain, not a bespoke ledger.
+  encounter_beat_choices:
+    - strike
+    - brace
+    - committed_blow
+    - break_contact
+    - argue
+    - press_obligation
+    - yield
+    - withdraw
+    - run
+    - vanish
+  magic_access: wwn
+  # governing_attr CHARISMA → CHA: the bargain is struck and held by force of
+  # personality, a deliberate divergence from the Arcane-INT traditions.
+  # Tunable in a later story if the spell math wants INT; CHA is seeded now
+  # because Effort + spellcasting are seeded at chargen.
+  wwn_magic:
+    effort_sources:
+      - source: pact_born
+        governing_attr: CHARISMA
+        relevant_skill: Magic
+        starting_skill_level: 1
+    casts_per_day_by_level:
+      "1": 2
+    max_spell_level_by_level:
+      "1": 1
+    prepared_by_level:
+      "1": 2
+    starting_prepared:
+      - lance_of_darkness
+      - inviolable_sphere
+    partial: false
+  saving_throws:
+    death_ray_or_poison: 13
+    magic_wands: 14
+    paralysis_or_stone: 13
+    dragon_breath: 16
+    rods_staves_spells: 15
+  abilities:
+    - name: "Call the Covenant"
+      genre_description: >-
+        The Pact-born can spend a measure of what they have bargained for —
+        power drawn on credit, never on savings. The patron answers, and the
+        answer is always exactly what was asked for, which is precisely the
+        danger. The thing on the other end of the pact is a literalist, and
+        it is keeping its own books.
+      mechanical_effect: >-
+        Spend 1 Effort (Effort-1) to invoke a covenant effect adjudicated by
+        the narrator — a borrowed favor that lands as asked and exacts a
+        clever, literal cost (the monkey's paw curls). Once per scene. Cannot
+        activate at Effort 0.
+      involuntary: false
+
+# ═══════════════════════════════════════════════════════════════════════
+# BARSOOM CASTER CALLINGS (story 89-5)
+#
+# Keith's classes-vs-Foci call (2026-06-05): FULL CALLINGS, completing the
+# BARSOOM HOOK staged in 89-4 (spells_wwn.yaml + rules.yaml). Both ride the
+# same inherited WWN Effort / System-Strain chassis as the doom Callings.
+# They are genre-tier because classes.yaml has no world-tier merge — but
+# they are OFFERED only by barsoom's world char_creation.yaml surface
+# (which REPLACES the genre crucible), so doom worlds never see them, and
+# barsoom never sees the doom Callings. Their starting_prepared lists are
+# the suggested seeds from the 89-4 tradition headers.
+# ═══════════════════════════════════════════════════════════════════════
+
+- id: mentalist
+  display_name: Mentalist
+  rpg_role: control
+  jungian_default: magician
+  minimum_score: 9
+  kit_table: mentalist_kit
+  prime_requisite: WIS
+  flavor: >-
+    The Mentalist carries the discipline of dead Lothar: the trained will
+    that forces the mind's image out into the world until other eyes — and
+    other bodies — must answer it. Phantom bowmen loose phantom arrows that
+    kill real men who believe in them. The working is exhausting in the
+    canon's own terms: every sustained image is paid for out of the body,
+    in Effort and in System Strain, and an image disbelieved collapses at
+    once. It is not sorcery. It is the last art of a people who outlived
+    their sea, their enemies, and very nearly their own reality.
+  encounter_beat_choices:
+    - strike
+    - brace
+    - break_contact
+    - argue
+    - press_obligation
+    - yield
+    - withdraw
+    - run
+    - read_the_ground
+    - vanish
+  magic_access: wwn
+  # governing_attr WISDOM → WIS (rules.yaml attribute_map): the Lotharian
+  # working is sustained WILL, not scholarship — a deliberate divergence
+  # from the Arcane-INT doom traditions.
+  wwn_magic:
+    effort_sources:
+      - source: mentalist
+        governing_attr: WISDOM
+        relevant_skill: Magic
+        starting_skill_level: 1
+    casts_per_day_by_level:
+      "1": 2
+    max_spell_level_by_level:
+      "1": 1
+    prepared_by_level:
+      "1": 2
+    starting_prepared:
+      - phantom_bowmen
+      - mind_veil
+    partial: false
+  saving_throws:
+    death_ray_or_poison: 13
+    magic_wands: 14
+    paralysis_or_stone: 13
+    dragon_breath: 16
+    rods_staves_spells: 15
+  abilities:
+    - name: "Hold the Image"
+      genre_description: >-
+        A Lotharian's phantasm persists only while the will that cast it
+        does not waver. The Mentalist can keep one working alive past its
+        natural end — the bowmen hold their line, the veil stays drawn —
+        by pouring more of the self into the image than the image was
+        worth.
+      mechanical_effect: >-
+        Spend 1 Effort (Effort-1) to sustain one active Mentalist working
+        for one additional scene beat, or to re-assert a phantasm one
+        observer has begun to disbelieve. Once per scene. Cannot activate
+        at Effort 0.
+      involuntary: false
+
+- id: super_scientist
+  display_name: Super-scientist
+  rpg_role: striker
+  jungian_default: sage
+  minimum_score: 9
+  kit_table: super_scientist_kit
+  prime_requisite: INT
+  flavor: >-
+    The Super-scientist works the vanished science of Barsoom — the ninth
+    ray, the brain that can be moved between skulls, the compound that
+    bends light around a hull. Their marvels are apparatus and exhausting
+    concentration, expressed through the same Effort economy as any
+    working: the device is real, but it answers only to the mind that
+    built it, and that mind pays for every firing. The everyday pulp toys
+    (radium rifles, fliers) are mere GEAR; what the Super-scientist casts
+    is the impossible edge of the art.
+  encounter_beat_choices:
+    - strike
+    - brace
+    - break_contact
+    - argue
+    - press_obligation
+    - yield
+    - withdraw
+    - run
+    - read_the_ground
+    - vanish
+  magic_access: wwn
+  # governing_attr INTELLIGENCE → INT: the apparatus answers to intellect.
+  wwn_magic:
+    effort_sources:
+      - source: super_scientist
+        governing_attr: INTELLIGENCE
+        relevant_skill: Magic
+        starting_skill_level: 1
+    casts_per_day_by_level:
+      "1": 2
+    max_spell_level_by_level:
+      "1": 1
+    prepared_by_level:
+      "1": 2
+    starting_prepared:
+      - disintegration_ray
+      - invisibility_compound
+    partial: false
+  saving_throws:
+    death_ray_or_poison: 13
+    magic_wands: 14
+    paralysis_or_stone: 13
+    dragon_breath: 16
+    rods_staves_spells: 15
+  abilities:
+    - name: "Apparatus of the Ninth Ray"
+      genre_description: >-
+        The Super-scientist is never without some instrument of the old
+        science — a lens, a coil, a hand-built emitter. In the moment of
+        need it can be retuned to a purpose its maker never filed: a lock
+        read by its radium signature, a flier's buoyancy tank coaxed past
+        its rating, a beam bent a degree off true.
+      mechanical_effect: >-
+        Spend 1 Effort (Effort-1) to improvise a one-shot apparatus effect
+        adjudicated by the narrator — a concrete, physical intervention of
+        the vanished science (open, overload, illuminate, deflect). Once
+        per scene. Cannot activate at Effort 0.
+      involuntary: false

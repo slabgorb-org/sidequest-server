@@ -132,7 +132,7 @@ def test_loaded_pack_has_required_fields() -> None:
     if not _has_real_content():
         pytest.skip("sidequest-content not available")
     pack = load_genre_pack(CC_PACK_DIR)
-    assert pack.lore is not None
+    assert pack.lore is None  # epic-74 (74-3): genre lore is world-only / forbidden
     assert pack.rules is not None
     assert pack.prompts is not None
     assert pack.axes is not None
@@ -140,6 +140,29 @@ def test_loaded_pack_has_required_fields() -> None:
     assert pack.theme is not None
     assert pack.visual_style is not None
     assert pack.progression is not None
+
+
+def test_pack_level_visual_style_is_optional(tmp_path: Path) -> None:
+    """2026-05-29 directive: visual prompts live at world level. A pack with
+    NO pack-level visual_style.yaml loads cleanly, with pack.visual_style None.
+
+    Worlds keep their own self-contained visual_style.yaml; the daemon's
+    StyleCatalog is the fail-loud backstop when a render truly has no style.
+    """
+    if not _has_real_content():
+        pytest.skip("sidequest-content not available")
+    clone = _clone_pack_with_updated_genre_key(CC_PACK_DIR, tmp_path / "cc_no_genre_style")
+    (clone / "visual_style.yaml").unlink()
+    assert not (clone / "visual_style.yaml").exists()
+
+    pack = load_genre_pack(clone)
+
+    assert isinstance(pack, GenrePack)
+    assert pack.visual_style is None
+    # The pack is otherwise fully usable — worlds still carry their own style.
+    assert pack.meta.name
+    assert pack.rules is not None
+    assert len(pack.worlds) >= 1
 
 
 def test_loaded_pack_has_worlds() -> None:
@@ -222,16 +245,20 @@ def test_loader_fails_loud_on_missing_required_file(tmp_path: Path) -> None:
         load_genre_pack(pack_dir)
 
 
-def test_loader_fails_loud_on_missing_lore_yaml(tmp_path: Path) -> None:
-    """Missing lore.yaml raises GenreLoadError (required file)."""
+def test_loader_succeeds_without_genre_lore_yaml() -> None:
+    """Epic 74 (74-1/74-3): genre-tier lore.yaml is no longer required — lore is
+    world-only and a genre lore.yaml is forbidden. A live pack ships none, so the
+    loader must succeed and ``pack.lore`` is ``None``.
+
+    The old "missing lore.yaml fails loud" contract moved to the WORLD tier: an
+    empty/absent WORLD lore.yaml fails loud, covered by the guard tests in
+    ``tests/genre/test_world_lore_required_74_3.py`` and the pack validator's
+    ``_validate_world_lore_seedable`` rule.
+    """
     if not _has_real_content():
         pytest.skip("sidequest-content not available")
-    # Copy pack structure but remove lore.yaml
-    pack_dir = tmp_path / "cc_no_lore"
-    shutil.copytree(CC_PACK_DIR, pack_dir)
-    (pack_dir / "lore.yaml").unlink()
-    with pytest.raises(GenreLoadError):
-        load_genre_pack(pack_dir)
+    pack = load_genre_pack(CC_PACK_DIR)
+    assert pack.lore is None
 
 
 def test_loader_fails_loud_on_malformed_yaml(tmp_path: Path) -> None:
@@ -338,7 +365,7 @@ def test_full_phase1_pack_pipeline() -> None:
 
     # Every Phase 1 narrator-relevant aggregate is populated
     assert pack.prompts is not None
-    assert pack.lore is not None
+    assert pack.lore is None  # epic-74 (74-3): genre lore is world-only / forbidden
     assert pack.rules is not None
     assert pack.axes is not None
     assert pack.theme is not None

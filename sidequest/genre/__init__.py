@@ -74,9 +74,6 @@ from sidequest.genre.resolve import resolve_trope_inheritance
 from sidequest.genre.resolver import (
     LayeredMerge,
     MergeStrategy,
-    ResolutionContext,
-    Resolved,
-    Resolver,
 )
 
 __all__ = [
@@ -97,12 +94,9 @@ __all__ = [
     "ArchetypeResolution",
     "ResolutionSource",
     "resolve_archetype",
-    # resolver
+    # resolver (merge machinery; the four-tier walk was removed — Story 82-4 / ADR-121)
     "LayeredMerge",
     "MergeStrategy",
-    "ResolutionContext",
-    "Resolved",
-    "Resolver",
     # errors
     "GenreError",
     "GenreLoadError",

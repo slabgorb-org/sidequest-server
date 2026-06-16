@@ -1,0 +1,191 @@
+# Heavy Metal — character progression
+#
+# Affinities track the six ways characters accrue power, meaning, or ruin
+# in a baroque world where every working costs and every empire is ending.
+# Unlike low_fantasy where skills represent craft mastered, here skills
+# represent debts paid. The tier thresholds are intentionally steep —
+# advancement in heavy_metal is a reckoning, not a progression.
+
+affinities:
+  - name: "Iron"
+    description: "Martial bearing — the sword-work of doomed princes and last-ditch defenders. Every blow remembered in the body."
+    triggers:
+      - "winning a sworn duel or a formal challenge"
+      - "holding a line against greater numbers"
+      - "fighting wounded, refusing to yield"
+      - "executing a traitor or rival in open combat"
+      - "defending a failing court or crumbling wall"
+    tier_thresholds: [6, 14, 28]
+    unlocks:
+      tier_1:
+        name: "Iron-Hand"
+        description: "The body has learned to carry the weight of the sword as its own weight."
+        abilities:
+          - name: "Weight of Arms"
+            experience: >
+              Your guard sits where the blade wants it. You tire less, and you give ground
+              less, than you once did.
+            limits: >
+              Only while armed and standing. Exhaustion and grievous wounds still close
+              the gap — this is bearing, not invulnerability.
+        mechanical_effects:
+          - type: edge_max_bonus
+            amount: 2
+          - type: beat_discount
+            beat_id: committed_blow
+            edge_delta_mod: -1
+
+  - name: "Pact"
+    description: "Bargained magic — the practitioner's hand in the working, and the working's hand in the practitioner. Years spent, memories ceded, names written into ledgers that do not forget."
+    triggers:
+      - "negotiating terms with a creditor, spirit, or daemon"
+      - "executing a rite under time pressure"
+      - "paying a cost in blood, memory, or years"
+      - "forcing a working to completion against interference"
+      - "renegotiating a debt that cannot be paid in full"
+    tier_thresholds: [5, 12, 25]
+    unlocks:
+      tier_1:
+        name: "Ledger-Read"
+        description: "You speak the ritual with the creditor already listening. The price shrinks because the negotiation started long before the working."
+        abilities:
+          - name: "Negotiated Working"
+            experience: >
+              The cost you would once have paid in voice or memory is partially
+              forgiven — not by mercy, but by a better contract.
+            limits: >
+              Only on workings you have prepared for; improvised or forced rites still
+              cost full freight.
+        mechanical_effects:
+          - type: beat_discount
+            beat_id: invoke
+            edge_delta_mod: 0
+            resource_mod:
+              voice: -1
+
+  - name: "Craft"
+    description: "The guild-laborer's art — scars on the hands, knowledge in the joints. Things made by touch that no scholar could describe."
+    triggers:
+      - "repairing what others call beyond repair"
+      - "working a material the guild said could not be worked"
+      - "recognising the maker of an object by its flaws"
+      - "completing a commission under impossible constraint"
+      - "passing craft-knowledge to an apprentice"
+    tier_thresholds: [5, 12, 25]
+    unlocks:
+      tier_1:
+        name: "Journeyman"
+        description: "You have failed in enough ways that the failures themselves have become knowledge."
+        abilities:
+          - name: "Scarred Hands"
+            experience: >
+              You do not flinch from material that has burned you before. Your body
+              remembers how to compensate.
+            limits: >
+              Craft knowledge only — does not shelter you from emotional or political injury.
+        mechanical_effects:
+          - type: edge_max_bonus
+            amount: 1
+
+  - name: "Lore"
+    description: "Forbidden and half-forbidden knowledge. The kind of learning that leaves marks on the reader."
+    triggers:
+      - "translating a text no living scholar has opened in a generation"
+      - "identifying a daemon, spirit, or working by its sign"
+      - "recalling a genealogy, heresy, or court protocol at the critical moment"
+      - "recognising the true nature of a relic or site"
+      - "deciphering the terms of an old pact from fragmentary evidence"
+    tier_thresholds: [6, 14, 28]
+    unlocks:
+      tier_1:
+        name: "Marginalia"
+        description: "You read the silences in a text as closely as the words. Resolutions make the page speak back."
+        abilities:
+          - name: "Annotated Outcome"
+            experience: >
+              When an encounter ends, you see what was almost decided — the compromise
+              that failed, the motive that surfaced.
+            limits: >
+              Only fires on resolution, and only on matters the scholarship touches;
+              raw violence reveals less to this eye.
+        mechanical_effects:
+          - type: lore_reveal_bonus
+            scope: encounter_resolution
+
+  - name: "Court"
+    description: "Political maneuvering in collapsing halls. The courtier's ledger of favours, feuds, and survivable indiscretions."
+    triggers:
+      - "turning a rival's ally into your own"
+      - "surviving a formal accusation or denunciation"
+      - "extracting a concession from a superior without seeming to"
+      - "reading a room of nobles and picking the right knife"
+      - "protecting a client, dependent, or lover from the court's attention"
+    tier_thresholds: [5, 12, 25]
+    unlocks:
+      tier_1:
+        name: "Leveraged"
+        description: "You press an obligation with a collector's precision — the debt is always there; you have learned when to name it."
+        abilities:
+          - name: "Named Obligation"
+            experience: >
+              You time the ask so the refusal costs them more than the concession.
+            limits: >
+              Only against targets who acknowledge the social order you are citing;
+              outsiders and nihilists are unmoved.
+        mechanical_effects:
+          - type: leverage_bonus
+            beat_id: press_obligation
+            target_edge_delta_mod: 1
+
+  - name: "Ruin"
+    description: "The particular expertise of having already lost. Those who endure beyond the point where endurance should not be possible find that something changes — they can hear the decay in things before others do."
+    triggers:
+      - "surviving a working that should have destroyed the caster"
+      - "walking out of a catastrophe that took everyone else"
+      - "recognising the end of a thing — a dynasty, a love, a body — before it arrives"
+      - "drawing strength from grief, loss, or the end of hope"
+      - "speaking a truth the court would prefer to keep buried"
+    tier_thresholds: [7, 16, 30]
+    unlocks:
+      tier_1:
+        name: "Still-Standing"
+        description: "When the strain is worst, a clean refusal to yield returns something to the pool — not grace, but stubbornness made mechanical."
+        abilities:
+          - name: "Brace Against Ending"
+            experience: >
+              In the moment when the break is closest, a held ground restores a little of
+              what was spent.
+            limits: >
+              Only while strained; when the pool is full, this recovery does not fire.
+        mechanical_effects:
+          - type: edge_recovery
+            amount: 1
+            trigger:
+              kind: on_beat_success
+              beat_id: brace
+              amount: 1
+              while_strained: true
+
+milestone_categories:
+  - "oath"
+  - "debt"
+  - "ruin"
+  - "revelation"
+  - "reckoning"
+
+milestones_per_level: 3
+max_level: 8
+
+wealth_tiers:
+  - max_gold: 5
+    label: "Pauper"
+  - max_gold: 40
+    label: "Scraping"
+  - max_gold: 120
+    label: "Craft-Sustained"
+  - max_gold: 400
+    label: "Guild-Made"
+  - max_gold: 1200
+    label: "Court-Favoured"
+  - max_gold: null
+    label: "Pact-Rich"

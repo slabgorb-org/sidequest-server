@@ -36,21 +36,12 @@ from sidequest.telemetry.watcher_hub import (
     publish_event,
     watcher_hub,
 )
+from tests._helpers.doubles import FakeSocket
 from tests._helpers.session_room import room_for
 
 
-class _FakeSocket:
-    """Minimal WebSocket stand-in that records every broadcast."""
-
-    def __init__(self) -> None:
-        self.events: list[dict[str, Any]] = []
-
-    async def send_json(self, data: dict[str, Any]) -> None:
-        self.events.append(data)
-
-
-async def _capture(hub: WatcherHub) -> _FakeSocket:
-    sock = _FakeSocket()
+async def _capture(hub: WatcherHub) -> FakeSocket:
+    sock = FakeSocket()
     # cast away the type — our fake is structurally compatible
     await hub.subscribe(sock)  # type: ignore[arg-type]
     return sock
@@ -841,7 +832,7 @@ async def test_dead_subscribers_are_pruned(bound_hub: WatcherHub) -> None:
             raise RuntimeError("socket closed")
 
     dead = _DeadSocket()
-    good = _FakeSocket()
+    good = FakeSocket()
     await bound_hub.subscribe(dead)  # type: ignore[arg-type]
     await bound_hub.subscribe(good)  # type: ignore[arg-type]
     publish_event("state_transition", {"field": "location"})
@@ -910,8 +901,30 @@ async def test_unserializable_event_is_dropped_subscribers_preserved(
     cyclic: dict[str, Any] = {"a": 1}
     cyclic["self"] = cyclic  # circular — even default=str can't fix this
 
-    publish_event("state_transition", {"payload": cyclic})
-    publish_event("turn_complete", {"turn_id": 99, "agent_name": "narrator"})
+    # Exercise the HUB's tolerant-encode drop path directly. ``publish_event``
+    # also drives the out-of-frame telemetry persist (``_persist_turn_telemetry``),
+    # whose pre-try ``json.dumps`` legitimately raises on a circular reference —
+    # that's a separate publisher-side concern. The invariant under test here is
+    # the broadcast hub's: one unserializable event is dropped without evicting a
+    # live subscriber, and the very next event still delivers.
+    bound_hub.publish(
+        {
+            "timestamp": "t",
+            "component": "sidequest-server",
+            "event_type": "state_transition",
+            "severity": "info",
+            "fields": {"payload": cyclic},
+        }
+    )
+    bound_hub.publish(
+        {
+            "timestamp": "t",
+            "component": "orchestrator",
+            "event_type": "turn_complete",
+            "severity": "info",
+            "fields": {"turn_id": 99, "agent_name": "narrator"},
+        }
+    )
     await asyncio.sleep(0.05)
 
     # The bad event was dropped; the good one was delivered.

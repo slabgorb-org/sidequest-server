@@ -1,18 +1,35 @@
-"""Wiring test for Phase A — SDK client through tool round-trip + spans.
+"""Wiring test for Phase A — SDK client through a converged turn + spans.
 
-Exercises every Phase A primitive together: protocol dataclasses, the
-SDK client, cost math, llm.request span emission, cache_control on
-system blocks, the tool loop, and streaming text deltas.
+Exercises the Phase A primitives together against the **claude-agent-sdk**
+transport (Story 119-3): protocol dataclasses, the SDK client, usage/cost math
+from ``ResultMessage.usage`` (a ``dict``), and ``llm.request`` span emission.
+
+Story 119-3 transport changes that reshape this test:
+
+* The manual ``messages.create`` loop is replaced by the SDK's ``query()`` loop,
+  monkeypatched at the late-bound ``anthropic_sdk_client.query`` seam (OQ-9).
+* ``AnthropicSdkClient()`` takes no args; both ``ANTHROPIC_API_KEY`` and
+  ``ANTHROPIC_AUTH_TOKEN`` must be UNSET (a set key re-routes to PAYG and raises).
+* ``cache_control`` markers / the ``extended-cache-ttl`` beta header are GONE —
+  the CLI owns caching now (spec §6.4.3 / OQ-6), so the old request-payload
+  assertions on those have no analog and are dropped.
+* ``llm.request`` fires once per ``complete_with_tools`` call (not once per loop
+  iteration — the SDK owns the loop), so a single span with ``llm.iteration==1``.
+
+The model-driven tool round-trip (populated ``ToolingResult.tool_calls`` / a
+WRITE tool firing through dispatch) cannot be driven by the hermetic fake
+``query`` — the real SDK owns ``@tool`` invocation, so a converged stream yields
+``tool_calls == []``. That bridge is covered by
+``test_119_3_narrator_port.py::test_tool_bridge_dispatches_bare_name_and_accumulates``;
+here the tool surface is still advertised, but the turn converges to prose.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any
-
 import pytest
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+from sidequest.agents import anthropic_sdk_client
 from sidequest.agents.anthropic_sdk_client import AnthropicSdkClient
 from sidequest.agents.tooling_protocol import (
     CacheableBlock,
@@ -21,103 +38,46 @@ from sidequest.agents.tooling_protocol import (
     ToolResultBlock,
     ToolUseBlock,
 )
+from tests.agents.fakes.fake_agent_sdk import (
+    FakeQuery,
+    converged_text_stream,
+    fake_usage,
+)
 
 
-@dataclass
-class _Usage:
-    input_tokens: int
-    output_tokens: int
-    cache_read_input_tokens: int = 0
-    cache_creation_input_tokens: int = 0
-
-
-@dataclass
-class _TextBlock:
-    type: str
-    text: str
-
-
-@dataclass
-class _ToolUseBlock:
-    type: str
-    id: str
-    name: str
-    input: dict[str, Any]
-
-
-@dataclass
-class _Response:
-    content: list[Any]
-    stop_reason: str
-    usage: _Usage
-    model: str
-
-
-class _Messages:
-    def __init__(self, responses: list[_Response]) -> None:
-        self._responses = responses
-        self.received: list[dict[str, Any]] = []
-
-    async def create(self, **kwargs: Any) -> _Response:
-        self.received.append(kwargs)
-        return self._responses.pop(0)
-
-
-class _Sdk:
-    def __init__(self, responses: list[_Response]) -> None:
-        self.messages = _Messages(responses)
+@pytest.fixture(autouse=True)
+def _subscription_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
 
 
 @pytest.mark.asyncio
 async def test_combat_shaped_turn_wiring(
     otel_capture: InMemorySpanExporter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("SIDEQUEST_ANTHROPIC_CACHE_TTL", raising=False)
-
-    sdk = _Sdk(
-        responses=[
-            _Response(
-                content=[
-                    _ToolUseBlock(
-                        type="tool_use",
-                        id="toolu_a",
-                        name="roll_dice",
-                        input={"sides": 20},
-                    )
-                ],
-                stop_reason="tool_use",
-                usage=_Usage(
-                    input_tokens=300,
-                    output_tokens=20,
-                    cache_read_input_tokens=12000,
-                    cache_creation_input_tokens=0,
-                ),
-                model="claude-sonnet-4-6",
+    prose = "The strike lands; the bandit reels."
+    # A converged turn whose terminal ResultMessage carries the usage dict the
+    # client adapts into token rollups + cost (spec §3.2 — usage is dict|None).
+    fake = FakeQuery(
+        converged_text_stream(
+            text=prose,
+            num_turns=3,
+            usage=fake_usage(
+                input_tokens=650,
+                output_tokens=100,
+                cache_read=24000,
+                cache_write=0,
             ),
-            _Response(
-                content=[
-                    _TextBlock(
-                        type="text",
-                        text="The strike lands; the bandit reels.",
-                    )
-                ],
-                stop_reason="end_turn",
-                usage=_Usage(
-                    input_tokens=350,
-                    output_tokens=80,
-                    cache_read_input_tokens=12000,
-                    cache_creation_input_tokens=0,
-                ),
-                model="claude-sonnet-4-6",
-            ),
-        ]
+        )
     )
-    client = AnthropicSdkClient(sdk=sdk)
+    monkeypatch.setattr(anthropic_sdk_client, "query", fake, raising=False)
 
-    deltas: list[str] = []
+    client = AnthropicSdkClient()
 
     def dispatch(block: ToolUseBlock) -> ToolResultBlock:
+        # Defensive: the hermetic fake never invokes this (the SDK owns @tool
+        # invocation), but the closure must satisfy the signature so the tool
+        # surface is still advertised on the call.
         assert block.name == "roll_dice"
         return ToolResultBlock(tool_use_id=block.id, content="17")
 
@@ -143,41 +103,42 @@ async def test_combat_shaped_turn_wiring(
         ],
         tool_dispatch=dispatch,
         model="claude-sonnet-4-6",
-        on_text_delta=deltas.append,
     )
 
-    # 1. Final narration came through.
-    assert result.text == "The strike lands; the bandit reels."
+    # 1. Final narration came through; a converged success maps to end_turn.
+    assert result.text == prose
     assert result.stop_reason == "end_turn"
 
-    # 2. Token rollups are cumulative across iterations.
+    # 2. Token rollups are read from ResultMessage.usage (dict|None, §3.2).
     assert result.input_tokens == 650
     assert result.output_tokens == 100
     assert result.cached_input_read_tokens == 24000
 
-    # 3. Tool round-trip captured.
-    assert len(result.tool_calls) == 1
-    assert result.tool_calls[0].name == "roll_dice"
+    # 3. The tool surface was advertised (the call carried the SDK-MCP server),
+    #    but a converged stream invokes no handler, so tool_calls is empty.
+    #    The model-driven dispatch round-trip is covered by the port suite's
+    #    test_tool_bridge_dispatches_bare_name_and_accumulates.
+    options = fake.last_options
+    assert options.allowed_tools == ["mcp__narration__roll_dice"], (
+        "the ruleset-filtered tool catalog must surface as the SDK-MCP "
+        f"allowed_tools; got {options.allowed_tools!r}"
+    )
+    assert result.tool_calls == []
 
-    # 4. Streaming callback got the final-turn text.
-    assert deltas == ["The strike lands; the bandit reels."]
+    # 4. The system blocks collapse to a plain-string system_prompt (AC1) — the
+    #    CLI owns caching, so the per-block cache markers / extended-cache-ttl
+    #    beta header (removed symbols) have no request-payload analog.
+    assert isinstance(options.system_prompt, str)
+    assert "SOUL+rules+tone" in options.system_prompt
 
-    # 5. Default path is now 1h: the real request payload carries
-    #    ttl:"1h" on the cache_control marker, and the extended-cache-ttl
-    #    beta header rides every messages.create call (without it the API
-    #    400s the 1h request — see test_anthropic_sdk_client.py).
-    first_call = sdk.messages.received[0]
-    sys_array = first_call["system"]
-    assert sys_array[0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
-    assert first_call["extra_headers"]["anthropic-beta"] == "extended-cache-ttl-2025-04-11"
-
-    # 6. Two llm.request spans emitted (one per iteration).
+    # 5. One llm.request span emitted per complete_with_tools call (the SDK owns
+    #    the loop, so it is no longer one-span-per-iteration).
     spans = [s for s in otel_capture.get_finished_spans() if s.name == "llm.request"]
-    assert len(spans) == 2
-    iter_attrs = sorted(int(str((s.attributes or {})["llm.iteration"])) for s in spans)
-    assert iter_attrs == [1, 2]
+    assert len(spans) == 1
+    attrs = dict(spans[0].attributes or {})
+    assert attrs["llm.iteration"] == 1
+    assert attrs["llm.caller"] == "narrator"
 
-    # 7. Cost attribute non-zero and computed against the cost module.
-    first_attrs = dict(spans[0].attributes or {})
-    cost_usd = first_attrs["llm.cost_usd"]
+    # 6. Cost attribute non-zero and computed against the cost module.
+    cost_usd = attrs["llm.cost_usd"]
     assert isinstance(cost_usd, float) and cost_usd > 0

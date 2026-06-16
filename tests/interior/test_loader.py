@@ -61,7 +61,12 @@ def test_validate_raises_loud_on_unknown_room():
 
 @pytest.mark.integration
 def test_voidborn_freighter_loads_clean_through_genre_loader():
-    """Wiring test: real Kestrel chassis YAML passes validation at load time."""
+    """Wiring test: real Kestrel chassis YAML passes validation at load time.
+
+    Epic 94 moved chassis_classes from the space_opera genre tier down to the
+    coyote_star WORLD tier (genre = rulebook only). The Kestrel now lives on
+    ``World.chassis_classes`` and station cross-validation runs at world load.
+    """
     from pathlib import Path
 
     from sidequest.genre.loader import load_genre_pack
@@ -72,11 +77,13 @@ def test_voidborn_freighter_loads_clean_through_genre_loader():
         pytest.skip("space_opera content pack not present")
 
     pack = load_genre_pack(space_opera)
-    assert pack.chassis_classes is not None
-    voidborn = next(c for c in pack.chassis_classes.classes if c.id == "voidborn_freighter")
+    world = pack.worlds.get("coyote_star")
+    assert world is not None, "coyote_star world missing from space_opera pack"
+    assert world.chassis_classes is not None
+    voidborn = next(c for c in world.chassis_classes.classes if c.id == "voidborn_freighter")
     assert len(voidborn.stations) == 4
     station_ids = {s.id for s in voidborn.stations}
     assert station_ids == {"command", "helm", "weapons", "engineering_controls"}
-    # Validation runs as part of pack loading; if it raised, this test would
+    # Validation runs as part of world loading; if it raised, this test would
     # never have reached this assertion.
     validate_chassis_stations(voidborn)

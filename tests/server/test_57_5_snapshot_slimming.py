@@ -137,7 +137,9 @@ def _build_sd(snapshot: GameSnapshot, *, player_name: str = "Alice") -> _Session
         player_name=player_name,
         player_id=f"player:{player_name.lower()}",
         snapshot=snapshot,
-        store=MagicMock(),
+        repository=MagicMock(),
+        dungeon_repository=MagicMock(),
+        telemetry_sink=MagicMock(),
         genre_pack=pack,
         orchestrator=MagicMock(),
     )
@@ -271,6 +273,34 @@ def test_phase_b_drops_achievement_tracker_from_state_summary() -> None:
     assert "achievement_tracker" not in payload, (
         "Phase B drop missing: ``achievement_tracker`` still in "
         "state_summary. P6-deferred subsystem with no narrator consumer."
+    )
+
+
+def test_phase_b_drops_next_turn_directives_from_state_summary() -> None:
+    """BUG B (sq-playtest 2026-06-13 directive-leak): the one-shot
+    ``next_turn_directives`` queue is rendered into the dedicated
+    ``intent_directives`` Recency guardrail (orchestrator
+    ``_consume_next_turn_directives``) — the narrator reads the directive
+    CONTENT there, in natural language. It must NOT also ride the raw
+    ``<game_state>`` JSON: when it did, the narrator echoed the literal
+    field name into player prose ("…per the next_turn_directives, the
+    entity's Strike missed…"). Phase B drops it from the prompt payload.
+
+    The queue still persists in the save (populate-this-turn /
+    consume-next-turn discipline) — that round-trip is pinned by
+    ``tests/game/test_snapshot_next_turn_directives.py``; here we assert
+    only the prompt-payload drop."""
+    snap = _make_snapshot()
+    snap.next_turn_directives.append(
+        "MECHANICAL TRUTH (weave into the narration): the entity MISSED Alice."
+    )
+    payload = json.loads(_state_summary(snap))
+
+    assert "next_turn_directives" not in payload, (
+        "Phase B drop missing: ``next_turn_directives`` still in "
+        "state_summary. The raw field name leaked verbatim into player "
+        "narration; the narrator must read the directive only from the "
+        "dedicated intent_directives Recency guardrail."
     )
 
 
@@ -417,7 +447,9 @@ def test_anchor_preserved_quest_log_when_populated() -> None:
         "Mission anchor stripped: ``quest_log`` is absent from "
         "state_summary despite the fixture seeding two quests."
     )
-    assert payload["quest_log"].get("main") == "Find the lost vault.", (
+    # Story 77-2: quest_log values are structured QuestEntry now; the legacy
+    # string seed coerces into the status field.
+    assert payload["quest_log"].get("main", {}).get("status") == "Find the lost vault.", (
         "Mission anchor corrupted: ``quest_log['main']`` does not match "
         "the seeded value — the field is present but the content is "
         "wrong."

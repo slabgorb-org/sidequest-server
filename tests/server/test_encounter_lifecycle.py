@@ -12,6 +12,39 @@ def cac_pack():
     return GenreLoader(DEFAULT_GENRE_PACK_SEARCH_PATHS).load("caverns_and_claudes")
 
 
+# caverns_and_claudes was ported to the WWN ruleset (PR #429), so combat
+# instantiation now rolls initiative (1d8+DEX) for every player-side actor and
+# resolves each PC's DEX from ``snapshot.characters`` — failing loud when a
+# seated player isn't a real Character (No Silent Fallbacks,
+# encounter_lifecycle.py). Pre-WWN these tests could seat a player_name with an
+# empty snapshot because the native ruleset short-circuited initiative; under
+# WWN the PC must actually exist. ``_seat_wwn_pcs`` registers minimal but real
+# Characters carrying the WWN attribute block (DEXTERITY flavor = "DEX").
+_WWN_STATS = {"STR": 12, "DEX": 12, "CON": 12, "INT": 10, "WIS": 10, "CHA": 10}
+
+
+def _seat_wwn_pcs(snap, *names: str) -> None:
+    from sidequest.game.character import Character
+    from sidequest.game.creature_core import CreatureCore, Inventory
+
+    for name in names:
+        snap.characters.append(
+            Character(
+                core=CreatureCore(
+                    name=name,
+                    description="Sünden delver.",
+                    personality="bold",
+                    inventory=Inventory(items=[]),
+                    hp={"current": 10, "max": 10, "base_max": 10},
+                ),
+                char_class="Warrior",
+                race="Human",
+                backstory="Born to the deep dark.",
+                stats=dict(_WWN_STATS),
+            )
+        )
+
+
 def test_instantiate_combat_creates_encounter(cac_pack) -> None:
     from sidequest.agents.orchestrator import NpcMention
     from sidequest.server.dispatch.encounter_lifecycle import (
@@ -19,6 +52,7 @@ def test_instantiate_combat_creates_encounter(cac_pack) -> None:
     )
 
     snap = GameSnapshot(genre_slug="caverns_and_claudes")
+    _seat_wwn_pcs(snap, "Rux")
     enc = instantiate_encounter_from_trigger(
         snapshot=snap,
         pack=cac_pack,
@@ -33,11 +67,14 @@ def test_instantiate_combat_creates_encounter(cac_pack) -> None:
     actor_names = [a.name for a in enc.actors]
     assert "Rux" in actor_names
     assert "Goblin" in actor_names
-    # caverns_and_claudes combat dual-dial: player_metric and opponent_metric.
-    # Threshold 7 per ADR-093 calibration (was 10 pre-calibration).
-    assert enc.player_metric.name == "momentum"
+    # caverns_and_claudes was ported to the WWN ruleset (PR #429): combat is now
+    # an ablative-HP confrontation (ADR-114), so both dials track "hp" rather
+    # than the pre-WWN "momentum" dual-dial. Resolution is by HP depletion, so
+    # the dial threshold is the hp-depletion sentinel, not an ADR-093 momentum
+    # cap — assert the metric identity, not the sentinel value.
+    assert enc.player_metric.name == "hp"
+    assert enc.opponent_metric.name == "hp"
     assert enc.player_metric.starting == 0
-    assert enc.player_metric.threshold == 7
 
 
 def test_instantiate_unknown_type_raises(cac_pack) -> None:
@@ -59,7 +96,14 @@ def test_instantiate_unknown_type_raises(cac_pack) -> None:
 
 
 def test_instantiate_replaces_resolved_encounter(cac_pack) -> None:
-    """A resolved prior encounter does not block a new one."""
+    """A resolved prior encounter does not block a genuinely-new one.
+
+    Story 73-5 refined the resolution-turn guard: a resolved prior of the SAME
+    ``encounter_type`` is treated as that confrontation's resolution turn and
+    no-ops (see ``test_resolution_turn_same_type_suppresses_initiated_span``).
+    A resolved prior of a DIFFERENT type is a genuinely-new confrontation and
+    must still replace it — that is what this test pins.
+    """
     from sidequest.agents.orchestrator import NpcMention
     from sidequest.game.encounter import EncounterActor, EncounterMetric
     from sidequest.server.dispatch.encounter_lifecycle import (
@@ -67,14 +111,17 @@ def test_instantiate_replaces_resolved_encounter(cac_pack) -> None:
     )
 
     snap = GameSnapshot(genre_slug="caverns_and_claudes")
+    # Prior confrontation is a RESOLVED negotiation — a different type than the
+    # incoming combat, so the new combat is genuinely new and must replace it.
     prior = StructuredEncounter(
-        encounter_type="combat",
+        encounter_type="negotiation",
         player_metric=EncounterMetric(name="momentum", current=0, starting=0, threshold=10),
         opponent_metric=EncounterMetric(name="momentum", current=0, starting=0, threshold=10),
-        actors=[EncounterActor(name="old", role="combatant", side="player")],
+        actors=[EncounterActor(name="old", role="participant", side="player")],
     )
     prior.resolved = True
     snap.encounter = prior
+    _seat_wwn_pcs(snap, "Rux")
     # Story 45-33: combat now requires an opponent post-fallback. The original
     # test fixture passed npcs_present=[] because the focus is the resolved
     # encounter replacement, not opponent supply — adding an explicit
@@ -89,6 +136,97 @@ def test_instantiate_replaces_resolved_encounter(cac_pack) -> None:
     )
     assert snap.encounter is enc
     assert enc is not prior
+
+
+def test_resolution_turn_same_type_suppresses_initiated_span(cac_pack) -> None:
+    """Story 73-5: ``encounter.confrontation_initiated`` fires exactly once per
+    confrontation — on first initiation — and is NOT re-emitted on the
+    resolution turn of the SAME confrontation.
+
+    Symptom (epic 73): when a confrontation reaches its resolution turn the
+    router re-dispatches the same ``encounter_type``; because the prior
+    encounter is now ``resolved`` the old guard let a duplicate through,
+    re-firing the cosmetic "initiated" span so the GM panel showed a fresh
+    confrontation on a turn that was actually resolving.
+
+    This is the OTEL lie-detector invariant: the GM panel's "initiated" signal
+    must reflect reality (one initiation per confrontation).
+    """
+    import opentelemetry.trace as otel_trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    from sidequest.agents.orchestrator import NpcMention
+    from sidequest.server.dispatch.encounter_lifecycle import (
+        instantiate_encounter_from_trigger,
+    )
+    from sidequest.telemetry.setup import init_tracer
+
+    init_tracer()
+    provider = otel_trace.get_tracer_provider()
+    assert isinstance(provider, TracerProvider)
+    exporter = InMemorySpanExporter()
+    processor = SimpleSpanProcessor(exporter)
+    provider.add_span_processor(processor)
+
+    try:
+        snap = GameSnapshot(genre_slug="caverns_and_claudes")
+        snap.character_locations["Rux"] = "Cavern Mouth"
+        _seat_wwn_pcs(snap, "Rux")
+
+        # Turn 1 — initiation. The span fires exactly once here.
+        enc = instantiate_encounter_from_trigger(
+            snapshot=snap,
+            pack=cac_pack,
+            encounter_type="combat",
+            player_name="Rux",
+            npcs_present=[NpcMention(name="Goblin", side="opponent", role="hostile")],
+            genre_slug="caverns_and_claudes",
+        )
+        assert enc is not None
+        spans_after_init = [
+            s.name
+            for s in exporter.get_finished_spans()
+            if s.name == "encounter.confrontation_initiated"
+        ]
+        assert len(spans_after_init) == 1, (
+            "initiation must fire encounter.confrontation_initiated exactly "
+            f"once; got {len(spans_after_init)}"
+        )
+
+        # Resolution turn — the same confrontation is now resolved and the
+        # router re-dispatches the same encounter_type. Must NOT rebuild and
+        # must NOT re-fire the initiated span.
+        snap.encounter.resolved = True
+        result = instantiate_encounter_from_trigger(
+            snapshot=snap,
+            pack=cac_pack,
+            encounter_type="combat",
+            player_name="Rux",
+            npcs_present=[NpcMention(name="Goblin", side="opponent", role="hostile")],
+            genre_slug="caverns_and_claudes",
+        )
+        assert result is None, (
+            "a same-type re-dispatch on the resolution turn must no-op "
+            "(no new encounter), not rebuild the confrontation"
+        )
+        assert snap.encounter is enc, "the resolved encounter must stay on the snapshot untouched"
+
+        init_spans = [
+            s.name
+            for s in exporter.get_finished_spans()
+            if s.name == "encounter.confrontation_initiated"
+        ]
+        assert len(init_spans) == 1, (
+            "encounter.confrontation_initiated must fire EXACTLY ONCE per "
+            "confrontation — it must be absent on the resolution turn of the "
+            f"same confrontation; got {len(init_spans)} total emissions"
+        )
+    finally:
+        processor.shutdown()
 
 
 def test_instantiate_active_encounter_is_noop(cac_pack) -> None:
@@ -190,6 +328,36 @@ def test_instantiate_two_dials_from_cdef(snapshot_with_pack):
     assert enc.opponent_metric.threshold == 10
 
 
+def test_instantiate_stamps_category_from_cdef(snapshot_with_pack):
+    """Wiring (road_warrior chase bug 2026-06-04): the StructuredEncounter must
+    carry its confrontation category, stamped from ConfrontationDef.category at
+    instantiation (sibling to win_condition). The location-change handler reads
+    this to decide whether a confrontation is mobile (a chase/escape moves WITH
+    the party and must not abandon on a scene change). The synthetic pack's only
+    def is category='combat', so stamping 'combat' here proves the field flows
+    from cdef.category end-to-end.
+    """
+    from sidequest.agents.orchestrator import NpcMention
+    from sidequest.server.dispatch.encounter_lifecycle import (
+        instantiate_encounter_from_trigger,
+    )
+
+    snap, pack = snapshot_with_pack
+    enc = instantiate_encounter_from_trigger(
+        snapshot=snap,
+        pack=pack,
+        encounter_type="combat",
+        player_name="Sam",
+        npcs_present=[NpcMention(name="Promo", side="opponent", role="hostile")],
+        genre_slug="test_pack",
+    )
+    assert enc is not None
+    assert enc.category == "combat", (
+        "StructuredEncounter.category must be stamped from cdef.category at "
+        f"instantiation; got {enc.category!r}"
+    )
+
+
 def test_instantiate_routes_actor_sides_from_payload(snapshot_with_pack):
     from sidequest.agents.orchestrator import NpcMention
     from sidequest.server.dispatch.encounter_lifecycle import (
@@ -260,6 +428,7 @@ def test_instantiate_seats_additional_pcs_for_mp_bundle(cac_pack) -> None:
     )
 
     snap = GameSnapshot(genre_slug="caverns_and_claudes")
+    _seat_wwn_pcs(snap, "Scratchy", "Itchy")
     enc = instantiate_encounter_from_trigger(
         snapshot=snap,
         pack=cac_pack,
@@ -284,6 +453,7 @@ def test_instantiate_additional_pcs_dedup_against_primary(cac_pack) -> None:
     )
 
     snap = GameSnapshot(genre_slug="caverns_and_claudes")
+    _seat_wwn_pcs(snap, "Scratchy", "Itchy")
     # Story 45-33: combat requires an opponent post-fallback; this test's
     # focus is PC-list dedup, so supply a stub opponent and assert against
     # only the player-side actors.
@@ -311,6 +481,7 @@ def test_instantiate_additional_pcs_default_none_keeps_solo_behavior(cac_pack) -
     )
 
     snap = GameSnapshot(genre_slug="caverns_and_claudes")
+    _seat_wwn_pcs(snap, "Rux")
     # Story 45-33: combat requires an opponent. The test's focus is the
     # solo-PC roster shape (no MP bundle), not opponent supply.
     enc = instantiate_encounter_from_trigger(
@@ -393,6 +564,11 @@ def sealed_letter_pack():
         resolution_mode=ResolutionMode.sealed_letter_lookup,
         player_metric=MetricDef(name="energy", starting=0, threshold=30),
         opponent_metric=MetricDef(name="energy", starting=0, threshold=30),
+        # Task 12: sealed-letter instantiation seeds frame HP from these fields.
+        # The seeding guard requires both to be non-None for any
+        # sealed_letter_lookup cdef — fail-loud per CLAUDE.md.
+        player_default_stats={"hp": 8},
+        opponent_default_stats={"hp": 8},
         beats=[
             BeatDef.model_validate(
                 {

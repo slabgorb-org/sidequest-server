@@ -1,11 +1,8 @@
 """Per-connection WebSocket session handler.
 
-Extracted from ``session_handler.py``: the ``WebSocketSessionHandler`` class
-lives here so the lifecycle/dispatch surface can evolve without churning the
-helpers (``_State``, ``_SessionData``, ``_KIND_TO_MESSAGE_CLS``, etc.) that
-remain re-exported from ``session_handler``. Tracer name is preserved
-(``sidequest.server.session_handler``) so OTEL consumers do not see a
-span-source rename.
+Extracted from ``session_handler.py``; helpers (``_State``, ``_SessionData``,
+etc.) remain re-exported from there. Tracer name is preserved
+(``sidequest.server.session_handler``) so OTEL span sources do not rename.
 """
 
 from __future__ import annotations
@@ -15,7 +12,6 @@ import contextlib
 import hashlib
 import logging
 import os
-import random
 import time
 import uuid
 from collections.abc import Callable
@@ -26,54 +22,36 @@ from typing import TYPE_CHECKING, cast
 from opentelemetry import trace
 
 if TYPE_CHECKING:
-    from sidequest.dungeon.region_graph.model import RegionGraph
-    from sidequest.dungeon.themes import ThemePalette
+    from sidequest.game.retrieval_orchestration import RetrievedEntities
     from sidequest.handlers.base import MessageHandler
-    from sidequest.protocol.messages import DungeonMapPayload
-    from sidequest.protocol.models import EncounterLocationOverlay, LocationEntity
     from sidequest.server.session_room import RoomRegistry, SessionRoom
 
 from sidequest.agents.claude_client import LlmClient
 from sidequest.agents.dispatch_engagement_watcher import (
     run_dispatch_engagement_watcher,
+    run_improvised_combat_watcher,
+    run_unminted_objective_watcher,
 )
+from sidequest.agents.fate_engagement_watcher import run_fate_engagement_watcher
 from sidequest.agents.intent_router import IntentRouterFailure
-from sidequest.agents.llm_factory import build_llm_client
+from sidequest.agents.llm_factory import (
+    _INTENT_ROUTER_MODEL,
+    build_llm_client,
+    build_unseeded_objective_classifier_llm,
+)
 from sidequest.agents.orchestrator import TurnContext
-from sidequest.audio.library_backend import LibraryBackend
+from sidequest.agents.post_narration_classifier import (
+    run_unseeded_objective_classifier_watcher,
+)
 from sidequest.daemon_client import (
     DaemonClient,
     DaemonRequestError,
     DaemonUnavailableError,
     render_enabled,
 )
-from sidequest.game.archetype_apply import apply_archetype_resolved
-from sidequest.game.builder import (
-    BuilderError,
-    CharacterBuilder,
-    NoQualifyingClassesError,
-    PoolValueNotPresentError,
-    StoryInput,
-    UnfilledArrangementError,
-)
-from sidequest.game.character import Character
-from sidequest.game.chassis import (
-    init_chassis_registry,
-    rebind_chassis_bonds_to_character,
-)
 from sidequest.game.event_log import EventLog
-from sidequest.game.lore_seeding import (
-    seed_lore_from_char_creation,
-    seed_world_lore,
-)
 from sidequest.game.projection.cache import ProjectionCache
 from sidequest.game.projection_filter import ProjectionFilter
-from sidequest.game.region_init import RegionInitError, init_region_location
-from sidequest.game.room_movement import (
-    RoomGraphInitError,
-    init_room_graph_location,
-    process_session_open,
-)
 from sidequest.game.session import (
     GameSnapshot,
     NarrativeEntry,
@@ -81,30 +59,18 @@ from sidequest.game.session import (
 from sidequest.game.shared_world_delta import (
     build_shared_world_delta,
 )
+from sidequest.game.tension_tracker import RoundResult
 from sidequest.game.world_materialization import (
-    CampaignMaturity,
-    HistoryParseError,
-    materialize_from_genre_pack,
-    parse_history_chapters,
-    preload_authored_npcs,
     recompute_arc_history,
     should_recompute_arc,
 )
-from sidequest.genre.archetype.shim import resolve_archetype
-from sidequest.genre.error import GenreValidationError
-from sidequest.genre.loader import DEFAULT_GENRE_PACK_SEARCH_PATHS, GenreLoader
-from sidequest.genre.models.pack import GenrePack
+from sidequest.genre.loader import DEFAULT_GENRE_PACK_SEARCH_PATHS
 from sidequest.genre.models.world import NavigationMode
 from sidequest.protocol import GameMessage
 from sidequest.protocol.enums import MessageType
 from sidequest.protocol.messages import (
-    AudioCueMessage,
-    AudioCuePayload,
     ChapterMarkerMessage,
     ChapterMarkerPayload,
-    CharacterCreationMessage,
-    CharacterCreationPayload,
-    ConfrontationMessage,
     ConfrontationPayload,
     ImageMessage,
     ImagePayload,
@@ -118,8 +84,6 @@ from sidequest.protocol.messages import (
     ScrapbookEntryPayload,
     SecretNotePayload,
     SessionEventPayload,
-    TacticalGridMessage,
-    TacticalGridPayload,
     TurnStatusMessage,
     TurnStatusPayload,
 )
@@ -128,34 +92,25 @@ from sidequest.protocol.models import (
 )
 from sidequest.protocol.types import NonBlankString
 from sidequest.server import intent_router_pass, views
-from sidequest.server.audio_cue import build_audio_cue_payload
-from sidequest.server.dispatch.chargen_loadout import apply_starting_loadout
-from sidequest.server.dispatch.chargen_summary import render_confirmation_summary
 from sidequest.server.dispatch.opening import (
-    OpeningResolutionError,
-    _resolve_opening_post_chargen,
-    build_directive,
     record_opening_played,
 )
-from sidequest.server.dispatch.scenario_bind import bind_scenario
 from sidequest.server.intent_router_pass import execute_intent_router_pre_narrator_pass
-from sidequest.server.magic_init import init_magic_state_for_session
 from sidequest.server.narration_apply import (
     _apply_narration_result_to_snapshot,
     _handshake_resolved_tropes,
 )
 from sidequest.server.session_helpers import (
-    _build_cartography_map_message,
     _build_turn_context,
     _error_msg,
     _render_url_from_path,
     _resolve_acting_character_name,
     _resolve_location_display,
-    _world_history_value,
     build_secret_note_events,
+    player_log_content,
+    refresh_turn_context_post_dispatch,
 )
 from sidequest.server.session_state import (
-    _AUDIO_INTERPRETER,
     _build_pc_descriptor,
     _hash_snapshot,
     _SessionData,
@@ -165,1305 +120,134 @@ from sidequest.server.session_state import (
 from sidequest.server.utils import slugify_player_name as _slugify_player_name
 from sidequest.telemetry.phase_timing import PhaseTimings
 from sidequest.telemetry.spans import (
-    SPAN_CHARGEN_ARCHETYPE_GATE_BLOCKED,
-    SPAN_CHARGEN_ARCHETYPE_GATE_EVALUATED,
-    audio_backend_disabled_span,
-    audio_backend_enabled_span,
-    audio_dispatched_span,
-    audio_skipped_span,
     encounter_momentum_broadcast_span,
     orchestrator_process_action_span,
     round_invariant_span,
     turn_span,
 )
+from sidequest.telemetry.spans.intent_router import intent_router_decompose_span
 from sidequest.telemetry.turn_record import PatchSummary, TurnRecord
 from sidequest.telemetry.validator import Validator
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
 
 logger = logging.getLogger(__name__)
 
-# Preserve the original tracer name so OTEL span sources do not rename when
-# this class moved out of session_handler.py. Phase-3 plan principle.
+# Preserve the original tracer name so OTEL span sources do not rename.
 tracer = trace.get_tracer("sidequest.server.session_handler")
 
 
-def _populate_opening_directive_on_chargen_complete(
-    session_data: _SessionData,
-    snapshot: GameSnapshot,
-    pack: GenrePack,
-    world_slug: str,
-    mode: object,
-) -> str | None:
-    """Resolve and stash an Opening directive at chargen-completion time.
+def perspective_character_name(sd) -> str:
+    """The seated character name to use as a party_location perspective key.
 
-    Called from the ``is_first_commit`` branch of
-    :meth:`WebSocketSessionHandler._handle_character_creation` after
-    authored NPCs have been pre-loaded but before persistence and the
-    first narrator turn fires. Picks one Opening from the world's bank
-    via :func:`_resolve_opening_post_chargen`, builds a directive via
-    :func:`build_directive`, and stashes both the seed and directive on
-    ``session_data`` so :meth:`_run_opening_turn_narration` can consume
-    them on the very next call.
-
-    Side effects:
-    - sets ``session_data.opening_seed`` to the chosen Opening's
-      first_turn_invitation
-    - sets ``session_data.opening_directive`` to the rendered directive
-    - sets ``session_data._resolved_opening_id`` for the played-span
-    - binds ``snapshot.current_region`` to the opening's authored
-      ``setting.region_id`` (a real cartography node) when it differs from
-      the spawn region, emitting a ``state_patch.current_region`` OTEL span
-
-    Returns the cartography region id the opening rebound ``current_region``
-    to (so the caller can fire the opening LOCATION_DESCRIPTION for that
-    region), or ``None`` when no rebind happened — no ``region_id`` declared,
-    the region was already bound, or an early bail-out path was taken.
-
-    No-ops gracefully when:
-    - ``opening_directive`` is already populated (idempotency for
-      double-confirmation guards)
-    - the snapshot has no characters (defensive — chargen should have
-      appended one already)
-    - the world has no openings authored (Validator 7 should have
-      caught this at world load)
-    - resolution fails (Validators 7+8 should make this unreachable)
-
-    The MP-joiner case is handled by the *caller*: this helper is only
-    invoked from the ``is_first_commit`` branch, so a peer joining a
-    snapshot that already has characters never reaches this code path.
-
-    See ``docs/superpowers/specs/2026-05-01-canned-openings-design.md``
-    §2.4 + §2.6.
+    Story 67-6: the POV key is the seated CHARACTER, resolved from
+    snapshot.player_seats[player_id] — never the player identity. Falls back to
+    sd.player_name (which is itself the character name pre-seat) when no seat is
+    bound yet, preserving prior behavior.
     """
-    if getattr(session_data, "opening_directive", None) is not None:
-        return  # already populated — idempotent (no event: silent on replay)
-
-    # Loud-fail bail-out paths (playtest 2026-05-03 — opening narration
-    # skips Kestrel beat). Each ``return`` previously was a silent
-    # ``# defensive`` bail; the GM panel had no signal that the canned
-    # opening was even attempted. Now every skip emits an
-    # ``opening.skipped`` watcher event so Sebastien sees the lie-
-    # detector fire when the narrator improvises in place of the
-    # canned opening. Severity=warning because the resolver running and
-    # finding no match is the exact bug that surfaces as "PCs land in
-    # Vaskov Centrum customs instead of the Kestrel galley".
-    _genre_slug = getattr(session_data, "genre_slug", "")
-    _world_slug = getattr(session_data, "world_slug", world_slug)
-
-    def _emit_skip(reason: str, **extra: object) -> None:
-        _watcher_publish(
-            "opening.skipped",
-            {
-                "reason": reason,
-                "genre": _genre_slug,
-                "world": _world_slug,
-                "characters_committed": len(snapshot.characters),
-                **extra,
-            },
-            component="opening_hook",
-            severity="warning",
-        )
-
-    if not snapshot.characters:
-        _emit_skip("empty_snapshot")
-        return
-
-    pc = snapshot.characters[0]
-    pc_background = getattr(pc, "background", "") or ""
-
-    world = pack.worlds.get(world_slug)
-    if world is None or not world.openings:
-        _emit_skip(
-            "world_or_openings_missing",
-            world_present=world is not None,
-            opening_bank_size=len(getattr(world, "openings", []) or []) if world else 0,
-        )
-        return
-
-    mode_str = mode.value if hasattr(mode, "value") else str(mode)
-    try:
-        opening = _resolve_opening_post_chargen(
-            world.openings,
-            mode=mode_str,
-            player_count=len(snapshot.characters),
-            pc_background=pc_background,
-            world_slug=world_slug,
-        )
-    except OpeningResolutionError as exc:
-        # The active cause of the Kestrel-skip bug: ``mp_galley_jumprest``
-        # declares ``min_players: 2`` and the resolver runs at first
-        # commit when only 1 PC is seated. The deferral gate
-        # (``_should_fire_opening_narration``) catches this and waits
-        # for the second commit; the skip event tells Sebastien
-        # *why* the resolver gave up.
-        _emit_skip(
-            "resolution_failed",
-            mode=mode_str,
-            player_count=len(snapshot.characters),
-            pc_background=pc_background,
-            opening_bank_size=len(world.openings),
-            error=str(exc),
-        )
-        return
-
-    # Chassis lookup — World may not store chassis_instances directly
-    # (loader populates them as a sibling structure for validators).
-    # Use getattr to fall through gracefully when the field is absent;
-    # location-anchored Openings won't need it anyway.
-    chassis = None
-    authored_crew: list = []
-    bond_tier: str = "neutral"
-    if opening.setting.chassis_instance is not None:
-        chassis_instances = getattr(world, "chassis_instances", []) or []
-        chassis = next(
-            (c for c in chassis_instances if c.id == opening.setting.chassis_instance),
-            None,
-        )
-        if chassis is not None:
-            npc_by_id = {n.id: n for n in world.authored_npcs}
-            authored_crew = [npc_by_id[i] for i in chassis.crew_npcs if i in npc_by_id]
-            for seed in chassis.bond_seeds:
-                if seed.character_role == "player_character":
-                    bond_tier = seed.bond_tier_chassis
-                    break
-
-    present_npcs: list = []
-    if opening.setting.chassis_instance is None:
-        npc_by_id = {n.id: n for n in world.authored_npcs}
-        present_npcs = [npc_by_id[i] for i in opening.setting.present_npcs if i in npc_by_id]
-
-    per_pc_beat = None
-    pc_drive = getattr(pc, "drive", "") or ""
-    for beat in opening.per_pc_beats:
-        applies = beat.applies_to
-        if applies.get("background") == pc_background:
-            per_pc_beat = beat
-            break
-        if applies.get("drive") == pc_drive:
-            per_pc_beat = beat
-            break
-
-    magic_register = getattr(world, "magic_register", "") or ""
-
-    pc_name_parts = pc.core.name.split() if hasattr(pc, "core") else [""]
-    directive = build_directive(
-        opening=opening,
-        chassis=chassis,
-        authored_crew=authored_crew,
-        magic_register=magic_register,
-        bond_tier_for_pc=bond_tier,
-        per_pc_beat=per_pc_beat,
-        pc_first_name=getattr(pc, "first_name", None) or pc_name_parts[0],
-        pc_last_name=getattr(pc, "last_name", "") or "",
-        pc_nickname=getattr(pc, "nickname", "") or "",
-        present_npcs=present_npcs,
-    )
-
-    session_data.opening_seed = opening.first_turn_invitation
-    session_data.opening_directive = directive
-    session_data._resolved_opening_id = opening.id
-
-    # sq-playtest 2026-05-09 [OBS] projection.party_zone_absent_with_characters:
-    # ``party_location()`` returned None at game start because no seated PC
-    # had a ``character_locations`` entry — the perception rewriter then
-    # fell back to "you can't identify them" mode and the narrator had to
-    # call PCs *"another figure — armed, by the silhouette"* instead of by
-    # name. Bootstrap every seated PC's location to the resolved Opening's
-    # ``setting.location_label`` so ``visible_to()`` / ``in_same_zone()``
-    # return true on turn 1. Idempotent: only writes when an entry is
-    # absent. Both PCs land on the same string, so consensus matches.
-    _bootstrap_character_locations_from_opening(snapshot, opening)
-
-    # Playtest 2026-05-25 [BUG] flickering_reach MP: the active location never
-    # advances from the spawn region. ``init_region_location`` seeds
-    # ``current_region`` from ``cartography.starting_region`` (toods_dome),
-    # but the opening anchors the party at Salt Camp / Blind Reach canyon — a
-    # different cartography node. The narrator only emits a free-text
-    # ``location_label``, never a region_id, so the Location panel + Map +
-    # OTEL State stayed pinned to the spawn region. The opening now declares an
-    # explicit ``setting.region_id`` (an authored binding to a real cartography
-    # node); bind ``current_region`` to it here so the region-mode
-    # LOCATION_DESCRIPTION + Map + OTEL State all agree with the prose.
-    return _bind_current_region_from_opening(snapshot, pack, world_slug, opening)
+    return sd.snapshot.player_seats.get(sd.player_id, sd.player_name)
 
 
-def _bind_current_region_from_opening(
-    snapshot: GameSnapshot,
-    pack: GenrePack,
-    world_slug: str,
-    opening: object,
-) -> str | None:
-    """Bind ``snapshot.current_region`` to the opening's declared ``region_id``.
-
-    The opening's ``setting.region_id`` is an authored binding to a real
-    cartography graph node (the free-text ``location_label`` is prose only and
-    is never a region id). When the opening declares a ``region_id``:
-
-    - If it IS a declared cartography region, set ``snapshot.current_region``
-      to it (and dedup-append to ``discovered_regions``), emit a
-      ``current_region`` state-patch OTEL span, and return the bound id so the
-      caller can fire the opening LOCATION_DESCRIPTION for it. Only emits/
-      returns when the canonical id actually CHANGED — re-binding to the same
-      region is a silent no-op (no redundant patch).
-    - If it is NOT a declared region, FAIL LOUD: emit a
-      ``current_region.bind_failed`` ERROR span and raise. A bad binding is a
-      pack-authoring bug (per CLAUDE.md No-Silent-Fallbacks) — never fuzzy-
-      match the free-text label to a node, never leave the region Unknown.
-
-    Returns the bound region id when it changed, else ``None`` (no region_id
-    declared, or already bound to that region).
-    """
-    region_id = getattr(getattr(opening, "setting", None), "region_id", None)
-    if not region_id:
-        return None
-
-    world = pack.worlds.get(world_slug)
-    cartography = getattr(world, "cartography", None) if world is not None else None
-    regions = getattr(cartography, "regions", {}) or {}
-    opening_id = getattr(opening, "id", "") or ""
-
-    if region_id not in regions:
-        _watcher_publish(
-            "current_region.bind_failed",
-            {
-                "opening_id": opening_id,
-                "declared_region_id": region_id,
-                "world": world_slug,
-                "declared_regions": sorted(regions),
-                "reason": "region_id_not_a_cartography_node",
-            },
-            component="opening_hook",
-            severity="error",
-        )
-        trace.get_current_span().add_event(
-            "current_region.bind_failed",
-            {
-                "event": "current_region.bind_failed",
-                "opening_id": opening_id,
-                "declared_region_id": region_id,
-                "world": world_slug,
-                "declared_regions": ",".join(sorted(regions)),
-            },
-        )
-        raise RegionInitError(
-            f"opening '{opening_id}' setting.region_id '{region_id}' is not a "
-            f"declared cartography region (declared: {sorted(regions)})"
-        )
-
-    prior_region = snapshot.current_region or ""
-    if prior_region == region_id:
-        return None  # already bound — no redundant patch
-
-    snapshot.current_region = region_id
-    if region_id not in snapshot.discovered_regions:
-        snapshot.discovered_regions.append(region_id)
-    # Movement subsystem §Q0: seed seated PCs' per-PC region (chargen complete,
-    # seats known) so region_for(perspective=pc) resolves by movement time.
-    snapshot.seed_pc_regions(region_id)
-
-    _watcher_publish(
-        "state_patch.current_region",
-        {
-            "opening_id": opening_id,
-            "current_region": region_id,
-            "prior_current_region": prior_region,
-            "source": "opening.setting.region_id",
-            "world": world_slug,
-        },
-        component="opening_hook",
-        severity="info",
-    )
-    trace.get_current_span().add_event(
-        "state_patch.current_region",
-        {
-            "event": "state_patch.current_region",
-            "opening_id": opening_id,
-            "current_region": region_id,
-            "prior_current_region": prior_region,
-            "source": "opening.setting.region_id",
-            "world": world_slug,
-        },
-    )
-    return region_id
-
-
-def _bootstrap_character_locations_from_opening(snapshot: GameSnapshot, opening: object) -> None:
-    """Write the opening's ``setting.location_label`` to every seated PC
-    without a ``character_locations`` entry.
-
-    Idempotent — preserves any prior entry (turn-1 narration apply or a
-    resumed save's last-known location). Only fills the *empty* slots that
-    cause ``party_location()`` to return None at game start.
-
-    Emits ``snapshot.character_locations_bootstrapped`` (watcher event +
-    span event) so the GM panel can verify the chargen-complete bootstrap
-    fired and which seats were populated.
-    """
-    location = getattr(getattr(opening, "setting", None), "location_label", None)
-    if not location:
-        return
-    seated = [name for name in snapshot.player_seats.values() if name]
-    bootstrapped: list[str] = []
-    for name in seated:
-        if name not in snapshot.character_locations:
-            snapshot.character_locations[name] = location
-            bootstrapped.append(name)
-    if bootstrapped:
-        opening_id = getattr(opening, "id", "") or ""
-        _watcher_publish(
-            "snapshot.character_locations_bootstrapped",
-            {
-                "source": "opening.setting.location_label",
-                "opening_id": opening_id,
-                "bootstrapped_pcs": bootstrapped,
-                "bootstrapped_count": len(bootstrapped),
-                "seated_count": len(seated),
-            },
-            component="opening_hook",
-            severity="info",
-        )
-        trace.get_current_span().add_event(
-            "snapshot.character_locations_bootstrapped",
-            {
-                "event": "snapshot.character_locations_bootstrapped",
-                "source": "opening.setting.location_label",
-                "opening_id": opening_id,
-                "bootstrapped_pcs": ",".join(bootstrapped),
-                "bootstrapped_count": len(bootstrapped),
-                "seated_count": len(seated),
-            },
-        )
-
-
-def _should_fire_opening_narration(session_data: object, room: object) -> bool:
-    """Decide whether to run opening narration on this chargen.complete.
-
-    Playtest 2026-05-03: in MP, the canned ``mp_galley_jumprest`` opening
-    declares ``min_players: 2`` but the populator runs at FIRST commit
-    when only 1 PC is seated. Resolution fails → no directive → narrator
-    improvises Vaskov Centrum customs instead of the Kestrel galley. The
-    second committer hits ``mp_joiner_opening_suppressed_at_consume``
-    and gets joiner-orientation anchored on the (improvised) host
-    location — the canned MP opening is never used.
-
-    Fix: the populator is now called on every commit (idempotent — bails
-    if directive already set). This gate decides whether to *fire* the
-    opening narration based on whether the party is complete enough
-    that the canned opening can resolve. Solo paths fire on first
-    commit (preserves prior behavior). MP first committers DEFER until
-    the last committer can re-run the populator with the full party
-    seated.
-
-    Returns ``True`` when:
-      - There is no MP room (solo headless path).
-      - Room reports ``non_abandoned_player_count <= 1`` (solo via room).
-      - The directive is already populated (resolver succeeded —
-        either because we're solo or because this is the last
-        committer and the party is complete).
-      - All non-abandoned seats have committed chargen
-        (``len(characters) >= non_abandoned_player_count``) — fire as a
-        belt-and-suspenders fallback even if the populator hasn't
-        managed to set the directive (e.g. world has no openings — the
-        narrator's "I look around" fallback still beats silence).
-
-    Returns ``False`` only in the explicit MP-defer case: room exists,
-    >1 seat expected, party not complete, and no directive populated.
-    """
-    if room is None:
-        return True
-    try:
-        seat_count = int(room.non_abandoned_player_count())
-    except Exception:  # noqa: BLE001 — fail open to current behavior on contract drift
-        return True
-    if seat_count <= 1:
-        return True
-    if getattr(session_data, "opening_directive", None) is not None:
-        return True
-    snapshot = getattr(session_data, "snapshot", None)
-    chars = getattr(snapshot, "characters", []) if snapshot is not None else []
-    return len(chars) >= seat_count
-
-
-def _maybe_build_runtime_cavern_payload(
-    *,
-    sd: _SessionData,
-    room_id: str,
-) -> TacticalGridPayload | None:
-    """Build a TacticalGridPayload from a persisted runtime cavern mask.
-
-    Story 52-4 (ADR-096 + ADR-106). When ``_maybe_emit_tactical_grid``
-    finds no static room YAML and the world has a procedural dungeon
-    (``sd.dungeon_store`` is wired by the Beneath Sünden path), look up
-    the persisted mask BLOB for ``room_id`` and:
-
-    1. Emit a ``.cavern.png`` sidecar at the local-renders mount via
-       ``emit_runtime_cavern_png`` (fires the
-       ``dungeon.render.cavern_mask_to_png`` OTEL span).
-    2. Synthesise a minimal ``TacticalGridPayload`` carrying the
-       decoded ASCII mask + resolved cavern image URL + cell size.
-       Cellular params are unknown at this point (the mask is the
-       truth; the originating generation params live in
-       ``GenerationReport``, not in the persisted mask BLOB).
-       ``DerivedRoomData`` is computed from the mask: floor_count is
-       the ASCII '.' count; exits and pois are empty here — the
-       procedural region's exits live at the region-graph level, not
-       the cavern-mask level (52-5 / future work owns surfacing them).
-    3. Return the payload so the caller emits a normal
-       ``TACTICAL_GRID`` message. The UI's existing TacticalGridRenderer
-       consumes it identically to the static path (AC5 contract: "the
-       PNG sidecar integrates with the existing TacticalGridRenderer").
-
-    Returns ``None`` when:
-      * ``sd.dungeon_store`` is absent (no procedural dungeon wired —
-        applies to every non-Beneath-Sünden world right now);
-      * no mask is persisted for ``room_id`` (the room_id is not a
-        materialised region — could be a settlement_id or a typo);
-      * the local-renders output directory is not configured
-        (``SIDEQUEST_OUTPUT_DIR`` env var unset at turn time —
-        ``server.app`` startup also logs ``render_assets.no_output_dir``
-        loudly when it cannot resolve a daemon-output handshake; this
-        per-turn check is the safety net and also emits its own
-        ``tactical_grid.runtime_render_skipped`` watcher event so the
-        GM panel sees the per-turn skip without depending on
-        startup-time correlation).
-
-    No silent fallbacks: a corrupt mask BLOB or PIL failure propagates
-    as a ``ValueError`` / ``OSError`` from ``emit_runtime_cavern_png``
-    and is caught by the outer ``_maybe_emit_tactical_grid``'s generic
-    ``except Exception`` handler (logged at warning level).
-    """
-    import base64 as _base64
-    import os as _os
-
-    from sidequest.game.room_file_loader import emit_runtime_cavern_png
-    from sidequest.protocol.models import DerivedRoomData
-    from sidequest.server.asset_urls import resolve_asset_url
-
-    # The Decision-N gate shape (``<var> = getattr(sd, "dungeon_store", None)``
-    # followed by ``if <var> is not None:``) is grep-asserted by
-    # tests/dungeon/test_setpiece_attach_wiring.py — keep the positive guard
-    # so the structural lint binding both this helper and the existing
-    # resolve_complications_for_resolved_tropes site continues to pass.
-    dungeon_store = getattr(sd, "dungeon_store", None)
-    if dungeon_store is not None:
-        try:
-            masks = dungeon_store.load_masks()
-        except Exception as exc:  # noqa: BLE001 — must not crash a turn
-            logger.warning(
-                "tactical_grid.runtime_mask_load_failed genre=%s world=%s room_id=%s error=%s",
-                sd.genre_slug,
-                sd.world_slug,
-                room_id,
-                exc,
-            )
-            return None
-        mask_dict = masks.get(room_id)
-        if mask_dict is None:
-            return None  # room_id is not a materialised region — defer to static-not-found path
-
-        output_dir_env = _os.environ.get("SIDEQUEST_OUTPUT_DIR")
-        if not output_dir_env:
-            # No silent fallback: a missing output dir is an
-            # operator-visible config gap. ``server.app`` also logs
-            # this loudly at startup; the per-turn warning + watcher
-            # event is the safety net per CLAUDE.md No-Silent-Fallbacks.
-            logger.warning(
-                "tactical_grid.runtime_render_skipped reason=no_output_dir "
-                "genre=%s world=%s room_id=%s",
-                sd.genre_slug,
-                sd.world_slug,
-                room_id,
-            )
-            _watcher_publish(
-                "tactical_grid.runtime_render_skipped",
-                {
-                    "genre": sd.genre_slug,
-                    "world": sd.world_slug,
-                    "room_id": room_id,
-                    "reason": "no_output_dir",
-                },
-                component="cavern_renderer",
-                severity="warning",
-            )
-            return None
-        output_root = Path(output_dir_env)
-
-        save_path = getattr(sd.store, "_path", None)
-        save_id = save_path.stem if isinstance(save_path, Path) else "in_memory"
-
-        relative = f"artifacts/dungeon/{save_id}/regions/{room_id}.cavern.png"
-        output_path = output_root / relative
-        emit_runtime_cavern_png(
-            mask_dict=mask_dict,
-            output_path=output_path,
-            region_id=room_id,
-        )
-
-        cavern_image_url = resolve_asset_url(relative)
-
-        # Decode the mask ASCII for the UI overlay (independent of the PNG
-        # — the UI uses the mask string for cell-stepped math, not pixel-
-        # peeping).
-        mask_text = _base64.b64decode(mask_dict["mask_bytes_b64"]).decode("ascii")
-        floor_count = mask_text.count(".")
-        block = mask_dict["block"]
-
-        return TacticalGridPayload(
-            room_id=room_id,
-            room_name=room_id,  # procedural rooms have no authored name — region_id IS the name
-            room_type="cavern",
-            mask=mask_text,
-            cavern_image_url=cavern_image_url,
-            cell_size=block["cell_width"],
-            cellular=None,  # originating generation params not persisted in the mask BLOB
-            derived=DerivedRoomData(
-                floor_count=floor_count,
-                exits={},  # procedural exits live at the region-graph level, not the mask
-                pois=[],
-            ),
-            tokens=[],
-            initiative=None,
-            entities=[],
-        )
-
-    return None
-
-
-def _maybe_emit_tactical_grid(
-    handler: object,
-    *,
+def _drive_session_tension_tracker(
     sd: _SessionData,
     snapshot: GameSnapshot,
-    actor: str | None,
-    emit_fn: object,
-    room_id_override: str | None = None,
+    *,
+    encounter_resolved_this_turn: bool,
 ) -> None:
-    """Emit a TACTICAL_GRID message when the player enters a room-graph room.
+    """Feed the per-session :class:`TensionTracker` one observation per turn.
 
-    ADR-096 Task 20b. Wires ``load_room_payload`` into the room-enter dispatch
-    path so the UI's Automapper receives live cavern/settlement data.
+    ADR-024 producer wiring (story 81-2). The narrator improvises pacing on
+    *every* turn, so the dual-track signal must update every turn — not only on
+    combat turns — which is why this is driven here in the handler (a quiet turn
+    is a Boring observation) rather than buried in the LLM-gated narration-apply
+    path. ``observe()`` records the action event, ages the spike, AND emits the
+    ``tension:round_observed`` watcher event the GM panel reads (the only
+    emitting path — we reuse it rather than add a parallel telemetry channel).
 
-    Called from two sites:
-    1. Narrator location-change branch (narration turn loop) — ``actor`` is the
-       acting character, room_id comes from ``snapshot.character_locations``.
-    2. Chargen room-graph init — ``room_id_override`` is the entrance room id
-       returned by ``init_room_graph_location``.
+    Honest mapping from resolved turn state to the tracker's inputs:
 
-    OTEL: emits ``tactical_grid.emitted`` on success,
-    ``tactical_grid.room_not_found`` when the room YAML is absent (non-fatal —
-    many worlds use room_graph without per-room YAMLs), and
-    ``tactical_grid.load_failed`` on unexpected loader errors.
+    - **stakes track** — the acting player's real HP ratio via ``update_stakes``.
+    - **action track + drama** — ``observe()`` classifies the turn from real
+      encounter signals: a combatant defeated *this* turn is a dramatic kill;
+      the lowest seated combatant HP ratio drives NearMiss; otherwise a quiet
+      turn ramps the gambler's Boring streak.
+
+    Per-turn HP-delta ``damage_events`` are intentionally NOT synthesized (no
+    start/end HP capture this story) — the relative-magnitude math is covered by
+    the tracker's own unit tests; see the Dev deviation. Input reads are
+    None/zero-guarded so the tracker is never called with invalid args (e.g.
+    ``update_stakes`` with ``max_hp <= 0``); the single call site additionally
+    wraps this in try/except so a watcher-hub hiccup can't crash the turn
+    (ADR-006 graceful degradation).
     """
-    from sidequest.game.room_file_loader import RoomNotFoundError, load_room_payload
-    from sidequest.genre.loader import DEFAULT_GENRE_PACK_SEARCH_PATHS, GenreLoader
+    tracker = sd.tension_tracker
 
-    world = sd.genre_pack.worlds.get(sd.world_slug)
-    if world is None:
-        return
+    # Stakes track from the acting player's real HP, when seated with a pool.
+    pc = snapshot.find_creature_core(sd.player_name)
+    if pc is not None and pc.hp.max > 0:
+        tracker.update_stakes(pc.hp.current, pc.hp.max)
 
-    if room_id_override is not None:
-        room_id = room_id_override
-    else:
-        # Read the post-apply location for this actor.
-        room_id = snapshot.character_locations.get(actor or "") if actor else None
-    if not room_id:
-        return
-
-    try:
-        loader = GenreLoader(search_paths=DEFAULT_GENRE_PACK_SEARCH_PATHS)
-        world_dir = loader.find(sd.genre_slug) / "worlds" / sd.world_slug
-    except Exception as exc:  # noqa: BLE001 — non-fatal; world dir lookup must not crash a turn
-        logger.warning(
-            "tactical_grid.world_dir_lookup_failed genre=%s world=%s error=%s",
-            sd.genre_slug,
-            sd.world_slug,
-            exc,
-        )
-        return
-
-    # Story 52-5: discriminator on tactical_grid.emitted so the GM panel
-    # (Sebastien) can distinguish runtime-generated cavern PNGs from
-    # statically authored ones without correlating sibling OTEL spans.
-    source = "static"
-    try:
-        payload = load_room_payload(world_dir, room_id, genre_slug=sd.genre_slug)
-    except RoomNotFoundError:
-        # Story 52-4: no static YAML — try the runtime path. If the
-        # world has a procedural dungeon (Beneath Sünden via ADR-106)
-        # and the room_id is a region_id with a persisted mask, emit
-        # the runtime cavern PNG sidecar and synthesise a
-        # TacticalGridPayload from the mask. Falls through (return)
-        # if the world has no procedural dungeon or no mask exists for
-        # this room_id — the existing static-path absence is non-fatal.
-        runtime_payload = _maybe_build_runtime_cavern_payload(sd=sd, room_id=room_id)
-        if runtime_payload is not None:
-            payload = runtime_payload
-            source = "runtime"
-        else:
-            # Per CLAUDE.md no-silent-fallback: log at debug so the
-            # absence IS visible to Keith/Sebastien at low verbosity,
-            # but not loud enough to alarm on every non-YAML room.
-            logger.debug(
-                "tactical_grid.room_not_found genre=%s world=%s room_id=%s",
-                sd.genre_slug,
-                sd.world_slug,
-                room_id,
-            )
-            _watcher_publish(
-                "tactical_grid.room_not_found",
-                {
-                    "genre": sd.genre_slug,
-                    "world": sd.world_slug,
-                    "room_id": room_id,
-                },
-                component="cavern_renderer",
-            )
-            return
-    except FileNotFoundError as exc:
-        # Mask .txt or .cavern.png missing — authoring error, log loud.
-        logger.warning(
-            "tactical_grid.load_failed genre=%s world=%s room_id=%s error=%s",
-            sd.genre_slug,
-            sd.world_slug,
-            room_id,
-            exc,
-        )
-        _watcher_publish(
-            "tactical_grid.load_failed",
-            {
-                "genre": sd.genre_slug,
-                "world": sd.world_slug,
-                "room_id": room_id,
-                "error": str(exc),
-            },
-            component="cavern_renderer",
-            severity="warning",
-        )
-        return
-    except Exception as exc:  # noqa: BLE001 — must not crash a turn
-        logger.warning(
-            "tactical_grid.load_failed genre=%s world=%s room_id=%s error=%s",
-            sd.genre_slug,
-            sd.world_slug,
-            room_id,
-            exc,
-        )
-        _watcher_publish(
-            "tactical_grid.load_failed",
-            {
-                "genre": sd.genre_slug,
-                "world": sd.world_slug,
-                "room_id": room_id,
-                "error": str(exc),
-            },
-            component="cavern_renderer",
-            severity="warning",
-        )
-        return
-
-    # Tokens and initiative are populated from game state.
-    # TODO: populate tokens from snapshot encounter/party at room_id when
-    # the token placement system (ADR-096 Phase 3) lands. For now, empty
-    # list is correct — the plan task description explicitly notes this is
-    # out of scope for Phase E.
-    tactical_msg = TacticalGridMessage(
-        payload=payload,
-        player_id=getattr(sd, "player_id", ""),
-    )
-    _watcher_publish(
-        "tactical_grid.emitted",
-        {
-            "genre": sd.genre_slug,
-            "world": sd.world_slug,
-            "room_id": room_id,
-            "room_type": payload.room_type,
-            "room_name": payload.room_name,
-            "source": source,
-        },
-        component="cavern_renderer",
-    )
-    logger.info(
-        "tactical_grid.emitted genre=%s world=%s room_id=%s room_type=%s",
-        sd.genre_slug,
-        sd.world_slug,
-        room_id,
-        payload.room_type,
-    )
-    # Dispatch via the shared-world emit function (broadcasts to all connected
-    # sockets). The emit_fn is the closure from the turn dispatch loop; it
-    # handles both the room.broadcast path and the outbound-list fallback for
-    # test fixtures without a real SessionRoom.
-    emit_fn(tactical_msg, "TACTICAL_GRID")  # type: ignore[operator]
-
-
-def _maybe_emit_location_description(
-    handler: object,
-    *,
-    sd: _SessionData,
-    snapshot: GameSnapshot,
-    actor: str | None,
-    emit_fn: object,
-    room_id_override: str | None = None,
-) -> None:
-    """Emit a LOCATION_DESCRIPTION message when the party's current_room changes.
-
-    Story 54-2 / ADR-109. Mirrors the ``_maybe_emit_tactical_grid`` wiring:
-
-    1. Narrator location-change branch (same call sites as tactical grid).
-    2. Session-resume dispatch (``room_id_override`` is the resumed room).
-
-    Two source paths:
-    - Per-room YAML via ``load_room_payload`` (room_graph worlds).
-    - Cartography region (region-mode worlds) — fallback when no room YAML.
-
-    Missing room id is silent because no-room is not an error state.
-    Missing manifest source fires the ``location_description.no_source``
-    watcher event so the absence is observable on the GM panel — per
-    CLAUDE.md OTEL Observability Principle.
-
-    The ``overlays`` payload field is always emitted as ``[]`` in this
-    story — overlay population is owned by Story 54-7
-    (``LOCATION_OVERLAY_CHANGED``).
-    """
-    from sidequest.game.room_file_loader import RoomNotFoundError, load_room_payload
-    from sidequest.genre.loader import DEFAULT_GENRE_PACK_SEARCH_PATHS, GenreLoader
-    from sidequest.protocol.messages import LocationDescriptionMessage
-    from sidequest.protocol.models import LocationDescriptionPayload
-
-    world = sd.genre_pack.worlds.get(sd.world_slug)
-    if world is None:
-        return
-
-    if room_id_override is not None:
-        room_id = room_id_override
-    else:
-        room_id = snapshot.character_locations.get(actor or "") if actor else None
-    if not room_id:
-        return
-
-    prose: str = ""
-    terrain: str | None = None
-    entities: list[LocationEntity] = []
-    sourced = False
-
-    # Path 1: per-room YAML via load_room_payload.
-    try:
-        loader = GenreLoader(search_paths=DEFAULT_GENRE_PACK_SEARCH_PATHS)
-        world_dir = loader.find(sd.genre_slug) / "worlds" / sd.world_slug
-    except Exception as exc:  # noqa: BLE001 — non-fatal; world dir lookup must not crash a turn
-        logger.warning(
-            "location_description.world_dir_lookup_failed genre=%s world=%s error=%s",
-            sd.genre_slug,
-            sd.world_slug,
-            exc,
-        )
-        _watcher_publish(
-            "location_description.world_dir_lookup_failed",
-            {
-                "genre": sd.genre_slug,
-                "world": sd.world_slug,
-                "error": str(exc),
-            },
-            component="location",
-            severity="warning",
-        )
-        return
-
-    try:
-        room_payload = load_room_payload(world_dir, room_id, genre_slug=sd.genre_slug)
-        prose = room_payload.settlement_description or ""
-        terrain = room_payload.room_type
-        entities = room_payload.entities
-        sourced = True
-    except RoomNotFoundError:
-        # Fall back to cartography region lookup (region-mode worlds).
-        cartography = getattr(world, "cartography", None)
-        region = (
-            cartography.regions.get(room_id)
-            if cartography is not None and hasattr(cartography, "regions")
-            else None
-        )
-        if region is not None:
-            prose = getattr(region, "description", "") or ""
-            terrain = getattr(region, "terrain", None)
-            entities = getattr(region, "entities", [])
-            sourced = True
-    except Exception as exc:  # noqa: BLE001 — must not crash a turn
-        logger.warning(
-            "location_description.load_failed genre=%s world=%s room=%s error=%s",
-            sd.genre_slug,
-            sd.world_slug,
-            room_id,
-            exc,
-        )
-        _watcher_publish(
-            "location_description.load_failed",
-            {
-                "genre": sd.genre_slug,
-                "world": sd.world_slug,
-                "room_id": room_id,
-                "error": str(exc),
-            },
-            component="location",
-            severity="warning",
-        )
-        return
-
-    if not sourced:
-        # Neither path produced a manifest source — make the absence
-        # observable on the GM panel rather than silently emitting an
-        # empty payload.
-        _watcher_publish(
-            "location_description.no_source",
-            {
-                "genre": sd.genre_slug,
-                "world": sd.world_slug,
-                "room_id": room_id,
-            },
-            component="location",
-        )
-        return
-
-    # Story 54-7: layer the active encounter overlay on top of the base
-    # so a session-resume client sees the live overlay state without
-    # waiting for a separate LOCATION_OVERLAY_CHANGED delta.
-    from sidequest.game.location_view import (
-        active_overlays_for,
-        get_location_prose,
-    )
-    from sidequest.protocol.models import LocationDescriptionOverlaySummary
-
-    effective_prose = get_location_prose(
-        region_id=room_id,
-        authored_description=prose,
-        snapshot=snapshot,
-    )
-    active_overlays = active_overlays_for(snapshot, region_id=room_id)
-    overlay_summaries: list[LocationDescriptionOverlaySummary] = []
-    for overlay in active_overlays:
-        enc = getattr(snapshot, "encounter", None)
-        encounter_id_str = f"{enc.encounter_type}@{room_id}" if enc is not None else ""
-        overlay_summaries.append(
-            LocationDescriptionOverlaySummary(
-                encounter_id=encounter_id_str,
-                prose_suffix=overlay.prose_suffix,
-                entity_delta_count=len(overlay.entity_delta),
-            )
-        )
-
-    # Story 63-6: deep-link the region header into the /reference/lore wiki.
-    # POI slugs from the world's history.yaml are the authoritative set of
-    # regions that have a lore-page anchor (Story 63-8). Resolve to None when
-    # the region has no anchor — no guessed/broken URL. Every decision emits a
-    # reference-URL span so the GM panel sees location anchors fire (AC5 / OTEL).
-    from sidequest.server.reference_anchors import reference_url_for_region
-    from sidequest.server.reference_renderer import load_poi_image_slugs
-    from sidequest.telemetry.spans.reference import (
-        reference_url_attached_span,
-        reference_url_skipped_span,
-    )
-
-    poi_slugs = load_poi_image_slugs(world_dir)
-    reference_url = reference_url_for_region(
-        pack=sd.genre_slug,
-        world=sd.world_slug,
-        region_id=room_id,
-        known_location_slugs=poi_slugs,
-    )
-    if reference_url is not None:
-        with reference_url_attached_span(
-            kind="location",
-            pack=sd.genre_slug,
-            world=sd.world_slug,
-            keys=(room_id,),
-        ):
-            pass
-    else:
-        with reference_url_skipped_span(
-            kind="location",
-            pack=sd.genre_slug,
-            world=sd.world_slug,
-            keys=(room_id,),
-            reason="region_not_in_lore_poi_manifest",
-        ):
-            pass
-
-    payload = LocationDescriptionPayload(
-        region_id=room_id,
-        prose=effective_prose,
-        terrain=terrain,
-        entities=entities,
-        overlays=overlay_summaries,
-        reference_url=reference_url,
-    )
-    msg = LocationDescriptionMessage(
-        payload=payload,
-        player_id=getattr(sd, "player_id", ""),
-    )
-    _watcher_publish(
-        "location_description.emitted",
-        {
-            "genre": sd.genre_slug,
-            "world": sd.world_slug,
-            "room_id": room_id,
-            "entity_count": len(entities),
-            "prose_chars": len(effective_prose),
-            "overlay_count": len(overlay_summaries),
-        },
-        component="location",
-    )
-    logger.info(
-        "location_description.emitted genre=%s world=%s room=%s entities=%d",
-        sd.genre_slug,
-        sd.world_slug,
-        room_id,
-        len(entities),
-    )
-    emit_fn(msg, "LOCATION_DESCRIPTION")  # type: ignore[operator]
-
-
-def _maybe_emit_location_overlay_changed(
-    handler: object,
-    *,
-    sd: _SessionData,
-    snapshot: GameSnapshot,
-    transition: str,
-    emit_fn: object,
-    prior_overlay: EncounterLocationOverlay | None = None,
-) -> None:
-    """Emit LOCATION_OVERLAY_CHANGED on encounter overlay activate/deactivate.
-
-    Story 54-7 / ADR-109 §5.5. ``transition`` is ``"activate"`` or
-    ``"deactivate"``:
-
-    - **activate** — called at the ``prior_live=False, now_live=True``
-      edge in the narration turn loop. Reads the overlay off the live
-      encounter; no-op when the encounter has no ``location_overlay``.
-    - **deactivate** — called inside the ``encounter_resolved_this_turn``
-      branch. ``prior_overlay`` is passed by the caller (the prior
-      encounter has been replaced or cleared by this point). No-op when
-      ``prior_overlay`` is ``None``.
-
-    The payload carries the FULL post-transition overlay set — on
-    activate that's one item, on deactivate that's an empty list. The UI
-    replaces its overlay slice rather than reconciling diffs (54-9). The
-    dedicated ``location.overlay.{activate,deactivate}`` OTEL spans
-    (Story 54-8) carry the same fields through the ``SPAN_ROUTES``
-    fan-out (``component="location"``, ``state_transition`` event), so
-    the prior bare ``_watcher_publish("location_overlay_changed.emitted", ...)``
-    is no longer needed and has been removed.
-    """
-    from contextlib import AbstractContextManager
-
-    from sidequest.protocol.messages import LocationOverlayChangedMessage
-    from sidequest.protocol.models import (
-        LocationDescriptionOverlaySummary,
-        LocationOverlayChangedPayload,
-    )
-    from sidequest.telemetry.spans import (
-        location_overlay_activate_span,
-        location_overlay_deactivate_span,
-    )
-
-    region_id: str
-    overlay_summaries: list[LocationDescriptionOverlaySummary]
-    span_cm: AbstractContextManager[object]
-
-    if transition == "activate":
-        enc = getattr(snapshot, "encounter", None)
-        if enc is None or enc.resolved:
-            return
-        overlay = getattr(enc, "location_overlay", None)
-        if overlay is None:
-            return
-        region_id = overlay.bound_room_id
-        encounter_id_str = f"{enc.encounter_type}@{region_id}"
-        overlay_summaries = [
-            LocationDescriptionOverlaySummary(
-                encounter_id=encounter_id_str,
-                prose_suffix=overlay.prose_suffix,
-                entity_delta_count=len(overlay.entity_delta),
-            )
+    killed: str | None = None
+    lowest_hp_ratio: float | None = None
+    enc = snapshot.encounter
+    if enc is not None:
+        ratios = [
+            core.hp.current / core.hp.max
+            for actor in enc.actors
+            if (core := snapshot.find_creature_core(actor.name)) is not None and core.hp.max > 0
         ]
-        span_cm = location_overlay_activate_span(
-            region_id=region_id,
-            encounter_id=encounter_id_str,
-            delta_count=len(overlay.entity_delta),
-            suffix_chars=len(overlay.prose_suffix),
-        )
-    elif transition == "deactivate":
-        if prior_overlay is None:
-            return
-        region_id = prior_overlay.bound_room_id
-        overlay_summaries = []
-        # delta_count=0 reflects the post-transition state (the overlay
-        # has just cleared). suffix_chars carries the prior suffix length
-        # so the GM panel can still see what was just removed.
-        span_cm = location_overlay_deactivate_span(
-            region_id=region_id,
-            encounter_id="",
-            delta_count=0,
-            suffix_chars=len(prior_overlay.prose_suffix),
-        )
-    else:
-        raise ValueError(f"transition must be 'activate' or 'deactivate', got {transition!r}")
+        if ratios:
+            lowest_hp_ratio = min(ratios)
+        # A side defeated *this* turn is a dramatic kill (real resolution). The
+        # this-turn nuance keeps the spike from re-firing while a resolved
+        # encounter lingers. Empty string still counts as a kill in classify.
+        if encounter_resolved_this_turn and enc.outcome in (
+            "player_victory",
+            "opponent_victory",
+        ):
+            defeated_side = "opponent" if enc.outcome == "player_victory" else "player"
+            killed = next((a.name for a in enc.actors if a.side == defeated_side), "")
 
-    payload = LocationOverlayChangedPayload(
-        region_id=region_id,
-        overlays=overlay_summaries,
-    )
-    msg = LocationOverlayChangedMessage(
-        payload=payload,
-        player_id=getattr(sd, "player_id", ""),
-    )
-    # 54-8: the dedicated span carries the same fields through the
-    # SPAN_ROUTES fan-out (component='location', state_transition event),
-    # so the bare _watcher_publish('location_overlay_changed.emitted', ...)
-    # that 54-7 published is removed — the dual emit was redundant.
-    with span_cm:
-        logger.info(
-            "location_overlay_changed.emitted region=%s transition=%s overlays=%d",
-            region_id,
-            transition,
-            len(overlay_summaries),
-        )
-        emit_fn(msg, "LOCATION_OVERLAY_CHANGED")  # type: ignore[operator]
-
-
-def _resolve_connection_pc_region(
-    snapshot: GameSnapshot, player_id: str
-) -> tuple[str | None, str | None]:
-    """OP1 — resolve THIS connection's PC and its graph region.
-
-    The connection's identity is ``sd.player_id``; ``snapshot.player_seats``
-    maps ``player_id`` -> seated ``character.core.name`` (see
-    ``GameSnapshot.player_seats``). The per-PC region is then
-    ``region_for(perspective=<character_name>)`` — the SAME per-PC perspective
-    accessor the rest of the code uses (mirrors ``character_locations`` /
-    ``party_location``), NEVER the singular ``current_region``.
-
-    Returns ``(pc_name, pc_region)``:
-      - ``(None, None)`` — ``player_id`` maps to no seated character
-        (spectator / GM-panel connection). Caller emits
-        ``dungeon.map_skipped(no_pc_region)`` — per OP1, a connection with no
-        seated PC gets the skip, NOT the consensus view, for v1.
-      - ``(pc_name, None)`` — seated PC has no ``pc_regions`` entry. Caller
-        also skips (loud) — NEVER falls back to ``current_region``.
-      - ``(pc_name, region_id)`` — the per-connection YOU-ARE-HERE region.
-    """
-    pc_name = snapshot.player_seats.get(player_id) if player_id else None
-    if not pc_name:
-        return None, None
-    return pc_name, snapshot.region_for(perspective=pc_name)
-
-
-def _load_dungeon_map_context(
-    sd: _SessionData,
-) -> tuple[RegionGraph, ThemePalette, str] | None:
-    """Load the live region graph + theme palette for the dungeon-map emit.
-
-    The single content/IO seam (DungeonStore.load_map, GenreLoader,
-    load_theme_palette). Returns ``(graph, palette, entrance_id)`` or
-    ``None`` for a clean skip:
-      - other-world no-op (``applies_to`` False) — silent (the per-turn
-        ``dungeon.region_projection`` span already records it);
-      - missing schema / empty map — emits ``dungeon.map_skipped`` (loud).
-
-    Lazy imports: ``sidequest.dungeon`` depends on game models (the
-    frontier-hook lazy-import precedent)."""
-    from sidequest.dungeon.persistence import DatabaseError, DungeonStore
-    from sidequest.dungeon.region_projection import applies_to
-    from sidequest.dungeon.seed_bootstrap import ENTRANCE_ID
-    from sidequest.dungeon.themes import load_theme_palette
-    from sidequest.genre.loader import (
-        DEFAULT_GENRE_PACK_SEARCH_PATHS,
-        GenreLoader,
-    )
-
-    if not applies_to(sd.genre_slug, sd.world_slug):
-        return None  # the per-turn dungeon.region_projection span already
-        # records the other-world no-op; a second event here is noise.
-
-    store = DungeonStore(sd.store.connection())
-    try:
-        graph = store.load_map(entrance_id=ENTRANCE_ID)
-    except DatabaseError as exc:
-        _watcher_publish(
-            "dungeon.map_skipped",
-            {"world": sd.world_slug, "reason": f"no_schema: {exc}"},
-            component="dungeon",
-            severity="warning",
-        )
-        logger.warning("dungeon.map_skipped no schema: %s", exc)
-        return None
-    if not graph.nodes:
-        _watcher_publish(
-            "dungeon.map_skipped",
-            {"world": sd.world_slug, "reason": "empty_map"},
-            component="dungeon",
-            severity="warning",
-        )
-        logger.warning("dungeon.map_skipped empty dungeon_map")
-        return None
-
-    loader = GenreLoader(search_paths=DEFAULT_GENRE_PACK_SEARCH_PATHS)
-    world_dir = loader.find(sd.genre_slug) / "worlds" / sd.world_slug
-    palette = load_theme_palette(world_dir.parent.parent)
-    return graph, palette, ENTRANCE_ID
-
-
-def _build_dungeon_map_payload(
-    *,
-    graph: RegionGraph,
-    palette: ThemePalette,
-    pc_region: str,
-    discovered_regions: list[str],
-    entrance_id: str,
-) -> DungeonMapPayload:
-    """Build a ``DungeonMapPayload`` with a per-PC YOU-ARE-HERE marker.
-
-    ``pc_region`` is THIS connection's PC region (§Q-map). ``discovered_regions``
-    is the SHARED fog-of-war set — a region any PC entered is on the whole
-    table's map; only the YOU-ARE-HERE marker (``is_current_room`` /
-    ``current_location`` / ``region``) is per-PC."""
-    from sidequest.protocol.messages import (
-        DungeonMapExit,
-        DungeonMapLocation,
-        DungeonMapPayload,
-    )
-
-    nodes = graph.nodes
-    edges = graph.edges
-
-    discovered = [r for r in discovered_regions if r in nodes]
-    # Fog of war: never leak undiscovered regions. If discovered_regions is
-    # somehow empty but this PC's region is bound, at least show that.
-    if not discovered and pc_region in nodes:
-        discovered = [pc_region]
-
-    explored: list[DungeonMapLocation] = []
-    for rid in discovered:
-        node = nodes[rid]
-        try:
-            display = palette.get(node.theme).display_name
-        except KeyError:
-            display = rid  # fail-soft label; the span/log below is loud
-        room_exits = [
-            DungeonMapExit(target=(e.b if e.a == rid else e.a), exit_type=e.kind)
-            for e in edges
-            if rid in (e.a, e.b) and not e.hidden  # secrets stay off the map
-        ]
-        explored.append(
-            DungeonMapLocation(
-                id=rid,
-                name=display,
-                type="region",
-                connections=[x.target for x in room_exits],
-                room_exits=room_exits,
-                room_type="entrance" if rid == entrance_id else "normal",
-                is_current_room=(rid == pc_region),
-            )
-        )
-
-    return DungeonMapPayload(
-        current_location=pc_region,
-        region=pc_region,
-        explored=explored,
+    tracker.observe(
+        RoundResult(round=snapshot.turn_manager.interaction),
+        killed=killed,
+        lowest_hp_ratio=lowest_hp_ratio,
     )
 
 
-def _maybe_emit_dungeon_map(
-    handler: object,
-    *,
-    sd: _SessionData,
-    snapshot: GameSnapshot,
-    emit_fn: object,
-) -> None:
-    """Emit a DUNGEON_MAP frame for a beneath_sunden session (BETTER fix
-    seam 3). Projects the live region graph (discovered regions only —
-    fog of war) to the UI Map tab in the ``MapState``/``ExploredLocation``
-    shape so the MapWidget's Automapper region-graph path renders it with
-    no adapter. Cures the 2026-05-17 "No map data yet" defect: the
-    materialized dungeon was never projected to the UI after ADR-019
-    MAP_UPDATE was deleted in the port (this is the NEW ADR-055 message).
+# --- Extracted handler helpers (moved to websocket_handlers/) -------------
+# Free functions/mixins moved to sibling modules under ``websocket_handlers/``,
+# re-imported here so methods + external importers resolve the names unchanged.
+from sidequest.server.websocket_handlers.audio_mixin import (  # noqa: E402
+    AudioDispatchMixin,
+)
 
-    Called every narration turn (idempotent — the UI just replaces its
-    MapState). Clean no-op for every other world. OTEL: emits
-    ``dungeon.map_emitted`` on success / ``dungeon.map_skipped`` (with a
-    reason) otherwise, so the GM panel sees the UI seam engaged — never a
-    silent skip. A live turn never hard-fails on a dungeon defect.
-
-    Per-PC (Movement subsystem §Q-map / OP1): the YOU-ARE-HERE marker is
-    THIS connection's PC region (``player_id`` -> seat -> PC ->
-    ``region_for(perspective=pc)``), NOT the singular ``current_region``.
-    A connection with no seated PC / no ``pc_regions`` entry emits
-    ``dungeon.map_skipped(no_pc_region)`` — loud, NEVER a silent fall-through
-    to the stale ``current_region``. ``discovered_regions`` stays SHARED."""
-    from sidequest.protocol.messages import DungeonMapMessage
-
-    player_id = getattr(sd, "player_id", "")
-
-    # OP1 — resolve this connection's PC region BEFORE the content load so a
-    # spectator / unseated connection skips loudly with no stale fallback.
-    pc_name, pc_region = _resolve_connection_pc_region(snapshot, player_id)
-    if not pc_region:
-        _watcher_publish(
-            "dungeon.map_skipped",
-            {
-                "world": sd.world_slug,
-                "reason": "no_pc_region",
-                "player_id": player_id,
-                "pc_name": pc_name or "",
-            },
-            component="dungeon",
-            severity="warning",
-        )
-        logger.warning(
-            "dungeon.map_skipped no_pc_region player_id=%s pc_name=%s",
-            player_id,
-            pc_name,
-        )
-        return
-
-    ctx = _load_dungeon_map_context(sd)
-    if ctx is None:
-        return  # other-world no-op or map_skipped already emitted by loader.
-    graph, palette, entrance_id = ctx
-
-    payload = _build_dungeon_map_payload(
-        graph=graph,
-        palette=palette,
-        pc_region=pc_region,
-        discovered_regions=list(snapshot.discovered_regions),
-        entrance_id=entrance_id,
-    )
-    msg = DungeonMapMessage(payload=payload, player_id=player_id)
-    _watcher_publish(
-        "dungeon.map_emitted",
-        {
-            "world": sd.world_slug,
-            "pc_name": pc_name,
-            "pc_region": pc_region,
-            "discovered_regions": len(payload.explored),
-            "total_regions": len(graph.nodes),
-        },
-        component="dungeon",
-    )
-    logger.info(
-        "dungeon.map_emitted pc=%s region=%s discovered=%d/%d",
-        pc_name,
-        pc_region,
-        len(payload.explored),
-        len(graph.nodes),
-    )
-    emit_fn(msg, "DUNGEON_MAP")  # type: ignore[operator]
+# Chargen worker methods live in a mixin; inherited so session._chargen_* calls
+# resolve via the MRO.
+from sidequest.server.websocket_handlers.chargen_mixin import (  # noqa: E402
+    CharGenMixin,
+)
+from sidequest.server.websocket_handlers.fate_state_emit import (  # noqa: E402
+    _maybe_emit_fate_state,
+)
+from sidequest.server.websocket_handlers.map_emit import (  # noqa: E402
+    _maybe_emit_cartography_map,
+    _maybe_emit_dungeon_map,
+    _maybe_emit_location_description,
+    _maybe_emit_location_overlay_changed,
+    _maybe_emit_tactical_grid,
+)
+from sidequest.server.websocket_handlers.quests_emit import (  # noqa: E402
+    _maybe_emit_quests,
+)
+from sidequest.server.websocket_handlers.relationships_emit import (  # noqa: E402
+    _maybe_emit_relationships,
+)
 
 
-class WebSocketSessionHandler:
+class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
     """Per-connection session: state machine + dispatch.
 
     Created fresh per WebSocket connection by the /ws endpoint factory.
-    Not shared across connections (Phase 1 is single-player).
     """
 
     def __init__(
@@ -1491,29 +275,25 @@ class WebSocketSessionHandler:
         self._validator: Validator | None = validator
         self._state = _State.AwaitingConnect
         self._session_data: _SessionData | None = None
-        # Room context fields — populated by attach_room_context() during the
-        # WebSocket lifecycle (ws_endpoint). Absent here means the handler is
-        # being driven outside that lifecycle (e.g. unit tests that exercise
-        # non-slug-connect code paths). The slug-connect branch rejects this
-        # loudly rather than silently skipping room wiring.
+        # Room context — populated by attach_room_context() during the
+        # ws_endpoint lifecycle. Absent means driven outside it (unit tests);
+        # the slug-connect branch rejects that loudly (no silent room-wiring skip).
         self._room_registry: RoomRegistry | None = None
         self._socket_id: str | None = None
         self._out_queue: asyncio.Queue[object] | None = None
         self._room: SessionRoom | None = None
-        # EventLog + projection filter are bound in the slug-connect branch.
-        # The legacy genre/world connect path leaves them None; _emit_event
-        # falls back to a plain message without seq in that case. This is a
-        # real production code path (not a test-only skip), documented below.
+        self._player_identity: str | None = None
+        self._player_identity_source: str | None = None
+        # Bound in the slug-connect branch. The legacy genre/world connect path
+        # leaves them None; _emit_event then falls back to a plain message
+        # without seq (a real production path, not a test-only skip).
         self._event_log: EventLog | None = None
         self._projection_filter: ProjectionFilter | None = None
         self._projection_cache: ProjectionCache | None = None
-        # Story 61-followup-C: ws_endpoint reads this after cleanup() returns
-        # to decide whether to fire room.close_store(). The cleanup save block
-        # swallows save exceptions to keep the WebSocket lifecycle stable,
-        # which would otherwise hide a final-snapshot loss from the teardown
-        # gate. Setting this here exposes the swallowed failure to
-        # ws_endpoint so it can skip close_store and preserve the canonical
-        # store handle for a later retry.
+        # Story 61-followup-C: ws_endpoint reads this after cleanup() to decide
+        # whether to fire room.close_store(). The cleanup save block swallows
+        # exceptions; exposing the failure here lets ws_endpoint skip
+        # close_store and preserve the canonical store for a retry.
         self.last_save_failure: Exception | None = None
 
     # ------------------------------------------------------------------
@@ -1526,19 +306,23 @@ class WebSocketSessionHandler:
         registry: RoomRegistry,
         socket_id: str,
         out_queue: asyncio.Queue[object],
+        player_identity: str | None = None,
+        player_identity_source: str | None = None,
     ) -> None:
-        """Attach the process-wide RoomRegistry, socket_id, and per-socket outbound queue.
+        """Attach the RoomRegistry, socket_id, and per-socket outbound queue.
 
-        Called by ws_endpoint immediately after accept(). _room is assigned in
-        the slug-connect branch when a room is joined. out_queue is the
-        asyncio.Queue that the writer task in ws_endpoint drains.
+        Called by ws_endpoint after accept(). out_queue is the asyncio.Queue
+        the writer task drains. All three are required; the slug-connect branch
+        fails loudly if this was not called.
 
-        All three fields are required. The slug-connect branch fails loudly if
-        this method was not called — there is no silent test-only path.
+        player_identity and player_identity_source are optional (default None)
+        so existing callers/tests that omit them continue to work.
         """
         self._room_registry = registry
         self._socket_id = socket_id
         self._out_queue = out_queue
+        self._player_identity = player_identity
+        self._player_identity_source = player_identity_source
 
     def current_room(self) -> SessionRoom | None:
         """Return the room this handler is currently registered in, or None."""
@@ -1549,51 +333,44 @@ class WebSocketSessionHandler:
     # ------------------------------------------------------------------
 
     def _emit_event(
-        self, kind: str, payload_model: object, *, author_player_id: str | None = None
+        self,
+        kind: str,
+        payload_model: object,
+        *,
+        author_player_id: str | None = None,
+        per_recipient_payload: Callable[[str], object] | None = None,
     ) -> object:
         """Persist + fan-out an event. Delegates to ``emitters.emit_event``.
 
-        Phase 1 of session_handler decomposition (see
-        docs/superpowers/specs/2026-04-27-session-handler-decomposition-design.md).
+        ``author_player_id`` (ADR-105 Track A): when set, this is a shared
+        merged-MP turn whose driver is merely the last-submitter, so the
+        emitter is projected like any recipient. ``None`` (solo/legacy)
+        preserves the raw-bypass + lazy_fill invariant.
 
-        ``author_player_id`` (ADR-105 Track A): when set, the emit is a
-        shared merged-MP turn whose driving handler is the last-submitter,
-        NOT the sole author. The emitter is then projected like any
-        recipient instead of receiving the solo Invariant-3 raw bypass.
-        ``None`` (solo / legacy) preserves the byte-identical raw-bypass
-        delegate call — keeps the documented emitter-skip + lazy_fill
-        invariant intact.
+        ``per_recipient_payload`` (Story 59-16): a supplier delivering one
+        class-filtered CONFRONTATION frame to every connected socket while
+        the canonical union is persisted to the EventLog only.
         """
         from sidequest.server import emitters
 
-        if author_player_id is None:
-            return emitters.emit_event(self, kind, payload_model)
-        return emitters.emit_event(self, kind, payload_model, author_player_id=author_player_id)
+        return emitters.emit_event(
+            self,
+            kind,
+            payload_model,
+            author_player_id=author_player_id,
+            per_recipient_payload=per_recipient_payload,
+        )
 
     def _dispatch_pending_magic_frames(self, snapshot: GameSnapshot) -> None:
         """Phase 5 (Story 47-3): drain pending magic-confrontation queues.
 
-        ``apply_magic_working`` and ``_resolve_magic_confrontation_if_applicable``
-        populate ``snapshot.pending_magic_auto_fires`` (CONFRONTATION
-        starts) and ``snapshot.pending_magic_confrontation_outcome``
-        (the resolved branch + mandatory_outputs). Both are dispatched
-        here as outbound WebSocket frames; both fields are reset
-        afterwards so the next turn starts clean.
-
-        Frames are emitted via ``self._emit_event(...)`` rather than a
-        direct broadcast so they participate in the EventLog (durable
-        replay) and any per-recipient projection. Errors during
-        dispatch propagate — a broken outbound queue is loud per
-        CLAUDE.md.
+        Dispatches ``pending_magic_auto_fires`` (CONFRONTATION starts) and
+        ``pending_magic_confrontation_outcome`` as outbound frames, resetting
+        both. Emitted via ``_emit_event`` so they hit the EventLog + projection;
+        dispatch errors propagate (broken queue is loud per CLAUDE.md).
         """
-        # CONFRONTATION starts (one per auto-fire). The payload shape
-        # already matches ``ConfrontationPayload``; emit_event will
-        # dispatch it. Pop-as-you-go (round 2 fix) so a malformed
-        # entry's ValidationError doesn't strand previously-emitted or
-        # subsequent entries in the queue forever — pre-fix the
-        # post-loop ``= []`` was the only drain path, so a raise on
-        # entry N left entries 0..end stuck and re-fired the valid
-        # entries 0..N-1 every dispatch tick.
+        # Pop-as-you-go so a malformed entry's ValidationError doesn't strand
+        # the rest of the queue or re-fire valid entries each dispatch tick.
         if snapshot.pending_magic_auto_fires:
             from sidequest.protocol.messages import ConfrontationPayload
 
@@ -1603,10 +380,8 @@ class WebSocketSessionHandler:
                 try:
                     payload = ConfrontationPayload(**raw)
                 except Exception:
-                    # Surface the malformed entry to the GM panel + log
-                    # loud, then continue draining the queue. The bad
-                    # entry is dropped (already popped) — fail loud, do
-                    # not silently re-emit the next tick.
+                    # Fail loud: surface the malformed entry to the GM panel +
+                    # log, drop it (already popped), keep draining.
                     logger.error(
                         "magic.dispatch_payload_invalid kind=CONFRONTATION raw=%r",
                         raw,
@@ -1625,10 +400,8 @@ class WebSocketSessionHandler:
                     continue
                 self._emit_event("CONFRONTATION", payload)
 
-        # CONFRONTATION_OUTCOME (the reveal panel — Decision #9 calls
-        # this "explicit panel callout at outcome time, ALWAYS shown").
-        # Field is reset BEFORE emit so a ValidationError doesn't leave
-        # the bad payload stranded for the next dispatch tick.
+        # CONFRONTATION_OUTCOME (reveal panel, always shown). Reset BEFORE emit
+        # so a ValidationError doesn't strand the payload for the next tick.
         if snapshot.pending_magic_confrontation_outcome is not None:
             from sidequest.protocol.messages import ConfrontationOutcomePayload
 
@@ -1669,18 +442,10 @@ class WebSocketSessionHandler:
     ) -> None:
         """Persist + emit a scrapbook entry. Delegates to ``emitters.emit_scrapbook_entry``.
 
-        Phase 1 of session_handler decomposition (see
-        docs/superpowers/specs/2026-04-27-session-handler-decomposition-design.md).
-
-        ``render_status`` carries the unified Story 45-30 + Story 45-31
-        discriminator: ``"rendered"`` (happy path), ``"skipped_policy"``
-        (45-30 — trigger policy returned NONE_POLICY), ``"failed"``
-        (daemon errored synchronously), ``"unavailable"`` (45-31 — daemon
-        mirror reports UNRESPONSIVE; the dispatcher will skip the
-        round-trip and the UI shows the placeholder badge live, no
-        replay JOIN). Daemon-unavailable wins over policy decisions —
-        when there's no render coming either way, the user-facing reason
-        is "the daemon is down."
+        ``render_status`` (Story 45-30 + 45-31): ``"rendered"``,
+        ``"skipped_policy"`` (trigger policy NONE_POLICY), ``"failed"`` (daemon
+        errored), ``"unavailable"`` (daemon UNRESPONSIVE). Daemon-unavailable
+        wins over policy — no render is coming either way.
         """
         from sidequest.server import emitters
 
@@ -1693,11 +458,7 @@ class WebSocketSessionHandler:
         )
 
     def _persist_scrapbook_entry(self, payload: ScrapbookEntryPayload) -> None:
-        """Insert a scrapbook row. Delegates to ``emitters.persist_scrapbook_entry``.
-
-        Phase 1 of session_handler decomposition (see
-        docs/superpowers/specs/2026-04-27-session-handler-decomposition-design.md).
-        """
+        """Insert a scrapbook row. Delegates to ``emitters.persist_scrapbook_entry``."""
         from sidequest.server import emitters
 
         emitters.persist_scrapbook_entry(self, payload)
@@ -1712,14 +473,11 @@ class WebSocketSessionHandler:
         return self._session_data
 
     async def handle_message(self, msg: GameMessage) -> list[object]:
-        """Dispatch an inbound message; return list of outbound protocol message objects.
+        """Dispatch an inbound message; return outbound protocol message objects.
 
-        Looks the message type up in the per-class ``_MESSAGE_HANDLERS`` registry
-        (built once at first dispatch) and forwards to the corresponding
-        first-class handler under :mod:`sidequest.handlers`. The thin
-        ``_handle_X`` methods on this class remain as a test-friendly
-        public API so test suites can drive a single message type without
-        going through the WebSocket protocol layer.
+        Looks up the message type in the ``_MESSAGE_HANDLERS`` registry and
+        forwards to the corresponding handler under :mod:`sidequest.handlers`.
+        The thin ``_handle_X`` methods remain as a test-friendly public API.
         """
         msg_type: str = msg.type  # type: ignore[attr-defined]
 
@@ -1735,21 +493,20 @@ class WebSocketSessionHandler:
 
     @classmethod
     def _message_handler_for(cls, msg_type: str) -> MessageHandler | None:
-        """Lazy-built registry of message-type → first-class handler singleton.
+        """Lazy-built registry of message-type → handler singleton.
 
-        Built on first call to avoid importing the handler modules at
-        ``WebSocketSessionHandler`` class-definition time, which would
-        eagerly drag in their transitive imports (and create a circular
-        reference, since the handler modules import this class for
-        type-checking). The registry is cached on the class so subsequent
-        dispatches are a single dict lookup.
+        Built on first call to avoid class-definition-time imports of the
+        handler modules (which would create a circular reference, since they
+        import this class). Cached on the class.
         """
         registry = getattr(cls, "_MESSAGE_HANDLERS", None)
         if registry is None:
             from sidequest.handlers.action_reveal import HANDLER as ACTION_REVEAL_HANDLER
             from sidequest.handlers.character_creation import HANDLER as CHARACTER_CREATION_HANDLER
+            from sidequest.handlers.check_throw import HANDLER as CHECK_THROW_HANDLER
             from sidequest.handlers.client_error import HANDLER as CLIENT_ERROR_HANDLER
             from sidequest.handlers.dice_throw import HANDLER as DICE_THROW_HANDLER
+            from sidequest.handlers.fate_action import HANDLER as FATE_ACTION_HANDLER
             from sidequest.handlers.journal_request import HANDLER as JOURNAL_REQUEST_HANDLER
             from sidequest.handlers.orbital_intent import HANDLER as ORBITAL_INTENT_HANDLER
             from sidequest.handlers.player_action import HANDLER as PLAYER_ACTION_HANDLER
@@ -1763,6 +520,8 @@ class WebSocketSessionHandler:
                 "CHARACTER_CREATION": CHARACTER_CREATION_HANDLER,
                 "PLAYER_SEAT": PLAYER_SEAT_HANDLER,
                 "DICE_THROW": DICE_THROW_HANDLER,
+                "FATE_ACTION": FATE_ACTION_HANDLER,
+                "CHECK_THROW": CHECK_THROW_HANDLER,
                 "CLIENT_ERROR": CLIENT_ERROR_HANDLER,
                 "YIELD": YIELD_HANDLER,
                 "ORBITAL_INTENT": ORBITAL_INTENT_HANDLER,
@@ -1775,14 +534,9 @@ class WebSocketSessionHandler:
     async def cleanup(self) -> None:
         """Called on disconnect — persist current state if in Playing."""
         if self._session_data is not None:
-            # Cancel any in-flight embed worker first so it cannot write
-            # to an orphaned in-memory lore_store after store.close().
-            # CancelledError is a BaseException in Python 3.8+, so it
-            # escapes every `except Exception` in the worker; we await
-            # and swallow it here so disconnect never raises to the
-            # WebSocket layer. Non-cancel exceptions (a real worker bug
-            # that happened to surface during cancellation) are logged
-            # at warning with exc_info — cleanup still proceeds.
+            # Cancel any in-flight embed worker first so it cannot write to an
+            # orphaned lore_store after store.close(). Await + swallow
+            # CancelledError so disconnect never raises; log real worker bugs.
             embed_task = self._session_data.embed_task
             if embed_task is not None and not embed_task.done():
                 embed_task.cancel()
@@ -1797,28 +551,22 @@ class WebSocketSessionHandler:
                         exc,
                         exc_info=True,
                     )
-            # Beneath Sünden Plan 7 (§8): drain the live dungeon look-ahead
-            # worker before the final save so the observer is gone before
-            # state is persisted. Null-safe by construction — lookahead_handle
-            # is None for non-beneath_sunden sessions and for sessions that
-            # disconnected before attach. Mirrors embed_task.cancel(): it
-            # unregisters/drains only and must NOT close the store — the room
-            # owns the store lifecycle. Function-local import avoids any
-            # import cycle through the dungeon package.
+            # Beneath Sünden Plan 7 (§8): drain the dungeon look-ahead worker
+            # before the final save. Null-safe (None off beneath_sunden); drains
+            # only, must NOT close the store (the room owns it). Local import
+            # avoids a dungeon-package import cycle.
             from sidequest.dungeon.session_integration import (
                 detach_dungeon_from_session,
             )
 
             await detach_dungeon_from_session(self._session_data.lookahead_handle)
             try:
-                # ADR-037 Python port: room owns the canonical snapshot,
-                # so a plain room.save() persists it once for every
-                # session that disconnects. Legacy non-slug path falls
-                # back to the per-session store.
+                # ADR-037: room owns the canonical snapshot, so room.save()
+                # persists it once. Legacy non-slug path uses the per-session store.
                 if self._room is not None:
                     self._room.save()
                 else:
-                    self._session_data.store.save(self._session_data.snapshot)
+                    self._session_data.repository.save(self._session_data.snapshot)
                 logger.info(
                     "session.disconnect_save genre=%s world=%s player=%s "
                     "char_count=%d seat_count=%d",
@@ -1830,17 +578,30 @@ class WebSocketSessionHandler:
                 )
             except Exception as exc:
                 logger.error("session.disconnect_save_failed error=%s", exc)
-                # Story 61-followup-C: expose the swallowed save failure to
-                # ws_endpoint so its teardown gate can skip close_store().
-                # Closing the canonical store after a lost final save would
-                # compound the data loss into a permanent state regression.
+                # Story 61-followup-C: expose the swallowed save failure so
+                # ws_endpoint's teardown gate can skip close_store() — closing
+                # the canonical store after a lost save would make the loss permanent.
                 self.last_save_failure = exc
 
-            # Story 45-31: post-session render diagnostic. Writes a
-            # JSON snapshot of the render worker's lifetime so the
-            # next Felix-style 13-minute silence can be diagnosed
-            # without reproducing the crash. Best-effort — diagnostic
-            # write must never raise back to the WebSocket layer.
+            # Story 75-15: persist the lore_store on disconnect — the in-memory
+            # store is not part of the snapshot, so the save above does not cover
+            # it. ISOLATED in its own try/except: a lore-only failure must NOT set
+            # last_save_failure (that gates close_store on the canonical snapshot
+            # save, which is a strictly more important write).
+            try:
+                self._session_data.repository.save_lore_fragments(self._session_data.lore_store)
+            except Exception as exc:  # noqa: BLE001 — lore persist must not block teardown
+                logger.error("lore.disconnect_persist_failed error=%s", exc)
+                _watcher_publish(
+                    "lore_persist_failed",
+                    {"scope": "disconnect", "error": str(exc)},
+                    component="rag",
+                    severity="error",
+                )
+
+            # Story 45-31: post-session render diagnostic — JSON snapshot of the
+            # render worker's lifetime for later diagnosis. Best-effort; must
+            # never raise back to the WebSocket layer.
             try:
                 from datetime import UTC
                 from datetime import datetime as _dt
@@ -1854,8 +615,7 @@ class WebSocketSessionHandler:
                 if self._room is not None:
                     room_slug_for_diag = getattr(self._room, "slug", None)
                 if not room_slug_for_diag:
-                    # Legacy/no-slug path — namespace by genre+player so
-                    # the diagnostic file remains greppable.
+                    # Legacy/no-slug path — namespace by genre+player.
                     room_slug_for_diag = (
                         (
                             f"{self._session_data.genre_slug or 'unknown'}-"
@@ -1898,22 +658,14 @@ class WebSocketSessionHandler:
             except Exception as _diag_exc:  # noqa: BLE001 — diagnostic must never crash teardown
                 logger.warning("render.session_diagnostic_failed err=%s", _diag_exc)
             finally:
-                # ADR-037 Python port: when the session is bound to a room,
-                # the room owns the SqliteStore lifecycle — every WS session
-                # bound to the slug shares the same store reference, so
-                # closing it from one session's cleanup() leaves
-                # ``room.save()`` operating on a closed connection from any
-                # other session's perspective and produces
-                # ``session.disconnect_save_failed error=Cannot operate on
-                # a closed database`` (playtest 2026-04-25 [BUG-LOW]). The
-                # room's store is closed via ``room.close_store()`` at room
-                # teardown — not from per-session cleanup.
-                #
-                # Legacy non-slug path (no room) still closes its
-                # per-session store here — it is owned by the session.
+                # ADR-037: a room-bound session shares the room's SqliteStore,
+                # so closing it from one session's cleanup() breaks every other
+                # session's room.save() (playtest 2026-04-25: "Cannot operate on
+                # a closed database"). The room closes its store at teardown.
+                # Legacy non-slug path owns + closes its per-session store here.
                 if self._room is None:
                     with contextlib.suppress(Exception):
-                        self._session_data.store.close()
+                        self._session_data.repository.close()
 
     # ------------------------------------------------------------------
     # PLAYER_SEAT dispatch (MP-02 Task 5)
@@ -1926,7 +678,7 @@ class WebSocketSessionHandler:
         return await HANDLER.handle(self, msg)
 
     # ------------------------------------------------------------------
-    # DICE_THROW dispatch (story 34 port — restored for 2026-04-24 playtest)
+    # DICE_THROW dispatch
     # ------------------------------------------------------------------
 
     async def _handle_dice_throw(self, msg: GameMessage) -> list[object]:
@@ -1975,1428 +727,6 @@ class WebSocketSessionHandler:
 
         return await HANDLER.handle(self, msg)
 
-    # ---- phase=scene ----------------------------------------------------
-    def _chargen_scene(
-        self,
-        builder: CharacterBuilder,
-        payload: CharacterCreationPayload,
-        sd: _SessionData,
-        player_id: str,
-        span: trace.Span,
-    ) -> list[object]:
-        choice_str = payload.choice if payload.choice is not None else "1"
-
-        # AwaitingFollowup has no choice list — the entire input (numeric or
-        # prose) is the answer to the scene's hook_prompt and routes to
-        # answer_followup, NOT apply_choice/apply_freeform (both InProgress-only;
-        # they raise WrongPhaseError). Playtest 2026-05-26 [road_warrior/
-        # the_circuit]: an ambiguous free-text names answer pushed the builder
-        # into AwaitingFollowup and the UI re-sent freeform, hard-blocking
-        # chargen with WrongPhaseError(expected=InProgress, got=AwaitingFollowup).
-        if builder.is_awaiting_followup():
-            span.add_event(
-                "character_creation.followup",
-                {
-                    "phase": "followup",
-                    "choice_raw": choice_str,
-                    "player_id": player_id,
-                },
-            )
-            try:
-                builder.answer_followup(choice_str)
-            except BuilderError as exc:
-                return [_error_msg(f"Invalid followup answer: {exc!r}")]
-            return self._next_message(builder, sd, player_id)
-
-        resolved_index: int | None
-        try:
-            # 1-based numeric index (Rust: saturating_sub(1))
-            n = int(choice_str)
-            resolved_index = max(0, n - 1)
-        except ValueError:
-            # Label-match (case-insensitive) against the current scene's
-            # choices. Only applies when we're in InProgress; AwaitingFollowup
-            # has no choice list and will fall through to freeform below.
-            resolved_index = None
-            if builder.is_in_progress():
-                current = builder.current_scene()
-                for i, c in enumerate(current.choices):
-                    if c.label.casefold() == choice_str.casefold():
-                        resolved_index = i
-                        break
-
-        span.add_event(
-            "character_creation.scene",
-            {
-                "phase": "scene",
-                "choice_raw": choice_str,
-                "resolved_index": str(resolved_index),
-                "player_id": player_id,
-            },
-        )
-
-        if resolved_index is not None:
-            try:
-                builder.apply_choice(resolved_index)
-            except BuilderError as exc:
-                return [_error_msg(f"Invalid choice: {exc!r}")]
-        else:
-            try:
-                builder.apply_freeform(choice_str)
-            except BuilderError as exc:
-                return [_error_msg(f"Invalid freeform input: {exc!r}")]
-
-        return self._next_message(builder, sd, player_id)
-
-    # ---- phase=continue -------------------------------------------------
-    def _chargen_continue(
-        self,
-        builder: CharacterBuilder,
-        sd: _SessionData,
-        player_id: str,
-        span: trace.Span,
-    ) -> list[object]:
-        logger.info("chargen.continue player_id=%s", player_id)
-        span.add_event(
-            "character_creation.continue",
-            {"phase": "continue", "player_id": player_id},
-        )
-        try:
-            builder.apply_auto_advance()
-        except BuilderError as exc:
-            return [_error_msg(f"Cannot continue from current scene: {exc!r}")]
-        return self._next_message(builder, sd, player_id)
-
-    # ---- phase=arrange_assign ------------------------------------------
-    def _chargen_arrange_assign(
-        self,
-        builder: CharacterBuilder,
-        payload: CharacterCreationPayload,
-        sd: _SessionData,
-        player_id: str,
-        span: trace.Span,
-    ) -> list[object]:
-        if payload.stat is None or payload.value is None:
-            return [_error_msg("arrange_assign requires stat and value fields")]
-        span.add_event(
-            "character_creation.arrange_assign",
-            {
-                "stat": payload.stat,
-                "value": payload.value,
-                "player_id": player_id,
-            },
-        )
-        try:
-            builder.assign_stat(stat_name=payload.stat, value=payload.value)
-        except PoolValueNotPresentError as exc:
-            return [_error_msg(f"arrange_assign rejected: {exc!r}")]
-        except BuilderError as exc:
-            return [_error_msg(f"arrange_assign failed: {exc!r}")]
-        return self._next_message(builder, sd, player_id)
-
-    # ---- phase=arrange_clear -------------------------------------------
-    def _chargen_arrange_clear(
-        self,
-        builder: CharacterBuilder,
-        payload: CharacterCreationPayload,
-        sd: _SessionData,
-        player_id: str,
-        span: trace.Span,
-    ) -> list[object]:
-        if payload.stat is None:
-            return [_error_msg("arrange_clear requires stat field")]
-        span.add_event(
-            "character_creation.arrange_clear",
-            {"stat": payload.stat, "player_id": player_id},
-        )
-        try:
-            builder.clear_stat(stat_name=payload.stat)
-        except BuilderError as exc:
-            return [_error_msg(f"arrange_clear failed: {exc!r}")]
-        return self._next_message(builder, sd, player_id)
-
-    # ---- phase=arrange_confirm -----------------------------------------
-    def _chargen_arrange_confirm(
-        self,
-        builder: CharacterBuilder,
-        sd: _SessionData,
-        player_id: str,
-        span: trace.Span,
-    ) -> list[object]:
-        span.add_event(
-            "character_creation.arrange_confirm",
-            {"player_id": player_id},
-        )
-        try:
-            builder.apply_arrangement_confirm()
-        except UnfilledArrangementError as exc:
-            return [_error_msg(f"arrange_confirm rejected: {exc!r}")]
-        except NoQualifyingClassesError as exc:
-            return [_error_msg(f"arrange_confirm has no qualifying class: {exc!r}")]
-        except BuilderError as exc:
-            return [_error_msg(f"arrange_confirm failed: {exc!r}")]
-        return self._next_message(builder, sd, player_id)
-
-    # ---- phase=arrange_reject ------------------------------------------
-    def _chargen_arrange_reject(
-        self,
-        builder: CharacterBuilder,
-        sd: _SessionData,
-        player_id: str,
-        span: trace.Span,
-    ) -> list[object]:
-        span.add_event(
-            "character_creation.arrange_reject",
-            {"player_id": player_id},
-        )
-        try:
-            builder.apply_arrangement_reject()
-        except BuilderError as exc:
-            return [_error_msg(f"arrange_reject failed: {exc!r}")]
-        return self._next_message(builder, sd, player_id)
-
-    # ---- phase=story_autogen -------------------------------------------
-    def _chargen_story_autogen(
-        self,
-        builder: CharacterBuilder,
-        payload: CharacterCreationPayload,
-        sd: _SessionData,
-        player_id: str,
-        span: trace.Span,
-    ) -> list[object]:
-        seed = payload.seed if payload.seed is not None else random.randint(0, 2**31 - 1)
-        span.add_event(
-            "character_creation.story_autogen",
-            {"seed": seed, "player_id": player_id},
-        )
-        try:
-            autogen_result = builder.autogen_backstory(seed=seed)
-        except BuilderError as exc:
-            return [_error_msg(f"story_autogen failed: {exc!r}")]
-        # Render the next scene message and inject autogen_result into the
-        # payload. Builder state remains in the_story (autogen is rerollable;
-        # we don't commit it to the builder).
-        msgs = self._next_message(builder, sd, player_id)
-        if msgs and isinstance(msgs[0], CharacterCreationMessage):
-            msgs[0].payload.autogen_result = autogen_result
-        return msgs
-
-    # ---- phase=story_confirm -------------------------------------------
-    def _chargen_story_confirm(
-        self,
-        builder: CharacterBuilder,
-        payload: CharacterCreationPayload,
-        sd: _SessionData,
-        player_id: str,
-        span: trace.Span,
-    ) -> list[object]:
-        span.add_event(
-            "character_creation.story_confirm",
-            {
-                "pronouns_present": bool(payload.pronouns),
-                "background_present": bool(payload.background),
-                "description_present": bool(payload.description),
-                "player_id": player_id,
-            },
-        )
-        story = StoryInput(
-            pronouns=payload.pronouns or "",
-            background=payload.background or "",
-            description=payload.description or "",
-        )
-        try:
-            builder.apply_response(story)
-        except UnfilledArrangementError as exc:
-            return [_error_msg(f"story_confirm rejected: {exc!r}")]
-        except BuilderError as exc:
-            return [_error_msg(f"story_confirm failed: {exc!r}")]
-        return self._next_message(builder, sd, player_id)
-
-    # ---- archetype resolution helper (Story 2.3 Slice A) ----------------
-    def _resolve_character_archetype(
-        self,
-        character: Character,
-        sd: _SessionData,
-        player_id: str,
-        span: trace.Span,
-    ) -> None:
-        """Resolve a raw ``jungian/rpg_role`` pair through the archetype shim.
-
-        The builder encodes accumulated archetype hints as
-        ``f"{jungian}/{rpg_role}"`` on ``character.resolved_archetype`` (see
-        ``builder.py:1585-1590``). This helper detects that raw form, runs
-        the four-tier resolve (base → constraints → world funnels), and
-        replaces the raw pair with the resolved display name via
-        ``apply_archetype_resolved`` — keeping ``archetype_provenance`` in
-        lockstep.
-
-        Resolution failures emit a ``character_creation.archetype_resolution_failed``
-        span event and leave the raw pair in place. The downstream
-        archetype-resolution gate in ``_chargen_confirmation`` (Story
-        45-6, ``_gate_archetype_resolution``) detects the partial state
-        and rejects the commit with a typed ERROR frame
-        (``code="chargen_archetype_unresolved"``); this helper is
-        no-op-on-failure intentionally so the gate can decide. Missing
-        axis data on the pack (no ``base_archetypes`` or
-        ``archetype_constraints``) also silently no-ops here — the
-        gate then routes to ``OK_NO_AXES`` (pass) if the builder
-        produced no pair, or ``raw_pair_unresolved`` (block) if the
-        builder produced a pair the resolver couldn't run.
-
-        Rust parity: ``connect.rs:1644-1737``.
-        """
-        raw = character.resolved_archetype
-        if raw is None or "/" not in raw:
-            return
-
-        jungian, rpg_role = raw.split("/", 1)
-        pack = sd.genre_pack
-        if pack.base_archetypes is None or pack.archetype_constraints is None:
-            return
-
-        world = pack.worlds.get(sd.world_slug)
-        funnels = world.archetype_funnels if world is not None else None
-
-        try:
-            resolution = resolve_archetype(
-                jungian=jungian,
-                rpg_role=rpg_role,
-                base=pack.base_archetypes,
-                constraints=pack.archetype_constraints,
-                funnels=funnels,
-                genre=sd.genre_slug,
-                world=sd.world_slug,
-            )
-        except GenreValidationError as exc:
-            span.add_event(
-                "character_creation.archetype_resolution_failed",
-                {
-                    "event": "archetype.resolution_failed",
-                    "error": str(exc),
-                    "jungian": jungian,
-                    "rpg_role": rpg_role,
-                    "player_id": player_id,
-                },
-            )
-            logger.warning(
-                "chargen.archetype_resolution_failed jungian=%s rpg_role=%s error=%s",
-                jungian,
-                rpg_role,
-                exc,
-            )
-            return
-
-        apply_archetype_resolved(character, resolution)
-        span.add_event(
-            "character_creation.archetype_resolved",
-            {
-                "event": "archetype.resolved",
-                "jungian": jungian,
-                "rpg_role": rpg_role,
-                "resolved_name": resolution.resolved.name,
-                "source": resolution.source.value,
-                "source_tier": resolution.provenance.source_tier.value,
-                "weight": resolution.weight.value,
-                "faction": resolution.resolved.faction or "none",
-                "genre": sd.genre_slug,
-                "world": sd.world_slug,
-                "player_id": player_id,
-            },
-        )
-
-    # ---- archetype-resolution gate (Story 45-6) -------------------------
-    def _gate_archetype_resolution(
-        self,
-        character: Character,
-        sd: _SessionData,
-        player_id: str,
-        span: trace.Span,
-    ) -> tuple[bool, str | None]:
-        """Inspect the post-resolve character state and decide whether
-        chargen is allowed to ship.
-
-        The gate distinguishes three states:
-
-        - **OK_RESOLVED** — ``apply_archetype_resolved`` ran and stamped
-          ``archetype_provenance``. The discriminator keys on
-          ``character.archetype_provenance is not None``, NOT on the
-          shape of ``resolved_archetype`` — that survives display
-          names that legitimately contain ``"/"``. Pass.
-        - **OK_NO_AXES** — ``resolved_archetype is None`` AND the pack
-          opted out of the archetype system
-          (``base_archetypes is None and archetype_constraints is None``).
-          The builder didn't form a pair and the resolver had nothing
-          to resolve. Pass.
-        - **BLOCKED_PARTIAL** — anything else. Three failure modes
-          (Story 45-6 / playtest 3 ``pumblestone`` corpus):
-
-          1. ``raw_pair_unresolved`` — a literal ``"jungian/rpg_role"``
-             string is still on the character AND the pack lacks axes.
-             ``_resolve_character_archetype`` short-circuited at the
-             pack-axes check (line 579) before calling
-             ``resolve_archetype``; the raw pair stayed.
-          2. ``missing_axes_with_pack_axes`` — pack declares axes but
-             the chargen scenes accumulated at most one hint, so the
-             builder set ``resolved_archetype = None``. This is the
-             ``pumblestone`` failure: chargen scenes malformed.
-          3. ``resolver_raised`` — pack has axes AND a raw pair is
-             still on the character. Pure shape inference: the
-             pack-lacks-axes short-circuit at line 579 would have
-             returned before calling ``resolve_archetype``, so a raw
-             pair with pack-axes-set can only mean the resolver was
-             called and raised — the catch-block at line 595 caught
-             ``GenreValidationError`` and returned, leaving the raw
-             pair.
-
-        The evaluator span fires on every chargen-confirm; the blocked
-        span fires only on BLOCKED_PARTIAL. Both go to the GM panel via
-        ``SPAN_ROUTES`` (Sebastien's lie-detector — CLAUDE.md OTEL
-        Observability Principle). On the blocked branch a
-        ``logger.warning()`` entry is also emitted to the structured
-        server log so ops debugging is independent of the OTEL pipeline
-        (python.md rule 4).
-
-        Returns ``(is_blocked, block_reason)`` — ``block_reason`` is
-        one of ``"raw_pair_unresolved"``,
-        ``"missing_axes_with_pack_axes"``, ``"resolver_raised"``, or
-        ``None`` on a pass.
-        """
-        pack = sd.genre_pack
-        pack_has_axes = pack.base_archetypes is not None and pack.archetype_constraints is not None
-        ra = character.resolved_archetype
-        provenance_set = character.archetype_provenance is not None
-        # ``had_both_hints`` is the only granularity the gate has access
-        # to: the builder writes ``resolved_archetype = f"{j}/{r}"`` iff
-        # both hints were set, else ``None``. After the resolver runs,
-        # ``apply_archetype_resolved`` may overwrite the raw pair with a
-        # display name — but ``apply_archetype_resolved`` only fires
-        # when both hints fed the resolver in the first place. So:
-        # ``ra is not None`` ⇒ both hints; ``ra is None`` ⇒ at most one
-        # hint. The gate cannot tell *which* hint was missing without
-        # threading the builder accumulator through, which would be
-        # invasive — the OTEL signal is intentionally per-pair, not
-        # per-axis.
-        had_both_hints = ra is not None
-
-        # Decide. The discriminator keys on ``provenance_set`` (the
-        # OK_RESOLVED signal) rather than ``"/"`` in ``ra`` — the latter
-        # would misclassify display names that legitimately contain
-        # ``"/"`` (no validator on ``ArchetypeResolved.name`` forbids
-        # it). ``apply_archetype_resolved`` writes both
-        # ``resolved_archetype`` and ``archetype_provenance`` together,
-        # so ``provenance_set`` is the durable lockstep signal.
-        gate_state: str
-        block_reason: str | None
-        if provenance_set:
-            # OK_RESOLVED — resolver succeeded and stamped provenance.
-            gate_state = "ok_resolved"
-            block_reason = None
-        elif ra is None and not pack_has_axes:
-            # OK_NO_AXES — pack opted out of the archetype system.
-            gate_state = "ok_no_axes"
-            block_reason = None
-        elif ra is None:
-            # ra is None AND pack_has_axes — pumblestone case (chargen
-            # scenes malformed; the builder didn't form a pair).
-            block_reason = "missing_axes_with_pack_axes"
-            gate_state = "blocked_partial"
-        else:
-            # Raw pair on the character (no provenance ⇒ resolver did
-            # not run successfully). With pack-axes-set the resolver
-            # was called and raised; without pack-axes it short-
-            # circuited at line 579.
-            block_reason = "resolver_raised" if pack_has_axes else "raw_pair_unresolved"
-            gate_state = "blocked_partial"
-
-        # Evaluator span — fires on every chargen-confirm. ``state``
-        # carries the decision so the GM panel sees the choice on every
-        # path, including the success branches (negative confirmation
-        # that the gate ran).
-        with tracer.start_as_current_span(
-            SPAN_CHARGEN_ARCHETYPE_GATE_EVALUATED,
-            attributes={
-                "state": gate_state,
-                "resolved_archetype": ra if ra is not None else "",
-                "pack_has_axes": pack_has_axes,
-                "had_both_hints": had_both_hints,
-                "provenance_set": provenance_set,
-                "genre": sd.genre_slug,
-                "world": sd.world_slug,
-                "player_id": player_id,
-            },
-        ):
-            pass
-
-        if block_reason is None:
-            return False, None
-
-        # python.md rule 4: error paths MUST log to the structured
-        # server log surface. The OTEL span is independent (it goes to
-        # the watcher dashboard / GM panel); this WARNING entry lands
-        # in journald / file logs so ops debugging works without the
-        # OTEL pipeline.
-        logger.warning(
-            "chargen.archetype_gate_blocked player_id=%s block_reason=%s "
-            "genre=%s world=%s pack_has_axes=%s resolved_archetype=%s",
-            player_id,
-            block_reason,
-            sd.genre_slug,
-            sd.world_slug,
-            pack_has_axes,
-            ra if ra is not None else "<none>",
-        )
-
-        # Blocked span — fires only on BLOCKED_PARTIAL. This is the
-        # explicit lie-detector entry that says "a chargen would have
-        # shipped broken; the gate caught it." The legacy
-        # ``character_creation.archetype_resolution_failed`` event is
-        # the inner-resolver event; the blocked span is the outer-gate
-        # event.
-        with tracer.start_as_current_span(
-            SPAN_CHARGEN_ARCHETYPE_GATE_BLOCKED,
-            attributes={
-                "state": "blocked_partial",
-                "block_reason": block_reason,
-                "resolved_archetype": ra if ra is not None else "",
-                "pack_has_axes": pack_has_axes,
-                "had_both_hints": had_both_hints,
-                "provenance_set": provenance_set,
-                "genre": sd.genre_slug,
-                "world": sd.world_slug,
-                "player_id": player_id,
-            },
-        ) as gate_span:
-            # Also record on the parent span for correlation in the
-            # existing ``character_creation.*`` event stream.
-            span.add_event(
-                "character_creation.archetype_gate_blocked",
-                {
-                    "event": "archetype_gate_blocked",
-                    "block_reason": block_reason,
-                    "resolved_archetype": ra if ra is not None else "",
-                    "pack_has_axes": pack_has_axes,
-                    "player_id": player_id,
-                },
-            )
-            # Mirror onto the gate span as well so ReadableSpan
-            # consumers (test exporter) see the same payload either
-            # way.
-            gate_span.add_event(
-                "character_creation.archetype_gate_blocked",
-                {"block_reason": block_reason},
-            )
-
-        return True, block_reason
-
-    # ---- phase=confirmation (commit) ------------------------------------
-    async def _chargen_confirmation(
-        self,
-        builder: CharacterBuilder,
-        sd: _SessionData,
-        player_id: str,
-        span: trace.Span,
-    ) -> list[object]:
-        # Outbound accumulator must be bound BEFORE any nested emit closure
-        # (e.g. _chargen_emit_tactical_grid / _chargen_emit_region_location)
-        # is invoked — those fire on the room_graph and region init seams,
-        # well before the CharacterCreationMessage is computed below. Binding
-        # it here (rather than mid-method) keeps `out` from becoming an
-        # unbound free variable in those closures (Playtest 2026-05-21
-        # region-mode NameError crash).
-        out: list[object] = []
-
-        # Name resolution: scene > lobby > "Player". Do NOT fall back to
-        # payload.choice — that's the UI button index (e.g. "1"), not a
-        # name (Rust comment at connect.rs:1607).
-        name_from_scene = builder.character_name()
-        char_name = name_from_scene or sd.player_name or "Player"
-        source = "name_scene" if name_from_scene is not None else "player_name_fallback"
-        span.add_event(
-            "character_creation.name_resolved",
-            {
-                "event": "name_resolved",
-                "char_name": char_name,
-                "source": source,
-                "player_id": player_id,
-            },
-        )
-
-        try:
-            character = builder.build(char_name)
-        except BuilderError as exc:
-            return [_error_msg(f"Character build failed: {exc!r}")]
-
-        # ADR-114: emit hp_current/hp_max (HP is the ablative pool per
-        # ADR-114, reversing ADR-078). `schema=adr-114` lets us find
-        # this seam in audits.
-        span.add_event(
-            "character_creation.character_built",
-            {
-                "event": "character_built",
-                "schema": "adr-114",
-                "name": character.core.name,
-                "class": character.char_class,
-                "race": character.race,
-                "hp_current": character.core.hp.current,
-                "hp_max": character.core.hp.max,
-                "player_id": player_id,
-            },
-        )
-
-        # Archetype resolution (Story 2.3 Slice A). The builder writes
-        # a raw "jungian/rpg_role" pair into ``resolved_archetype`` when
-        # both axis hints were accumulated during chargen. Resolve it
-        # through the four-tier shim (base → constraints → world funnels)
-        # and replace the raw pair with the resolved display name, also
-        # stamping ``archetype_provenance`` so the GM panel can show the
-        # source tier. Rust parity: connect.rs:1644-1737.
-        self._resolve_character_archetype(character, sd, player_id, span)
-
-        # Story 45-6: archetype-resolution gate. After resolution runs
-        # (or silently no-ops via one of the three early-return branches
-        # at lines 574, 579, 595 of ``_resolve_character_archetype``),
-        # this gate inspects the post-state and rejects partial
-        # commits — the ``pumblestone`` regression from Playtest 3
-        # evrópí. See ``_gate_archetype_resolution`` docstring for the
-        # three pass / fail paths.
-        is_blocked, block_reason = self._gate_archetype_resolution(character, sd, player_id, span)
-        if is_blocked:
-            return [
-                _error_msg(
-                    "Character creation incomplete: archetype resolution "
-                    f"failed ({block_reason}). Please re-run chargen.",
-                    code="chargen_archetype_unresolved",
-                )
-            ]
-
-        # Starting equipment loadout (Story 2.3 Slice A). The builder only
-        # holds item_hints; the class-specific loadout from inventory.yaml
-        # is wired in here. Rust parity: connect.rs:1745-1864.
-        # Story 45-12: pass session identity so the dedup-evaluated /
-        # dedup-fired spans carry genre/world/player_id for GM-panel
-        # attribution. Snapshot slugs are populated at connect time.
-        apply_starting_loadout(
-            character,
-            sd.genre_pack.inventory,
-            genre=sd.snapshot.genre_slug,
-            world=sd.snapshot.world_slug,
-            player_id=player_id,
-        )
-
-        # MP: peer may have already committed on the same slug. The
-        # ADR-037 Python port has every WS session on a slug share the
-        # room's canonical ``GameSnapshot`` reference, so an in-memory
-        # check is the authoritative one. Disk reload here used to
-        # paper over the snapshot-orphaning bug (sd.snapshot reassignment
-        # below) by re-fetching the peer's persisted state, but the
-        # peer's ``room.save()`` could only write the stale (empty)
-        # bound snapshot — so the disk-read returned no characters and
-        # the second player wrongly took the first-commit branch. With
-        # the canonical snapshot mutated in place (``replace_with``
-        # below), in-memory ``sd.snapshot.characters`` is always live.
-        existing_chars: list = list(sd.snapshot.characters)
-        is_first_commit = not existing_chars
-
-        if is_first_commit:
-            # World materialization (Story 2.3 Slice C / Rust connect.rs:1892).
-            # Parse failure → empty-snapshot fallback (must not hard-fail mid-
-            # commit when the character is already built).
-            history_value = _world_history_value(sd.genre_pack, sd.world_slug)
-            try:
-                # Story 45-19: parse once at chargen and cache the typed
-                # chapter list on _SessionData so the per-turn arc-recompute
-                # tick doesn't re-parse history.yaml on every interaction.
-                # Same input drives ``materialize_from_genre_pack`` below;
-                # both calls share the same HistoryParseError fate.
-                sd.cached_history_chapters = parse_history_chapters(history_value)
-                materialized = materialize_from_genre_pack(
-                    history_value,
-                    CampaignMaturity.Fresh,
-                    sd.genre_slug,
-                    sd.world_slug,
-                )
-            except HistoryParseError as exc:
-                # Loud failure (CLAUDE.md "No Silent Fallbacks"): log at
-                # ERROR and emit an OTEL span event so the GM panel /
-                # watcher dashboard surfaces the malformed shipping
-                # content. We retain the empty-snapshot fallback because
-                # the character has already been chargen-built and
-                # hard-failing here would orphan the commit; but the
-                # error is no longer invisible.
-                logger.error(
-                    "world_materialization.parse_failed genre=%s world=%s error=%s",
-                    sd.genre_slug,
-                    sd.world_slug,
-                    exc,
-                    exc_info=True,
-                )
-                span.add_event(
-                    "history.parse_failed",
-                    {
-                        "event": "history.parse_failed",
-                        "genre": sd.genre_slug,
-                        "world": sd.world_slug,
-                        "error": str(exc),
-                        "exception_type": type(exc).__name__,
-                        "exception_repr": repr(exc),
-                    },
-                )
-                materialized = GameSnapshot(genre_slug=sd.genre_slug, world_slug=sd.world_slug)
-                # Parse failed: cache an empty chapter list so the
-                # arc-recompute tick is a graceful no-op rather than
-                # propagating the parse error per turn.
-                sd.cached_history_chapters = []
-            # Canned-openings Phase 3 (Task 13): pre-load authored NPCs
-            # before the chargen character is attached. Gate inside
-            # ``preload_authored_npcs`` checks
-            # ``state.characters == [] AND turn_manager.interaction == 0``;
-            # the materialized snapshot satisfies both at this seam (the
-            # PC is appended on the next line). Resumed sessions never
-            # reach this branch — ``is_first_commit`` is False.
-            world_for_authored = sd.genre_pack.worlds.get(sd.world_slug)
-            if world_for_authored is not None:
-                preload_authored_npcs(materialized, list(world_for_authored.authored_npcs))
-            # Discard the "Adventurer" placeholder the fresh chapter may
-            # author — the chargen-built character owns that slot.
-            materialized.characters = [character]
-            # Wave 2B (story 45-48): the chapter's location was previously
-            # written to the materialized snapshot's ``location`` field;
-            # that field is gone. Backfill the now-attached PC's
-            # per-character entry from the latest chapter that authored a
-            # ``location`` so chargen-confirmation lands the player at the
-            # scene the chapter described. Room-graph worlds overwrite this
-            # below via ``init_room_graph_location`` (entrance room id),
-            # which is intentional — the chapter's free-text location is
-            # the fallback for non-room-graph worlds.
-            for ch in reversed(materialized.world_history):
-                if ch.location:
-                    materialized.character_locations[character.core.name] = ch.location
-                    break
-            # Mutate the canonical room snapshot in place rather than
-            # reassigning ``sd.snapshot``. Reassignment orphans the
-            # ``room._snapshot`` reference: ``room.save()`` then
-            # persists the stale pre-chargen snapshot, the next
-            # connecting peer loads an empty save, treats themselves
-            # as first-commit, materializes their own world, and the
-            # slug ends up running two parallel solo games. Mutating
-            # in place keeps every existing ``sd.snapshot`` /
-            # ``room.snapshot`` reference live and pointing at the
-            # same authoritative object — including any peer session
-            # already bound to this slug.
-            sd.snapshot.replace_with(materialized)
-
-            # S1 (2026-05-04 split-brain cleanup): magic_state MUST be
-            # initialized before init_chassis_registry runs, because the
-            # chassis loader now writes confrontations directly into
-            # snapshot.magic_state.confrontations (the canonical home).
-            # The legacy world_confrontations stash is gone — see design
-            # spec 2026-05-04-snapshot-split-brain-cleanup-design.md S1.
-            #
-            # Magic Phase 4: instantiate MagicState on the canonical
-            # snapshot for worlds that ship a magic.yaml pair (genre +
-            # world). This is the production hook that pairs Phase 1's
-            # loader with Phase 2's snapshot field — without it,
-            # snapshot.magic_state stays None and the LedgerPanel never
-            # surfaces bars even though the engine can apply workings
-            # correctly. ``add_character`` instantiates per-character
-            # bars (sanity / notice / vitality on Coyote Star) keyed
-            # to the actor name the narrator emits in magic_working.
-            init_magic_state_for_session(
-                snapshot=sd.snapshot,
-                genre_pack_source_dir=sd.genre_pack.source_dir,
-                world_slug=sd.world_slug,
-                character_id=character.core.name,
-                character_class=character.char_class,
-            )
-
-            init_chassis_registry(sd.snapshot, sd.genre_pack)
-            # Story 47-6: bond_seeds in rigs.yaml use the
-            # ``"player_character"`` placeholder. Rewrite every chassis's
-            # bond_ledger to the real chargen character id so
-            # process_room_entry can find the bond on later transitions.
-            rebind_chassis_bonds_to_character(sd.snapshot, character.core.name)
-            # Story 47-6: evaluate room-entry eligibility for the starting
-            # interior_room so a session that opens INTO the galley fires
-            # the_tea_brew on turn 1 instead of waiting for a later
-            # narrator-driven location update.
-            process_session_open(
-                sd.snapshot,
-                character_id=character.core.name,
-                current_turn=sd.snapshot.turn_manager.interaction,
-            )
-            span.add_event(
-                "character_creation.world_materialized",
-                {
-                    "event": "world_materialized",
-                    "genre": sd.genre_slug,
-                    "world": sd.world_slug,
-                    "chapters_applied": len(materialized.world_history),
-                    "maturity": materialized.campaign_maturity,
-                    "trigger": "new_player_chargen",
-                    "player_id": player_id,
-                },
-            )
-
-            # Scenario binding (Slice D / connect.rs:1948). No-op without
-            # scenarios; sets active_scenario on the session for later
-            # pressure / scene-budget / accusation consumers.
-            bind_result = bind_scenario(
-                sd.genre_pack,
-                sd.snapshot,
-                genre_slug=sd.genre_slug,
-                world_slug=sd.world_slug,
-            )
-            if bind_result is not None:
-                _, active_pack = bind_result
-                sd.active_scenario = active_pack
-
-            world = sd.genre_pack.worlds.get(sd.world_slug)
-
-            # Region init (Story 37-31). Runs for every world with
-            # cartography. Init errors are pack-authoring bugs — log loud,
-            # don't hard-fail the confirmation frame.
-            if world is not None:
-                try:
-                    region_id = init_region_location(sd.snapshot, world.cartography)
-                    span.add_event(
-                        "region.initialized",
-                        {
-                            "event": "region.initialized",
-                            "region": region_id,
-                            "mode": world.cartography.navigation_mode.value,
-                            "source": "starting_region",
-                            "genre": sd.genre_slug,
-                            "world": sd.world_slug,
-                        },
-                    )
-                    logger.info(
-                        "region.init genre=%s world=%s region=%s discovered_regions=%d",
-                        sd.genre_slug,
-                        sd.world_slug,
-                        region_id,
-                        len(sd.snapshot.discovered_regions),
-                    )
-                except RegionInitError as exc:
-                    logger.error(
-                        "region.init_failed genre=%s world=%s error=%s",
-                        sd.genre_slug,
-                        sd.world_slug,
-                        exc,
-                    )
-                    span.add_event(
-                        "region.init_failed",
-                        {
-                            "event": "region.init_failed",
-                            "mode": world.cartography.navigation_mode.value,
-                            "genre": sd.genre_slug,
-                            "world": sd.world_slug,
-                            "error": str(exc),
-                        },
-                    )
-
-            if (
-                world is not None
-                and world.cartography.navigation_mode == NavigationMode.room_graph
-                and world.cartography.rooms
-            ):
-                try:
-                    entrance_id = init_room_graph_location(
-                        sd.snapshot, list(world.cartography.rooms)
-                    )
-                    span.add_event(
-                        "location.initialized",
-                        {
-                            "event": "location.initialized",
-                            "location": entrance_id,
-                            "mode": "room_graph",
-                            "source": "entrance_room",
-                            "genre": sd.genre_slug,
-                            "world": sd.world_slug,
-                        },
-                    )
-                    logger.info(
-                        "room_graph.init genre=%s world=%s entrance=%s discovered_rooms=%d",
-                        sd.genre_slug,
-                        sd.world_slug,
-                        entrance_id,
-                        len(sd.snapshot.discovered_rooms),
-                    )
-
-                    # ADR-096 Task 20b: emit TACTICAL_GRID for the entrance room so
-                    # the UI Automapper has grid data from session start, not only on
-                    # the first narrator-driven location change.
-                    def _chargen_emit_tactical_grid(msg: object, _kind: str) -> None:
-                        out.append(msg)
-
-                    _maybe_emit_tactical_grid(
-                        self,
-                        sd=sd,
-                        snapshot=sd.snapshot,
-                        actor=None,
-                        emit_fn=_chargen_emit_tactical_grid,
-                        room_id_override=entrance_id,
-                    )
-                    # Story 54-2 / ADR-109: emit LOCATION_DESCRIPTION on the
-                    # chargen / session-resume init path. room_id_override
-                    # carries the entrance room so a resumed client gets the
-                    # manifest snapshot without polling.
-                    _maybe_emit_location_description(
-                        self,
-                        sd=sd,
-                        snapshot=sd.snapshot,
-                        actor=None,
-                        emit_fn=_chargen_emit_tactical_grid,
-                        room_id_override=entrance_id,
-                    )
-                except RoomGraphInitError as exc:
-                    logger.error(
-                        "room_graph.init_failed genre=%s world=%s error=%s",
-                        sd.genre_slug,
-                        sd.world_slug,
-                        exc,
-                    )
-                    span.add_event(
-                        "location.init_failed",
-                        {
-                            "event": "location.init_failed",
-                            "mode": "room_graph",
-                            "genre": sd.genre_slug,
-                            "world": sd.world_slug,
-                            "error": str(exc),
-                        },
-                    )
-            elif (
-                world is not None
-                and world.cartography.navigation_mode == NavigationMode.region
-                and sd.snapshot.current_region
-            ):
-                # Playtest 2026-05-20 — Story 54-2 / ADR-109 chargen seam
-                # only fired for room_graph mode, so region-mode worlds
-                # (beneath_sunden surface, glenross, etc.) never received
-                # an opening LOCATION_DESCRIPTION → the UI Location tab
-                # never appears. Emit one here using current_region as the
-                # room_id. The emit's Path-2 cartography fallback resolves
-                # the prose + entities from ``cartography.regions``. No
-                # tactical grid — that's room-graph / cavern territory.
-                def _chargen_emit_region_location(msg: object, _kind: str) -> None:
-                    out.append(msg)
-
-                _maybe_emit_location_description(
-                    self,
-                    sd=sd,
-                    snapshot=sd.snapshot,
-                    actor=None,
-                    emit_fn=_chargen_emit_region_location,
-                    room_id_override=sd.snapshot.current_region,
-                )
-        else:
-            # MP second commit. ADR-037 Python port: sd.snapshot is the
-            # canonical room snapshot (already populated by the first
-            # committer's bind_world); just append our PC if not already
-            # present. No reload from store — the in-memory snapshot is
-            # authoritative.
-            existing_names = {c.core.name for c in sd.snapshot.characters}
-            if character.core.name not in existing_names:
-                sd.snapshot.characters.append(character)
-            # Pingpong 2026-05-07 ("magic.init only fires for the host"):
-            # the host's chargen-complete branch (above) calls
-            # ``init_magic_state_for_session`` to register the actor in
-            # the magic ledger AND emit the ``magic.init`` OTEL span;
-            # MP joiners never reached that call site. Result: late
-            # joiners (Donut, Katia) had no actor row in
-            # ``snapshot.magic_state.ledger``, so any narrator-emitted
-            # working against them raised ``unknown actor; call
-            # add_character first`` (the same shape as the 2026-04-30
-            # bug fixed in magic_init.py — the idempotence is now
-            # required at TWO seams, not one). Mirror the call here so
-            # every committer gets ``add_character`` + the
-            # observable ``magic.init`` span. Idempotent on
-            # ``snapshot.magic_state`` per the existing
-            # first_commit-vs-reuse branch.
-            init_magic_state_for_session(
-                snapshot=sd.snapshot,
-                genre_pack_source_dir=sd.genre_pack.source_dir,
-                world_slug=sd.world_slug,
-                character_id=character.core.name,
-                character_class=character.char_class,
-            )
-            # Re-bind active_scenario on this socket from whatever the
-            # peer wrote — its presence on sd.active_scenario is what
-            # downstream pressure / accusation code keys off.
-            if sd.active_scenario is None:
-                bind_result = bind_scenario(
-                    sd.genre_pack,
-                    sd.snapshot,
-                    genre_slug=sd.genre_slug,
-                    world_slug=sd.world_slug,
-                )
-                if bind_result is not None:
-                    _, active_pack = bind_result
-                    sd.active_scenario = active_pack
-            span.add_event(
-                "character_creation.mp_world_reused",
-                {
-                    "event": "mp_world_reused",
-                    "genre": sd.genre_slug,
-                    "world": sd.world_slug,
-                    "existing_pc_count": len(existing_chars),
-                    "appended_pc": character.core.name,
-                    "total_pc_count": len(sd.snapshot.characters),
-                    "player_id": player_id,
-                },
-            )
-            logger.info(
-                "session.mp_second_commit genre=%s world=%s existing_pcs=%d new_pc=%s total=%d",
-                sd.genre_slug,
-                sd.world_slug,
-                len(existing_chars),
-                character.core.name,
-                len(sd.snapshot.characters),
-            )
-
-        # Pingpong 2026-04-30 ("Lore RAG returns empty_query_or_store
-        # for all 4 PCs every turn — no genre lore reaching narration"):
-        # the genre pack's ``Lore`` corpus and the world's ``WorldLore``
-        # were never seeded into the per-session lore store — only
-        # chargen-choice fragments via ``seed_lore_from_char_creation``.
-        # Result: every ``lore_embedding.retrieve`` came back with
-        # ``store_size=0 outcome=empty_query_or_store`` and the narrator
-        # composed every turn with zero hits from the genre lore corpus.
-        # Pure wiring fix: ``seed_lore_from_genre_pack`` already existed
-        # (sidequest/game/lore_seeding.py:46) and was unit-tested but
-        # had zero production callers — exactly the
-        # "Don't Reinvent — Wire Up What Exists" gap CLAUDE.md warns
-        # about. Added a sibling ``seed_lore_from_world`` to cover the
-        # world-level lore.yaml (overrides the genre pack's defaults
-        # for that specific world; e.g. ``coyote_star`` has its own
-        # history/geography/factions distinct from ``space_opera``'s).
-        # Both run BEFORE ``seed_lore_from_char_creation`` so the
-        # genre/world fragments land first; chargen choices layer on
-        # top with ``Character`` category so they're scoped distinctly
-        # in the LoreStore index. Idempotent: re-seeding on a reconnect
-        # silently skips duplicate ids (``DuplicateLoreId`` guard).
-        # OTEL lie-detector: per the user's pingpong note request, expose
-        # ``lore.store_loaded count=N world=X`` so the GM panel can
-        # distinguish "lore is empty by design for this scenario" from
-        # "lore was supposed to load and didn't" — both pre-fix manifest
-        # as ``outcome=empty_query_or_store`` at retrieve time. Sebastien's
-        # State / Subsystems tabs read this watcher event. Shared with the
-        # slug-resume connect path via ``seed_world_lore`` so a resumed
-        # save's lore_store is re-seeded with the SAME deterministic
-        # genre+world fragments and emits the SAME ``lore_store_loaded``
-        # event (the resume gap commit 72750db exposed).
-        def _emit_lore_store_loaded(
-            *,
-            genre_fragments_added: int,
-            world_fragments_added: int,
-            total_fragments: int,
-            total_tokens: int,
-        ) -> None:
-            logger.info(
-                "lore.store_loaded genre=%s world=%s genre_fragments=%d "
-                "world_fragments=%d total=%d total_tokens=%d",
-                sd.genre_slug,
-                sd.world_slug,
-                genre_fragments_added,
-                world_fragments_added,
-                total_fragments,
-                total_tokens,
-            )
-            _watcher_publish(
-                "lore_store_loaded",
-                {
-                    "genre_slug": sd.genre_slug,
-                    "world_slug": sd.world_slug,
-                    "genre_fragments_added": genre_fragments_added,
-                    "world_fragments_added": world_fragments_added,
-                    "total_fragments": total_fragments,
-                    "total_tokens": total_tokens,
-                    "player_id": player_id,
-                },
-                component="rag",
-            )
-
-        genre_lore_added, world_lore_added = seed_world_lore(
-            sd.lore_store,
-            sd.genre_pack,
-            sd.world_slug,
-            emit=_emit_lore_store_loaded,
-        )
-
-        # Lore seeding (Slice F / connect.rs:2196). Must run BEFORE
-        # clearing the builder — the seeder reads scene choices to
-        # build Character-category lore fragments for narrator RAG.
-        lore_added = seed_lore_from_char_creation(sd.lore_store, list(builder.scenes()))
-        span.add_event(
-            "lore.char_creation_seeded",
-            {
-                "event": "char_creation_lore_seeded",
-                "fragments_added": lore_added,
-                "total_fragments": len(sd.lore_store),
-                "total_tokens": sd.lore_store.total_tokens(),
-                "genre": sd.genre_slug,
-                "world": sd.world_slug,
-                "player_id": player_id,
-            },
-        )
-        logger.info(
-            "rag.character_creation_lore_seeded count=%d total=%d",
-            lore_added,
-            len(sd.lore_store),
-        )
-        _watcher_publish(
-            "lore_retrieval",
-            {
-                "reason": "character_creation_seed",
-                "fragments_added": lore_added,
-                "total_fragments": len(sd.lore_store),
-                "total_tokens": sd.lore_store.total_tokens(),
-                "genre_slug": sd.genre_slug,
-                "world_slug": sd.world_slug,
-                "player_id": player_id,
-            },
-            component="rag",
-        )
-
-        # NPC registry reset removed in story 45-52. The pre-Wave-2A clear
-        # targeted the legacy ``npc_registry`` (chargen-tier name extractions
-        # — player's own name, lobby filler). With the registry dropped and
-        # the post-Wave-2A pool channel intentionally persistent across
-        # chargen (world-authored cast pre-seeds; recurring narrator-cited
-        # NPCs survive the seam), there is nothing to clear here.
-
-        # MP per-player chargen binding (playtest 2026-04-25). Maps
-        # player_id → character_name so slug-resume routes new players
-        # to chargen instead of auto-claiming an existing PC.
-        if sd.player_id and character.core.name:
-            sd.snapshot.player_seats[sd.player_id] = character.core.name
-            # Wave 2B (story 45-48) + sq-playtest 2026-05-09 [OBS]: seed
-            # the joiner's per-character location from another seated PC.
-            # The original branch used strict ``party_location()`` consensus
-            # (all seated PCs agree on the same location), which fails the
-            # moment a new player commits because *their* slot is still
-            # empty — so MP commits 2..N never inherited and the
-            # post-chargen window had no consensus at all. Loose
-            # inheritance: take any other seated PC's known location. The
-            # chargen-complete bootstrap from
-            # ``_bootstrap_character_locations_from_opening`` ensures the
-            # FIRST committer has a location to inherit.
-            if character.core.name not in sd.snapshot.character_locations:
-                inherited_from: str | None = None
-                inherited_loc: str | None = None
-                for seated_name in sd.snapshot.player_seats.values():
-                    if not seated_name or seated_name == character.core.name:
-                        continue
-                    candidate = sd.snapshot.character_locations.get(seated_name)
-                    if candidate:
-                        inherited_from = seated_name
-                        inherited_loc = candidate
-                        break
-                if inherited_loc:
-                    sd.snapshot.character_locations[character.core.name] = inherited_loc
-                    span.add_event(
-                        "snapshot.character_location_inherited",
-                        {
-                            "event": "snapshot.character_location_inherited",
-                            "joiner": character.core.name,
-                            "inherited_from": inherited_from or "",
-                        },
-                    )
-            span.add_event(
-                "session.player_seat_bound",
-                {
-                    "event": "session.player_seat_bound",
-                    "genre": sd.genre_slug,
-                    "world": sd.world_slug,
-                    "player_id": sd.player_id,
-                    "character_name": character.core.name,
-                    "seat_count": len(sd.snapshot.player_seats),
-                },
-            )
-            logger.info(
-                "session.player_seat_bound player_id=%s character=%s seat_count=%d",
-                sd.player_id,
-                character.core.name,
-                len(sd.snapshot.player_seats),
-            )
-            _watcher_publish(
-                "session_player_seat_bound",
-                {
-                    "genre_slug": sd.genre_slug,
-                    "world_slug": sd.world_slug,
-                    "player_id": sd.player_id,
-                    "character_name": character.core.name,
-                    "seat_count": len(sd.snapshot.player_seats),
-                    "seated_player_ids": list(sd.snapshot.player_seats.keys()),
-                },
-                component="session",
-            )
-
-        # Persist (Slice G / connect.rs:2174). Snapshot save makes the
-        # next slug-resume hit has_character=True; failure must not
-        # strand the player mid-commit (log loud, continue).
-        try:
-            # ADR-037 Python port: route through the canonical room save
-            # so concurrent chargen-commits from peers are serialized by
-            # the room lock. Fallback for legacy non-slug paths.
-            if self._room is not None:
-                self._room.save()
-            else:
-                sd.store.save(sd.snapshot)
-            span.add_event(
-                "session.persisted_at_chargen_complete",
-                {
-                    "event": "session.persisted",
-                    "genre": sd.genre_slug,
-                    "world": sd.world_slug,
-                    "player": sd.player_name,
-                    "turn": sd.snapshot.turn_manager.interaction,
-                },
-            )
-            logger.info(
-                "session.persisted_at_chargen_complete genre=%s world=%s player=%s",
-                sd.genre_slug,
-                sd.world_slug,
-                sd.player_name,
-            )
-        except Exception as exc:
-            # Don't strand mid-commit — log + OTEL event, then proceed.
-            # On next reconnect the save will be absent so chargen repeats.
-            logger.error(
-                "session.persist_failed_at_chargen_complete genre=%s world=%s error=%s",
-                sd.genre_slug,
-                sd.world_slug,
-                exc,
-            )
-            span.add_event(
-                "session.persist_failed_at_chargen_complete",
-                {
-                    "event": "session.persist_failed",
-                    "genre": sd.genre_slug,
-                    "world": sd.world_slug,
-                    "player": sd.player_name,
-                    "error": str(exc),
-                },
-            )
-
-        # Flip to Playing atomically with persistence (Slice G /
-        # connect.rs:2183). Pre-fix, a disconnect between confirm and
-        # first action lost the save-state flag.
-        self._state = _State.Playing
-
-        # Story 45-2: chargen committed → seat transitions CHARGEN → PLAYING
-        # so the turn barrier counts this peer. No-op if no room (solo
-        # path with no MP room) or if the peer was already PLAYING (safe
-        # under double-confirmation).
-        if self._room is not None:
-            self._room.transition_to_playing(player_id)
-
-        sd.builder = None
-        # ADR-114 (supersedes ADR-078): HP is back as the personal vitality track.
-        # Log surface-level mechanical state as hp=current/max.
-        # `schema=adr-114` is grep-able so future audits can find this seam.
-        logger.info(
-            "chargen.complete schema=adr-114 char_name=%s class=%s race=%s hp=%d/%d",
-            character.core.name,
-            character.char_class,
-            character.race,
-            character.core.hp.current,
-            character.core.hp.max,
-        )
-
-        payload = CharacterCreationPayload(
-            phase="complete",
-            total_scenes=builder.total_scenes(),
-            character=character.model_dump(mode="json"),
-        )
-        # Prepend (not re-bind) so the CharacterCreationMessage stays first in
-        # the returned list while preserving any LOCATION_DESCRIPTION /
-        # TACTICAL_GRID messages already appended by the init closures above.
-        out.insert(0, CharacterCreationMessage(payload=payload, player_id=player_id))
-
-        # PARTY_STATUS snapshot (Slice H / connect.rs:2533). Lands the
-        # Character tab populated at session-start. MP: also broadcast
-        # to peers so they see the new arrival without waiting for their
-        # own turn-end refresh.
-        try:
-            party_status_msg = views.build_session_start_party_status(
-                self, sd, character, player_id
-            )
-            out.append(party_status_msg)
-            from sidequest.game.persistence import (  # noqa: PLC0415 — break import cycle
-                GameMode as _GameMode,
-            )
-
-            if (
-                self._room is not None
-                and sd.mode == _GameMode.MULTIPLAYER
-                and self._socket_id is not None
-            ):
-                self._room.broadcast(party_status_msg, exclude_socket_id=self._socket_id)
-            span.add_event(
-                "session.start.character_snapshot_emitted",
-                {
-                    "event": "session.start.character_snapshot_emitted",
-                    "player_id": player_id,
-                    "character_name": character.core.name,
-                    "genre": sd.genre_slug,
-                    "world": sd.world_slug,
-                    "sheet_class": character.char_class,
-                    "inventory_count": len(
-                        [
-                            i
-                            for i in character.core.inventory.items
-                            if str(i.get("state", "Carried")) == "Carried"
-                        ]
-                    ),
-                },
-            )
-        except Exception as exc:
-            # Snapshot frame is UI convenience — log loud, don't block.
-            logger.error(
-                "session.start.character_snapshot_failed player=%s error=%s",
-                sd.player_name,
-                exc,
-            )
-            span.add_event(
-                "session.start.character_snapshot_failed",
-                {
-                    "event": "session.start.character_snapshot_failed",
-                    "error": str(exc),
-                    "player_id": player_id,
-                },
-            )
-
-        # Canned-openings Phase 4 (Task 19): resolve + stash the
-        # opening directive at chargen-completion.
-        #
-        # Playtest 2026-05-03 [BUG] Opening narration skips Kestrel
-        # beat: previously gated on ``is_first_commit``, which fired
-        # the resolver when only 1 PC was seated in MP — the canned
-        # ``mp_galley_jumprest`` opening declares ``min_players: 2``
-        # so resolution always failed and the narrator improvised
-        # Vaskov Centrum customs. Now the populator runs on EVERY
-        # commit (idempotent — bails when ``opening_directive`` is
-        # already set, emits ``opening.skipped`` watcher events
-        # otherwise), so the second committer's call succeeds with
-        # the full party seated.
-        rebound_region = _populate_opening_directive_on_chargen_complete(
-            session_data=sd,
-            snapshot=sd.snapshot,
-            pack=sd.genre_pack,
-            world_slug=sd.world_slug,
-            mode=sd.mode,
-        )
-
-        # Playtest 2026-05-25 [BUG] flickering_reach: the region-mode
-        # LOCATION_DESCRIPTION emit above (line ~2595) fired against the
-        # spawn region (``starting_region``), but the opening anchors the
-        # party at a different cartography node. When the opening rebound
-        # ``current_region`` to its authored ``setting.region_id``, fire the
-        # corrected LOCATION_DESCRIPTION for the opening's region so the UI
-        # Location tab + Map agree with the prose. ``rebound_region`` is the
-        # canonical node id (already validated against ``cartography.regions``
-        # inside the populator) — only set when it actually changed.
-        if rebound_region:
-
-            def _opening_emit_region_location(msg: object, _kind: str) -> None:
-                out.append(msg)
-
-            _maybe_emit_location_description(
-                self,
-                sd=sd,
-                snapshot=sd.snapshot,
-                actor=None,
-                emit_fn=_opening_emit_region_location,
-                room_id_override=rebound_region,
-            )
-
-        # Opening-turn bootstrap (Slice H / connect.rs:2270). Fires
-        # narrator with opening_seed + opening_directive (Early zone),
-        # consumed once so subsequent turns run directive-free.
-        #
-        # Deferral gate (playtest 2026-05-03): in MP, skip the opening
-        # narration on first commit so the canned MP opening can
-        # resolve at second commit with full party context. The last
-        # committer's narration is broadcast to peers below so the
-        # first committer still sees the opening.
-        if _should_fire_opening_narration(sd, self._room):
-            opening_messages = await self._run_opening_turn_narration(sd, player_id, span)
-            out.extend(opening_messages)
-            # MP: broadcast opening narration to peers so the earlier
-            # committer (whose chargen.complete was deferred) sees the
-            # canned opening when it finally fires here. Solo path
-            # (room is None or seat_count <= 1) skips the broadcast.
-            from sidequest.game.persistence import (  # noqa: PLC0415 — break import cycle
-                GameMode as _GameMode2,
-            )
-
-            if (
-                self._room is not None
-                and sd.mode == _GameMode2.MULTIPLAYER
-                and self._socket_id is not None
-                and opening_messages
-            ):
-                for _msg in opening_messages:
-                    self._room.broadcast(_msg, exclude_socket_id=self._socket_id)
-                _watcher_publish(
-                    "opening.broadcast_to_peers",
-                    {
-                        "genre": sd.genre_slug,
-                        "world": sd.world_slug,
-                        "player_id": player_id,
-                        "message_count": len(opening_messages),
-                    },
-                    component="opening_hook",
-                    severity="info",
-                )
-        else:
-            # Defer: don't fire opening narration yet — the next
-            # committer will populate the directive and fire it for
-            # everyone via the broadcast path above.
-            seat_count = self._room.non_abandoned_player_count() if self._room is not None else 0
-            _watcher_publish(
-                "opening.deferred_party_incomplete",
-                {
-                    "genre": sd.genre_slug,
-                    "world": sd.world_slug,
-                    "player_id": player_id,
-                    "characters_committed": len(sd.snapshot.characters),
-                    "non_abandoned_seats": seat_count,
-                },
-                component="opening_hook",
-                severity="info",
-            )
-            logger.info(
-                "opening.deferred_party_incomplete genre=%s world=%s player=%s "
-                "committed=%d expected=%d",
-                sd.genre_slug,
-                sd.world_slug,
-                sd.player_name,
-                len(sd.snapshot.characters),
-                seat_count,
-            )
-        return out
-
-    # ---- helper: next scene message OR confirmation summary -------------
-    def _next_message(
-        self,
-        builder: CharacterBuilder,
-        sd: _SessionData,
-        player_id: str,
-    ) -> list[object]:
-        """After apply_choice / apply_freeform / apply_auto_advance, emit the
-        appropriate next frame: either the next scene message, or the
-        confirmation summary if the builder has transitioned to Confirmation.
-
-        Rust parity: ``dispatch::chargen_summary::render_confirmation_summary``
-        takes the pack + lobby_name directly because the builder does not
-        own them.
-        """
-        if builder.is_confirmation():
-            return [render_confirmation_summary(builder, sd.genre_pack, sd.player_name, player_id)]
-        return [builder.to_scene_message(player_id)]
-
     # ------------------------------------------------------------------
     # PLAYER_ACTION dispatch
     # ------------------------------------------------------------------
@@ -3418,37 +748,50 @@ class WebSocketSessionHandler:
         turn_context: TurnContext,
         *,
         is_opening_turn: bool = False,
+        suppress_intent_router: bool = False,
     ) -> list[object]:
         """Run one narration turn: orchestrator call, snapshot mutation,
         persistence, NARRATION + NARRATION_END message build.
 
         Shared by :meth:`_handle_player_action` and
-        :meth:`_run_opening_turn_narration` (Story 2.3 Slice H). The
-        caller owns TurnContext construction so each entrypoint can
-        set per-turn fields (opening_directive on turn 0, pending
-        trope beats on subsequent turns) without leaking responsibility.
+        :meth:`_run_opening_turn_narration`; the caller owns TurnContext so each
+        entrypoint sets its own per-turn fields.
 
-        ``is_opening_turn`` (Story 45-5 / ADR-051): the chargen-confirmation
-        narration sets the scene at round=1 / interaction=1 rather than
-        completing a player-narrator exchange. Skipping
-        ``record_interaction()`` for this turn keeps both counters at
-        their fresh ``materialize_from_genre_pack`` defaults so post-
-        chargen state is exactly ``(round=1, interaction=1)``. The
-        narrative_log row this turn writes uses the pre-bump
-        ``interaction=1``, so the 45-11 ``round_invariant`` (round ==
-        MAX(narrative_log.round_number)) still holds. The first
-        PLAYER_ACTION turn is the first real exchange and advances both
-        counters in lockstep.
+        ``is_opening_turn`` (Story 45-5 / ADR-051): the opening scene-set skips
+        ``record_interaction()`` so post-chargen state stays at exactly
+        ``(round=1, interaction=1)`` and the 45-11 round_invariant still holds.
+        The first PLAYER_ACTION turn advances both counters in lockstep.
+
+        ``suppress_intent_router`` (Story 91-2, epic 91 "Dark Spend"): the
+        dice-resolution replay path re-enters this method with a synthesized
+        ``[BEAT_RESOLVED]``/``[DOGFIGHT_SHOT_RESOLVED]`` replay text whose only
+        new information is a mechanical outcome the dice dispatch already
+        applied — there is no new player intent to classify, and re-running
+        the pre-narrator pass was the structural driver of the [COST-1]
+        8x/turn Haiku volume. ``True`` skips the router + dispatch bank for
+        this turn (with LOUD span/log evidence — never a silent skip) while
+        the replay narration itself still runs. Only the dice replay re-entry
+        sets this; a normal player action MUST classify (ADR-113).
         """
         snapshot = sd.snapshot
+        # Reap a resolved encounter husk before anything reads it this turn
+        # (phantom-wound CRITICAL, sq-playtest 2026-06-14): a fight that
+        # resolved on a prior turn lingers as a zeroed husk the narrator can
+        # layer a fresh fight on. Skipped on the dice-replay re-entry, which
+        # narrates a just-resolved encounter and must keep it; never touches a
+        # live (unresolved) encounter.
+        from sidequest.server.dispatch.encounter_lifecycle import (
+            reap_resolved_encounter_husk,
+        )
+
+        reap_resolved_encounter_husk(
+            snapshot,
+            is_dice_replay=suppress_intent_router,
+            turn=snapshot.turn_manager.interaction,
+        )
         snapshot_before_hash = _hash_snapshot(snapshot)
-        # Reuse a pre-built PhaseTimings from the calling handler when
-        # one is attached — handler-entry construction lets pre-narrator
-        # phases (lore_retrieval, mp_barrier_wait, turn_context_build)
-        # land in the same `phase_durations_ms` dict the dashboard reads.
-        # When the caller didn't attach one (test fixtures, legacy paths),
-        # fall back to constructing here so the existing in-turn phases
-        # still record.
+        # Reuse the caller's PhaseTimings when attached so pre-narrator phases
+        # land in the same dict the dashboard reads; otherwise construct here.
         if isinstance(turn_context.phase_timings, PhaseTimings) and (
             turn_context.phase_timings is not PhaseTimings.NULL
         ):
@@ -3458,19 +801,13 @@ class WebSocketSessionHandler:
             turn_context.phase_timings = timings
         submitted = False
         result = None  # populated by run_narration_turn; None on degraded paths
-        # Story 45-20: capture trope-status baseline BEFORE any apply step
-        # mutates statuses. The handshake fires post-record_interaction and
-        # diffs this baseline against the live snapshot to detect any trope
-        # whose status flipped to "resolved" — chapter promotion (today),
-        # narrator extraction or engine tick (future). Capturing late
-        # would mask the diff.
+        # Story 45-20: capture trope-status baseline BEFORE any apply step so
+        # the post-record_interaction handshake can diff it to detect tropes
+        # that flipped to "resolved" this turn. Capturing late would mask the diff.
         trope_status_baseline: dict[str, str] = {t.id: t.status for t in snapshot.active_tropes}
         # Capture the watcher→OTLP synthetic-span counter at turn start so the
-        # finally-block can log the per-turn delta. With this in the server
-        # log a `grep turn.bridge_diagnostic /tmp/sidequest-server.log` reveals
-        # whether the bridge minted any spans for this turn — Jaeger-empty
-        # turns now have a hard, grep-able truth-value rather than a "did the
-        # bridge fire?" guessing game (playtest 2026-04-30 #Jaeger-bridge).
+        # finally-block can log the per-turn delta — gives Jaeger-empty turns a
+        # grep-able truth-value for "did the bridge fire?" (playtest 2026-04-30).
         from sidequest.telemetry.watcher_hub import synthetic_spans_count  # noqa: PLC0415
 
         bridge_minted_at_start = synthetic_spans_count()
@@ -3483,15 +820,10 @@ class WebSocketSessionHandler:
                 world=sd.world_slug,
                 action_len=len(action),
             ):
-                # Monster Manual injection (ADR-059, port of Rust
-                # dispatch/mod.rs:643-681). Materialize Manual NPCs and
-                # encounter creatures into snapshot.npcs BEFORE the
-                # narrator runs so the gaslighting doctrine path
-                # delivers them as world truth — never as appended
-                # "available list" text.  TurnContext was already built
-                # in the handler from the pre-injection snapshot, so
-                # refresh its ``npcs`` reference from the post-patch
-                # snapshot before dispatch.
+                # Monster Manual injection (ADR-059). Materialize Manual NPCs +
+                # encounter creatures into snapshot.npcs BEFORE the narrator runs
+                # so the gaslighting doctrine delivers them as world truth, not
+                # appended "available list" text. Refresh TurnContext.npcs after.
                 from sidequest.server.dispatch import monster_manual_inject
 
                 manual = monster_manual_inject.ensure_loaded(sd)
@@ -3507,12 +839,9 @@ class WebSocketSessionHandler:
                         current_location=mm_location,
                         in_combat=bool(turn_context.in_combat),
                     )
-                    # Honest plain-text signal (CLAUDE.md OTEL principle).
-                    # monster_manual.injected is an OTEL-only span; a GM
-                    # reading server.log otherwise has zero proof the
-                    # Manual materialized vs. the narrator improvising
-                    # creatures (Pattern 5). Logs the actual patch count,
-                    # not a presence boolean.
+                    # Plain-text proof (CLAUDE.md OTEL principle): log the actual
+                    # patch count so a GM reading server.log can tell the Manual
+                    # materialized vs. the narrator improvising creatures.
                     logger.info(
                         "monster_manual.injected genre=%s world=%s "
                         "player_id=%s turn=%s in_combat=%s patches=%d",
@@ -3524,25 +853,15 @@ class WebSocketSessionHandler:
                         mm_injected,
                     )
                     turn_context.npcs = list(snapshot.npcs)
-                    # _build_turn_context (session_helpers.py) snapshots
-                    # monster_manual off sd.monster_manual at the *caller*,
-                    # which runs BEFORE ensure_loaded() above lazily
-                    # populates it. Without this refresh the orchestrator
-                    # gets context.monster_manual=None on every session's
-                    # turn 1 and every MP turn where the acting player's
-                    # per-player _SessionData has not yet narrated —
-                    # lookup_monster goes dead and the context_wired OTEL
-                    # flag logs a false negative (playtest 2026-05-17).
+                    # _build_turn_context snapshots monster_manual at the caller,
+                    # BEFORE ensure_loaded() above populates it; refresh here or
+                    # the orchestrator gets None and lookup_monster goes dead
+                    # (playtest 2026-05-17).
                     turn_context.monster_manual = sd.monster_manual
 
-                # Story 22-3: bootstrap the seed-trope deck for a fresh
-                # session before the narrator builds its prompt. Idempotent —
-                # no-op once any seed has been drawn (either lives on
-                # snapshot.active_seeds or has ghosted). Uses the room
-                # slug (preferred, slug-connect path) or sd.game_slug,
-                # falling back to a deterministic id assembled from the
-                # session's bound identifiers so non-slug-connect paths
-                # still get a stable, reproducible draw.
+                # Story 22-3: bootstrap the seed-trope deck for a fresh session.
+                # Idempotent. Session id from room slug / sd.game_slug, falling
+                # back to a deterministic id for non-slug-connect paths.
                 from sidequest.game.seed_tick import ensure_initial_draw  # noqa: PLC0415
 
                 if self._room is not None:
@@ -3551,102 +870,174 @@ class WebSocketSessionHandler:
                     seed_session_id = sd.game_slug
                 else:
                     seed_session_id = f"{sd.genre_slug}::{sd.world_slug}::{sd.player_id}"
+                # Epic 94: seed_tropes is a world-tier CAST/CATALOG surface
+                # (genre = rulebook only). Resolve the bound World and pass it as
+                # the seed source — both ensure_initial_draw and draw_engaged_seed
+                # read ``.seed_tropes`` via getattr, so the World object is a
+                # drop-in. The migrated pack's genre-tier seed_tropes is [].
+                seed_source = sd.genre_pack.worlds.get(sd.world_slug) or sd.genre_pack
                 ensure_initial_draw(
                     snapshot,
-                    sd.genre_pack,
+                    seed_source,
                     session_id=seed_session_id,
                     now_turn=snapshot.turn_manager.interaction,
                 )
-                # Refresh TurnContext from the post-bootstrap snapshot
-                # so build_narrator_prompt sees the freshly drawn seeds.
-                # Mirrors the monster_manual.injected refresh pattern at
-                # ``turn_context.npcs = list(snapshot.npcs)`` above.
+                # Refresh TurnContext from the post-bootstrap snapshot so
+                # build_narrator_prompt sees the freshly drawn seeds.
                 turn_context.snapshot = snapshot
 
-                # Intent Router pre-narrator pass (Story 59-4, ADR-113). The
-                # router classifies the player's action and the dispatch bank
-                # engages mechanical engines on the canonical snapshot BEFORE
-                # the narrator runs — so the narrator narrates already-real
-                # state instead of self-reporting engagement via the (retired)
-                # ``begin_confrontation`` sidecar tool. ``IntentRouterFailure``
-                # (after the router's bounded retry) propagates out of this
-                # block and is handled by the existing turn-failure path —
-                # NO silent narrator-only fallback (memory rule
-                # feedback_no_fallbacks_hard). The factory call is module-
-                # level (``intent_router_pass.build_intent_router_for_session``)
-                # so tests monkeypatch it to a stub — tests MUST NOT spawn
-                # a real Claude client.
-                _acting_player_name = snapshot.player_seats.get(sd.player_id, "") or sd.player_id
-                _additional_player_names = [
-                    name
-                    for pid, name in snapshot.player_seats.items()
-                    if pid != sd.player_id and name and name != _acting_player_name
-                ]
-                _intent_router = intent_router_pass.build_intent_router_for_session()
-                # Opt-in degraded path for live-playtest unblock: when
-                # ``SIDEQUEST_INTENT_ROUTER_DEGRADE_ON_FAIL`` is set, an
-                # ``IntentRouterFailure`` after the bounded retry is logged
-                # LOUDLY (WARNING + structured log fields) and the turn
-                # continues with ``dispatch_package=None``. The narrator
-                # already handles None (see orchestrator.py:1599 et al.) —
-                # this is yesterday's pre-ADR-113 behavior, not a silent
-                # fallback. Default (env unset) preserves the ADR-113
-                # fail-loud contract.
-                try:
-                    # Movement subsystem (§0 context threading): the
-                    # dungeon graph store + palette + worker handle live on
-                    # the lookahead handle (wired by attach_dungeon_to_session
-                    # for beneath_sunden; None for every other world). Derive
-                    # them so run_movement_dispatch can resolve against the
-                    # real graph. None on non-procedural worlds → the handler
-                    # fails loud with no_dungeon_store (no silent fallback).
-                    _lookahead_handle = getattr(sd, "lookahead_handle", None)
-                    _dungeon_store = (
-                        _lookahead_handle.persistence if _lookahead_handle is not None else None
+                if suppress_intent_router:
+                    # Story 91-2 (epic 91 "Dark Spend"): dice-resolution replay
+                    # re-entry — the pre-narrator pass is INTENTIONALLY skipped.
+                    # The dice dispatch already applied the mechanical outcome;
+                    # the replay text carries no new player intent to classify,
+                    # and re-classifying it was the structural driver of the
+                    # [COST-1] 8x/turn Haiku volume. LOUD evidence, never a
+                    # silent skip: the routed intent_router.decompose span fires
+                    # with replay_suppressed=True / dispatch_count=0 (same
+                    # GM-panel pattern as the 71-29 degrade marker) so the
+                    # dashboard distinguishes "intentionally skipped (replay)"
+                    # from "spine dark".
+                    logger.info(
+                        "intent_router.replay_suppressed genre=%s world=%s "
+                        "player_id=%s action_len=%d — dice-replay re-entry, "
+                        "no new player intent to classify (story 91-2)",
+                        sd.genre_slug,
+                        sd.world_slug,
+                        sd.player_id,
+                        len(action),
                     )
-                    _dungeon_palette = (
-                        _lookahead_handle.palette if _lookahead_handle is not None else None
+                    with intent_router_decompose_span(
+                        action_length=len(action),
+                        model=_INTENT_ROUTER_MODEL,
+                    ) as _suppress_span:
+                        _suppress_span.set_attribute("dispatch_count", 0)
+                        _suppress_span.set_attribute("replay_suppressed", True)
+                    # The locals feed both turn_context AND the later
+                    # post-narration consumers (e.g. the engagement census at
+                    # the dispatch-summary emit) — bind them here too.
+                    _dispatch_package = None
+                    _bank_result = None
+                    turn_context.dispatch_package = None
+                    turn_context.bank_result = None
+                    turn_context.npcs = list(snapshot.npcs)
+                else:
+                    # Intent Router pre-narrator pass (Story 59-4, ADR-113): the
+                    # router classifies the action and the dispatch bank engages
+                    # engines on the canonical snapshot BEFORE the narrator runs, so
+                    # the narrator narrates already-real state. IntentRouterFailure
+                    # (after bounded retry) propagates to the turn-failure path — NO
+                    # silent narrator-only fallback. The factory call is module-level
+                    # so tests can monkeypatch it (must not spawn a real Claude client).
+                    _acting_player_name = (
+                        snapshot.player_seats.get(sd.player_id, "") or sd.player_id
                     )
-                    _dispatch_package = await execute_intent_router_pre_narrator_pass(
-                        intent_router=_intent_router,
-                        snapshot=snapshot,
-                        pack=sd.genre_pack,
-                        action=action,
-                        player_name=_acting_player_name,
-                        additional_player_names=_additional_player_names or None,
-                        dungeon_store=_dungeon_store,
-                        palette=_dungeon_palette,
-                        lookahead_handle=_lookahead_handle,
+                    _additional_player_names = [
+                        name
+                        for pid, name in snapshot.player_seats.items()
+                        if pid != sd.player_id and name and name != _acting_player_name
+                    ]
+                    # Story 91-4: the router's Haiku spend is keyed to the same
+                    # canonical session id the narrator's cost machinery uses
+                    # (room slug / sd.game_slug — the seed_session_id resolution
+                    # above), so it runs the ADR-134 detector and counts against
+                    # the per-session cumulative ceiling.
+                    _intent_router = intent_router_pass.build_intent_router_for_session(
+                        session_id=seed_session_id
                     )
-                except IntentRouterFailure as exc:
-                    if os.environ.get("SIDEQUEST_INTENT_ROUTER_DEGRADE_ON_FAIL"):
-                        logger.warning(
-                            "intent_router.degraded_continue genre=%s world=%s "
-                            "player=%s action_len=%d reason=%s — env "
-                            "SIDEQUEST_INTENT_ROUTER_DEGRADE_ON_FAIL set; "
-                            "continuing turn with dispatch_package=None "
-                            "(yesterday's narrator-only behavior). NOT a "
-                            "silent fallback — operator opt-in.",
-                            sd.genre_slug,
-                            sd.world_slug,
-                            _acting_player_name,
-                            len(action),
-                            exc,
+                    # Opt-in degraded path: when SIDEQUEST_INTENT_ROUTER_DEGRADE_ON_FAIL
+                    # is set, an IntentRouterFailure is logged LOUDLY and the turn
+                    # continues with dispatch_package=None (pre-ADR-113 behavior, an
+                    # operator opt-in, NOT a silent fallback). Default preserves the
+                    # ADR-113 fail-loud contract.
+                    try:
+                        # Movement subsystem context: the dungeon graph store +
+                        # palette + worker handle live on the lookahead handle (set
+                        # for beneath_sunden, None elsewhere). None on non-procedural
+                        # worlds → handler fails loud with no_dungeon_store.
+                        _lookahead_handle = getattr(sd, "lookahead_handle", None)
+                        _dungeon_store = (
+                            _lookahead_handle.persistence if _lookahead_handle is not None else None
                         )
-                        _dispatch_package = None
-                    else:
-                        raise
-                turn_context.dispatch_package = _dispatch_package
-                # The dispatch bank may have mutated snapshot.npcs (e.g. NPC
-                # edge published on confrontation initiation). Refresh
-                # turn_context.npcs the same way the monster_manual.injected
-                # path does, so build_narrator_prompt sees post-dispatch state.
-                turn_context.npcs = list(snapshot.npcs)
+                        _dungeon_palette = (
+                            _lookahead_handle.palette if _lookahead_handle is not None else None
+                        )
+                        # Stamp the dispatch-bank/equip spans with the turn number
+                        # turn_complete WILL emit (interaction+1 for a player turn —
+                        # record_interaction() runs below, after this pass). Without
+                        # it the spans grid one column to the left and the GM panel
+                        # shows intent_router/inventory dark on the resolving turn
+                        # (off-by-one, DRIVER 2026-06-04).
+                        _dispatch_turn_number = intent_router_pass.effective_dispatch_turn_number(
+                            snapshot.turn_manager, is_opening_turn=is_opening_turn
+                        )
+                        (
+                            _dispatch_package,
+                            _bank_result,
+                        ) = await execute_intent_router_pre_narrator_pass(
+                            intent_router=_intent_router,
+                            snapshot=snapshot,
+                            pack=sd.genre_pack,
+                            action=action,
+                            player_name=_acting_player_name,
+                            additional_player_names=_additional_player_names or None,
+                            dungeon_store=_dungeon_store,
+                            palette=_dungeon_palette,
+                            lookahead_handle=_lookahead_handle,
+                            phase_timings=timings,
+                            turn_number=_dispatch_turn_number,
+                        )
+                    except IntentRouterFailure as exc:
+                        if os.environ.get("SIDEQUEST_INTENT_ROUTER_DEGRADE_ON_FAIL"):
+                            logger.warning(
+                                "intent_router.degraded_continue genre=%s world=%s "
+                                "player=%s action_len=%d reason=%s — env "
+                                "SIDEQUEST_INTENT_ROUTER_DEGRADE_ON_FAIL set; "
+                                "continuing turn with dispatch_package=None "
+                                "(yesterday's narrator-only behavior). NOT a "
+                                "silent fallback — operator opt-in.",
+                                sd.genre_slug,
+                                sd.world_slug,
+                                _acting_player_name,
+                                len(action),
+                                exc,
+                            )
+                            # GM-panel coverage on the degrade path (Story 71-29):
+                            # decompose() raised before reaching its own
+                            # intent_router.decompose span, so the happy-path span
+                            # never fired. Mirror it here with dispatch_count=0 and
+                            # degraded=True so the routed intent_router.decompose
+                            # state_transition event still reaches the live GM
+                            # dashboard via WatcherSpanProcessor → hub.publish — the
+                            # SAME broadcast path the happy path uses, no
+                            # reimplementation. (This is a live-dashboard event, not
+                            # a durable turn_telemetry row: span routing broadcasts
+                            # through the hub, it does not call publish_event.)
+                            # Without this the GM panel sees NO decompose event on a
+                            # degraded turn and cannot tell a degrade from a turn
+                            # where the spine never ran.
+                            with intent_router_decompose_span(
+                                action_length=len(action),
+                                model=_INTENT_ROUTER_MODEL,
+                            ) as _degrade_span:
+                                _degrade_span.set_attribute("dispatch_count", 0)
+                                _degrade_span.set_attribute("degraded", True)
+                            _dispatch_package = None
+                            _bank_result = None
+                        else:
+                            raise
+                    turn_context.dispatch_package = _dispatch_package
+                    turn_context.bank_result = _bank_result
+                    # The dispatch bank mutates the snapshot before the narrator
+                    # prompt is built (ADR-113 engine-first): refresh npcs AND
+                    # the region projection so the narrator narrates the room
+                    # the party is actually in after a resolved move, not the
+                    # one _build_turn_context saw pre-dispatch (sq-playtest
+                    # 2026-06-12 — "the narrator just gets the updated map").
+                    refresh_turn_context_post_dispatch(turn_context, sd=sd, snapshot=snapshot)
 
                 with orchestrator_process_action_span(action_len=len(action)):
-                    result = await sd.orchestrator.run_narration_turn(
-                        action, turn_context, room=self._room
-                    )
+                    result = await sd.orchestrator.run_narration_turn(action, turn_context)
 
                 logger.info(
                     "session.narration_complete genre=%s world=%s degraded=%s duration_ms=%s",
@@ -3656,32 +1047,35 @@ class WebSocketSessionHandler:
                     result.agent_duration_ms,
                 )
 
-                # Capture encounter state BEFORE applying the narration result so we
-                # can detect transitions (live→resolved) after the dispatch below and
-                # emit the corresponding state_transition / resolve events.
+                # Capture encounter state BEFORE applying the narration result
+                # so the dispatch below can detect live→resolved transitions.
                 prior_encounter = snapshot.encounter
                 prior_live = prior_encounter is not None and not prior_encounter.resolved
                 prior_type = prior_encounter.encounter_type if prior_encounter else None
+                # Ping-pong 2026-06-07 ("MP confrontation DESYNC"): take the
+                # dice-path clear stash. ``dispatch_dice_throw`` resolves the
+                # encounter in the DICE_THROW handler — BEFORE this capture —
+                # so ``prior_live`` is already False for that transition and
+                # the clear branch below would never fire (no
+                # ``CONFRONTATION {active: false}`` frame, each client left to
+                # its own NARRATION_END heuristic → per-seat MP fork). The
+                # stash carries the live→resolved fact across the handler
+                # boundary. Take semantics: consumed here whether or not the
+                # clear fires (a new live encounter supersedes it).
+                pending_dice_clear_type = sd.pending_confrontation_clear
+                sd.pending_confrontation_clear = None
 
-                # Playtest 2026-05-20 — capture current_region BEFORE the
-                # narration patch applies so the region-mode
-                # LOCATION_DESCRIPTION emit branch can detect a true
-                # change (e.g. ropefoot → the_dropmouth on
-                # beneath_sunden surface). Character-level
-                # ``result.location`` is room-graph territory; region
-                # moves arrive via the ``current_region`` patch.
+                # Playtest 2026-05-20: capture current_region pre-apply so the
+                # region-mode LOCATION_DESCRIPTION branch can detect a true
+                # change (region moves arrive via the current_region patch, not
+                # the character-level result.location).
                 prior_current_region = snapshot.current_region
 
                 # Unified dispatch — passes the pack so encounter instantiation /
                 # beat application / resolution happen in one place (emits the
-                # Story-3.4 OTEL spans the GM panel reads).
-                #
-                # ADR-074 dice integration — read the most recent dice outcome
-                # stashed by the DICE_THROW handler (if any) and classify it as
-                # success/failure for the beat application. Uses getattr so this
-                # stays forward-compatible with the in-flight ``pending_roll_outcome``
-                # field on ``_SessionData`` that OQ-2 is landing in parallel —
-                # when the field is absent the call is a no-op.
+                # Story-3.4 OTEL spans). ADR-074: read the dice outcome stashed
+                # by the DICE_THROW handler and classify success/failure for
+                # beat application; getattr so an absent field is a no-op.
                 with timings.phase("state_apply"):
                     dice_outcome = getattr(sd, "pending_roll_outcome", None)
                     dice_failed: bool | None = None
@@ -3700,19 +1094,14 @@ class WebSocketSessionHandler:
                         None,
                     )
                     if sd._room is None:
-                        # Slug-connect branch always sets _room; this is
-                        # a programming-error path. Surface as a hard error.
+                        # Slug-connect always sets _room — programming error.
                         raise RuntimeError(
                             "_apply_narration_result_to_snapshot: sd._room "
                             "is None — slug-connect wiring missing"
                         )
-                    # Story 45-30: capture pre-apply state so the render
-                    # trigger policy classifier can detect SCENE_CHANGE
-                    # (location differs from prior turn) and ENCOUNTER_RESOLVED
-                    # (encounter transitioned from unresolved to resolved this
-                    # turn). Wave 2B (story 45-48): the comparison is now
-                    # per-character — capture the acting PC's current
-                    # location, not the removed party-level field.
+                    # Story 45-30: capture pre-apply state so the render-trigger
+                    # classifier can detect SCENE_CHANGE and ENCOUNTER_RESOLVED.
+                    # Wave 2B (45-48): per-character — the acting PC's location.
                     _acting_for_render_trigger = _resolve_acting_character_name(sd, sd._room)
                     snapshot_location_before_apply = snapshot.party_location(
                         perspective=_acting_for_render_trigger
@@ -3720,18 +1109,34 @@ class WebSocketSessionHandler:
                     encounter_unresolved_before = (
                         snapshot.encounter is not None and not snapshot.encounter.resolved
                     )
-                    # Spec 2026-05-20 step 7 — pull apply kwargs into a dict
-                    # so both the first apply and the reprompt-loop re-apply
-                    # share the same kwargs without duplication.
+                    # Spec 2026-05-20 step 7 — shared apply kwargs for the first
+                    # apply and the reprompt-loop re-apply.
                     _apply_kwargs = dict(
                         room=sd._room,
                         pack=sd.genre_pack,
+                        world=sd.world_slug,
                         dice_failed=dice_failed,
                         dice_actor=dice_actor,
                         opposed_player_d20=opposed_player_d20,
                         opposed_player_beat_id=opposed_player_beat_id,
                         opposed_player_actor=dice_actor,
                         acting_character_name=_resolve_acting_character_name(sd, sd._room),
+                        # Story 83-1: thread the MonsterManual so creature mentions
+                        # at the _apply_npc_mentions seam can look up real bestiary
+                        # entries and embed them as creature_data on the pool member.
+                        monster_manual=sd.monster_manual,
+                        # Story 97-5: the dice-resolution replay re-entry
+                        # (suppress_intent_router=True) carries no new player
+                        # intent — the scene's NPCs were applied on pass 1. Thread
+                        # the replay signal so the apply skips the NPC-mention
+                        # sub-block and stops every per-mention side effect from
+                        # double-running (the blackthorn turn-1 double-apply).
+                        is_dice_replay=suppress_intent_router,
+                        # Story 105-2: the seam-recovery guard needs the dungeon
+                        # store (handle.persistence) to perform a missed crossing
+                        # instead of accepting a confabulated deep.
+                        # None for non-dungeon worlds.
+                        lookahead_handle=sd.lookahead_handle,
                     )
                     applied_outcome = _apply_narration_result_to_snapshot(
                         snapshot,
@@ -3740,15 +1145,65 @@ class WebSocketSessionHandler:
                         **_apply_kwargs,
                     )
 
-                    # Story 59-3 / ADR-113 — Intent Router lie-detector.
-                    # Compare what the router dispatched against what the
-                    # engines actually engaged on the post-turn snapshot;
-                    # emit one OTEL span per mismatch so the GM panel
-                    # surfaces "convincing prose with zero mechanical
-                    # backing" turns. No-op while
-                    # turn_context.dispatch_package is None (the live SDK
-                    # path between 59-3 ship and 59-4 ship).
+                    # Story 59-3 / ADR-113 — Intent Router lie-detector: compare
+                    # what the router dispatched vs. what the engines engaged,
+                    # emit one OTEL span per mismatch so the GM panel catches
+                    # "convincing prose, zero mechanical backing". No-op while
+                    # dispatch_package is None.
                     run_dispatch_engagement_watcher(
+                        package=turn_context.dispatch_package,
+                        snapshot=snapshot,
+                    )
+
+                    # Phantom-wound lie-detector (sq-playtest 2026-06-14): the
+                    # narrator can depict combat damage even when the router
+                    # dispatched NO confrontation (it errored on the schema) —
+                    # the dispatch-engagement watcher is blind to it because no
+                    # dispatch exists to check. This reads the narration text
+                    # against the snapshot and beeps when a wound is narrated
+                    # with no encounter and no confrontation dispatch.
+                    run_improvised_combat_watcher(
+                        narration=getattr(result, "narration", "") or "",
+                        package=turn_context.dispatch_package,
+                        snapshot=snapshot,
+                    )
+
+                    # QUEST-MAJOR lie-detector (sq-playtest 2026-06-14, barsoom):
+                    # the narrator authored a concrete objective in prose ("find
+                    # the keeper, settle the debt, claim the egg") but never called
+                    # record_quest, so quest_log stayed empty and the engine filed
+                    # the hook as a ghost. Beep when objective-establishing prose
+                    # appears with no minted quest — the quest analogue of the
+                    # improvised-combat detector above.
+                    run_unminted_objective_watcher(
+                        narration=getattr(result, "narration", "") or "",
+                        snapshot=snapshot,
+                        package=turn_context.dispatch_package,
+                    )
+
+                    # Un-seeded objective classifier (Story 117-6, ADR-146): the
+                    # narrator can IMPROVISE an open-ended objective hook mid-scene
+                    # with no router quest_offer behind it — the un-seeded case the
+                    # pre-narration router cannot see and the keyword backstop above
+                    # misses (Zork Problem). A gated post-narration Haiku pass reads
+                    # the prose and beeps keyword-free, tagging the span
+                    # detection_method="classifier". Cost-gated inside the watcher:
+                    # fires only on non-empty narration with an empty quest_log and
+                    # no router quest_offer (the seeded path already owns that).
+                    await run_unseeded_objective_classifier_watcher(
+                        narration=getattr(result, "narration", "") or "",
+                        snapshot=snapshot,
+                        package=turn_context.dispatch_package,
+                        llm=build_unseeded_objective_classifier_llm(session_id=seed_session_id),
+                    )
+
+                    # Fate honesty lie-detector (ADR-144 F2c / Story 116-4): beep
+                    # when the prose claims a Fate outcome — an advantage created,
+                    # a foe taken out — that the engine state doesn't show
+                    # (empty situation_aspects / no withdrawn actor). The Fate
+                    # analogue of the improvised-combat detector above.
+                    run_fate_engagement_watcher(
+                        narration=getattr(result, "narration", "") or "",
                         package=turn_context.dispatch_package,
                         snapshot=snapshot,
                     )
@@ -3756,14 +1211,10 @@ class WebSocketSessionHandler:
                     encounter_resolved_this_turn = encounter_unresolved_before and (
                         snapshot.encounter is None or snapshot.encounter.resolved
                     )
-                    # Monster Manual lifecycle post-apply (ADR-059, port of
-                    # Rust dispatch/mod.rs:1671-1695). Dormant-on-scene-change
-                    # runs FIRST so a location change clears Active anchors
-                    # before this turn's narration is scanned for new
-                    # activations — otherwise the post-change party_location
-                    # would re-activate NPCs that should have aged out with
-                    # the scene.  Save() runs last so the mutated lifecycle
-                    # is persisted before the broader snapshot persist.
+                    # Monster Manual lifecycle post-apply (ADR-059): mark dormant
+                    # on scene-change FIRST so a location change clears Active
+                    # anchors before scanning this turn's narration for new
+                    # activations; save() last to persist the lifecycle.
                     if sd.monster_manual is not None:
                         post_apply_location = snapshot.party_location(
                             perspective=_acting_for_render_trigger
@@ -3780,14 +1231,9 @@ class WebSocketSessionHandler:
                             post_apply_location or "",
                         )
                         sd.monster_manual.save()
-                    # Phase 5 (Story 47-3): drain magic-confrontation
-                    # outbound queues. ``narration_apply.apply_magic_working``
-                    # populates ``pending_magic_auto_fires`` (one CONFRONTATION
-                    # payload per auto-fire); ``_resolve_magic_confrontation_if_applicable``
-                    # populates ``pending_magic_confrontation_outcome``. Both
-                    # are dispatched as outbound WebSocket frames here so the
-                    # UI overlay mounts and the reveal panel surfaces in
-                    # production gameplay (not just in test harnesses).
+                    # Phase 5 (Story 47-3): drain magic-confrontation outbound
+                    # queues here so the UI overlay + reveal panel surface in
+                    # production gameplay, not just test harnesses.
                     self._dispatch_pending_magic_frames(snapshot)
                     # Consume the pending outcome — one turn per roll.
                     if dice_outcome is not None and hasattr(sd, "pending_roll_outcome"):
@@ -3798,23 +1244,81 @@ class WebSocketSessionHandler:
                         sd.pending_opposed_player_d20 = None
                     if hasattr(sd, "pending_opposed_player_beat_id"):
                         sd.pending_opposed_player_beat_id = None
-                    # Story 45-5 / ADR-051: chargen is round 0; gameplay
-                    # starts at round 1. The opening narration is the
-                    # round-1 scene-set, not a player-narrator exchange,
-                    # so it does not bump either counter. The first
-                    # PLAYER_ACTION turn is the first real exchange.
+                    # Task 14 — dogfight player-throw stash. When the sealed-letter
+                    # branch yielded a PendingDogfightShot (player has a gun solution),
+                    # stash it on sd AND broadcast a DiceRequest so the client throws
+                    # the real Rapier d20. The stash survives until DICE_THROW reads
+                    # and clears it — do NOT clear it here on the narration-turn path.
+                    # (Contrast with opposed-check which is SET in dice_throw and READ
+                    # here; dogfight is the mirror: SET here, READ in dice_throw.)
+                    if applied_outcome.pending_dogfight_shot is not None:
+                        _pending_df = applied_outcome.pending_dogfight_shot
+                        sd.pending_dogfight_shot = _pending_df
+                        # Build and broadcast the DiceRequest for the player's shot.
+                        from uuid import uuid4  # noqa: PLC0415
+
+                        from sidequest.protocol.dice import (  # noqa: PLC0415
+                            DiceRequestPayload,
+                            DieSides,
+                            DieSpec,
+                        )
+                        from sidequest.protocol.messages import (  # noqa: PLC0415
+                            DiceRequestMessage,
+                        )
+                        from sidequest.protocol.types import Stat  # noqa: PLC0415
+
+                        _df_request_id = str(uuid4())
+                        _df_request = DiceRequestPayload(
+                            request_id=_df_request_id,
+                            rolling_player_id=sd.player_id,
+                            character_name=_pending_df.player_actor_name,
+                            dice=[DieSpec(sides=DieSides.D20, count=1)],
+                            modifier=_pending_df.player_modifier,
+                            # SWN dogfight to-hit = Pilot skill + attack bonus
+                            # (NOT a DEX ability check). The overlay stat badge
+                            # is player-facing; label it what actually rolls so
+                            # mechanics-first players read the right thing.
+                            stat=Stat("PILOT"),
+                            difficulty=_pending_df.player_target_number,
+                            context="dogfight_player_gun_solution",
+                        )
+                        if sd._room is not None:
+                            sd._room.broadcast(
+                                DiceRequestMessage(payload=_df_request, player_id="server"),
+                                exclude_socket_id=None,
+                            )
+                        _watcher_publish(
+                            "state_transition",
+                            {
+                                "field": "dogfight",
+                                "op": "player_dice_request_emitted",
+                                "player_shooter_role": _pending_df.player_shooter_role,
+                                "player_modifier": _pending_df.player_modifier,
+                                "player_target_number": _pending_df.player_target_number,
+                                "request_id": _df_request_id,
+                            },
+                            component="encounter",
+                        )
+                    # Ping-pong 2026-06-07 ("stale peer quote pinned at the
+                    # bottom"): capture the round THIS turn resolves BEFORE
+                    # record_interaction() bumps it — NARRATION_END stamps it
+                    # so the UI can anchor the round's persisted peer-action
+                    # quotes (dice-driven turns have no own PLAYER_ACTION
+                    # round to anchor by). Matches the round the turn's
+                    # ACTION_REVEAL entries were submitted under.
+                    _resolved_round = snapshot.turn_manager.round
+                    # Story 45-5 / ADR-051: the opening narration is the round-1
+                    # scene-set and bumps no counter; the first PLAYER_ACTION
+                    # turn is the first real exchange.
                     if not is_opening_turn:
-                        # Capture the round *before* incrementing so the
-                        # taunt-expiry OTEL span labels it correctly as
-                        # "the round that just ended" (Task 6).
+                        # Capture round before incrementing so the taunt-expiry
+                        # span labels "the round that just ended" (Task 6).
                         _prior_round = snapshot.turn_manager.round
                         snapshot.turn_manager.record_interaction()
 
-                        # Story 2026-05-10 — taunt decay tick (Task 6).
-                        # Runs on every round-advance so the 1-round taunt
-                        # duration is enforced mechanically, not left to
-                        # narrator improvisation. Only fires when an encounter
-                        # is active and unresolved — no-op outside combat.
+                        # Story 2026-05-10 — taunt decay tick (Task 6): enforce
+                        # the 1-round taunt duration mechanically on every
+                        # round-advance. No-op outside an active encounter.
                         if snapshot.encounter is not None and not snapshot.encounter.resolved:
                             from sidequest.game.taunt_tick import (  # noqa: PLC0415
                                 tick_taunt_round_advance,
@@ -3825,24 +1329,16 @@ class WebSocketSessionHandler:
                                 prior_round=_prior_round,
                             )
 
-                    # Story 45-19: arc-recompute tick. Closes Felix's
-                    # Playtest 3 bug where world_history froze at turn 30.
-                    # The predicate is consulted with the post-bump
-                    # interaction so cadence boundaries align with the
-                    # interaction count the GM panel surfaces. Empty
-                    # cached_history_chapters (pack with no history.yaml,
-                    # or parse-failed chargen fallback) is a graceful
-                    # no-op inside ``recompute_arc_history`` — the tick
-                    # span still fires so the panel sees the empty case.
+                    # Story 45-19: arc-recompute tick (closes the world_history
+                    # freeze bug). Consulted with the post-bump interaction so
+                    # cadence boundaries align with the GM panel. Empty
+                    # cached_history_chapters is a graceful no-op; the tick span
+                    # still fires.
                     #
-                    # Story 45-23: when the recompute reports newly-
-                    # promoted chapters, seed each chapter's narrative
-                    # log + lore strings into the durable narrative_log
-                    # and the RAG-retrievable lore store. Closes Felix's
-                    # writeback gap (71 turns, narrative_log + lore_store
-                    # empty of arc-sourced content). Per-chapter
-                    # ``arc_embedding_seed`` span carries the seeded
-                    # counts so the GM panel can chart Lane B throughput.
+                    # Story 45-23: seed each newly-promoted chapter's narrative
+                    # log + lore into the durable narrative_log + RAG lore store
+                    # (closes the arc-content writeback gap). Per-chapter
+                    # arc_embedding_seed span carries the seeded counts.
                     if should_recompute_arc(snapshot.turn_manager.interaction):
                         added_chapters = recompute_arc_history(snapshot, sd.cached_history_chapters)
                         if added_chapters:
@@ -3855,14 +1351,11 @@ class WebSocketSessionHandler:
                             )
 
                             for chapter in added_chapters:
-                                # One seed-call per promoted chapter so
-                                # the OTEL span attributes can attribute
-                                # the counts to the specific chapter id
-                                # — the GM panel filters by chapter to
-                                # diagnose which content got seeded.
+                                # One seed-call per chapter so the OTEL span
+                                # attributes the counts to the chapter id.
                                 seed_result = seed_lore_from_arc_promotion(
                                     snapshot,
-                                    sd.store,
+                                    sd.repository,
                                     sd.lore_store,
                                     [chapter],
                                 )
@@ -3885,15 +1378,10 @@ class WebSocketSessionHandler:
                                 ):
                                     pass
 
-                    # Story 45-27: trope progression tick. Advances passive
-                    # progression, fires staggered beats, gates new
-                    # activations through cap + cooldown. Wired here so
-                    # ``now_turn`` (interaction) is the post-bump value
-                    # and so any engine-driven resolution flows into the
-                    # 45-20 handshake's diff below — the handshake's
-                    # baseline was captured at the top of this method
-                    # before any apply step, so a fresh resolved status
-                    # set by the tick is visible to the diff.
+                    # Story 45-27: trope progression tick (advances passive
+                    # progression, fires staggered beats, gates activations).
+                    # Wired here so now_turn is post-bump and any engine-driven
+                    # resolution is visible to the 45-20 handshake diff below.
                     from sidequest.game.trope_tick import tick_tropes  # noqa: PLC0415
 
                     tick_tropes(
@@ -3903,10 +1391,8 @@ class WebSocketSessionHandler:
                         days_advanced=result.days_advanced,  # Story 50-4 — Pass A2 time skip
                     )
 
-                    # Story 22-3: seed trope engine — migrate any active seed
-                    # whose lifespan_turns elapsed into a [Faded] ghost. Wired
-                    # next to tick_tropes (same lifecycle beat) so both share
-                    # the post-bump interaction value as ``now_turn``.
+                    # Story 22-3: seed trope engine — ghost any active seed whose
+                    # lifespan_turns elapsed. Same post-bump now_turn as tick_tropes.
                     from sidequest.game.seed_tick import tick_seeds  # noqa: PLC0415
 
                     tick_seeds(
@@ -3915,40 +1401,62 @@ class WebSocketSessionHandler:
                         now_turn=snapshot.turn_manager.interaction,
                     )
 
-                    # Story 22-5: engagement-triggered seed injection.
-                    # When the dispatch package contains subsystem
-                    # dispatches (player engaged mechanically or socially)
-                    # and the snapshot has fewer than 2 active seeds, draw
-                    # a fresh seed from the remaining deck. Reuses the
-                    # same session_id as the initial draw for deck
-                    # reproducibility.
+                    # Story 22-5: engagement-triggered seed injection. Draw a
+                    # fresh seed when the player engaged a subsystem and fewer
+                    # than 2 seeds are active. Same session_id for reproducibility.
+                    # Epic 94: read the seed deck world-first (genre = rulebook
+                    # only). The bound World carries seed_tropes; the migrated
+                    # pack's genre-tier deck is [].
+                    _seed_source = sd.genre_pack.worlds.get(sd.world_slug) or sd.genre_pack
                     if (
                         _dispatch_package is not None
                         and any(pd.dispatch for pd in _dispatch_package.per_player)
                         and len(snapshot.active_seeds) < 2
-                        and getattr(sd.genre_pack, "seed_tropes", None)
+                        and getattr(_seed_source, "seed_tropes", None)
                     ):
                         from sidequest.game.seed_tick import draw_engaged_seed  # noqa: PLC0415
 
                         draw_engaged_seed(
                             snapshot,
-                            sd.genre_pack,
+                            _seed_source,
                             session_id=seed_session_id,
                             engagement_signal="dispatch",
                             now_turn=snapshot.turn_manager.interaction,
                         )
 
-                    # Story 45-20: trope-resolution handshake. Diffs the
-                    # baseline captured at the top of this method against
-                    # the post-recompute snapshot to detect any trope that
-                    # flipped to "resolved" this turn (chapter-promotion
-                    # path today; engine/narrator-extraction future).
-                    # Writes the durable record (quest_log entry +
-                    # active_stakes marker) and emits the handshake span
-                    # so the GM panel sees the path engaged. Idempotent
-                    # re-detect (already-resolved last turn) emits a span
-                    # with active_stakes_appended=False but does not
-                    # rewrite — the lie-detector signal Sebastien needs.
+                    # Story 77-7 (ADR-024/025/128): engine lull-escalation. Peer
+                    # to tick_seeds / the 22-5 engagement draw (post-bump), and
+                    # before the per-turn tension observe() below, so it reads the
+                    # boring_streak accumulated through the prior turn. When the
+                    # game has lulled (boring_streak >= the genre's
+                    # escalation_streak) the engine PUSHES: fire a seed as the
+                    # next turn's concrete escalation directive instead of waiting
+                    # for the player to prod. SPAN_LULL_ESCALATION is the GM-panel
+                    # lie detector for the push.
+                    from sidequest.game.lull_escalation import (  # noqa: PLC0415
+                        apply_lull_escalation,
+                    )
+                    from sidequest.genre.models.ocean import (  # noqa: PLC0415
+                        DramaThresholds,
+                    )
+
+                    # Epic 94: lull escalation draws from the seed deck — read it
+                    # world-first (genre = rulebook only). drama_thresholds stays
+                    # genre-tier (it's a rulebook dial, not cast/catalog).
+                    apply_lull_escalation(
+                        snapshot,
+                        sd.genre_pack.worlds.get(sd.world_slug) or sd.genre_pack,
+                        tracker=sd.tension_tracker,
+                        thresholds=(sd.genre_pack.drama_thresholds or DramaThresholds()),
+                        session_id=seed_session_id,
+                        now_turn=snapshot.turn_manager.interaction,
+                    )
+
+                    # Story 45-20: trope-resolution handshake. Diffs the baseline
+                    # against the post-recompute snapshot to detect tropes that
+                    # flipped to "resolved" this turn; writes the durable record
+                    # (quest_log + active_stakes) and emits the handshake span.
+                    # Idempotent re-detect emits active_stakes_appended=False.
                     _handshake_resolved_tropes(
                         snapshot,
                         trope_status_baseline,
@@ -3956,30 +1464,13 @@ class WebSocketSessionHandler:
                         source="chapter_promotion",
                     )
 
-                    # Plan 6 Task 5 — complication-ledger resolution
-                    # subscription. Consumes the same resolved-trope diff
-                    # the 45-20 handshake already computed above (reuse-
-                    # first, Decision M). Calls
-                    # resolve_complications_for_resolved_tropes which calls
-                    # store.resolve_thread() (Plan 5's span emitter) for
-                    # each open trope-thread whose ref_id matches a
-                    # just-resolved trope. Quest-thread resolution is
-                    # Plan 7's (Decision O).
-                    #
-                    # DECISION N (honest deferral, no runtime noise):
-                    # No-op is correct iff no dungeon was materialized. Only
-                    # Plan 7 both materializes set-pieces (creating ledger
-                    # threads via attach_set_piece) AND wires
-                    # sd.dungeon_store — the two land together, so
-                    # store-absent ⟺ no open dungeon threads exist.
-                    # Resolution wiring activates the moment Plan 7 sets
-                    # sd.dungeon_store. The loud seam is the mandatory
-                    # wiring test's structural tripwire
-                    # (test_setpiece_attach_wiring.py), NOT a per-turn log:
-                    # the trope engine is global, so a per-turn warning
-                    # would fire on ~100% of pre-Plan-7 turns and be pure
-                    # ignorable noise. No warning, no log here — the no-op
-                    # is provably correct.
+                    # Plan 6 Task 5 — complication-ledger resolution. Consumes
+                    # the same resolved-trope diff the 45-20 handshake computed
+                    # and calls resolve_complications_for_resolved_tropes →
+                    # store.resolve_thread() for each matching open trope-thread.
+                    # No-op until Plan 7 wires sd.dungeon_store (store-absent ⟺
+                    # no open dungeon threads); the wiring tripwire is
+                    # test_setpiece_attach_wiring.py, not a per-turn log.
                     _dungeon_store = getattr(sd, "dungeon_store", None)
                     if _dungeon_store is not None:
                         from sidequest.dungeon.setpiece_attach import (  # noqa: PLC0415
@@ -4002,6 +1493,8 @@ class WebSocketSessionHandler:
 
                     from sidequest.server.dispatch.encounter_lifecycle import (
                         _is_combat_category,
+                        apply_affinity_tier_ups,
+                        apply_level_ups,
                         apply_resource_patches,
                         award_turn_xp,
                     )
@@ -4011,7 +1504,21 @@ class WebSocketSessionHandler:
                         and not snapshot.encounter.resolved
                         and _is_combat_category(sd.genre_pack, snapshot.encounter.encounter_type)
                     )
-                    award_turn_xp(snapshot, in_combat=in_combat_now)
+                    # sq-playtest 2026-06-13: gate the native ADR-021 per-turn XP
+                    # tick by the bound ruleset. A WWN-bound world (beneath_sunden)
+                    # must NOT accrue the native 10/25-per-turn counter — WN uses
+                    # GM-awarded expedition XP. award_turn_xp suppresses + emits a
+                    # span when the module reports awards_native_turn_xp=False.
+                    from sidequest.game.ruleset.registry import get_ruleset_module
+
+                    _turn_ruleset = get_ruleset_module(sd.genre_pack.rules.ruleset)
+                    award_turn_xp(snapshot, in_combat=in_combat_now, ruleset=_turn_ruleset)
+                    # ADR-021 track 1: milestone → level-up runs on the freshly
+                    # awarded XP. The consumer that makes accumulation matter.
+                    apply_level_ups(snapshot, sd.genre_pack.progression)
+                    # ADR-021 track 2: affinity progress → tier promotion, the
+                    # consumer that makes AffinityState.progress matter.
+                    apply_affinity_tier_ups(snapshot, sd.genre_pack.progression)
 
                     try:
                         crossed_thresholds = apply_resource_patches(
@@ -4035,36 +1542,39 @@ class WebSocketSessionHandler:
 
                 with timings.phase("persistence"):
                     try:
-                        # ADR-037 Python port: room owns the canonical snapshot, so a
-                        # plain room.save() is sufficient — there is no per-session
-                        # divergence to merge. Falls back to sd.store.save when the
-                        # legacy non-slug path didn't bind a room.
+                        # ADR-037: room owns the canonical snapshot, so room.save()
+                        # suffices. Falls back to sd.repository.save on the legacy
+                        # non-slug path.
                         if self._room is not None:
                             self._room.save()
                         else:
-                            sd.store.save(snapshot)
+                            sd.repository.save(snapshot)
                         # Story 45-22: log the player's turn before the narrator
-                        # response so the narrative_log shows both sources.
-                        # Felix's Playtest 3 had 71 entries all author='narrator'
-                        # because the player append site was missing — Sebastien
-                        # could not distinguish player input from narrator
-                        # inference on the GM panel. Skipped on the opening
-                        # turn (no real player input — chargen-confirmation
-                        # seeds the action programmatically).
+                        # response so the narrative_log shows both sources
+                        # (pre-fix every entry was author='narrator'). Skipped on
+                        # the opening turn (no real player input).
                         if not is_opening_turn:
                             acting_name = _resolve_acting_character_name(
                                 sd,
                                 self._room,
                             )
+                            # #177 defect (a): record the player's verbatim words,
+                            # NOT the [INITIATIVE ORDER] scaffold + "Name: action"
+                            # join that dispatch_fired_barrier hands the narrator in
+                            # ``action``. merged_player_actions is the clean,
+                            # preamble-free source (None on the room-is-None solo
+                            # path and the dice-replay re-entry — fall back to action).
                             player_entry = NarrativeEntry(
                                 timestamp=0,
                                 round=snapshot.turn_manager.interaction,
                                 author="player",
-                                content=action,
+                                content=player_log_content(
+                                    action, turn_context.merged_player_actions
+                                ),
                                 tags=[],
                                 speaker=acting_name,
                             )
-                            sd.store.append_narrative(player_entry)
+                            sd.repository.append_narrative(player_entry)
                         narrative_entry = NarrativeEntry(
                             timestamp=0,
                             round=snapshot.turn_manager.interaction,
@@ -4072,7 +1582,7 @@ class WebSocketSessionHandler:
                             content=result.narration,
                             tags=[],
                         )
-                        sd.store.append_narrative(narrative_entry)
+                        sd.repository.append_narrative(narrative_entry)
                         logger.info(
                             "session.persisted turn=%d player=%s char_count=%d seat_count=%d",
                             snapshot.turn_manager.interaction,
@@ -4083,17 +1593,40 @@ class WebSocketSessionHandler:
                     except Exception as exc:
                         logger.error("session.persist_failed error=%s", exc)
 
+                    # Story 75-15: lore write-through to Postgres (lore_fragments)
+                    # so creation-seed + runtime-accreted fragments survive resume.
+                    # The in-memory lore_store is NOT part of the snapshot, so the
+                    # save above does not cover it. ISOLATED in its own try/except
+                    # AFTER the snapshot+narrative writes: lore is the least-critical
+                    # post-turn side-effect and must never suppress the durable
+                    # narrative_log (75-1 review standard: wrap+log+OTEL-fail+continue).
+                    try:
+                        lore_written = sd.repository.save_lore_fragments(sd.lore_store)
+                        logger.info(
+                            "lore.persisted turn=%s fragments=%s",
+                            snapshot.turn_manager.interaction,
+                            lore_written,
+                        )
+                    except Exception as exc:  # noqa: BLE001 — lore persist must not crash the turn
+                        logger.error("lore.persist_failed error=%s", exc)
+                        _watcher_publish(
+                            "lore_persist_failed",
+                            {
+                                "scope": "turn",
+                                "turn": snapshot.turn_manager.interaction,
+                                "error": str(exc),
+                            },
+                            component="rag",
+                            severity="error",
+                        )
+
                 # Story 45-11 — turn_manager.round invariant lie-detector.
-                # Felix's Playtest 3 ended round=65 / max(narrative_log)=72
-                # with nothing watching the divergence. Emit on EVERY tick
-                # (whether or not the invariant holds) so the GM panel can
-                # tell "engaged + clean" apart from "not engaged at all".
-                # Read MAX(round_number) from the durable narrative_log,
-                # not whatever in-memory mirror the snapshot carries —
-                # the SQL value is the ground truth Felix's save proved
-                # the snapshot can drift from.
+                # Emit on EVERY tick (invariant holding or not) so the GM panel
+                # can tell "engaged + clean" from "not engaged". Read
+                # MAX(round_number) from the durable narrative_log (ground truth);
+                # the snapshot's in-memory mirror can drift from it.
                 try:
-                    max_narrative_round = int(sd.store.max_narrative_round())
+                    max_narrative_round = int(sd.repository.max_narrative_round())
                 except Exception as exc:  # noqa: BLE001 — telemetry must never crash a turn
                     logger.warning(
                         "round_invariant.max_lookup_failed error=%s",
@@ -4105,16 +1638,27 @@ class WebSocketSessionHandler:
                     interaction=snapshot.turn_manager.interaction,
                     max_narrative_round=max_narrative_round,
                 ):
-                    # Span attributes are set by the helper; the body is
-                    # intentionally empty — this is a point-in-time emit,
-                    # not a wrapping span around downstream work.
+                    # Point-in-time emit; the helper sets the attributes.
                     pass
 
-                # Story 37-33: embed newly-seeded / pending lore fragments in the
-                # background so the *next* turn's RAG retrieval can find them.
-                # Spawns a fire-and-forget task — the narration turn returns to
-                # the player immediately; embeds populate during the human's
-                # reading time.
+                # Story 75-1: accrete this turn's runtime-discovered KnownFacts
+                # into the lore store BEFORE dispatching the embed worker, so the
+                # freshly minted GameEvent fragments are in the pending queue and
+                # get embedded this turn for next-turn RAG retrieval (restores the
+                # Rust lore_sync accumulate-and-persist loop).
+                self._accrete_lore_for_turn(sd)
+
+                # Story 75-6: reproject this turn's mutated entities into the
+                # universal-retrieval index BEFORE dispatching the embed worker,
+                # so reprojected cards (embedding_pending=True) are in the queue
+                # and get embedded this turn — keeping retrieval keyed on the
+                # current cast (ADR-118 §D2 dirty-flag reproject).
+                self._sync_entity_cards_for_turn(sd)
+
+                # Story 37-33 / 75-6: embed pending lore fragments AND reprojected
+                # entity cards in the background so the next turn's retrieval finds
+                # them. Fire-and-forget — the turn returns immediately; embeds
+                # populate during reading time.
                 self._dispatch_embed_worker(sd)
 
                 narration_text = result.narration or "(The world holds its breath...)"
@@ -4124,12 +1668,9 @@ class WebSocketSessionHandler:
                     narration_nbs = NonBlankString("The world holds its breath...")
 
                 # Forward extracted footnotes into the NarrationPayload so the UI
-                # Knowledge journal fills. Narrator produces them every turn
-                # (see `game_patch.extracted footnotes=N` in the server log) and
-                # the UI's useStateMirror was already wired to consume them — the
-                # session handler was the only missing link. Coerce raw dicts
-                # from the extraction into typed Footnote models, skipping any
-                # that fail validation rather than crashing the turn.
+                # Knowledge journal fills (the session handler was the missing
+                # link; useStateMirror already consumed them). Coerce raw dicts
+                # to typed Footnotes, dropping any that fail validation.
                 forwarded_footnotes: list[Footnote] = []
                 fact_ids_minted_this_turn = 0
                 for fn in result.footnotes or []:
@@ -4144,23 +1685,13 @@ class WebSocketSessionHandler:
                             fn,
                         )
                         continue
-                    # ADR-100 Seam C: every Footnote that reaches the UI MUST
-                    # carry a stable fact_id. The narrator prompt asks for one,
-                    # but narrators don't always comply (especially for new
-                    # facts where the prompt is permissive). Without this
-                    # defensive mint, the UI's strict drop policy
-                    # (useStateMirror.ts:198, "footnote missing fact_id;
-                    # skipping") silently swallows load-bearing world facts —
-                    # the exact consistency leak ADR-100 exists to close
-                    # (sq-playtest 2026-05-15: 6 dropped facts in one turn).
-                    #
-                    # Mint a deterministic hash-based id so a re-narration of
-                    # the same fact in a later turn collides on the client's
-                    # seenFactIds dedupe rather than re-entering the journal
-                    # with a fresh UUID. Narrator-supplied fact_ids are
-                    # preserved untouched — scenario clue_intake matches them
-                    # against ClueNode.id (genre-authored), so replacing them
-                    # would break Seam A.
+                    # ADR-100 Seam C: every Footnote reaching the UI MUST carry a
+                    # stable fact_id, but narrators don't always supply one and
+                    # the UI silently drops fact_id-less footnotes (sq-playtest
+                    # 2026-05-15: 6 dropped in one turn). Mint a deterministic
+                    # hash-based id so a later re-narration dedupes on the
+                    # client's seenFactIds. Narrator-supplied fact_ids are left
+                    # untouched — scenario clue_intake matches them to ClueNode.id.
                     if footnote.fact_id is None:
                         cat_str = (
                             footnote.category.value
@@ -4205,12 +1736,9 @@ class WebSocketSessionHandler:
                     },
                     component="footnotes",
                 )
-                # Story 50-5 / ADR-100 seams A + B: feed extracted footnotes
-                # to the scenario clue graph. Footnotes whose fact_id matches
-                # a ClueNode advance the scenario (SPAN_SCENARIO_ADVANCE) and
-                # mint a Discovered KnownFact on the acting player's
-                # character. No-op when no scenario is bound or when no
-                # fact_id matches.
+                # Story 50-5 / ADR-100 seams A + B: feed footnotes to the
+                # scenario clue graph. Matching fact_ids advance the scenario
+                # and mint a Discovered KnownFact. No-op when no scenario/match.
                 from sidequest.server.dispatch.scenario_clue_intake import (  # noqa: PLC0415
                     consume_clue_footnotes,
                 )
@@ -4220,28 +1748,19 @@ class WebSocketSessionHandler:
                     forwarded_footnotes,
                     active_character_name=snapshot.player_seats.get(sd.player_id, sd.player_name),
                 )
-                # Story 50-8 / ADR-053 AC-5: the AccusationEvaluator dispatch
-                # sibling. Imported here so the GM panel and tests can verify
-                # the narration-response path can reach the evaluator on demand.
-                # Per-turn invocation is deferred until a player-action
-                # accusation trigger lands (NarrationPayload sidecar / footnote
-                # subtype TBD); the import makes the dispatch module a live
-                # consumer of the production code path rather than dead code.
+                # Story 50-8 / ADR-053 AC-5: AccusationEvaluator dispatch
+                # sibling. Imported so the evaluator is reachable on demand;
+                # per-turn invocation is deferred until an accusation trigger
+                # lands. The import keeps the module a live consumer, not dead code.
                 from sidequest.server.dispatch.scenario_accusation import (  # noqa: F401, PLC0415
                     consume_accusation_request,
                 )
 
-                # Story 49-8: visibility classifier produces the v2
-                # sidecar that drives per-recipient routing AND 2nd-person
-                # POV swap downstream in emitters.emit_event. Pure
-                # post-narration work — no narrator subprocess calls.
-                #
-                # The classifier prefers result.action_rewrite.named when
-                # the narrator emitted it (ADR-039), falling back to a
-                # first-sentence scan of the prose. Returns atmospheric
-                # (anchor_pc=None, pov_strategy="atmospheric") when no PC
-                # name surfaces — that path broadcasts the canonical
-                # prose unchanged.
+                # Story 49-8: visibility classifier produces the v2 sidecar that
+                # drives per-recipient routing + 2nd-person POV swap in
+                # emitters.emit_event. Prefers result.action_rewrite.named
+                # (ADR-039), else a first-sentence scan; returns atmospheric
+                # (broadcasts canonical prose unchanged) when no PC name surfaces.
                 from sidequest.server.visibility_classifier import (  # noqa: PLC0415
                     classify_narration_visibility,
                 )
@@ -4270,10 +1789,8 @@ class WebSocketSessionHandler:
                         player_id_to_character=_player_id_to_character,
                     )
                 except ValueError:
-                    # Empty narration — the classifier fails loud; we
-                    # mirror the older behavior of emitting the canonical
-                    # prose unchanged so a degraded turn still surfaces
-                    # to the UI rather than crashing the hot path.
+                    # Empty narration — classifier fails loud; emit the canonical
+                    # prose unchanged so a degraded turn still surfaces to the UI.
                     _visibility_sidecar = None
 
                 narration_payload = NarrationPayload(
@@ -4282,19 +1799,12 @@ class WebSocketSessionHandler:
                     footnotes=forwarded_footnotes,
                     visibility_sidecar=_visibility_sidecar,
                 )
-                # MP-03 Task 3: route through EventLog + ProjectionFilter before send.
-                #
-                # ADR-105 Track A: a shared merged-MP narration (>1
-                # connected player) has no sole author — the driving
-                # handler is merely the last submitter. Thread its stable
-                # _session_data.player_id as author_player_id so the
-                # driver is projected/POV-swapped like every recipient
-                # (one projection.filter.decide + perception_rewrite +
-                # second_person_swap per DISTINCT player) rather than
-                # receiving the solo Invariant-3 raw bypass — the
-                # confirmed firewall+POV breach. Solo (<=1 connected)
-                # passes None and keeps the raw-bypass + lazy_fill
-                # invariant byte-identical.
+                # MP-03 Task 3: route through EventLog + ProjectionFilter.
+                # ADR-105 Track A: a merged-MP narration (>1 connected) has no
+                # sole author, so thread the driver's player_id as
+                # author_player_id to get it projected/POV-swapped like any
+                # recipient (not the solo raw bypass — a firewall+POV breach).
+                # Solo (<=1) passes None and keeps the raw-bypass invariant.
                 _mp_author = (
                     self._session_data.player_id
                     if self._session_data is not None and len(_connected_player_ids) > 1
@@ -4305,17 +1815,11 @@ class WebSocketSessionHandler:
                         "NARRATION", narration_payload, author_player_id=_mp_author
                     )
 
-                    # ADR-105 B3: emit each narrator-partitioned private
-                    # prose segment as its own NARRATION_SEGMENT, routed
-                    # by _visibility.visible_to to the single owning PC
-                    # (GM implicit via the GM CoreInvariant). The shared
-                    # NARRATION text above is public-safe by the amended
-                    # output contract; these carry the withheld
-                    # perception. The visibility-gated CoreInvariant (B1)
-                    # structurally firewalls non-recipients;
-                    # author_player_id (Track A) gives the owning PC a
-                    # real per-recipient projection pass. Default is zero
-                    # segments — fully-public turns add nothing here.
+                    # ADR-105 B3: emit each private prose segment as its own
+                    # NARRATION_SEGMENT, routed by visible_to to the owning PC.
+                    # The CoreInvariant (B1) firewalls non-recipients;
+                    # author_player_id (Track A) gives the owner a real
+                    # per-recipient projection pass. Zero segments on public turns.
                     _private_segments = getattr(result, "private_prose_segments", []) or []
                     if _private_segments:
                         _seat_to_player = {
@@ -4332,12 +1836,10 @@ class WebSocketSessionHandler:
                             _seg_anchor = (_seg.get("anchor_pc") or "").strip() or None
                             _owner_pid = _seat_to_player.get(_seg_anchor) if _seg_anchor else None
                             if _owner_pid is None:
-                                # Fail loud, never leak: an unresolvable
-                                # owner means we cannot safely route this
-                                # private prose. Dropping loses the prose
-                                # but routing-to-all would be the exact
-                                # breach ADR-105 closes. Surface it for
-                                # the GM panel rather than swallow it.
+                                # Fail loud, never leak: an unresolvable owner
+                                # means we can't safely route this prose. Drop it
+                                # (routing-to-all would be the ADR-105 breach)
+                                # and surface it for the GM panel.
                                 logger.warning(
                                     "narration.segment_unroutable "
                                     "anchor_pc=%r seated=%r — DROPPED (no leak)",
@@ -4358,34 +1860,22 @@ class WebSocketSessionHandler:
                                     severity="warning",
                                 )
                                 continue
-                            # author_player_id=_owner_pid makes the owner
-                            # the emitter: every OTHER connected player is
-                            # a peer recipient and the visibility-gated
-                            # CoreInvariant (B1) excludes them at fan-out
-                            # (no queue frame); the owner's frame is
-                            # projected + perception-rewritten + (B4)
-                            # POV-swapped and RETURNED. emit_event's peer
-                            # fan-out never delivers to the emitter, so the
-                            # owner's own segment must be pushed to the
-                            # owner's CURRENT socket explicitly (the
-                            # owner is not necessarily the turn driver —
-                            # the segment's owner is whichever PC the
-                            # narrator anchored the private prose to).
+                            # author_player_id=_owner_pid makes the owner the
+                            # emitter: peers are excluded at fan-out by the
+                            # CoreInvariant (B1); the owner's frame is projected,
+                            # POV-swapped (B4), and returned. Since emit_event
+                            # never delivers to the emitter, the owner's own
+                            # segment is pushed to the owner's current socket below.
                             _seg_msg = self._emit_event(
                                 "NARRATION_SEGMENT",
                                 NarrationSegmentPayload(
                                     text=_seg_text,
                                     anchor_pc=_seg_anchor,
                                     turn_id=_seg_turn_id,
-                                    # ADR-105 B4: per-segment POV. Each
-                                    # segment is single-PC by construction,
-                                    # so carrying anchor_pc + pc_anchored
-                                    # in _visibility lets the existing
-                                    # _apply_pov_swap (Track A having fixed
-                                    # per-recipient binding) rewrite it to
-                                    # 2nd-person for the owner. No
-                                    # multi-antecedent blob: the swap
-                                    # operates on one PC's private prose.
+                                    # ADR-105 B4: per-segment POV. Each segment
+                                    # is single-PC, so anchor_pc + pc_anchored
+                                    # let _apply_pov_swap rewrite it to 2nd-person
+                                    # for the owner.
                                     visibility_sidecar={
                                         "visible_to": [_owner_pid],
                                         "fidelity": {},
@@ -4395,14 +1885,11 @@ class WebSocketSessionHandler:
                                 ),
                                 author_player_id=_owner_pid,
                             )
-                            # Deliver the owner's projected+swapped frame
-                            # to the owner's live socket. Lookup at
-                            # delivery time so a reconnected owner's NEW
-                            # socket queue gets it (mirrors the
-                            # CONFRONTATION dispatcher-socket fix). On the
-                            # EventLog regardless (replay / GM lie-detector
-                            # / reconnect lazy_fill) — a missing live
-                            # socket is not a leak, just a deferred read.
+                            # Deliver the owner's projected+swapped frame to the
+                            # owner's live socket; lookup at delivery time so a
+                            # reconnected owner's new socket gets it. On the
+                            # EventLog regardless — a missing socket is a deferred
+                            # read, not a leak.
                             _seg_room = self._room
                             if _seg_msg is not None and _seg_room is not None:
                                 _seg_sock_fn = getattr(_seg_room, "socket_for_player", None)
@@ -4425,16 +1912,13 @@ class WebSocketSessionHandler:
                                 component="projection",
                             )
 
-                # Pingpong 2026-04-26 [S3-REGRESSION]: emit a SCRAPBOOK_ENTRY for
-                # every narration turn so the UI gallery has metadata to merge with
-                # the IMAGE that lands later from the daemon. Pure reuse — no new
-                # LLM calls. Fields come from the orchestrator result and the
-                # snapshot the narrator just stamped.
+                # Pingpong 2026-04-26 [S3-REGRESSION]: emit a SCRAPBOOK_ENTRY every
+                # narration turn so the UI gallery has metadata to merge with the
+                # later IMAGE. Fields come from the result + stamped snapshot.
                 with timings.phase("dispatch_post"):
-                    # Story 45-31 first: consult the daemon-state mirror so
-                    # the dispatcher below can skip its round-trip when the
-                    # daemon is UNRESPONSIVE. ``sd.render_unavailable_pending``
-                    # is the shared flag the dispatcher reads.
+                    # Story 45-31: consult the daemon-state mirror so the
+                    # dispatcher below can skip its round-trip when the daemon is
+                    # UNRESPONSIVE (sd.render_unavailable_pending is the flag).
                     from sidequest.daemon_client.state_mirror import (
                         get_mirror as _get_mirror,
                     )
@@ -4444,11 +1928,9 @@ class WebSocketSessionHandler:
                         _hb_mirror.last_heartbeat_ts() is not None and _hb_mirror.is_unresponsive()
                     )
 
-                    # Story 45-30: classify the render trigger reason once
-                    # so the same value lands in both the SCRAPBOOK_ENTRY
-                    # render_status discriminator and the dispatcher below.
-                    # ``classify_trigger`` is pure so the two call sites
-                    # converge without coordination.
+                    # Story 45-30: classify the render trigger once so the same
+                    # value lands in both the SCRAPBOOK_ENTRY render_status and
+                    # the dispatcher below (classify_trigger is pure).
                     from sidequest.server.render_trigger import (
                         RenderTriggerReason,
                         classify_trigger,
@@ -4460,10 +1942,8 @@ class WebSocketSessionHandler:
                         encounter_resolved_this_turn=encounter_resolved_this_turn,
                     )
 
-                    # Unified render_status (Story 45-30 + 45-31) — daemon-
-                    # unavailable wins over policy decisions because no
-                    # render is coming either way; the user-facing reason
-                    # is "the daemon is down." Then policy decides
+                    # Unified render_status (45-30 + 45-31): daemon-unavailable
+                    # wins over policy (no render either way), then policy decides
                     # skipped_policy vs rendered.
                     if sd.render_unavailable_pending:
                         _render_status = "unavailable"
@@ -4486,13 +1966,10 @@ class WebSocketSessionHandler:
                             exc,
                         )
 
-                    # Group G Task 6: route prompt-redacted dispatches as SECRET_NOTE
-                    # events. Task 5's ``redact_dispatch_package`` stripped these from the
-                    # narrator prompt and parked them on ``result.secret_routes``; here we
-                    # reify each one as its own event so the same ProjectionFilter /
-                    # visibility_tag rule (Task 3) delivers it only to the recipients in
-                    # its ``_visibility.visible_to``. Only SubsystemDispatch entries route;
-                    # see ``build_secret_note_events`` for the skip rules.
+                    # Group G Task 6: reify prompt-redacted dispatches (parked on
+                    # result.secret_routes) as SECRET_NOTE events so the
+                    # ProjectionFilter delivers each only to its visible_to
+                    # recipients. See build_secret_note_events for skip rules.
                     if result.secret_routes:
                         for _envelope in build_secret_note_events(
                             result.secret_routes,
@@ -4512,59 +1989,56 @@ class WebSocketSessionHandler:
                                 ),
                             )
 
-                    # Story 3.4 Task 11: emit CONFRONTATION when encounter state transitions.
-                    # OTEL visibility: add event to current span so the GM panel (Sebastien-
-                    # tier mechanical visibility) can see the dispatch decision end-to-end.
-                    # Pingpong 2026-04-26 S2-BUG: confrontations were PRIVATE to the
-                    # acting player — peers froze on the prior shared beat (no NPC
-                    # card, no narration, no buttons). Root cause: the message was
-                    # built directly via ``ConfrontationMessage(...)`` and only
-                    # appended to the actor's ``outbound`` list, never broadcast.
-                    # Fix: route through ``self._emit_event("CONFRONTATION", ...)``
-                    # so the canonical EventLog + ProjectionFilter fan-out path
-                    # delivers the same per-player frame to every connected peer
-                    # (mirrors how NARRATION is emitted at the line above). The
-                    # kind is already registered in ``_KIND_TO_MESSAGE_CLS``.
-                    # Independent of the multi-target parse-failure (#5): the
-                    # missing broadcast here is the sole cause of peer freeze.
-                    # (Producer-side parse failures now raise IntentRouterFailure
-                    # per ADR-113 rather than degrading the DispatchPackage.)
+                    # Story 3.4 Task 11: emit CONFRONTATION on encounter state
+                    # transition, with a span event for the GM panel.
+                    # Pingpong 2026-04-26 S2-BUG: confrontations were private to the
+                    # actor (peers froze) because the message was only appended to
+                    # the actor's outbound, never broadcast. Fix: route through
+                    # _emit_event so EventLog + ProjectionFilter fan it out per-peer.
                     confrontation_msg: object | None = None
                     confrontation_payload: ConfrontationPayload | None = None
                     confrontation_event_attrs: dict[str, object] | None = None
+                    cdef = None
                     if now_live and now_encounter is not None:
                         from sidequest.server.dispatch.confrontation import (
                             build_confrontation_payload,
                             find_confrontation_def,
+                            make_confrontation_portrait_resolver,
                         )
 
                         cdef = find_confrontation_def(
                             sd.genre_pack.rules.confrontations if sd.genre_pack.rules else [],
                             now_encounter.encounter_type,
                         )
-                        # No silent fallback: an active encounter whose type is not in the
-                        # pack is a pack-data bug. Task 10 raises in the same case during
-                        # beat-apply; the dispatch path matches.
+                        # No silent fallback: an active encounter type missing
+                        # from the pack is a pack-data bug — raise (matches beat-apply).
                         if cdef is None:
                             raise ValueError(
                                 f"active encounter type {now_encounter.encounter_type!r} "
                                 f"not in pack confrontations (genre={sd.genre_slug!r})"
                             )
-                        # Canonical (full-union) payload — persisted to
-                        # EventLog via ``_emit_event`` below for replay
-                        # parity, and also delivered to legacy stub-room
-                        # test fixtures that lack the full SessionRoom
-                        # API. ``recipient_pc=None`` is explicit: this
-                        # call deliberately does NOT project per-PC —
-                        # the per-recipient overlay loop below
-                        # overwrites each connected socket's
-                        # Confrontation tab with class-filtered beats
-                        # (Story 49-7).
+                        # Canonical full-union payload — persisted to EventLog
+                        # below for replay parity (and delivered to stub-room test
+                        # fixtures). recipient_pc=None: not projected per-PC; the
+                        # overlay loop below class-filters per socket (Story 49-7).
                         payload_dict = build_confrontation_payload(
                             encounter=now_encounter,
                             cdef=cdef,
                             genre_slug=sd.genre_slug,
                             recipient_pc=None,
+                            core_resolver=sd.snapshot.find_creature_core,
+                            # Story 85-3: stakes + opponent portrait on the
+                            # canonical union (persisted + delivered to stub-room
+                            # fixtures). The supplier below re-projects per socket.
+                            active_stakes=sd.snapshot.active_stakes,
+                            portrait_resolver=make_confrontation_portrait_resolver(
+                                snapshot=sd.snapshot,
+                                genre_pack=sd.genre_pack,
+                                genre_slug=sd.genre_slug,
+                            ),
+                            # Story 97-3: server-authored per-beat difficulty
+                            # on the offer (the TARGET banner source).
+                            rules=sd.genre_pack.rules,
                         )
                         confrontation_payload = ConfrontationPayload(**payload_dict)
                         confrontation_event_attrs = {
@@ -4572,37 +2046,61 @@ class WebSocketSessionHandler:
                             "encounter_type": now_encounter.encounter_type,
                             "genre_slug": sd.genre_slug,
                         }
-                    elif prior_live and not now_live:
+                    elif (prior_live or pending_dice_clear_type is not None) and not now_live:
                         from sidequest.server.dispatch.confrontation import (
                             build_clear_confrontation_payload,
                         )
 
-                        assert prior_type is not None  # guaranteed by prior_live=True
+                        # Ping-pong 2026-06-07: ``pending_dice_clear_type``
+                        # carries a live→resolved transition that happened in
+                        # the DICE_THROW handler (before the prior_live capture
+                        # above) — emit the same deterministic clear the
+                        # in-turn transition gets, so every connected socket
+                        # unmounts its overlay instead of relying on the
+                        # per-client NARRATION_END heuristic.
+                        cleared_type = prior_type if prior_live else pending_dice_clear_type
+                        assert cleared_type is not None  # one of the two gates held
                         payload_dict = build_clear_confrontation_payload(
-                            encounter_type=prior_type,
+                            encounter_type=cleared_type,
                             genre_slug=sd.genre_slug,
                         )
                         confrontation_payload = ConfrontationPayload(**payload_dict)
                         confrontation_event_attrs = {
                             "active": False,
-                            "encounter_type": prior_type,
+                            "encounter_type": cleared_type,
                             "genre_slug": sd.genre_slug,
                         }
 
                     if confrontation_payload is not None:
-                        # Story 45-3: lie-detector for the post-narration
-                        # CONFRONTATION emit. The narrator just opened or
-                        # advanced an encounter; the dial is about to move
-                        # on screen. Sebastien (mechanical-first player)
-                        # needs a span confirming the engine emitted
-                        # post-mutation momentum here, not just that the
-                        # narrator's prose happened to mention combat.
-                        # Only fires on the live branch (active emit
-                        # carrying real metric values) — the clear-payload
-                        # branch broadcasts active=false with empty
-                        # metrics, so there is no post-mutation momentum
-                        # to audit.
+                        # Story 59-16: ONE filtered delivery path. On the LIVE
+                        # branch, deliver a single class-filtered CONFRONTATION to
+                        # every connected socket (including the emitter) via a
+                        # per-recipient supplier; the canonical full-union payload
+                        # is persisted to the EventLog ONLY (replay/audit) and is
+                        # never sent to a client socket. This replaces the Story
+                        # 49-7 union-broadcast + per-PC overlay race (the UI's
+                        # last-message-wins reverted the tab to the 16-button union
+                        # after a flee/reconnect). A seated, connected PC whose
+                        # class will not resolve fails LOUD (ERROR span) and gets
+                        # no frame — never the union; an unseated/lobby socket gets
+                        # nothing silently. The clear branch (empty beats) stays a
+                        # single plain emit — there is nothing to per-PC filter.
                         if now_live and now_encounter is not None:
+                            from sidequest.server.dispatch.confrontation import (
+                                make_confrontation_frame_supplier,
+                            )
+
+                            assert cdef is not None  # set above; the cdef-is-None case raised
+                            # Story 59-20: shared single-filtered-delivery supplier
+                            # (same seam the dice mid-turn + resume paths use).
+                            _confrontation_frame_for = make_confrontation_frame_supplier(
+                                snapshot=sd.snapshot,
+                                genre_pack=sd.genre_pack,
+                                encounter=now_encounter,
+                                cdef=cdef,
+                                genre_slug=sd.genre_slug,
+                            )
+
                             with encounter_momentum_broadcast_span(
                                 encounter_type=now_encounter.encounter_type,
                                 player_metric_after=now_encounter.player_metric.current,
@@ -4613,105 +2111,34 @@ class WebSocketSessionHandler:
                                 confrontation_msg = self._emit_event(
                                     "CONFRONTATION",
                                     confrontation_payload,
+                                    per_recipient_payload=_confrontation_frame_for,
                                 )
                         else:
+                            # Clear (overlay unmount): empty beats, nothing to
+                            # per-PC filter — deliver the same frame to every
+                            # connected socket via the single path so the
+                            # dispatcher's tab unmounts too.
+                            _clear_payload = confrontation_payload
                             confrontation_msg = self._emit_event(
                                 "CONFRONTATION",
                                 confrontation_payload,
+                                per_recipient_payload=lambda _pid: _clear_payload,
                             )
 
-                        # Story 49-7: per-PC beat projection overlay. The
-                        # canonical ``_emit_event`` call above persists the
-                        # full-union payload to EventLog (replay-safe) and
-                        # fans it to peers via the ProjectionFilter — but
-                        # every recipient sees the same 16-button beat list
-                        # regardless of class (the 2026-05-12 caverns_sunden
-                        # playtest bug: Fighter saw Backstab/Cast Spell/Turn
-                        # Undead). We follow the canonical emit with a per-
-                        # recipient direct-queue overlay that delivers a
-                        # class-filtered CONFRONTATION to each connected
-                        # socket. UI renders whichever arrives last for a
-                        # given encounter — filtered wins. EventLog retains
-                        # the canonical row for audit; reconnect rebuilds
-                        # via the slug-resume bootstrap which is itself per-
-                        # PC filtered (handlers/connect.py:1110).
-                        # Track whether the per-PC overlay loop below
-                        # successfully queued a filtered CONFRONTATION to
-                        # the dispatcher's socket. The canonical
-                        # dispatcher push at the "Pingpong 2026-04-30
-                        # follow-on" block below (around line 3360) must
-                        # skip the dispatcher when the overlay already
-                        # covered them — otherwise the unfiltered canonical
-                        # lands AFTER the filtered overlay in the
-                        # dispatcher's queue and the UI's last-message-wins
-                        # render reverts the dispatcher's Confrontation tab
-                        # to the full 16-button union (pingpong 2026-05-12
-                        # 17:48: position-#3 PC always broke because
-                        # sd.player_id rotates to the last-narrated PC in
-                        # merged-dispatch order).
-                        _dispatcher_overlay_delivered = False
-                        if now_live and now_encounter is not None and self._room is not None:
-                            from sidequest.server.dispatch.confrontation import (
-                                resolve_recipient_pc,
-                            )
-
-                            socket_for_player_fn = getattr(self._room, "socket_for_player", None)
-                            queue_for_socket_fn = getattr(self._room, "queue_for_socket", None)
-                            connected_player_ids_fn = getattr(
-                                self._room, "connected_player_ids", None
-                            )
-                            if (
-                                callable(socket_for_player_fn)
-                                and callable(queue_for_socket_fn)
-                                and callable(connected_player_ids_fn)
-                            ):
-                                for _pid in connected_player_ids_fn():
-                                    _recipient_pc, _recipient_actor = resolve_recipient_pc(
-                                        snapshot=sd.snapshot,
-                                        genre_pack=sd.genre_pack,
-                                        player_id=_pid,
-                                    )
-                                    if _recipient_pc is None:
-                                        continue
-                                    _per_pc_dict = build_confrontation_payload(
-                                        encounter=now_encounter,
-                                        cdef=cdef,
-                                        genre_slug=sd.genre_slug,
-                                        recipient_pc=_recipient_pc,
-                                        recipient_actor_name=_recipient_actor,
-                                    )
-                                    _per_pc_msg = ConfrontationMessage(
-                                        payload=ConfrontationPayload(**_per_pc_dict),
-                                        player_id="server",
-                                    )
-                                    _socket_id = socket_for_player_fn(_pid)
-                                    if _socket_id is None:
-                                        continue
-                                    _q = queue_for_socket_fn(_socket_id)
-                                    if _q is None:
-                                        continue
-                                    _q.put_nowait(_per_pc_msg)
-                                    if _pid == sd.player_id:
-                                        _dispatcher_overlay_delivered = True
                         assert confrontation_event_attrs is not None
                         trace.get_current_span().add_event(
                             "confrontation.dispatched",
                             confrontation_event_attrs,
                         )
-                        # OTEL lie-detector hook (per CLAUDE.md OTEL principle): the
-                        # GM panel needs evidence the broadcast actually reached
-                        # peers — not just that the actor saw a confrontation card.
-                        # Without this, a regression to the pre-fix behavior (frame
-                        # appended only to actor's outbound) is invisible to the
-                        # watcher dashboard.
+                        # OTEL lie-detector (CLAUDE.md OTEL principle): evidence the
+                        # broadcast reached peers, not just the actor — without it a
+                        # regression to actor-only delivery is invisible.
                         peer_player_ids: list[str] = []
                         room_slug: str = ""
                         if self._room is not None:
-                            # Some unit-test fixtures (e.g. _StubRoom in
-                            # test_dice_throw_wiring) provide a minimal Room shim
-                            # that lacks ``connected_player_ids`` / ``slug``. The
-                            # OTEL hook is best-effort logging — never crash the
-                            # turn for missing observability metadata.
+                            # Some test fixtures use a minimal Room shim lacking
+                            # connected_player_ids / slug. The OTEL hook is
+                            # best-effort — never crash the turn for it.
                             import contextlib  # noqa: PLC0415 — local import keeps hot path lean
 
                             with contextlib.suppress(AttributeError):
@@ -4742,21 +2169,11 @@ class WebSocketSessionHandler:
                             component="confrontation",
                         )
 
-                        # sq-playtest 2026-05-12 lie-detector: classify the
-                        # post-narration confrontation state by comparing
-                        # narration prose kill-claims against the engine's
-                        # encounter state. The repro was the Chalk Moth
-                        # "kill turn" — narrator's prose said the moth
-                        # died ("the legs go slack", "Silence."), but no
-                        # engine resolution fired (rolls failing, dial
-                        # stuck 0/7) so the right-rail Confrontation
-                        # panel stayed open and the next turn's narration
-                        # un-killed the moth. Without this watcher event
-                        # the GM panel could only see ``state_transition
-                        # field=encounter op=resolved`` firing or not —
-                        # which is the engine side. This event surfaces
-                        # the NARRATOR side so Sebastien can see when
-                        # prose outruns the dial.
+                        # sq-playtest 2026-05-12 lie-detector: compare narration
+                        # kill-claims against the engine's encounter state (Chalk
+                        # Moth "kill turn": prose killed the moth but no resolution
+                        # fired). Surfaces the NARRATOR side so the GM panel can
+                        # see when prose outruns the dial.
                         from sidequest.server.confrontation_lifecycle_detector import (
                             build_lifecycle_snapshot,
                         )
@@ -4778,50 +2195,21 @@ class WebSocketSessionHandler:
                         )
 
                 with timings.phase("broadcast"):
-                    # MP merged-dispatch: shared-world frames need to reach
-                    # every connected socket in the room. NARRATION rides the
-                    # _emit_event/EventLog path (durable, replayed on
-                    # reconnect). The four shared-world envelopes built below
-                    # — NARRATION_END / CHAPTER_MARKER / PARTY_STATUS /
-                    # AUDIO_CUE — are NOT durable: they're built once at
-                    # turn-end and never persisted. Two pingpong cycles on
-                    # 2026-04-30 caught both halves of the broadcast bug:
-                    #   (1) commit 4b90250 — peers missed all four because
-                    #       they were only appended to ``outbound`` (which
-                    #       ships to the dispatcher socket alone). Fix added
-                    #       a peer-broadcast helper.
-                    #   (2) follow-on bug — the dispatcher's *own* socket
-                    #       missed the four envelopes whenever the dispatcher
-                    #       reconnected mid-narration (browser refresh during
-                    #       the 30-60s Claude await). The peer-broadcast
-                    #       excluded the dispatcher's pre-await socket_id;
-                    #       outbound.append delivered to the now-cancelled
-                    #       writer task on the old socket; the new socket
-                    #       got nothing because the envelopes aren't in
-                    #       EventLog to replay. Last-submitter froze every
-                    #       turn (Reproduced 3× in pingpong).
-                    #
-                    # Fix: emit shared-world frames via a single broadcast to
-                    # every CURRENT socket in the room (exclude_socket_id=
-                    # None). Picks up reconnected sockets that registered
-                    # before the broadcast fires; the original socket either
-                    # detached (clean) or is still attached (gets the frame
-                    # like everyone else). Replaces both outbound.append and
-                    # the peer-only broadcast — single delivery path, no
-                    # double-send risk.
-                    #
-                    # Legacy non-slug path (self._room is None — only legacy
-                    # genre/world connect tests reach this) still falls back
-                    # to outbound.append so test fixtures without a room
-                    # registry continue to work.
+                    # MP merged-dispatch: the four shared-world envelopes
+                    # (NARRATION_END / CHAPTER_MARKER / PARTY_STATUS / AUDIO_CUE)
+                    # are NOT durable (unlike NARRATION on the EventLog path).
+                    # Pingpong 2026-04-30 caught both halves of a delivery bug:
+                    # peers missed them (outbound went to the dispatcher socket
+                    # alone), and the dispatcher's own reconnected socket missed
+                    # them on a mid-await refresh. Fix: broadcast to every CURRENT
+                    # socket (exclude_socket_id=None) — single delivery path, picks
+                    # up reconnected sockets, no double-send. Legacy non-slug path
+                    # (self._room is None) falls back to outbound.append.
                     _has_room = self._room is not None
 
-                    # OTEL lie-detector: emit one watcher event per shared-
-                    # world frame that records every recipient socket_id
-                    # plus the resolved player_id. The GM panel can verify
-                    # all 4 sockets received NARRATION_END after the merged
-                    # dispatch — the only way to catch silent regressions
-                    # of this exact bug going forward.
+                    # OTEL lie-detector: one watcher event per shared-world frame
+                    # recording recipient socket_ids + player_ids, so the GM panel
+                    # can verify every socket received it (catches regressions).
                     def _emit_shared_world_frame(msg: object, frame_kind: str) -> None:
                         if not _has_room:
                             outbound.append(msg)
@@ -4829,15 +2217,9 @@ class WebSocketSessionHandler:
                         room = self._room
                         assert room is not None  # noqa: S101 — narrowed by _has_room
                         room.broadcast(msg, exclude_socket_id=None)
-                        # OTEL lie-detector: emit one watcher event per
-                        # shared-world frame keyed by recipient player_ids
-                        # so the GM panel can verify the dispatcher AND every
-                        # peer received the frame after the merged dispatch
-                        # — the only way to catch silent regressions of the
-                        # last-submitter-stuck bug going forward. Wrapped in
-                        # try/except: the broadcast above is the load-bearing
-                        # call; OTEL must never crash a turn (and in tests a
-                        # stub Room may not expose `connected_player_ids`).
+                        # OTEL lie-detector keyed by recipient player_ids (catches
+                        # the last-submitter-stuck regression). Wrapped: the
+                        # broadcast above is load-bearing, OTEL must never crash a turn.
                         try:
                             recipients_method = getattr(room, "connected_player_ids", None)
                             recipient_player_ids = (
@@ -4864,106 +2246,29 @@ class WebSocketSessionHandler:
 
                     outbound: list[object] = [narration_msg]
                     if confrontation_msg is not None:
-                        # Pingpong 2026-04-30 follow-on (sibling of f0b40c7):
-                        # CONFRONTATION goes through ``_emit_event`` for
-                        # EventLog persistence + projection-filter peer
-                        # fan-out. The dispatcher's copy was previously
-                        # added to ``outbound`` (closure-captured,
-                        # delivered to the dispatcher's PRE-await socket
-                        # queue). When the dispatcher's WS cycles during
-                        # the 30-60s Claude await — browser refresh /
-                        # network blip — the pre-await writer task is
-                        # already cancelled; ``outbound.append`` lands on
-                        # a dead queue and the encounter dial never
-                        # activates on the dispatcher's tab. Reconnect
-                        # replay can backfill via EventLog + lazy_fill,
-                        # but the race is wide (CONFRONTATION fires AFTER
-                        # the dispatcher's reconnect handler has finished
-                        # its own replay), so the dispatcher freezes on
-                        # the prior turn even though the EventLog has the
-                        # row. Fix matches f0b40c7's shape: deliver to
-                        # the dispatcher's CURRENT socket via
-                        # room.queue_for_socket(socket_for_player(...))
-                        # — the lookup runs at delivery time, so a
-                        # reconnected dispatcher's NEW socket queue gets
-                        # the frame. Peer delivery is unchanged
-                        # (``_emit_event`` peer fan-out already covered
-                        # them) — no double-delivery hazard. Falls back
-                        # to ``outbound.append`` when the room is None
-                        # (legacy non-slug test fixtures).
-                        # Stub rooms in older test fixtures (_StubRoom in
-                        # dice-throw wiring tests) may not expose the
-                        # full SessionRoom API — fall back to outbound
-                        # so those tests continue to exercise the
-                        # actor-receives-via-return-value contract.
-                        socket_for_player = (
-                            getattr(
-                                self._room,
-                                "socket_for_player",
-                                None,
-                            )
-                            if _has_room
-                            else None
+                        # Story 59-16: emit_event already delivered the single
+                        # filtered CONFRONTATION to every connected socket —
+                        # including the dispatcher's CURRENT socket, looked up at
+                        # delivery time so a mid-await reconnect is covered. No
+                        # second push, and the canonical union never reaches a
+                        # socket. Legacy / stub rooms (no EventLog or no
+                        # connected_player_ids) get the emitter's filtered frame
+                        # appended to outbound so the return value carries it.
+                        connected_player_ids_fn = (
+                            getattr(self._room, "connected_player_ids", None) if _has_room else None
                         )
-                        queue_for_socket = (
-                            getattr(
-                                self._room,
-                                "queue_for_socket",
-                                None,
-                            )
-                            if _has_room
-                            else None
-                        )
-                        if _has_room and callable(socket_for_player) and callable(queue_for_socket):
+                        if (
+                            _has_room
+                            and self._event_log is not None
+                            and callable(connected_player_ids_fn)
+                        ):
                             room = self._room
-                            assert room is not None  # noqa: S101 — narrowed by _has_room
-                            dispatcher_socket = socket_for_player(sd.player_id)
-                            dispatcher_queue = (
-                                queue_for_socket(dispatcher_socket)
-                                if dispatcher_socket is not None
-                                else None
-                            )
-                            # Pingpong 2026-05-12 17:48 (trailing-PC regression
-                            # of 49-7): only push the unfiltered canonical to
-                            # the dispatcher when the per-PC overlay above did
-                            # NOT already queue a filtered frame for them. The
-                            # overlay covers the dispatcher whenever
-                            # ``sd.player_id`` is connected AND seated to a PC
-                            # the genre pack can resolve a class for. When that
-                            # holds (the typical MP playtest case — every PC is
-                            # seated), the overlay's class-filtered frame
-                            # already sits in the dispatcher's queue; pushing
-                            # the unfiltered canonical here lands AFTER it and
-                            # the UI's last-message-wins render snaps back to
-                            # the full 16-button union. When the overlay
-                            # skipped the dispatcher (no PC seat / no class
-                            # resolution / clear branch / stub-room test
-                            # fixture without socket helpers), the canonical
-                            # remains the dispatcher's sole delivery path.
-                            if dispatcher_queue is not None and not _dispatcher_overlay_delivered:
-                                dispatcher_queue.put_nowait(confrontation_msg)
-                            # OTEL lie-detector: per-recipient confrontation
-                            # delivery for the GM panel. Mirrors the
-                            # ``shared_world_frame_broadcast`` watcher used by
-                            # NARRATION_END / CHAPTER_MARKER / PARTY_STATUS /
-                            # AUDIO_CUE so Sebastien's panel can spot a silent
-                            # regression of this exact bug — frame_kind names
-                            # the variant so confrontation events filter
-                            # cleanly out of the broader frame stream.
-                            # ``dispatcher_delivery_path`` distinguishes
-                            # ``per_pc_overlay`` (the seated-PC branch the
-                            # 17:48 fix protects) from ``canonical_push``
-                            # (the legacy fallback for unseated dispatchers
-                            # / stub-room test fixtures) so a future
-                            # regression of either branch is visible from
-                            # the dashboard alone.
+                            assert room is not None  # noqa: S101 — narrowed above
+                            # OTEL lie-detector: how many sockets the single
+                            # filtered fan-out reached (catches a future skip).
                             try:
                                 slug_attr = getattr(room, "slug", "")
-                                connected = (
-                                    room.connected_player_ids()
-                                    if callable(getattr(room, "connected_player_ids", None))
-                                    else []
-                                )
+                                connected = list(room.connected_player_ids())
                                 _watcher_publish(
                                     "shared_world_frame_broadcast",
                                     {
@@ -4972,12 +2277,7 @@ class WebSocketSessionHandler:
                                         "recipient_count": len(connected),
                                         "recipient_player_ids": connected,
                                         "dispatcher_player_id": sd.player_id,
-                                        "dispatcher_socket_attached": dispatcher_queue is not None,
-                                        "dispatcher_delivery_path": (
-                                            "per_pc_overlay"
-                                            if _dispatcher_overlay_delivered
-                                            else "canonical_push"
-                                        ),
+                                        "dispatcher_delivery_path": "single_filtered",
                                     },
                                     component="multiplayer",
                                 )
@@ -4988,23 +2288,13 @@ class WebSocketSessionHandler:
                                     exc,
                                 )
                         else:
-                            # Legacy / stub-room fallback: append to
-                            # outbound so test fixtures without a real
-                            # SessionRoom API still see CONFRONTATION
-                            # in the function return value (the
-                            # contract pre-pingpong-2026-04-30).
+                            # Legacy / stub-room fallback: append the emitter's
+                            # filtered frame to outbound so the return value carries it.
                             outbound.append(confrontation_msg)
-                    # CHAPTER_MARKER — the UI's ``useRunningHeader`` hook derives the
-                    # running-header chapter title from this frame. When the narrator
-                    # emits a location in game_patch, the new location is already on
-                    # ``snapshot.character_locations[acting_character]`` (applied in
-                    # ``_apply_narration_result_to_snapshot``). Emit one frame per
-                    # location change so the header updates in lock-step with
-                    # narration. Without this the header stays blank since the UI
-                    # never saw the server's ``state.location_update`` log line.
-                    # Pingpong 2026-04-24 — "Location not rendered in the header on
-                    # resume" — fix is symmetric (slug-resume bootstrap also emits
-                    # CHAPTER_MARKER; see the slug-connect block).
+                    # CHAPTER_MARKER — drives the UI's useRunningHeader title. Emit
+                    # one frame per location change so the header tracks narration
+                    # (Pingpong 2026-04-24 "location not rendered on resume"; the
+                    # slug-resume bootstrap emits the symmetric frame).
                     if result.location:
                         chapter_marker_msg = ChapterMarkerMessage(
                             payload=ChapterMarkerPayload(
@@ -5018,10 +2308,8 @@ class WebSocketSessionHandler:
                             player_id=sd.player_id,
                         )
                         _emit_shared_world_frame(chapter_marker_msg, "CHAPTER_MARKER")
-                        # ADR-096 Task 20b: emit TACTICAL_GRID when the world
-                        # uses room_graph navigation and the new location has
-                        # a room YAML file on disk. This closes the wiring
-                        # gap: load_room_payload is now reachable from gameplay.
+                        # ADR-096 Task 20b: emit TACTICAL_GRID for room_graph
+                        # worlds whose new location has a room YAML on disk.
                         _maybe_emit_tactical_grid(
                             self,
                             sd=sd,
@@ -5029,10 +2317,9 @@ class WebSocketSessionHandler:
                             actor=_acting_for_render_trigger,
                             emit_fn=_emit_shared_world_frame,
                         )
-                        # Story 54-2 / ADR-109: emit LOCATION_DESCRIPTION on
-                        # the same room-change branch. Carries the typed
-                        # entity manifest + base prose so the UI Location
-                        # tab stays in sync with the party's current room.
+                        # Story 54-2 / ADR-109: emit LOCATION_DESCRIPTION on the
+                        # same room-change branch — typed entity manifest + base
+                        # prose to keep the UI Location tab in sync.
                         _maybe_emit_location_description(
                             self,
                             sd=sd,
@@ -5040,16 +2327,10 @@ class WebSocketSessionHandler:
                             actor=_acting_for_render_trigger,
                             emit_fn=_emit_shared_world_frame,
                         )
-                    # Playtest 2026-05-20 — per-turn LOCATION_DESCRIPTION
-                    # on region change for region-mode worlds. The
-                    # ``if result.location`` branch above is character-
-                    # level (room_graph territory). For region-mode
-                    # (beneath_sunden surface, glenross, ...) the region
-                    # patch is the only signal — emit when it changed
-                    # this turn so the Location tab tracks ropefoot →
-                    # the_dropmouth. Idempotent for non-region worlds
-                    # (skipped on the world.cartography.navigation_mode
-                    # check) and for unchanged regions.
+                    # Playtest 2026-05-20 — per-turn LOCATION_DESCRIPTION on region
+                    # change for region-mode worlds (the result.location branch
+                    # above is room_graph-level). The region patch is the only
+                    # signal here. No-op for non-region worlds + unchanged regions.
                     _world_for_region_emit = sd.genre_pack.worlds.get(sd.world_slug)
                     _is_region_mode_world = (
                         _world_for_region_emit is not None
@@ -5057,16 +2338,11 @@ class WebSocketSessionHandler:
                         == NavigationMode.region
                     )
                     if _is_region_mode_world:
-                        # Lie-detector (symmetric to room_graph's
-                        # ``narrator.location_drift_repaired``): on EVERY
-                        # region-mode turn, record whether the narrator
-                        # declared/changed ``current_region``. "Prose moved
-                        # the party but current_region did not" is the
-                        # frozen-Location-panel failure mode (playtest
-                        # 2026-05-21) — the GM panel must see it directly, not
-                        # infer it from a stale panel. Fires every turn so a
-                        # future regression (narrator stops emitting
-                        # current_region) is visible, not silent.
+                        # Lie-detector: on EVERY region-mode turn record whether
+                        # the narrator declared/changed current_region. "Prose
+                        # moved the party but current_region didn't" is the
+                        # frozen-Location-panel failure (playtest 2026-05-21);
+                        # firing every turn keeps a regression visible.
                         _region_changed = bool(
                             snapshot.current_region
                             and snapshot.current_region != prior_current_region
@@ -5092,38 +2368,71 @@ class WebSocketSessionHandler:
                                 emit_fn=_emit_shared_world_frame,
                                 room_id_override=snapshot.current_region,
                             )
-                    # Beneath Sünden BETTER fix (seam 3): project the live
-                    # region graph to the UI Map tab every turn (NOT gated
-                    # on result.location — region moves arrive via the
-                    # current_region patch, not always a location change;
-                    # unconditional per-turn also covers turn 1 + resume,
-                    # curing "No map data yet"). Idempotent; clean no-op
-                    # for every non-beneath_sunden world.
+                    # Beneath Sünden seam 3: project the live region graph to the
+                    # UI Map tab every turn (NOT gated on result.location — covers
+                    # turn 1 + resume, curing "No map data yet"). No-op off
+                    # beneath_sunden.
                     _maybe_emit_dungeon_map(
                         self,
                         sd=sd,
                         snapshot=snapshot,
                         emit_fn=_emit_shared_world_frame,
                     )
-                    # Region-mode cartography map: emit MAP_UPDATE on
-                    # location change so the Map tab shows the region list.
-                    # No-op for room_graph worlds (they use DUNGEON_MAP).
-                    if _is_region_mode_world and _region_changed:
-                        _cart_map = _build_cartography_map_message(
-                            sd.genre_pack,
-                            sd.world_slug,
-                            snapshot.current_region
-                            or snapshot.party_location(perspective=_acting_for_render_trigger),
-                            player_id=sd.player_id,
-                        )
-                        if _cart_map is not None:
-                            _emit_shared_world_frame(_cart_map, "MAP_UPDATE")
-                    # Story 54-7 / ADR-109: encounter overlay transitions.
-                    # Activate when a fresh encounter goes live this turn
-                    # carrying a location_overlay; deactivate when the prior
-                    # encounter resolved this turn and was carrying one.
-                    # Decoupled from room change — a bar fight can ignite
-                    # in the room the party already stands in.
+                    # ADR-136: relationship roster rides the same per-turn /
+                    # resume cadence as the dungeon-map projection above — NOT
+                    # gated on a location/region change, because a disposition
+                    # shift (the common case) happens mid-scene without moving
+                    # the party. The emitter is internally change-gated on the
+                    # roster signature, so an unchanged roster is a no-op and a
+                    # resume re-fires a fresh roster on the next turn. Transient
+                    # broadcast (_emit_shared_world_frame), never event-sourced.
+                    _maybe_emit_relationships(
+                        self,
+                        snapshot=snapshot,
+                        emit_fn=_emit_shared_world_frame,
+                    )
+                    # ADR-137 / Story 77-8: quest spine roster rides the same
+                    # per-turn / resume cadence as the relationship roster above.
+                    # Internally change-gated on the spine signature (quests +
+                    # anchors + stakes), so an unchanged spine is a no-op and an
+                    # empty spine shows nothing. Transient broadcast
+                    # (_emit_shared_world_frame), never event-sourced — the UI
+                    # quest/objective panel (Story 77-5) consumes it.
+                    _maybe_emit_quests(
+                        self,
+                        snapshot=snapshot,
+                        emit_fn=_emit_shared_world_frame,
+                    )
+                    # ADR-144 F3a / Story 118-1: player-facing Fate spine rides the
+                    # same per-turn / resume cadence as the relationships + quests
+                    # rosters above. Internally ruleset=='fate'-gated (no-op off a
+                    # Fate pack, so it never co-renders with the WN/native overlay)
+                    # AND change-gated on the Fate-state signature (so an unchanged
+                    # sheet is a no-op). Transient broadcast (_emit_shared_world_frame),
+                    # never event-sourced — the UI Fate panel (Story 118-2) consumes it.
+                    _maybe_emit_fate_state(
+                        self,
+                        sd=sd,
+                        snapshot=snapshot,
+                        emit_fn=_emit_shared_world_frame,
+                    )
+                    # Region-mode cartography map: project the region graph to
+                    # the UI Map tab EVERY turn (NOT gated on a region change —
+                    # covers turn 1 + intra-region moves + resume, curing "No map
+                    # data yet"; EH-2 burning_peace 2026-06-05). Idempotent (the
+                    # UI replaces its MapState); no-op for room_graph worlds (they
+                    # use DUNGEON_MAP). Mirrors the dungeon-map / relationships /
+                    # quests projections above, which already fire unconditionally.
+                    _maybe_emit_cartography_map(
+                        self,
+                        sd=sd,
+                        snapshot=snapshot,
+                        emit_fn=_emit_shared_world_frame,
+                        acting_perspective=_acting_for_render_trigger,
+                    )
+                    # Story 54-7 / ADR-109: encounter overlay transitions —
+                    # activate when a fresh encounter with a location_overlay goes
+                    # live, deactivate when one resolves. Decoupled from room change.
                     if now_live and not prior_live and now_encounter is not None:
                         _maybe_emit_location_overlay_changed(
                             self,
@@ -5145,21 +2454,17 @@ class WebSocketSessionHandler:
                             emit_fn=_emit_shared_world_frame,
                             prior_overlay=prior_encounter.location_overlay,
                         )
-                    # Story 45-1 — sealed-letter shared-world handshake.
-                    # Build the canonical delta from the post-resolution
-                    # snapshot and ride it on NARRATION_END so peers see
-                    # ground-truth location/encounter/party formation
-                    # (playtest 3 fix: stops narrator fabricating
-                    # "collapsed corridor" between Orin and Blutka).
+                    # Story 45-1 — sealed-letter shared-world handshake: ride the
+                    # canonical post-resolution delta on NARRATION_END so peers see
+                    # ground-truth location/encounter/party (stops the narrator
+                    # fabricating geography between PCs).
                     handshake_delta = build_shared_world_delta(
                         snapshot,
                         room=self._room,
                     )
-                    # Magic Phase 4: ride the post-resolution magic_state on the
-                    # NARRATION_END handshake. Sent every turn (not gated on the
-                    # internal StateDelta.magic flag) — the UI is stateless on
-                    # this payload and an unchanged dict is cheap; gating would
-                    # silently desync the ledger after a reconnect.
+                    # Magic Phase 4: ride post-resolution magic_state on the
+                    # NARRATION_END handshake every turn (gating would silently
+                    # desync the ledger after a reconnect).
                     magic_state_dict = (
                         snapshot.magic_state.model_dump(mode="json")
                         if snapshot.magic_state is not None
@@ -5172,16 +2477,18 @@ class WebSocketSessionHandler:
                                 handshake_delta,
                                 magic_state=magic_state_dict,
                             ),
+                            # Ping-pong 2026-06-07: the round this turn
+                            # resolved (pre-bump) — the UI's peer-quote anchor.
+                            round=_resolved_round,
                         ),
                         player_id=sd.player_id,
                     )
                     _emit_shared_world_frame(narration_end_msg, "NARRATION_END")
 
-                    # MP turn-ownership clear (ADR-036 sealed-letter pacing). Pair with
-                    # the TURN_STATUS{active} broadcast at action receipt — peers' banner
-                    # tone="peer" stays stuck without this clear. exclude_socket_id=None
-                    # so every socket (including the actor) gets the resolved signal;
-                    # the UI clears activePlayerName on status="resolved".
+                    # MP turn-ownership clear (ADR-036): pairs with the
+                    # TURN_STATUS{active} broadcast at action receipt — peers' banner
+                    # stays stuck without it. Broadcast to every socket; the UI
+                    # clears activePlayerName on status="resolved".
                     if self._room is not None and sd.player_name:
                         try:
                             acting_name = _resolve_acting_character_name(sd, self._room)
@@ -5190,12 +2497,8 @@ class WebSocketSessionHandler:
                                     player_name=NonBlankString(acting_name),
                                     status="resolved",
                                     # Explicit empty roster — the UI clears
-                                    # turnStatusEntries on resolved; sending
-                                    # `[]` keeps the wire canonical and
-                                    # prevents the App.tsx per-player path
-                                    # from re-pushing a stale "pending"
-                                    # entry between the clear and the next
-                                    # round's broadcasts.
+                                    # turnStatusEntries on resolved; `[]` prevents
+                                    # App.tsx re-pushing a stale "pending" entry.
                                     entries=[],
                                 ),
                                 player_id=sd.player_id or "",
@@ -5223,41 +2526,30 @@ class WebSocketSessionHandler:
                                 exc,
                             )
 
-                    # Refresh PARTY_STATUS so `current_location` and any HP/inventory
-                    # mutations landed by the narration apply propagate to the client
-                    # header / CharacterSheet. Previously PARTY_STATUS
-                    # was emitted exactly once at chargen-end (before the opening
-                    # turn), which froze the location at its pre-opening value
-                    # (typically empty). Playtest 2026-04-22.
+                    # Refresh PARTY_STATUS so current_location + any HP/inventory
+                    # mutations propagate to the client header / CharacterSheet
+                    # (pre-fix it fired once at chargen-end and froze the location;
+                    # playtest 2026-04-22).
                     if snapshot.characters:
                         try:
-                            # MP: resolve "self" by sd.player_id, not snapshot.characters[0].
-                            # The turn-end refresh fires per-socket; if the requesting
-                            # socket isn't characters[0] (any non-first-committed
-                            # player in MP), passing characters[0] mis-tags that PC's
-                            # data with the requesting socket's player_id and the UI
-                            # renders the wrong PC as "(YOU)" — playtest 2026-04-25
-                            # "Tab 2 sees Laverne (YOU)".
+                            # MP: resolve "self" by sd.player_id, not
+                            # characters[0] — passing characters[0] mis-tags the
+                            # wrong PC as "(YOU)" for any non-first player
+                            # (playtest 2026-04-25 "Tab 2 sees Laverne (YOU)").
                             self_char = (
                                 views.resolve_self_character(self, sd) or snapshot.characters[0]
                             )
                             party_status = views.build_session_start_party_status(
                                 self, sd, self_char, sd.player_id
                             )
-                            # MP merged-dispatch: every connected socket needs the
-                            # post-narration party refresh (location/HP/inventory).
-                            # The dispatcher-built payload is safe to broadcast as-is —
-                            # each peer's UI resolves "(YOU)" via the seat_map-tagged
-                            # player_id of the member whose ``name`` matches its
-                            # connectedPlayerName, not via the dispatcher's player_id
-                            # field. Pre-fix-2 (peer-only broadcast), peers got it
-                            # but the dispatcher's reconnected socket missed it
-                            # (pingpong 2026-04-30 follow-on); single broadcast
-                            # path fixes both halves.
+                            # MP merged-dispatch: broadcast the party refresh to
+                            # every socket. Safe as-is — each peer's UI resolves
+                            # "(YOU)" via the seat_map-tagged player_id, not the
+                            # dispatcher's. Single broadcast covers both peers and
+                            # the dispatcher's reconnected socket (pingpong 2026-04-30).
                             _emit_shared_world_frame(party_status, "PARTY_STATUS")
-                            # Wave 2B (story 45-48): the log/event location is
-                            # the actor's own current scene — there is no
-                            # party-frame ``snapshot.location`` anymore.
+                            # Wave 2B (45-48): log the actor's own scene — there's
+                            # no party-frame snapshot.location anymore.
                             _ps_log_loc = (
                                 snapshot.party_location(perspective=self_char.core.name) or ""
                             )
@@ -5282,13 +2574,9 @@ class WebSocketSessionHandler:
                         except Exception as exc:  # noqa: BLE001 — party refresh must never crash a turn
                             logger.warning("state.party_status_refresh_failed error=%s", exc)
 
-                # Visual-scene render dispatch. Fire-and-forget: the RENDER_QUEUED
-                # message ships with the NARRATION payload; the async render task
-                # posts an IMAGE message onto the per-connection outbound queue
-                # when the daemon replies. Short-circuits without any socket work
-                # when: render flag off, no visual scene, daemon socket missing,
-                # or outbound queue unavailable (test configurations that don't
-                # attach room context).
+                # Visual-scene render dispatch. Fire-and-forget: RENDER_QUEUED
+                # ships now; the async task posts IMAGE when the daemon replies.
+                # Short-circuits on render flag off / no scene / no daemon / no queue.
                 render_queued = self._maybe_dispatch_render(
                     sd,
                     result,
@@ -5299,20 +2587,18 @@ class WebSocketSessionHandler:
                 if render_queued is not None:
                     outbound.append(render_queued)
 
-                # Audio DJ dispatch. Synchronous: AUDIO_CUE (or nothing) ships
-                # with this turn's outbound frames. No placeholder + later message
-                # dance — the DJ is a local filesystem lookup. MP: same cue plays
-                # for every player at the table — broadcast to peers so the music
-                # bed transitions in lock-step with the shared narration.
+                # Audio DJ dispatch. Synchronous (local filesystem lookup):
+                # AUDIO_CUE ships with this turn's frames. Broadcast so the music
+                # bed transitions in lock-step for every player.
                 audio_cue = self._maybe_dispatch_audio(sd, result)
                 if audio_cue is not None:
                     _emit_shared_world_frame(audio_cue, "AUDIO_CUE")
 
-                # turn_complete is now emitted by the validator (per ADR-089 §6.7).
-                # The TurnRecord assembled below is the single source of truth.
+                # turn_complete is emitted by the validator (ADR-089 §6.7); the
+                # TurnRecord below is the single source of truth.
 
                 # --- TurnRecord assembly + validator submit ---
-                # Wrapped in try/except: the validator must NEVER crash the hot path.
+                # The validator must NEVER crash the hot path.
                 if self._validator is not None:
                     try:
                         _patch_summaries: list[PatchSummary] = []
@@ -5320,13 +2606,9 @@ class WebSocketSessionHandler:
                             _patch_summaries.append(
                                 PatchSummary(patch_type="location", fields_changed=["location"])
                             )
-                        if result.quest_updates:
-                            _patch_summaries.append(
-                                PatchSummary(
-                                    patch_type="quest",
-                                    fields_changed=list(result.quest_updates),
-                                )
-                            )
+                        # Story 77-4: the legacy quest_updates lane was retired
+                        # (record_quest is the typed home); the NarrationTurnResult
+                        # field is gone, so there is no quest PatchSummary here.
                         if result.lore_established:
                             _patch_summaries.append(
                                 PatchSummary(patch_type="lore", fields_changed=["lore_established"])
@@ -5377,21 +2659,36 @@ class WebSocketSessionHandler:
                             phase_call_counts=timings.phase_call_counts,
                             total_duration_ms=timings.total_ms,
                             footnotes_count=len(result.footnotes or []),
+                            # sq-playtest 2026-06-12: persist the dispatch
+                            # bank's engage/degrade verdicts (previously
+                            # span-only — unauditable after the fact).
+                            dispatches=list(
+                                getattr(turn_context.bank_result, "decisions", None) or []
+                            ),
                         )
                         await self._validator.submit(record)
                         submitted = True
                     except Exception as exc:  # noqa: BLE001
                         logger.exception("turn_record.assemble_failed: %s", exc)
 
-                # Per-turn `game_state_snapshot` for the dashboard State tab
-                # (playtest 2026-04-30 #1C). Pre-fix this event was published
-                # only at session connect / chargen confirmation — after the
-                # initial fire the State tab read "Waiting for
-                # GameStateSnapshot event..." forever. Per ADR-031 the watcher
-                # is supposed to tick every turn so the GM panel can verify
-                # state advancement; this publish closes that gap. Wrapped in
-                # try/except so a serialization issue cannot crash the hot
-                # turn path.
+                # ADR-024 / story 81-2: feed the per-session TensionTracker one
+                # observation per turn so the dual-track pacing signal accumulates
+                # across the session and the tension:round_observed watcher event
+                # fires every turn (the GM-panel pacing lie-detector). Guarded like
+                # the sibling per-turn watcher emits below — a tension/watcher
+                # hiccup must never crash the turn (ADR-006 graceful degradation).
+                try:
+                    _drive_session_tension_tracker(
+                        sd,
+                        snapshot,
+                        encounter_resolved_this_turn=encounter_resolved_this_turn,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception("tension_tracker.drive_failed: %s", exc)
+
+                # Per-turn game_state_snapshot for the dashboard State tab
+                # (playtest 2026-04-30 #1C). Pre-fix it fired only at connect, so
+                # the State tab waited forever. ADR-031 wants a per-turn tick.
                 try:
                     _watcher_publish(
                         "game_state_snapshot",
@@ -5402,19 +2699,11 @@ class WebSocketSessionHandler:
                             "player_name": sd.player_name,
                             "player_id": sd.player_id,
                             "turn_number": snapshot.turn_manager.interaction,
-                            # Full snapshot dump so the dashboard's State
-                            # panel can render characters / NPCs / inventory
-                            # / known facts / regions etc. Pre-fix the
-                            # event payload was a thin summary
-                            # (counts only) and the State panel could
-                            # not draw any of its rich UI even when the
-                            # event did fire at connect.
+                            # Full snapshot dump so the State panel can render its
+                            # rich UI (pre-fix the payload was counts-only).
                             "snapshot": snapshot.model_dump(mode="json"),
-                            # Back-compat summary fields the connect-time
-                            # publishes have always exposed. Wave 2B (story
-                            # 45-48): use the per-actor location for the
-                            # dashboard's "current_location" — the dashboard
-                            # is per-player.
+                            # Back-compat summary fields. Wave 2B (45-48):
+                            # per-actor location (the dashboard is per-player).
                             "current_location": (
                                 snapshot.party_location(
                                     perspective=snapshot.player_seats.get(sd.player_id, "")
@@ -5446,16 +2735,10 @@ class WebSocketSessionHandler:
             with contextlib.suppress(Exception):  # finally must never re-raise
                 timings.mark_done()
 
-            # Per-turn watcher→OTLP bridge diagnostic + flush. Two birds:
-            # (1) prove the bridge fired during this turn — a non-zero
-            # ``minted`` value is hard evidence that publish_event saw the
-            # ``SIDEQUEST_WATCHER_AS_SPANS`` flag and minted synthetic spans,
-            # closing the "is the bridge live during gameplay?" question that
-            # the resume-only Jaeger output kept open. (2) force a tracer
-            # flush so the BatchSpanProcessor (default 2 s schedule) doesn't
-            # hide turn-level spans from a live Jaeger viewer for the next
-            # batch window. Both actions are wrapped in suppress() because
-            # diagnostics must NEVER fail a turn.
+            # Per-turn watcher→OTLP bridge diagnostic + flush: (1) a non-zero
+            # ``minted`` proves the bridge fired this turn; (2) force a tracer
+            # flush so the BatchSpanProcessor doesn't hide turn-level spans.
+            # Suppressed — diagnostics must NEVER fail a turn.
             with contextlib.suppress(Exception):
                 minted = synthetic_spans_count() - bridge_minted_at_start
                 logger.info(
@@ -5468,10 +2751,8 @@ class WebSocketSessionHandler:
                 )
             with contextlib.suppress(Exception):
                 provider = trace.get_tracer_provider()
-                # ``force_flush`` is on the SDK ``TracerProvider``; the proxy
-                # provider used in tests / pre-init paths doesn't have it. A
-                # hasattr check avoids importing the SDK class here just to
-                # isinstance-check it.
+                # force_flush is on the SDK TracerProvider but not the proxy
+                # provider used in tests; hasattr avoids importing the SDK class.
                 flush = getattr(provider, "force_flush", None)
                 if callable(flush):
                     flush(timeout_millis=200)
@@ -5517,37 +2798,16 @@ class WebSocketSessionHandler:
     ) -> list[object]:
         """Fire the opening narration turn at the end of chargen.
 
-        Consumes ``sd.opening_seed`` + ``sd.opening_directive`` exactly
-        once. The seed becomes the first "action" string; the directive
-        is injected into the narrator's Early zone for this turn only.
-        Both fields are zeroed on the session after the turn runs so
-        the next PLAYER_ACTION turn sees a fresh context.
-
-        When no opening hook was resolved at connect time (pack has no
-        openings) the Rust dispatcher substitutes a generic
-        "I look around and take in my surroundings." Match that — the
-        narrator still fires so the player lands in the world rather
-        than at a blank UI.
-
-        Rust parity: connect.rs:2270-2529.
+        Consumes ``sd.opening_seed`` + ``sd.opening_directive`` once (seed →
+        first action, directive → narrator Early zone), then zeroes both. When
+        no opening hook was resolved, substitutes a generic "I look around…" so
+        the narrator still fires.
         """
-        # Consume-time MP-joiner suppression (playtest 2026-04-26
-        # [S2-BUG] coyote_star regression). The connect-time guard in
-        # ``_handle_connect`` only fires when the joiner connects AFTER
-        # the host has completed chargen — checking
-        # ``len(snapshot.characters) > 0`` at connect-time. In the more
-        # common race scenario (both players in lobby together, both
-        # walking chargen at the same time) the joiner's ``sd.opening_
-        # seed/directive`` get populated at connect because the snapshot
-        # was empty, and only the timing of chargen-completion decides
-        # who's first vs. second. This guard catches the second
-        # committer at consume-time: by the time we get here, the joiner's
-        # PC is already in ``sd.snapshot.characters`` (appended in the
-        # second-commit branch around line 2725), so the test is "more
-        # than just me" → at least one peer character is present →
-        # suppress the cold-open and fall back to the generic continuation
-        # action so the persistent narrator (ADR-067) treats this as
-        # scene continuation, not a fresh in-medias-res open.
+        # Consume-time MP-joiner suppression (playtest 2026-04-26 coyote_star
+        # regression). The connect-time guard misses the both-in-lobby race; by
+        # the time we get here the joiner's PC is in snapshot.characters, so
+        # >1 character means suppress the cold-open and fall back to the generic
+        # continuation action (ADR-067 scene continuation, not a fresh open).
         if sd.opening_seed is not None and len(sd.snapshot.characters) > 1:
             _watcher_publish(
                 "mp_joiner_opening_suppressed_at_consume",
@@ -5584,59 +2844,26 @@ class WebSocketSessionHandler:
             sd.opening_seed = None
             sd.opening_directive = None
 
-        # Playtest 2026-04-29 BUG-LOW: when MP joiner-orientation fires (the
-        # suppression branch above just zeroed the seed), the previous
-        # fallback "I look around and take in my surroundings." gave the
-        # narrator a generic, unattributed action — and the resulting
-        # narration treated the host PC as if THEY had performed it
-        # ("Laverne is in the pilot's couch, hands flat on her thighs..."),
-        # because the narrator had no anchor for whose POV the orientation
-        # belonged to. Naming the joining PC explicitly fixes the POV
-        # attribution; the SOUL.md Agency strengthening (sibling fix in
-        # this playtest cycle) keeps the narrator from inventing dialogue
-        # for either PC. We resolve the joining PC's character name from
-        # the snapshot — it was just appended in the second-commit branch,
-        # so the joiner is the LAST entry in ``snapshot.characters``.
+        # Playtest 2026-04-29: on MP joiner-orientation the old generic fallback
+        # gave the narrator an unattributed action and it narrated the host PC's
+        # POV instead. Naming the joining PC fixes the attribution.
         joiner_orientation = sd.opening_seed is None and len(sd.snapshot.characters) > 1
         if joiner_orientation:
-            # Per-arrival entry beat (Keith's path #1, sq-playtest 2026-05-12):
-            # every PC gets per-PC POV anchored on the just-joined PC. The
-            # previous ``len(snapshot.characters) >= 3`` omniscient
-            # party-orientation branch (commit ``e23ef6a`` 2026-05-01) was
-            # added to handle a 4-PC simultaneous-commit scenario where the
-            # opener anchored on whoever happened to be ``characters[-1]``.
-            # Under sequential commits — the actual production flow — each
-            # chargen-complete is a discrete event with a well-defined
-            # just-joining PC: ``player_seats[sd.player_id]``. The omniscient
-            # framing then suppressed per-PC POV for every PC from the 3rd
-            # onward (sq-playtest 2026-05-12 Carl/Donut/Katia: Katia got
-            # ``atmospheric, names no PC`` because she was the 3rd commit).
-            #
-            # Resolve joiner_char_name from the seat-map first (authoritative
-            # for the connecting session's PC) and fall back to
-            # ``characters[-1]`` for legacy paths that don't bind player_id.
+            # Per-arrival entry beat (sq-playtest 2026-05-12): anchor POV on the
+            # just-joined PC. The prior >=3 omniscient branch suppressed per-PC
+            # POV for the 3rd+ commit (Carl/Donut/Katia bug). Resolve the joiner
+            # from the seat-map, falling back to characters[-1] for legacy paths.
             joiner_char_name = sd.snapshot.player_seats.get(sd.player_id or "", "") or (
                 sd.snapshot.characters[-1].core.name
                 if sd.snapshot.characters
                 else (sd.player_name or "the new arrival")
             )
-            # Playtest 2026-05-02 [BUG-LOW]: joiner-orientation drifted
-            # off the established scene (host on the Kestrel cockpit;
-            # joiner improvised at Vaskov Centrum East Freight Stair).
-            # The chargen confirmation epilogue promises "the crew is
-            # the crew" — both PCs aboard the same chassis at session
-            # start — and the canned MP opening (mp_galley_jumprest)
-            # anchors the host aboard the Kestrel. Anchor the joiner
-            # explicitly to the location the host's prior turn already
-            # established so the narrator does not invent a new place
-            # for the second PC. Falls back to "the same scene the
-            # other player(s) are in" when no seated PC has a known
-            # location yet (degenerate path, but defensible).
-            #
-            # Wave 2B (story 45-48): pick the location from any
-            # already-seated non-joiner PC's per-character entry.
-            # ``party_location()`` would return None here because the
-            # just-chargen'd joiner doesn't have an entry yet.
+            # Playtest 2026-05-02: joiner-orientation drifted off the
+            # established scene. Anchor the joiner to the host's already-
+            # established location so the narrator doesn't invent a new place;
+            # fall back to "the same scene the others are in" when no seated PC
+            # has a known location. Wave 2B (45-48): read the location from any
+            # already-seated non-joiner PC (party_location() is None pre-entry).
             host_location = ""
             for _seated_char in sd.snapshot.player_seats.values():
                 if _seated_char and _seated_char != joiner_char_name:
@@ -5649,11 +2876,8 @@ class WebSocketSessionHandler:
                 if host_location
                 else "into the same scene the other player(s) are already in"
             )
-            # For 3+ PCs, name the other already-seated PCs explicitly so
-            # the narrator has the full table in view when it describes
-            # the arrival ("Carl is already here..."-style). This is the
-            # 3-PC repro's correct shape — Donut's beat referenced Carl
-            # by name, and Katia's beat should reference Carl and Donut.
+            # For 3+ PCs, name the other seated PCs so the narrator has the full
+            # table in view when describing the arrival.
             other_pcs = [
                 n for n in sd.snapshot.player_seats.values() if n and n != joiner_char_name
             ]
@@ -5672,12 +2896,9 @@ class WebSocketSessionHandler:
                 "already present."
             )
             source_tier = "mp_joiner_orientation"
-            # OTEL: surface the anchor decision so the GM panel can
-            # verify the joiner's prompt actually carried the host's
-            # location (CLAUDE.md OTEL principle — Sebastien's
-            # lie-detector). Mirror the watcher_publish payload as a
-            # span.add_event so OTLP exporters (Jaeger / in-memory
-            # test exporter) see it without needing
+            # OTEL: surface the anchor decision (CLAUDE.md OTEL principle) so the
+            # GM panel can verify the joiner's prompt carried the host's location.
+            # Mirrored as span.add_event so OTLP exporters see it without
             # SIDEQUEST_WATCHER_AS_SPANS=1.
             anchor_kind = "host_location" if host_location else "fallback_same_scene"
             _watcher_publish(
@@ -5709,22 +2930,12 @@ class WebSocketSessionHandler:
             action = sd.opening_seed or "I look around and take in my surroundings."
             source_tier = "world_or_genre_hook" if sd.opening_seed else "fallback"
 
-        # Cold-open delivery (playtest 2026-04-25 [P2]). The opening seed
-        # is in-medias-res prose the world author wrote for the player to
-        # READ — not narrator prompt-context. Previously it was passed only
-        # as `action='...'` and the narrator silently consumed it: long
-        # hooks got truncated (player saw "the iron door grinds inward" but
-        # never the kidnapping setup), short hooks survived expansion by
-        # accident. The contract was broken either way.
-        #
-        # Fix: emit the seed directly to the player as a NARRATION message
-        # BEFORE running the narrator. The narrator's first turn still
-        # receives the seed as `action` and continues from where the hook
-        # ends — so what the player sees is hook + continuation as a
-        # single coherent opening beat, instead of the hook being a ghost
-        # in the prompt. Suppressed when the pack has no opening hook
-        # (the fallback "I look around…" is the player's implicit action,
-        # not authored cold-open prose).
+        # Cold-open delivery (playtest 2026-04-25 [P2]). The opening seed is
+        # authored prose for the player to READ, not narrator prompt-context;
+        # passing it only as `action` truncated long hooks. Fix: emit the seed as
+        # a NARRATION message BEFORE the narrator runs (which still receives it as
+        # `action` and continues from there) so the player sees hook + continuation
+        # as one beat. Suppressed when the pack has no opening hook.
         cold_open_messages: list[object] = []
         if sd.opening_seed:
             cold_open_messages.append(
@@ -5744,10 +2955,17 @@ class WebSocketSessionHandler:
             )
 
         lore_context = await self._retrieve_lore_for_turn(sd, action)
+        entity_retrieval = await self._retrieve_entities_for_turn(sd, action)
         turn_context = _build_turn_context(
             sd,
             opening_directive=sd.opening_directive,
+            # Pingpong 2026-06-05 [BAR-1]: only the seeded branch hands the
+            # already-cold-opened invitation down as `action`; the joiner-
+            # orientation and fallback branches build genuine prompts that
+            # were never displayed, so they keep the plain framing.
+            opening_seed_shown=bool(sd.opening_seed) and action == sd.opening_seed,
             lore_context=lore_context,
+            entity_retrieval=entity_retrieval,
             room=self._room,
         )
 
@@ -5770,82 +2988,68 @@ class WebSocketSessionHandler:
             turn_context,
             is_opening_turn=True,
         )
-        messages = cold_open_messages + list(narrator_messages)
 
-        # Canned-openings Phase 4 (Task 19): emit opening.played span at
-        # consumption so the GM panel can verify the canned opening
-        # actually reached the narrator's first turn rather than being
-        # silently dropped. Only fires when a directive was actually
-        # rendered (skips MP-joiner / no-opening / fallback paths).
+        # Story 71-13 / sq-playtest 2026-05-28 #G1: route the cold-open prose
+        # through the EventLog HERE so it is event-sourced, projected, and
+        # replayable — the same pipeline the narrator's own NARRATION already
+        # used inside _execute_narration_turn. The narrator_messages are
+        # ALREADY emitted (NARRATION event-sourced internally; RENDER_QUEUED /
+        # NARRATION_END / AUDIO_CUE appended as non-durable frames), so the
+        # caller must NOT re-emit them. The prior caller-side loop blindly
+        # re-emitted EVERY opening message as kind="NARRATION", which persisted
+        # a RenderQueuedPayload (`{render_id}`) under NARRATION and bricked
+        # reconnect: replay rebuilt it as NarrationPayload, failed validation,
+        # and tore down the socket on every reconnect.
+        _opening_connected = (
+            self._room.connected_player_ids()
+            if self._room is not None
+            and callable(getattr(self._room, "connected_player_ids", None))
+            else []
+        )
+        _cold_open_author = sd.player_id if len(_opening_connected) > 1 else None
+        # Pingpong 2026-06-05 [BAR-1]: a SOLO-fired cold-open seed is the
+        # authored second-person ``first_turn_invitation`` for THIS player.
+        # Journaled without a visibility sidecar, a later MP joiner's
+        # lazy_fill/replay handed them the host's "you" prose raw (the
+        # ADR-105 leak half of the doubled-opening finding). Anchor it:
+        # visible_to=[author] rides the existing VisibilityTagRule (packs
+        # with projection.yaml) and the structural 1c NARRATION list-gate
+        # (CoreInvariantStage) for packs without one. MP-fired openings
+        # (>1 connected — the group invitation) keep today's broadcast.
+        _cold_open_sidecar: dict | None = None
+        if _cold_open_author is None:
+            _cold_open_sidecar = {
+                "visible_to": [sd.player_id],
+                "fidelity": {},
+                "anchor_pc": sd.snapshot.player_seats.get(sd.player_id) or sd.player_name,
+                "pov_strategy": "private",
+            }
+        emitted_cold_open = [
+            self._emit_event(
+                "NARRATION",
+                m.payload.model_copy(update={"visibility_sidecar": _cold_open_sidecar})
+                if _cold_open_sidecar is not None
+                else m.payload,
+                author_player_id=_cold_open_author,
+            )
+            for m in cold_open_messages
+        ]
+        messages = emitted_cold_open + list(narrator_messages)
+
+        # Canned-openings Phase 4 (Task 19): emit opening.played at consumption
+        # so the GM panel can verify the opening reached the narrator's first
+        # turn. Only fires when a directive was rendered.
         if sd.opening_directive is not None:
             record_opening_played(
                 opening_id=getattr(sd, "_resolved_opening_id", None) or "<unknown>",
                 turn_id=sd.snapshot.turn_manager.interaction,
             )
 
-        # Consume once — Rust uses `opening_directive.take()`; subsequent
-        # turns must run directive-free. Same for the seed: it's a
-        # one-shot bootstrap action, not a recurring input.
+        # Consume once — subsequent turns run directive- and seed-free.
         sd.opening_seed = None
         sd.opening_directive = None
 
         return messages
-
-    # ------------------------------------------------------------------
-    # Audio DJ backend construction
-    # ------------------------------------------------------------------
-
-    def _build_audio_backend(
-        self,
-        genre_slug: str,
-        genre_pack: GenrePack,
-    ) -> LibraryBackend | None:
-        """Construct the per-session LibraryBackend, or None when the
-        genre pack has no resolvable on-disk audio directory.
-
-        Emits a watcher event when audio is disabled so the GM panel
-        can tell whether a silent turn is because the narration had
-        no cues or because audio is off entirely."""
-        try:
-            pack_dir = GenreLoader().find(genre_slug)
-        except Exception as exc:  # noqa: BLE001 — best-effort; never crash connect
-            # Span emission replaces the prior direct ``_watcher_publish`` —
-            # ``WatcherSpanProcessor`` re-emits via
-            # ``SPAN_ROUTES[SPAN_AUDIO_BACKEND_DISABLED]``.
-            with audio_backend_disabled_span(
-                reason="pack_dir_missing",
-                genre=genre_slug,
-            ):
-                logger.warning(
-                    "audio.backend_skipped reason=pack_dir_missing genre=%s error=%s",
-                    genre_slug,
-                    exc,
-                )
-            return None
-
-        audio_cfg = genre_pack.audio
-        if not audio_cfg.mood_tracks and not audio_cfg.themes and not audio_cfg.sfx_library:
-            with audio_backend_disabled_span(
-                reason="empty_config",
-                genre=genre_slug,
-            ):
-                logger.info(
-                    "audio.backend_skipped reason=empty_config genre=%s",
-                    genre_slug,
-                )
-            return None
-
-        with audio_backend_enabled_span(
-            genre=genre_slug,
-            mood_count=len(audio_cfg.mood_tracks) + len(audio_cfg.themes),
-            sfx_count=len(audio_cfg.sfx_library),
-        ):
-            logger.info(
-                "audio.backend_ready genre=%s pack_dir=%s",
-                genre_slug,
-                pack_dir,
-            )
-        return LibraryBackend(audio_cfg, base_path=pack_dir)
 
     # ------------------------------------------------------------------
     # Visual-scene render dispatch
@@ -5860,33 +3064,19 @@ class WebSocketSessionHandler:
         snapshot_location_before: str | None = None,
         acting_character_name: str | None = None,
     ) -> RenderQueuedMessage | None:
-        """Fire a render request at the media daemon if the trigger policy
-        classifies this turn as eligible (Story 45-30).
+        """Fire a render request if the trigger policy rates this turn eligible
+        (Story 45-30).
 
-        Returns a ``RenderQueuedMessage`` to append to the turn's outbound
-        frames, or ``None`` when nothing was dispatched (policy chose
-        none_policy, feature flag off, daemon offline, or no outbound queue).
-
-        The actual daemon round-trip runs on a background task; the IMAGE
-        reply lands on ``self._out_queue`` whenever the render completes.
-        Failures are swallowed with OTEL spans + watcher events so that no
-        render error ever crashes a turn.
+        Returns a ``RenderQueuedMessage`` to append to outbound frames, or
+        ``None`` when nothing dispatched (none_policy, flag off, daemon offline,
+        no queue). The daemon round-trip runs on a background task; failures are
+        swallowed with OTEL/watcher events so no render error crashes a turn.
 
         Args:
-            encounter_resolved_this_turn: ``True`` when an active encounter
-                transitioned to ``resolved`` on this turn. Threaded from
-                the ``narration_apply`` seam — the caller compares pre- and
-                post-apply state to derive this signal. Default ``False``
-                lets test fixtures and the throttled-by-other-gates code
-                path call without rewiring.
-            snapshot_location_before: The acting PC's location BEFORE
-                ``_apply_narration_result_to_snapshot`` mutated it (Wave
-                2B uses ``snapshot.party_location(perspective=acting)``).
-                The production caller captures this; tests that call
-                directly may omit it (defaults to the party consensus
-                accessor, which is correct when the test never applies
-                narration). The classifier needs the pre-apply value to
-                detect SCENE_CHANGE.
+            encounter_resolved_this_turn: ``True`` when an encounter resolved
+                this turn (threaded from the narration_apply seam).
+            snapshot_location_before: the acting PC's location pre-apply, which
+                the classifier needs to detect SCENE_CHANGE.
         """
         from sidequest.agents.orchestrator import NarrationTurnResult
         from sidequest.server.render_trigger import (
@@ -5901,16 +3091,14 @@ class WebSocketSessionHandler:
         had_visual_scene = visual is not None
         subject_present = had_visual_scene and bool(getattr(visual, "subject", "").strip())
 
-        # Policy gate (Story 45-30) — classify the trigger reason from the
-        # structured signals already on NarrationTurnResult plus the
-        # out-of-band ``encounter_resolved_this_turn`` boolean. The
-        # narrator's ``visual_scene`` block is NOT a signal; pre-story
-        # behaviour gated on it and let banter turns render while named-
-        # NPC introductions did not.
+        # Policy gate (Story 45-30) — classify from the structured signals on
+        # NarrationTurnResult + encounter_resolved_this_turn. The visual_scene
+        # block is NOT a signal (pre-story it let banter render but skipped
+        # named-NPC introductions).
         location_before = (
             snapshot_location_before
             if snapshot_location_before is not None
-            else sd.snapshot.party_location(perspective=sd.player_name)
+            else sd.snapshot.party_location(perspective=perspective_character_name(sd))
         )
         reason = classify_trigger(
             result,
@@ -5920,16 +3108,9 @@ class WebSocketSessionHandler:
 
         turn_number = sd.snapshot.turn_manager.interaction
 
-        # NONE_POLICY: emit both render.trigger (with eligible=False,
-        # queued=False) AND the focused render.policy_skip event. Per
-        # CLAUDE.md OTEL Observability Principle, silence is the bug —
-        # the GM panel needs the negative confirmation that the policy
-        # ran on this turn. Pattern matches the existing render
-        # throttle_decision watcher events: event_type=state_transition,
-        # field=render, op=<route key>. The SPAN_ROUTES entry for
-        # render.trigger is a static registry check (asserts the route
-        # is declared); the actual emission happens here so it works
-        # without an OTEL span being opened.
+        # NONE_POLICY: emit render.trigger (eligible=False) AND render.policy_skip
+        # so the GM panel gets negative confirmation the policy ran (CLAUDE.md
+        # OTEL principle — silence is the bug).
         if reason is RenderTriggerReason.NONE_POLICY:
             _watcher_publish(
                 "state_transition",
@@ -5954,17 +3135,15 @@ class WebSocketSessionHandler:
                     "reason": reason.value,
                     "turn_number": turn_number,
                     "player_id": sd.player_id,
-                    # Distinguishes "narrator didn't even try" from
-                    # "narrator emitted a subject but no policy match".
+                    # "narrator didn't try" vs "emitted a subject, no policy match".
                     "narrator_emitted_subject": subject_present,
                 },
                 component="render",
             )
             return None
 
-        # Eligible — emit the trigger event before any downstream gate so
-        # the GM panel sees the policy decision even when the feature
-        # flag / daemon / queue refuses below.
+        # Eligible — emit the trigger event before any downstream gate so the GM
+        # panel sees the policy decision even when a gate refuses below.
         _watcher_publish(
             "state_transition",
             {
@@ -5972,10 +3151,8 @@ class WebSocketSessionHandler:
                 "op": "trigger",
                 "reason": reason.value,
                 "eligible": True,
-                # ``queued`` reflects whether dispatch will actually proceed.
-                # We set True optimistically here; if a downstream gate
-                # refuses synchronously, that path emits its own watcher
-                # event and we don't retroactively edit this one.
+                # Optimistic True; a downstream synchronous refusal emits its
+                # own watcher event rather than editing this one.
                 "queued": True,
                 "turn_number": turn_number,
                 "player_id": sd.player_id,
@@ -5985,11 +3162,8 @@ class WebSocketSessionHandler:
             component="render",
         )
 
-        # Eligible turns still need a visual_scene to actually compose a
-        # prompt — the policy says "the narrative weight earned a render"
-        # but the prompt-building code requires a subject string. When
-        # the narrator didn't emit one (narrative weight present but
-        # subject missing), we cannot dispatch — log loudly and return.
+        # Eligible turns still need a visual_scene subject to compose a prompt.
+        # When the narrator emitted none, we cannot dispatch — log loudly.
         if not subject_present:
             logger.warning(
                 "render.eligible_no_subject reason=%s turn=%d — "
@@ -6013,15 +3187,9 @@ class WebSocketSessionHandler:
             )
             return None
         client = DaemonClient()
-        # Story 45-31: the turn pipeline already consulted the
-        # daemon-state mirror immediately before the scrapbook emit
-        # and stamped ``sd.render_unavailable_pending`` accordingly.
-        # The SCRAPBOOK_ENTRY for this turn already carries
-        # ``render_status="unavailable"`` (live broadcast + DB row in
-        # one shot — no duplicate row, no separate replay JOIN).
-        # All this branch needs to do is: emit the watcher event so
-        # the GM panel sees the substitution, increment counters, and
-        # return None to skip the daemon round-trip.
+        # Story 45-31: render_unavailable_pending was already stamped before the
+        # scrapbook emit (which carries render_status="unavailable"). Here just
+        # emit the watcher event, bump counters, and skip the round-trip.
         if sd.render_unavailable_pending:
             from sidequest.daemon_client.state_mirror import get_mirror as _get_mirror
 
@@ -6065,15 +3233,12 @@ class WebSocketSessionHandler:
             )
             return None
         if self._out_queue is None:
-            # Test configurations that don't attach room context can't
-            # receive async IMAGE frames. Skip loudly so we don't fire
-            # a render whose result has nowhere to land.
+            # No room context (test config) — nowhere for the IMAGE to land.
             logger.warning("render.skipped reason=no_outbound_queue")
             return None
 
-        # ADR-050 image pacing throttle. Consult BEFORE allocating a
-        # render_id or touching the daemon — suppressed renders should
-        # leave no trace beyond the OTEL decision event.
+        # ADR-050 image pacing throttle. Consult BEFORE allocating a render_id
+        # or touching the daemon — suppressed renders leave only the OTEL event.
         throttle_decision = sd.image_pacing_throttle.should_render()
         provisional_render_id = uuid.uuid4().hex[:12]
         if not throttle_decision.allowed:
@@ -6098,9 +3263,8 @@ class WebSocketSessionHandler:
                 component="render",
             )
             return None
-        # Allowed — emit the allow decision so the GM panel can see both
-        # branches in the OTEL stream (lie-detector requirement per
-        # CLAUDE.md OTEL Observability Principle).
+        # Allowed — emit the allow decision so the GM panel sees both branches
+        # (CLAUDE.md OTEL lie-detector requirement).
         _watcher_publish(
             "state_transition",
             {
@@ -6118,18 +3282,12 @@ class WebSocketSessionHandler:
         render_id = provisional_render_id
         tier = (visual.tier or "scene_illustration").strip() or "scene_illustration"
 
-        # The location is free-form narrator prose (e.g. "The Kestrel —
-        # Galley, Mid-Coast", "Engine Bay"), not a `where:<slug>`
-        # PlaceCatalog ref. The daemon's PromptComposer `_resolve_location`
-        # accepts an empty location (transient setting, subject prose
-        # carries it) and rejects anything else with ValueError →
-        # COMPOSE_FAILED. Sanitize once, centrally, before the per-tier
-        # branches: only true `where:<slug>` refs survive. Free-form prose
-        # is dropped to "" with a loud watcher event so the GM panel can
-        # see the contract gap (per CLAUDE.md "no silent fallbacks" + OTEL
-        # observability principle). Wave 2B (story 45-48): the source is
-        # the acting PC's per-character location; party-frame consensus
-        # is the fallback when the caller didn't thread an actor.
+        # The location is free-form narrator prose, not a `where:<slug>`
+        # PlaceCatalog ref. The daemon's _resolve_location accepts "" but rejects
+        # anything non-ref with ValueError → COMPOSE_FAILED. Sanitize centrally:
+        # only true `where:<slug>` refs survive; free-form prose drops to "" with
+        # a loud watcher event (no silent fallback). Wave 2B (45-48): source is
+        # the acting PC's location, party consensus as fallback.
         raw_location = (
             sd.snapshot.party_location(perspective=acting_character_name)
             if acting_character_name
@@ -6153,19 +3311,11 @@ class WebSocketSessionHandler:
                 severity="info",
             )
 
-        # R2 migration Task 20: propagate the session id into the daemon's
-        # render params so the artifact upload key
-        # ``artifacts/<world>/<session>/<kind>/<sha>.<ext>`` carries the
-        # real session segment. The daemon's zimage worker reads
-        # ``params["session_id"]`` and falls back to the literal
-        # ``"unknown"`` when missing — defeating per-session bucketing,
-        # save-aware sweeping, and operational forensics. The slug-connect
-        # path (the only production render-eligible path) always populates
-        # ``sd.game_slug``; ``sd._room.slug`` is the same value and used
-        # as the source of truth so we don't depend on an optional field.
-        # Per "No Silent Fallbacks" we refuse to dispatch with a missing
-        # session id rather than papering over it with a placeholder —
-        # the dispatch-eligible code path is always inside an active room.
+        # R2 migration Task 20: propagate the session id so the upload key
+        # ``artifacts/<world>/<session>/<kind>/<sha>.<ext>`` carries a real
+        # session segment (the daemon falls back to "unknown" when missing,
+        # defeating per-session bucketing). Per "No Silent Fallbacks", refuse to
+        # dispatch with a missing session id rather than use a placeholder.
         if self._room is not None:
             session_id = self._room.slug
         elif sd.game_slug is not None:
@@ -6185,35 +3335,22 @@ class WebSocketSessionHandler:
             "location": sanitized_location,
             "narration": result.narration,
             "genre": sd.genre_slug,
-            # Catalog-injected compose wiring (slice 1): the daemon scopes
-            # CharacterCatalog / PlaceCatalog / StyleCatalog by (genre, world).
-            # Without this field the daemon's compose conditional is dead and
-            # every render falls through to the prose-subject prompt path.
-            #
-            # Bug #2a (playtest 2026-04-26) reinforced the same constraint:
-            # the daemon's PromptComposer gate at
-            # sidequest-daemon/sidequest_daemon/media/daemon.py:453 short-
-            # circuits when ``params["world"]`` is absent, falling back to a
-            # raw subject+mood+tags prompt with no genre/world style. That
-            # silent fallback is why grimvault renders looked generic.
-            # Sending ``world`` engages the explicit-recipes pipeline so the
-            # world-scoped ``visual_style.yaml::positive_suffix`` actually
-            # lands in the ART_SENSIBILITY.WORLD slot.
+            # Catalog-injected compose (slice 1): the daemon scopes its catalogs
+            # by (genre, world). Without ``world`` the compose conditional is
+            # dead and every render falls through to the prose-subject path with
+            # no world style (Bug #2a, playtest 2026-04-26 — generic grimvault
+            # renders). Sending it engages the world-scoped visual_style suffix.
             "world": sd.world_slug,
             # R2 migration Task 20 — see preamble above.
             "session_id": session_id,
         }
-        # Portrait initials overlay (story 37-30 AC-4): the daemon's
-        # portrait composer needs the character's display name to draw
-        # the initials card. Other tiers ignore the field.
+        # Portrait initials overlay (story 37-30 AC-4): the portrait composer
+        # needs the display name for the initials card. Other tiers ignore it.
         if tier == "portrait":
             params["subject_name"] = sd.player_name
-            # Catalog-injected compose, slice 2: emit a structured `pc:<slug>`
-            # ref so the daemon's PromptComposer routes the portrait through
-            # the catalog instead of falling through to the prose-subject
-            # path. When the snapshot has a Character to project, we ship a
-            # descriptor blob alongside; the daemon's `_get_composer` calls
-            # `CharacterCatalog.add_pc` from it.
+            # Catalog-injected compose, slice 2: a `pc:<slug>` ref routes the
+            # portrait through the catalog instead of the prose-subject path; ship
+            # a descriptor blob for the daemon's CharacterCatalog.add_pc.
             pc_slug = _slugify_player_name(sd.player_name)
             params["characters"] = [f"pc:{pc_slug}"]
             descriptor = _build_pc_descriptor(sd, pc_slug)
@@ -6221,27 +3358,22 @@ class WebSocketSessionHandler:
                 params["pc_descriptor"] = descriptor
         elif tier == "scene_illustration":
             pc_slug = _slugify_player_name(sd.player_name)
-            # Match daemon's `build_cue_from_params` read key. The portrait
-            # branch above sets `characters`; this branch was previously
-            # setting `participants`, which the daemon never reads — so the
-            # PC ref never reached the composer's casting layer. The on-
-            # the-wire field is `characters` for both tiers; the daemon
-            # routes to portrait/illustration recipes by tier.
+            # `characters` is the field the daemon reads (it once read
+            # `participants` here, which the daemon ignored, so the PC ref never
+            # reached the composer). The daemon routes to recipes by tier.
             params["characters"] = [f"pc:{pc_slug}"]
             descriptor = _build_pc_descriptor(sd, pc_slug)
             if descriptor is not None:
                 params["pc_descriptor"] = descriptor
 
-        # Story 37-30 — record the (room_slug, player_id) mapping at
-        # dispatch so the completion handler can route the IMAGE through
-        # the live RoomRegistry queue instead of a closure-captured one
-        # that may have gone stale across a reconnect.
+        # Story 37-30 — record (room_slug, player_id) at dispatch so the
+        # completion handler routes the IMAGE via the live RoomRegistry queue,
+        # not a closure-captured one that may be stale after a reconnect.
         room_slug = self._room.slug if self._room is not None else None
         player_id = sd.player_id
-        # Playtest 2026-05-02: capture the dispatch-time turn_id so the
-        # render-completed handler can backfill the matching
-        # scrapbook_entries row's image_url (the live broadcast is
-        # ephemeral; replay-on-reload misses every IMAGE without this).
+        # Playtest 2026-05-02: capture the dispatch-time turn_id so completion
+        # can backfill the scrapbook row's image_url (the broadcast is ephemeral;
+        # replay-on-reload misses every IMAGE without this).
         dispatch_turn_id = int(sd.snapshot.turn_manager.interaction)
 
         logger.info(
@@ -6261,23 +3393,18 @@ class WebSocketSessionHandler:
                 "turn_number": sd.snapshot.turn_manager.interaction,
                 "player_id": player_id,
                 "room_slug": room_slug or "",
-                # Bug #2a lie-detector: surface the genre/world routing the
-                # daemon will see. If ``world`` is empty here, the daemon's
-                # PromptComposer gate will short-circuit and the render will
-                # silently fall back to a styleless prompt.
+                # Bug #2a lie-detector: surface the genre/world the daemon sees.
+                # Empty ``world`` means the compose gate short-circuits to a
+                # styleless prompt.
                 "genre": sd.genre_slug,
                 "world": sd.world_slug,
             },
             component="render",
         )
 
-        # Story 45-31: backpressure check — orthogonal to ADR-050 throttle.
-        # The throttle gates time-since-last-dispatch; backpressure gates
-        # concurrent in-flight depth so a daemon already swamped with
-        # renders gets a loud warn (and counter increment) before the
-        # 4th render piles in. Default threshold = 3; warn-mode lets
-        # the request through, conservative-tunable reject-mode is left
-        # for a follow-up.
+        # Story 45-31: backpressure check (orthogonal to the ADR-050 throttle's
+        # time gate) — warns on concurrent in-flight depth before a swamped
+        # daemon piles on. Threshold 3; warn-mode lets the request through.
         sd.render_enqueue_count += 1
         in_flight_after = sd.render_in_flight + 1
         backpressure_threshold = 3
@@ -6304,14 +3431,11 @@ class WebSocketSessionHandler:
                 component="render",
                 severity="warning",
             )
-        # Increment the in-flight counter; ``_run_render`` decrements
-        # it in the background task's finally block.
+        # _run_render decrements this in its finally block.
         sd.render_in_flight = in_flight_after
 
-        # Capture the legacy out_queue only as a fallback for the
-        # pre-room-context test/legacy path. When `_room` is set (the
-        # production slug-connect path) the completion handler looks the
-        # queue up via the registry instead.
+        # legacy_queue is the pre-room-context fallback; when _room is set the
+        # completion handler looks the queue up via the registry instead.
         legacy_queue = self._out_queue if room_slug is None else None
         asyncio.create_task(
             self._run_render(
@@ -6325,10 +3449,8 @@ class WebSocketSessionHandler:
                 sd,
             )
         )
-        # ADR-050 — record the dispatch *after* the task is created so the
-        # cooldown only starts ticking on actually-dispatched renders.
-        # ``force_render`` callers intentionally skip this call to leave the
-        # cadence untouched; this code path is the organic dispatch only.
+        # ADR-050 — record the dispatch after the task is created so the cooldown
+        # only ticks on actually-dispatched renders (force_render skips this).
         sd.image_pacing_throttle.record_render()
 
         return RenderQueuedMessage(
@@ -6338,150 +3460,51 @@ class WebSocketSessionHandler:
         )
 
     # ------------------------------------------------------------------
-    # Audio DJ dispatch — runs after NARRATION, ships AUDIO_CUE alongside.
-    # Synchronous filesystem lookup; no daemon round-trip, no placeholder
-    # message. See docs/superpowers/specs/2026-04-23-audio-dj-wiring-design.md
-    # ------------------------------------------------------------------
-
-    def _maybe_dispatch_audio(
-        self,
-        sd: _SessionData,
-        result: object,
-    ) -> AudioCueMessage | None:
-        """Run the DJ: interpret narration → resolve tracks → return an
-        AudioCueMessage, or None if any precondition fails. Best-effort;
-        exceptions are caught and logged so audio never crashes a turn."""
-        from sidequest.agents.orchestrator import NarrationTurnResult
-
-        if not isinstance(result, NarrationTurnResult):
-            return None
-        if sd.audio_backend is None:
-            self._audio_skip(sd, "no_audio_config")
-            return None
-        narration = (result.narration or "").strip()
-        if not narration:
-            self._audio_skip(sd, "no_narration")
-            return None
-
-        try:
-            # Keep the span open across interpret + payload build so its
-            # attributes can carry the *final* DJ decision (mood/track/
-            # sfx). Playtest 2026-04-24 "sidequest.audio.dispatch span has
-            # zero attributes — blind OTEL" — the prior impl opened the
-            # span with no attributes and the GM panel couldn't tell why
-            # the client was firing "Unable to decode audio data".
-            with tracer.start_as_current_span("sidequest.audio.dispatch") as span:
-                span.set_attribute("genre", sd.genre_slug)
-                span.set_attribute("turn_number", sd.snapshot.turn_manager.interaction)
-                cues = _AUDIO_INTERPRETER.interpret(
-                    narration,
-                    sd.audio_backend._config,  # type: ignore[attr-defined]
-                )
-                payload = build_audio_cue_payload(
-                    cues,
-                    audio_backend=sd.audio_backend,
-                    genre_slug=sd.genre_slug,
-                )
-                # Emit the resolved cue shape so the GM panel can correlate
-                # a turn's dispatch with the client-side decode errors.
-                span.set_attribute("mood", payload.mood or "")
-                span.set_attribute("music_track", payload.music_track or "")
-                span.set_attribute("sfx_count", len(payload.sfx_triggers))
-                if payload.sfx_triggers:
-                    # Spans accept list attributes; truncate to keep the
-                    # trace payload bounded even with long SFX batches.
-                    span.set_attribute(
-                        "sfx_triggers",
-                        list(payload.sfx_triggers[:16]),
-                    )
-                span.set_attribute(
-                    "reason",
-                    "empty_cues"
-                    if payload.mood is None and not payload.sfx_triggers
-                    else "dispatched",
-                )
-        except Exception as exc:  # noqa: BLE001 — best-effort; never crash a turn
-            logger.warning("audio.dispatch_failed error=%s", exc)
-            self._audio_skip(sd, "error", extra={"error": type(exc).__name__})
-            return None
-
-        if payload.mood is None and not payload.sfx_triggers:
-            self._audio_skip(sd, "empty_cues")
-            return None
-
-        self._audio_dispatched(sd, payload)
-        return AudioCueMessage(
-            payload=payload,
-            player_id=sd.player_id,
-        )
-
-    def _audio_skip(
-        self,
-        sd: _SessionData,
-        reason: str,
-        *,
-        extra: dict[str, object] | None = None,
-    ) -> None:
-        # Span emission replaces the prior direct ``_watcher_publish`` —
-        # ``WatcherSpanProcessor`` re-emits via
-        # ``SPAN_ROUTES[SPAN_AUDIO_SKIPPED]``. ``extra`` is JSON-encoded
-        # because OTEL drops dict attribute values; the route extract
-        # returns the JSON string for dashboard parity.
-        with audio_skipped_span(
-            reason=reason,
-            turn_number=sd.snapshot.turn_manager.interaction,
-            extra=extra,
-        ):
-            pass
-
-    def _audio_dispatched(
-        self,
-        sd: _SessionData,
-        payload: AudioCuePayload,
-    ) -> None:
-        # Span emission replaces the prior direct ``_watcher_publish`` —
-        # ``WatcherSpanProcessor`` re-emits via
-        # ``SPAN_ROUTES[SPAN_AUDIO_DISPATCHED]``.
-        with audio_dispatched_span(
-            turn_number=sd.snapshot.turn_manager.interaction,
-            mood=payload.mood or "",
-            music_track=payload.music_track or "",
-            sfx_count=len(payload.sfx_triggers),
-        ):
-            pass
-
-    # ------------------------------------------------------------------
     # Lore embedding — RAG retrieval (pre-turn) + worker dispatch (post-turn)
     # ------------------------------------------------------------------
 
     async def _retrieve_lore_for_turn(self, sd: _SessionData, action: str) -> str | None:
-        """Pre-turn lore RAG retrieval. Delegates to ``lore_embed.retrieve_for_turn``.
-
-        Phase 3 of session_handler decomposition (see
-        docs/superpowers/specs/2026-04-27-session-handler-decomposition-design.md).
-        """
+        """Pre-turn lore RAG retrieval. Delegates to ``lore_embed.retrieve_for_turn``."""
         from sidequest.server.dispatch import lore_embed
 
         return await lore_embed.retrieve_for_turn(self, sd, action)
 
-    def _dispatch_embed_worker(self, sd: _SessionData) -> None:
-        """Post-turn embed worker dispatch. Delegates to ``lore_embed.dispatch_worker``.
+    async def _retrieve_entities_for_turn(self, sd: _SessionData, action: str) -> RetrievedEntities:
+        """Pre-turn universal entity retrieval (ADR-118 §D4/§D5, Stories 75-5/75-7).
 
-        Phase 3 of session_handler decomposition (see
-        docs/superpowers/specs/2026-04-27-session-handler-decomposition-design.md).
+        Delegates to ``universal_retrieval.retrieve_for_turn``: the typed sibling
+        of :meth:`_retrieve_lore_for_turn` assembles the floor (scene-present
+        NPCs) and the semantic fill under a per-turn token budget, sanitizing
+        retrieved content at the choke-point, emitting the ``retrieval.universal``
+        span, AND (75-7) publishing the decision as a watcher event so it reaches
+        the GM panel. Never raises.
         """
+        from sidequest.server.dispatch import universal_retrieval
+
+        return await universal_retrieval.retrieve_for_turn(self, sd, action)
+
+    def _dispatch_embed_worker(self, sd: _SessionData) -> None:
+        """Post-turn embed worker dispatch. Delegates to ``lore_embed.dispatch_worker``."""
         from sidequest.server.dispatch import lore_embed
 
         lore_embed.dispatch_worker(self, sd)
 
+    def _accrete_lore_for_turn(self, sd: _SessionData) -> None:
+        """Post-turn lore accretion. Delegates to ``lore_accretion.accrete_for_turn``."""
+        from sidequest.server.dispatch import lore_accretion
+
+        lore_accretion.accrete_for_turn(self, sd)
+
+    def _sync_entity_cards_for_turn(self, sd: _SessionData) -> None:
+        """Post-turn entity-card sync. Delegates to ``entity_sync.sync_for_turn`` (75-6)."""
+        from sidequest.server.dispatch import entity_sync
+
+        entity_sync.sync_for_turn(self, sd)
+
     async def _run_embed_worker(
         self, sd: _SessionData, pending_count: int, turn_number: int
     ) -> None:
-        """Background embed worker. Delegates to ``lore_embed.run_worker``.
-
-        Phase 3 of session_handler decomposition (see
-        docs/superpowers/specs/2026-04-27-session-handler-decomposition-design.md).
-        """
+        """Background embed worker. Delegates to ``lore_embed.run_worker``."""
         from sidequest.server.dispatch import lore_embed
 
         await lore_embed.run_worker(self, sd, pending_count, turn_number)
@@ -6497,21 +3520,14 @@ class WebSocketSessionHandler:
         dispatch_turn_id: int,
         sd: _SessionData | None = None,
     ) -> None:
-        """Background render coroutine — waits for the daemon reply, then
-        enqueues an IMAGE message or logs a failure. Never raises; any
-        exception is caught and surfaced as an OTEL watcher event.
+        """Background render coroutine — waits for the daemon reply, enqueues an
+        IMAGE or logs a failure. Never raises (exceptions become OTEL events).
 
-        Routing (story 37-30): when ``room_slug`` is set, the IMAGE is
-        delivered to the *current* outbound queue looked up via the
-        RoomRegistry — so a reconnect mid-render still gets its image.
-        ``legacy_queue`` is the pre-room-context fallback for
-        constructions that haven't joined a room (used by older tests
-        and the deprecated genre/world connect path).
-
-        ``sd`` is optional for backwards compatibility with legacy
-        call sites; when provided, the in-flight render counter
-        (story 45-31) is decremented in the finally block so the
-        backpressure gate sees an accurate concurrent depth."""
+        Routing (story 37-30): with ``room_slug`` set, the IMAGE goes to the
+        current outbound queue via the RoomRegistry so a mid-render reconnect
+        still gets it; ``legacy_queue`` is the pre-room-context fallback. ``sd``
+        optional — when present, the in-flight counter (45-31) decrements in finally.
+        """
         try:
             await self._run_render_inner(
                 client,
@@ -6525,8 +3541,7 @@ class WebSocketSessionHandler:
             )
         finally:
             if sd is not None:
-                # Decrement is unconditional — a render that completed,
-                # failed, or raised all release the in-flight slot.
+                # Unconditional — completed, failed, or raised all release the slot.
                 sd.render_in_flight = max(0, sd.render_in_flight - 1)
 
     async def _run_render_inner(
@@ -6540,10 +3555,8 @@ class WebSocketSessionHandler:
         dispatch_turn_id: int,
         sd: _SessionData | None = None,
     ) -> None:
-        """Inner body of ``_run_render`` — does the actual daemon
-        round-trip and IMAGE-frame fan-out. Split from ``_run_render``
-        so the counter decrement (story 45-31) lives in a single
-        finally block instead of being repeated at every return site.
+        """Inner body of ``_run_render`` — the daemon round-trip + IMAGE fan-out.
+        Split out so the 45-31 counter decrement lives in one finally block.
         """
         try:
             reply = await client.render(params)
@@ -6600,20 +3613,12 @@ class WebSocketSessionHandler:
             return
 
         image_url = str(reply.get("image_url") or "")
-        # R2 migration (Task 11): when the daemon uploaded the artifact
-        # to R2 (Task 13+) the reply carries an ``r2_key`` field. Prefer
-        # that path through the asset_urls seam — it returns the CDN
-        # URL the UI should fetch. When ``r2_key`` is absent we're on
-        # the legacy local-tmpdir flow, which still needs the
-        # self-healing render mount described below.
-        #
-        # Self-healing render mount (S4-BUG, legacy path): if the
-        # daemon restarted mid-session its tmp dir changed;
-        # ensure_render_mount appends the new dir to the live
-        # StaticFiles mount so /renders/* keeps serving without a
-        # server restart. Falls back to the legacy env-based rewriter
-        # so single-root paths (and unit tests that don't wire app
-        # singleton) continue to work.
+        # R2 migration (Task 11): an ``r2_key`` in the reply means the artifact
+        # uploaded to R2 — resolve via the asset_urls seam (CDN URL). Absent →
+        # legacy local-tmpdir flow, which needs the self-healing render mount:
+        # ensure_render_mount appends a restarted daemon's new tmp dir to the
+        # live StaticFiles mount so /renders/* keeps serving (falls back to the
+        # env-based rewriter for single-root paths + tests).
         from sidequest.server.render_mounts import (
             ensure_render_mount,
             get_active_app,
@@ -6623,6 +3628,59 @@ class WebSocketSessionHandler:
         r2_key = reply.get("r2_key")
         if r2_key:
             served_url = resolve_artifact_url(str(r2_key)) or ""
+            # Story 65-2: link this runtime artifact to the save that produced
+            # it, so the UI can rehydrate it on resume without re-rendering.
+            # The content sha256 already lives inside r2_key, so nothing else
+            # is needed from the reply. asset_type is the <kind> segment of
+            # artifacts/<world>/<session>/<kind>/<sha>.<ext>.
+            if sd is not None:
+                # The SaveRepository Protocol guarantees append_asset_ledger; no
+                # hasattr guard (that would be a silent-skip fallback). A missing
+                # method should raise loudly via the except below.
+                key_parts = str(r2_key).split("/")
+                asset_type = key_parts[3] if len(key_parts) >= 5 else str(params.get("tier") or "")
+                entity_ref = str(params.get("subject_name") or params.get("subject") or "unknown")
+                try:
+                    sd.repository.append_asset_ledger(
+                        r2_key=str(r2_key),
+                        asset_type=asset_type,
+                        entity_ref=entity_ref,
+                        created_turn=dispatch_turn_id,
+                    )
+                except Exception as exc:  # noqa: BLE001 — ledger failure must not lose the image
+                    logger.error(
+                        "asset_ledger.write_failed render_id=%s r2_key=%s error=%s",
+                        render_id,
+                        r2_key,
+                        exc,
+                    )
+                    _watcher_publish(
+                        "state_transition",
+                        {
+                            "field": "asset_ledger",
+                            "op": "write_failed",
+                            "r2_key": str(r2_key),
+                            "render_id": render_id,
+                            "error": type(exc).__name__,
+                        },
+                        component="render",
+                        severity="error",
+                    )
+                else:
+                    _watcher_publish(
+                        "state_transition",
+                        {
+                            "field": "asset_ledger",
+                            "op": "write",
+                            "r2_key": str(r2_key),
+                            "asset_type": asset_type,
+                            "entity_ref": entity_ref,
+                            "session_id": sd.repository.session_id,
+                            "turn": dispatch_turn_id,
+                        },
+                        component="render",
+                        severity="info",
+                    )
         else:
             active_app = get_active_app()
             healed: str | None = (
@@ -6647,27 +3705,18 @@ class WebSocketSessionHandler:
             player_id=player_id,
         )
 
-        # Story 37-30 — resolve the live room at completion time, not at
-        # dispatch. When the room is known, look up the *current*
-        # SessionRoom via the RoomRegistry so reconnects mid-render still
-        # land on live sockets.
-        #
-        # Bug #2b (playtest 2026-04-26): IMAGE used to land on a single
-        # per-player queue (the originating actor's socket). Shared-world
-        # scene imagery (POI/encounter/location/illustration) should be
-        # shared across all connected players in the room — so peers see
-        # the same image event. Switch to ``room.broadcast(msg)`` so
-        # every attached outbound queue receives the IMAGE. The legacy
-        # single-queue path remains for non-room-context tests and the
-        # deprecated genre/world connect path.
+        # Story 37-30 — resolve the live room at completion time via the
+        # RoomRegistry so mid-render reconnects land on live sockets.
+        # Bug #2b (playtest 2026-04-26): IMAGE used to land on the actor's queue
+        # alone; shared-world scene imagery should reach every player, so
+        # broadcast to all queues. Legacy single-queue path remains for tests.
         recipients_count = 0
         broadcast_used = False
         if room_slug is not None:
             registry = self._room_registry
             room = registry.get(room_slug) if registry is not None else None
             if room is None:
-                # No live room — surface as session_not_found so the GM
-                # panel sees the drop instead of it being silent.
+                # No live room — surface as session_not_found, not a silent drop.
                 logger.warning(
                     "render.session_not_found render_id=%s room=%s player=%s reason=room_missing",
                     render_id,
@@ -6690,25 +3739,12 @@ class WebSocketSessionHandler:
                     severity="warning",
                 )
                 return
-            # Broadcast to every connected socket in the room. We do NOT
-            # exclude the originating player — they need the IMAGE too,
-            # mirroring the SCRAPBOOK_ENTRY/_emit_event fan-out pattern.
-            #
-            # Pingpong 2026-04-30 "Scrapbook only on first-connected
-            # player": the OTEL `recipients_count` was being computed
-            # from `connected_player_ids()` (the `_connected` map size)
-            # but the broadcast itself iterates `_outbound_queues`. When
-            # those diverge — typically because a peer's WebSocket
-            # closed without their `detach_outbound` call running yet,
-            # leaving them in `_connected` but not in `_outbound_queues`
-            # — the broadcast log over-reports recipients while peers
-            # silently miss the IMAGE. Switched to using the broadcast
-            # return value (the list of (socket_id, player_id) pairs
-            # actually queued onto) so the GM panel sees ground truth
-            # instead of a synthesized count. Also surfaces per-recipient
-            # detail so the dashboard's "scrapbook.image_received" lie-
-            # detector has the receive-side player_id list to diff
-            # against.
+            # Broadcast to every socket (the originator included, mirroring the
+            # _emit_event fan-out). Pingpong 2026-04-30: recipients_count once came
+            # from connected_player_ids() while the broadcast iterates
+            # _outbound_queues; when those diverge the log over-reported. Now use
+            # the broadcast return value (actual (socket_id, player_id) pairs) so
+            # the GM panel sees ground truth.
             try:
                 delivered_recipients = room.broadcast(msg, exclude_socket_id=None)
             except Exception as exc:  # noqa: BLE001 — broadcast failure must surface
@@ -6733,10 +3769,8 @@ class WebSocketSessionHandler:
                 )
                 return
             broadcast_used = True
-            # Lie-detector: ground-truth recipient count from the
-            # broadcast itself, plus the connect-map count for the
-            # divergence check. If these differ, the GM panel surfaces
-            # the gap directly instead of the prior over-report.
+            # Lie-detector: ground-truth count from the broadcast plus the
+            # connect-map count, so the GM panel surfaces any divergence.
             recipients_count = len(delivered_recipients)
             connected_count = len(room.connected_player_ids())
             recipient_socket_ids = [sid for sid, _pid in delivered_recipients]
@@ -6788,8 +3822,8 @@ class WebSocketSessionHandler:
                 )
                 return
         else:
-            # Legacy / test path: no room context, fall back to the
-            # single per-connection queue captured at dispatch.
+            # Legacy / test path: no room context — use the single queue
+            # captured at dispatch.
             target_queue = legacy_queue
             if target_queue is None:
                 logger.warning(
@@ -6818,11 +3852,9 @@ class WebSocketSessionHandler:
                 return
             recipients_count = 1
 
-        # Playtest 2026-05-02: persist the URL into the matching
-        # scrapbook_entries row so `slug_connect.replay` can JOIN it back
-        # into the SCRAPBOOK_ENTRY payload on reconnect. The IMAGE
-        # broadcast above is ephemeral; without this UPDATE every browser
-        # reload turns 1/3 of the scrapbook into placeholder cards.
+        # Playtest 2026-05-02: persist the URL into the scrapbook_entries row so
+        # replay can JOIN it back on reconnect (the IMAGE broadcast is ephemeral;
+        # without this every reload leaves placeholder cards).
         from sidequest.server.emitters import update_scrapbook_image_url
 
         scrapbook_updated = update_scrapbook_image_url(
@@ -6861,19 +3893,16 @@ class WebSocketSessionHandler:
                 "elapsed_ms": elapsed,
                 "player_id": player_id,
                 "room_slug": room_slug or "",
-                # Bug #2b lie-detector: surface whether the IMAGE was
-                # delivered as a shared-world broadcast or via the
-                # legacy single-queue path, plus the recipient count.
-                # Without this, "image only reached one player" was an
-                # invisible regression (playtest 2026-04-26).
+                # Bug #2b lie-detector: surface broadcast vs. legacy single-queue
+                # path + recipient count ("image only reached one player" was an
+                # invisible regression, playtest 2026-04-26).
                 "broadcast": broadcast_used,
                 "recipients": recipients_count,
             },
             component="render",
         )
-        # Story 45-31: stamp the per-session diagnostic counters with
-        # the most-recent successful render so the post-session
-        # snapshot can quote the last image the player actually saw.
+        # Story 45-31: stamp the diagnostic counters with the latest successful
+        # render so the post-session snapshot can quote the last image shown.
         if sd is not None:
             from datetime import UTC
             from datetime import datetime as _dt

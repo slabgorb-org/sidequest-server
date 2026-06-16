@@ -145,11 +145,24 @@ walked off, killed. Required when an NPC joins or leaves; a one-scene NPC
 who never leaves their post is NOT a companion.
 
 npcs_present: Array of NPC mentions from this turn's prose. Format each entry:
-  {"name": "<NPC or group name>", "role": "<hostile|friendly|neutral|merchant|ally|patron|quest_giver|...>", "pronouns": "<she/her|he/him|they/them|it/its>", "appearance": "<short physical/attire note>", "is_new": true, "side": "player|opponent|neutral"}
+  {"name": "<NPC or group name>", "role": "<hostile|friendly|neutral|merchant|ally|patron|quest_giver|...>", "pronouns": "<she/her|he/him|they/them|it/its>", "appearance": "<short physical/attire note>", "is_new": true, "side": "player|opponent|neutral", "is_creature": false, "disengaged": false}
 Only name, role, and side are required; the rest are optional but
 recommended on first appearance. `side` is a closed enum the engine routes
 on — "player" (party allies), "opponent" (anyone the party is fighting),
 "neutral" (bystanders, audience). Wrong sides break momentum routing.
+`disengaged`: true on a `side="opponent"` mention ONLY the turn that opponent
+LEAVES the confrontation (walks out of a negotiation, flees a parley) — the
+engine then withdraws them and ends the encounter so the player isn't trapped
+against an Other who left. Keep it false for an opponent still present or merely
+losing, and stop seating a disengaged opponent in later turns.
+`is_creature`: set true for a wild animal, beast, or monster that belongs to
+NO culture or faction (a pack of lions, a swamp horror, a swarm). A creature
+keeps the descriptive name you give it ("The Forest Lions") and is NEVER
+given a person-name or a culture by the engine. Set false (the default) for
+any person — even a named bandit, a masked stranger, or a whole people/clan;
+those route through the culture namer. A talking, named character with a
+personality is a person, not a creature, even if non-human (the Cowardly
+Lion, a dragon envoy) — `is_creature` is for un-named fauna, not characters.
 
 CRITICAL ADVERSARY RULE — every adversary, enemy, creature, or antagonist
 NPC referenced this turn MUST appear in npcs_present with both `name AND role`.

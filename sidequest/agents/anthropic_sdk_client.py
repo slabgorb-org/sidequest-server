@@ -1,15 +1,36 @@
-"""AnthropicSdkClient — Phase A foundation."""
+"""AnthropicSdkClient — narrator transport on ``claude-agent-sdk`` (ADR-101
+amendment, Story 119-3).
+
+The narrator inference path runs through the ``claude-agent-sdk`` ``query()``
+loop over the Max **subscription** pool (the bundled CLI's OAuth login), NOT the
+raw ``anthropic`` Messages SDK over the metered PAYG ledger. ``ANTHROPIC_API_KEY``
+/ ``ANTHROPIC_AUTH_TOKEN`` must be **unset** (a set key re-routes to PAYG — the
+119-1 NO-GO); :func:`assert_subscription_auth` enforces that loudly at call time
+(No Silent Fallbacks). Context isolation (AC1) is pinned in
+:func:`build_agent_sdk_options`.
+"""
 
 from __future__ import annotations
 
 import inspect
 import logging
-import math
 import os
+import tempfile
+import uuid
 from collections import deque
 from collections.abc import Awaitable, Callable
-from typing import Any, Literal
+from typing import Any
 
+from claude_agent_sdk import (
+    ClaudeAgentOptions,
+    create_sdk_mcp_server,
+    query,
+)
+from claude_agent_sdk import (
+    tool as _sdk_tool,
+)
+
+from sidequest.agents import cost_safety
 from sidequest.agents.anthropic_cost import compute_cost_usd
 from sidequest.agents.claude_client import LlmClientError
 from sidequest.agents.tooling_protocol import (
@@ -21,6 +42,11 @@ from sidequest.agents.tooling_protocol import (
     ToolUseBlock,
 )
 from sidequest.telemetry.spans.llm_request import llm_request_span
+from sidequest.telemetry.spans.narrator import (
+    narrator_multi_text_block_discarded_span,
+    narrator_tool_loop_cap_hit_span,
+    narrator_tool_loop_span,
+)
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish_event
 
 logger = logging.getLogger(__name__)
@@ -43,53 +69,25 @@ logger = logging.getLogger(__name__)
 # pattern. Calls with ``session_id=None`` (non-narrator codepaths like
 # the dungeon materializer one-shot curate) are detector no-ops — no
 # read, no append.
-
-_BASELINE_WINDOW_K: int = 10
-_WARMUP_COST_USD_FLOOR: float = 0.03
-_WARMUP_INPUT_TOKENS_FLOOR: int = 12_000
-_COST_TRIGGER_MULTIPLE: float = 5.0
-_IO_FINGERPRINT_INPUT_MULTIPLE: float = 2.0
-_IO_FINGERPRINT_OUTPUT_CEILING: int = 50
-# Architect spec-check A: absolute ceiling that fires REGARDLESS of the
-# rolling baseline. The rolling baseline can self-train onto a sustained
-# runaway — if 10 consecutive turns bill at $0.12 each, the baseline
-# averages to ~$0.12 and call 11 at $0.18 is only 1.5x baseline (sub-5x
-# threshold → silent). The May-23 incident, if it had run continuously,
-# would have calibrated the alarm into silence within 10 calls. The
-# absolute floor at $0.30/call (10x the $0.03 healthy-turn target) is the
-# safety net for that case. Symmetric with the I/O fingerprint trigger,
-# which already has an absolute output<50 floor.
-_ABSOLUTE_COST_USD_FLOOR: float = 0.30
-
-# Story 61-followup-D — trained-into-silence mitigations layered onto the
-# 61-4 detector surface.
 #
-# (A) Baseline ceiling: clamp the rolling-mean baseline used in the
-# comparator at 3× the warmup floors. The 5×-cost-multiple and
-# 2×-I/O-fingerprint rules then have hard upper trip thresholds
-# (5×$0.09=$0.45 for cost; 2×36_000=72_000 tokens for input) regardless
-# of how high the rolling mean has drifted under sustained runaway. The
-# 60-7 annees_folles ramp (11 turns at $0.165 sustained, no 5x alarm)
-# is the specific shape this clamp catches on the input axis.
-_BASELINE_COST_CEILING: float = 3.0 * _WARMUP_COST_USD_FLOOR
-_BASELINE_INPUT_CEILING: int = 3 * _WARMUP_INPUT_TOKENS_FLOOR
+# Story 91-4 — the constants, the trigger comparator, the ceiling-env
+# parsing, and the cross-call-site ledger moved to
+# ``sidequest.agents.cost_safety`` so the Haiku adapters (``_AsideLlm``,
+# ``_IntentRouterLlm``) run the SAME detector and feed the SAME
+# per-session cumulative. Re-bound here (assignment, not import-as) for
+# the pre-91-4 importers — semantics and values unchanged.
 
-# (B) Absolute input_tokens floor: fires regardless of baseline AND
-# regardless of output_tokens. Catches the high-output sibling of the
-# 60K-in/12-out fingerprint — a 50K-in/800-out call slips past the I/O
-# fingerprint (output≥50) but is still a strong canary for snapshot
-# bloat / section misroute. Halfway between ~20K healthy steady-state
-# and 60K runaway fingerprint (story body §B).
-_ABSOLUTE_INPUT_TOKENS_FLOOR: int = 40_000
-
-# (C) Session-cumulative HARD KILL: per-session_id cumulative cost
-# capped at $10.00. Sized at ~333 healthy turns ($0.03 target) — generous
-# headroom for a real long session, tight enough that a 60-7-class
-# regression at $0.165/turn caps at ~60 turns / one playtest evening,
-# not a weekend. Overridable via SIDEQUEST_SESSION_COST_CEILING_USD for
-# the manual-playtest closure step (operator lowers to $0.50 to validate
-# end-to-end termination without running up a real bill).
-_SESSION_COST_CEILING_USD: float = 10.0
+_BASELINE_WINDOW_K = cost_safety._BASELINE_WINDOW_K
+_WARMUP_COST_USD_FLOOR = cost_safety._WARMUP_COST_USD_FLOOR
+_WARMUP_INPUT_TOKENS_FLOOR = cost_safety._WARMUP_INPUT_TOKENS_FLOOR
+_COST_TRIGGER_MULTIPLE = cost_safety._COST_TRIGGER_MULTIPLE
+_IO_FINGERPRINT_INPUT_MULTIPLE = cost_safety._IO_FINGERPRINT_INPUT_MULTIPLE
+_IO_FINGERPRINT_OUTPUT_CEILING = cost_safety._IO_FINGERPRINT_OUTPUT_CEILING
+_ABSOLUTE_COST_USD_FLOOR = cost_safety._ABSOLUTE_COST_USD_FLOOR
+_BASELINE_COST_CEILING = cost_safety._BASELINE_COST_CEILING
+_BASELINE_INPUT_CEILING = cost_safety._BASELINE_INPUT_CEILING
+_ABSOLUTE_INPUT_TOKENS_FLOOR = cost_safety._ABSOLUTE_INPUT_TOKENS_FLOOR
+_SESSION_COST_CEILING_USD = cost_safety._SESSION_COST_CEILING_USD
 
 
 class AnthropicSdkClientError(LlmClientError):
@@ -98,6 +96,18 @@ class AnthropicSdkClientError(LlmClientError):
 
 class AnthropicSdkConfigError(AnthropicSdkClientError):
     """Construction-time configuration problem (missing key, bad TTL)."""
+
+
+class AgentSdkAuthUnavailable(AnthropicSdkClientError):
+    """Story 119-3 (AC2): the claude-agent-sdk subscription path is not usable.
+
+    Raised when a PAYG credential (``ANTHROPIC_API_KEY`` /
+    ``ANTHROPIC_AUTH_TOKEN``) is SET on the SDK path — a set key silently
+    re-routes to the metered API-platform ledger (the 119-1 NO-GO) — OR when a
+    query fails because the subscription login is absent. There is NO PAYG
+    fallback on this transport: the failure surfaces as a loud raise, never a
+    degraded-but-successful result (No Silent Fallbacks).
+    """
 
 
 class AnthropicSdkLoopExceeded(AnthropicSdkClientError):
@@ -129,65 +139,143 @@ class AnthropicSdkCostCeilingExceeded(AnthropicSdkClientError):
         self.ceiling_usd = ceiling_usd
 
 
-CacheTtl = Literal["5m", "1h"]
-_VALID_TTLS: frozenset[str] = frozenset({"5m", "1h"})
+# Story 119-3 — the in-process SDK-MCP server name the narration tools are
+# collected under. The model addresses each tool by ``mcp__<server>__<tool>``;
+# the ``@tool`` handler bridge maps it back to the bare name for the registry
+# (spec §5.2/§5.3).
+_NARRATION_SERVER_NAME = "narration"
 
 
-# 1h ephemeral cache is a beta: without this header on the request the
-# API rejects ``ttl: "1h"`` and every narration turn 400s. Sent only on
-# the 1h path — see ``complete_with_tools``.
-_EXTENDED_CACHE_TTL_BETA = "extended-cache-ttl-2025-04-11"
+# Story 119-3 — process-stable neutral working dir for the agent SDK. The SDK
+# treats ``cwd`` as the project root and would absorb the repo ``CLAUDE.md`` /
+# ``.claude`` from the launch dir (the spike answered in an SM persona — AC1).
+# An empty temp dir holds none of that.
+_AGENT_SDK_CWD: str | None = None
+
+
+def _neutral_cwd() -> str:
+    """Return a process-stable empty dir with no ``CLAUDE.md`` / ``.claude``."""
+    global _AGENT_SDK_CWD
+    if _AGENT_SDK_CWD is None:
+        _AGENT_SDK_CWD = tempfile.mkdtemp(prefix="sidequest-agentsdk-cwd-")
+    return _AGENT_SDK_CWD
+
+
+def assert_subscription_auth() -> None:
+    """Raise :class:`AgentSdkAuthUnavailable` if a PAYG credential is set
+    (Story 119-3 AC2 — the INVERSE of the old "key required" check).
+
+    The claude-agent-sdk transport draws the Max subscription pool only with
+    ``ANTHROPIC_API_KEY`` AND ``ANTHROPIC_AUTH_TOKEN`` both unset; a set key
+    silently re-routes to the metered PAYG ledger (the 119-1 NO-GO). There is
+    no PAYG fallback — fail loud (No Silent Fallbacks).
+    """
+    for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+        if os.environ.get(var):
+            raise AgentSdkAuthUnavailable(
+                f"{var} is set — the claude-agent-sdk transport must run with "
+                "ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN both UNSET so auth "
+                "resolves to the Max subscription login. A set credential "
+                "re-routes to the metered PAYG ledger (the 119-1 NO-GO). Unset "
+                "it; there is no PAYG fallback (No Silent Fallbacks)."
+            )
+
+
+def build_agent_sdk_options(
+    *,
+    model: str,
+    system_prompt: str,
+    max_turns: int,
+    allowed_tools: list[str] | None = None,
+    mcp_servers: dict[str, Any] | None = None,
+    output_format: dict[str, Any] | None = None,
+) -> ClaudeAgentOptions:
+    """Build the frozen ``ClaudeAgentOptions`` for one subscription call.
+
+    Asserts the no-PAYG-cred invariant (AC2) and pins context isolation (AC1):
+    a **plain-string** ``system_prompt`` (never the ``claude_code`` preset), a
+    neutral ``cwd`` with no ``CLAUDE.md``, and ``setting_sources=[]`` +
+    ``add_dirs=[]`` so no on-disk config tier (user/project/local) or repo
+    ``CLAUDE.md`` is absorbed.
+
+    ``max_turns`` is floored at 2: the SDK spends an internal finalize turn, so
+    a literal ``max_turns=1`` fails closed with ``subtype='error_max_turns'``
+    (the +1 is MANDATORY — spec §3.6 / OQ-16).
+    """
+    assert_subscription_auth()
+    return ClaudeAgentOptions(
+        model=model,
+        system_prompt=system_prompt,
+        max_turns=max(2, int(max_turns)),
+        allowed_tools=list(allowed_tools) if allowed_tools else [],
+        mcp_servers=dict(mcp_servers) if mcp_servers else {},
+        output_format=output_format,
+        setting_sources=[],
+        add_dirs=[],
+        cwd=_neutral_cwd(),
+    )
+
+
+def _usage_int(usage: Any, key: str) -> int:
+    """Read a token count from ``ResultMessage.usage`` (``dict | None`` — spec
+    §3.2) or a usage object, defaulting to 0 when absent."""
+    if usage is None:
+        return 0
+    if isinstance(usage, dict):
+        return int(usage.get(key, 0) or 0)
+    return int(getattr(usage, key, 0) or 0)
+
+
+def _is_agent_result_message(msg: Any) -> bool:
+    """Duck-typed terminal ``ResultMessage`` detector (fakes file §): the
+    terminal message carries ``is_error`` + ``num_turns``; the streaming
+    ``AssistantMessage`` carries ``content`` and neither."""
+    return hasattr(msg, "is_error") and hasattr(msg, "num_turns")
+
+
+def _build_narration_tool_handler(
+    *,
+    bare_name: str,
+    tool_dispatch: Callable[[ToolUseBlock], Awaitable[ToolResultBlock] | ToolResultBlock],
+    accumulator: list[ToolUseBlock],
+) -> Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]:
+    """The SDK-MCP → ``default_registry.dispatch`` bridge for one tool (spec §5.3).
+
+    The agent SDK owns the loop and invokes this handler when the model calls
+    the tool. The handler re-enters the orchestrator's ``dispatch`` closure with
+    a ``ToolUseBlock`` carrying the **bare** tool name (the registry only knows
+    bare names — ``Registry.dispatch`` looks up ``block.name``), appends it to
+    the per-turn ledger (the fabricated-roll detector + GM-panel ledger depend
+    on a complete ``tool_calls`` list), and returns the dispatch result in the
+    SDK's ``{"content":[...],"is_error":...}`` shape so the SDK feeds it back to
+    the model.
+    """
+
+    async def handler(args: dict[str, Any]) -> dict[str, Any]:
+        block = ToolUseBlock(id=f"toolu_{uuid.uuid4().hex}", name=bare_name, arguments=args)
+        accumulator.append(block)
+        maybe = tool_dispatch(block)
+        result = await maybe if inspect.isawaitable(maybe) else maybe
+        return {
+            "content": [{"type": "text", "text": result.content}],
+            "is_error": result.is_error,
+        }
+
+    return handler
 
 
 class AnthropicSdkClient:
     """Anthropic SDK client implementing ToolingLlmClient."""
 
-    def __init__(
-        self,
-        *,
-        sdk: Any | None = None,
-        cache_ttl: CacheTtl | None = None,
-    ) -> None:
-        self._api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if sdk is None and not self._api_key:
-            raise AnthropicSdkConfigError(
-                "ANTHROPIC_API_KEY not set — required to construct "
-                "AnthropicSdkClient without an explicit sdk= injection."
-            )
-
-        # Operative default is 1h: submit-and-wait MP cadence routinely
-        # exceeds the 5m window, so a 5m write is re-paid almost every
-        # turn. A 1h write is 2x base and is INTENDED to amortize across
-        # an ~85-turn session. Operators can still opt back to 5m via the
-        # env var.
-        #
-        # Story 60-4 (2026-05-23): the 1h amortization is now realized on
-        # tool-use continuations as well. ``complete_with_tools`` adds a moving
-        # cache_control breakpoint on the last content block of the newest
-        # continuation message, so the appended tool_use/tool_result blocks
-        # ride the same cache as system_blocks[0] + tools instead of forcing a
-        # 5m re-mint of the ~11.7k prefix on every iter 2+. Measured savings
-        # vs the original bug shape: ~70% of per-turn narrator cost (60-3
-        # baseline ~$0.116/turn → ~$0.035/turn post-fix). See
-        # ``sprint/archive/60-3-session.md`` (diagnosis) and
-        # ``sprint/archive/60-4-session.md`` (fix).
-        resolved_ttl = (
-            cache_ttl
-            if cache_ttl is not None
-            else os.environ.get("SIDEQUEST_ANTHROPIC_CACHE_TTL", "1h")
-        )
-        if resolved_ttl not in _VALID_TTLS:
-            raise AnthropicSdkConfigError(
-                f"SIDEQUEST_ANTHROPIC_CACHE_TTL={resolved_ttl!r} invalid; "
-                f"must be one of {sorted(_VALID_TTLS)}"
-            )
-        self.cache_ttl: CacheTtl = resolved_ttl  # type: ignore[assignment]
-
-        if sdk is None:
-            from anthropic import AsyncAnthropic
-
-            sdk = AsyncAnthropic(api_key=self._api_key)
-        self._sdk = sdk
+    def __init__(self) -> None:
+        # Story 119-3: the narrator transport is claude-agent-sdk over the Max
+        # subscription pool. No ``ANTHROPIC_API_KEY`` is read or required —
+        # construction never touches the network. The auth invariant is the
+        # INVERSE of the old "key required" check (a SET key re-routes to PAYG —
+        # the 119-1 NO-GO) and is asserted loudly at call time in
+        # :func:`build_agent_sdk_options` (AC2, No Silent Fallbacks). The
+        # late-bound module-level ``query`` symbol is the fake-injection seam
+        # (OQ-9), monkeypatched by the test fleet — no ``sdk=`` injection.
 
         # Story 61-followup-A — per-session_id rolling baselines for the
         # cost-runaway fingerprint detector. Two parallel windows
@@ -211,45 +299,25 @@ class AnthropicSdkClient:
         # Story 61-followup-D — per-session_id cumulative cost tracker
         # and the configurable ceiling. ``None`` session_ids bypass the
         # tracker (non-narrator codepaths). Env var override is parsed
-        # at construction with the same no-silent-fallback discipline as
-        # the cache TTL above — non-parseable or non-positive values
-        # raise AnthropicSdkConfigError immediately.
-        ceiling_env = os.environ.get("SIDEQUEST_SESSION_COST_CEILING_USD")
-        if ceiling_env is None:
-            self.session_cost_ceiling_usd: float = _SESSION_COST_CEILING_USD
-        else:
-            try:
-                parsed = float(ceiling_env)
-            except ValueError as exc:
-                raise AnthropicSdkConfigError(
-                    f"SIDEQUEST_SESSION_COST_CEILING_USD={ceiling_env!r} "
-                    "could not be parsed as a float."
-                ) from exc
-            # Reject NaN, ±inf, and non-positive values. Python's float()
-            # accepts 'inf', 'nan', 'infinity' silently — and NaN comparisons
-            # return False so `cumulative >= nan` never fires, which would
-            # silently disable the entire hard-kill feature. inf likewise
-            # produces an unreachable ceiling. Reviewer 2026-05-23 finding
-            # (security + rule-checker §11 + edge-hunter).
-            if not math.isfinite(parsed) or parsed <= 0.0:
-                raise AnthropicSdkConfigError(
-                    f"SIDEQUEST_SESSION_COST_CEILING_USD={ceiling_env!r} "
-                    "must be a finite positive number."
-                )
-            self.session_cost_ceiling_usd = parsed
+        # at construction with no-silent-fallback discipline — the
+        # validation (NaN/inf/non-positive → AnthropicSdkConfigError,
+        # Reviewer 2026-05-23 finding) moved to
+        # ``cost_safety.parse_session_cost_ceiling_usd`` (91-4) so the
+        # Haiku adapters apply the identical check at THEIR construction.
+        self.session_cost_ceiling_usd: float = cost_safety.parse_session_cost_ceiling_usd()
 
-        # Per-session_id cumulative cost. Populated after every successful
-        # call in ``complete_with_tools``; consulted at the next call's
-        # entry to short-circuit if the ceiling has already been crossed.
-        self._session_cumulative_cost_usd: dict[str, float] = {}
-        # Per-session "ceiling already announced" tracker. Prevents
-        # duplicate ``session.cost_ceiling_exceeded`` emits when the same
-        # session keeps trying to make calls after the kill.
-        self._session_ceiling_announced: set[str] = set()
-
-    @property
-    def api_key_present(self) -> bool:
-        return bool(self._api_key)
+        # Per-session_id cumulative cost + announce set. Story 91-4:
+        # these are ALIASES onto the process-level ``SessionCostLedger``
+        # dicts — narrator, aside, and intent-router spend all land in
+        # ONE pot per session, so the running-total pulse reports the
+        # combined figure and a ceiling kill on any call site terminally
+        # refuses every other call site for that session. The instance
+        # attrs are kept (rather than reading the ledger inline) because
+        # the 61-followup-D machinery and its test suite address them
+        # here; aliasing changes sharing, not behavior.
+        _ledger = cost_safety.ledger()
+        self._session_cumulative_cost_usd: dict[str, float] = _ledger.cumulative_cost_usd
+        self._session_ceiling_announced: set[str] = _ledger.ceiling_announced
 
     # ------------------------------------------------------------------
     # complete_with_tools
@@ -265,278 +333,264 @@ class AnthropicSdkClient:
         *,
         model: str,
         max_iterations: int = 8,
+        iteration_cap: int | None = None,
         max_tokens: int = 4096,
-        on_text_delta: Callable[[str], None] | None = None,
         session_id: str | None = None,
+        caller: str = "narrator",
+        tool_choice: dict[str, Any] | None = None,
     ) -> ToolingResult:
-        # Story 61-followup-D §C.2 — pre-flight ceiling check. A session
-        # whose cumulative has already crossed the ceiling on a prior call
-        # MUST raise immediately without touching the SDK. This is the
-        # "no further billing" half of the terminal-refusal contract.
+        """Drive one narration turn through the claude-agent-sdk ``query()`` loop.
+
+        Story 119-3: the manual ``messages.create`` + ``stop_reason=='tool_use'``
+        re-call loop is replaced by the SDK's own loop. The system blocks are
+        concatenated into a plain-string ``system_prompt`` (AC1 isolation); the
+        narration tools become in-process SDK-MCP ``@tool`` handlers that bridge
+        back into ``tool_dispatch`` (spec §5.3); the SDK runs the loop and emits a
+        terminal ``ResultMessage`` carrying the converged prose, ``num_turns``,
+        and ``usage``. The ``ToolingResult`` shape and every OTEL signal are
+        preserved (spec §4/§7.4).
+
+        ``max_tokens`` and ``tool_choice`` are accepted for ToolingLlmClient
+        signature compatibility but not forwarded: the CLI owns output length and
+        the Agent SDK exposes no ``tool_choice`` (spec §3.6). A read-only caller
+        (the aside, ``tool_choice={"type":"none"}``) passes no ``tool_dispatch``,
+        so no tools are advertised — the agent SDK's analog of "present no tools".
+        """
+        del max_tokens, tool_choice  # signature-compat only (see docstring)
+
+        # Story 61-followup-D §C.2 — pre-flight ceiling check. A session whose
+        # cumulative already crossed the ceiling MUST raise before any spend.
         if session_id is not None:
             self._check_cost_ceiling(session_id)
 
-        sdk_system = self._build_system_array(system_blocks)
-        sdk_tools = self._build_tools_array(tools)
-
-        running_messages: list[dict[str, Any]] = [
-            {"role": m.role, "content": m.content} for m in messages
-        ]
-        all_tool_uses: list[ToolUseBlock] = []
-        last_text = ""
-        cumulative_in = 0
-        cumulative_out = 0
-        cumulative_cache_read = 0
-        cumulative_cache_write = 0
-        cumulative_cache_write_5m = 0
-        cumulative_cache_write_1h = 0
-        cumulative_cost_usd = 0.0
-        last_model = model
-
-        # ttl:"1h" on the cache_control markers is rejected unless the
-        # extended-cache-ttl beta is opted in via this header. The 5m path
-        # sends no extra header (request stays identical to the prior
-        # behavior). No silent fallback: if the API still rejects 1h the
-        # error surfaces, it is not downgraded to 5m.
-        extra_headers = (
-            {"anthropic-beta": _EXTENDED_CACHE_TTL_BETA} if self.cache_ttl == "1h" else None
+        # AC1: the assembled narrator system text is a PLAIN STRING (never the
+        # claude_code preset). The three-zone cacheable layout collapses to one
+        # string — the CLI owns caching now, so the per-block cache markers are
+        # gone (spec §6.4.3 / OQ-6).
+        system_prompt = "\n\n".join(b.text for b in system_blocks if b.text)
+        # The SDK owns the tool round-trip, so only the initial user turn(s) are
+        # sent as the prompt; tool_result continuations are no longer hand-built.
+        prompt = "\n\n".join(
+            m.content for m in messages if isinstance(m.content, str) and m.content
         )
 
-        initial_message_count = len(running_messages)
+        all_tool_uses: list[ToolUseBlock] = []
+        mcp_servers, allowed_tools = self._build_narration_mcp(
+            tools, tool_dispatch, all_tool_uses
+        )
+        options = build_agent_sdk_options(
+            model=model,
+            system_prompt=system_prompt,
+            max_turns=max_iterations,
+            allowed_tools=allowed_tools,
+            mcp_servers=mcp_servers,
+        )
 
-        for iteration in range(1, max_iterations + 1):
-            # Story 60-4/60-7: every iter — iter=1 included — build the API
-            # payload with a moving cache_control breakpoint on the LAST
-            # content block of the newest user message. Without this marker
-            # the API auto-caches the content sitting past our last explicit
-            # breakpoint (the system_blocks[0]+tools prefix) at the default 5m
-            # TTL — on iter=1 that's the new user message + recency-zone
-            # deltas (~17K tok), on iter=2+ it's the appended tool_use /
-            # tool_result blocks. The iter=2 marker then writes the same
-            # content at 1h seconds later, displacing the 5m write — pure
-            # waste. Stamping every iter at the configured TTL overrides the
-            # auto-5m default so the write lands at 1h directly. Measured
-            # savings: ~$0.041/turn ($0.137 → $0.096) on top of the 60-4
-            # baseline. The payload is rebuilt fresh per iteration so prior
-            # calls' captured kwargs stay snapshot-clean.
-            payload_messages = self._build_messages_payload(
-                running_messages,
-                is_continuation=len(running_messages) > initial_message_count,
+        last_text = ""
+        last_model = model
+        result_msg: Any = None
+        with llm_request_span(model=model) as span:
+            async for message in query(prompt=prompt, options=options):
+                if _is_agent_result_message(message):
+                    result_msg = message
+                    continue
+                model_id = getattr(message, "model", None)
+                if model_id:
+                    last_model = model_id
+                content = getattr(message, "content", None)
+                if isinstance(content, list):
+                    text_chunks = [
+                        b.text for b in content if getattr(b, "type", None) == "text"
+                    ]
+                    # Playtest 2026-06-07 (five_points doubled-narration): keep
+                    # only the LAST text block of an assistant message; earlier
+                    # blocks are drafts. Emit a WARNING span so the drop is
+                    # audited, never silent (house OTEL rule, spec §7.3).
+                    if len(text_chunks) > 1:
+                        discarded_chars = sum(len(c) for c in text_chunks[:-1])
+                        logger.warning(
+                            "narrator.multi_text_block_discarded count=%d "
+                            "discarded_chars=%d kept_chars=%d caller=%s",
+                            len(text_chunks) - 1,
+                            discarded_chars,
+                            len(text_chunks[-1]),
+                            caller,
+                        )
+                        with narrator_multi_text_block_discarded_span(
+                            discarded_count=len(text_chunks) - 1,
+                            discarded_chars=discarded_chars,
+                            kept_chars=len(text_chunks[-1]),
+                            iteration=1,
+                            caller=caller,
+                        ):
+                            pass
+                    if text_chunks:
+                        last_text = text_chunks[-1]
+
+            if result_msg is None:
+                raise AnthropicSdkClientError(
+                    "claude-agent-sdk query produced no terminal ResultMessage "
+                    f"(caller={caller!r}, model={model!r}) — cannot account for "
+                    "the call (No Silent Fallbacks)."
+                )
+
+            # Usage / cost accounting from ResultMessage.usage (dict|None, §3.2).
+            usage = getattr(result_msg, "usage", None)
+            input_tokens = _usage_int(usage, "input_tokens")
+            output_tokens = _usage_int(usage, "output_tokens")
+            cache_read = _usage_int(usage, "cache_read_input_tokens")
+            cache_write = _usage_int(usage, "cache_creation_input_tokens")
+            cost = compute_cost_usd(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cached_input_read_tokens=cache_read,
+                cached_input_write_tokens=cache_write,
+                model=last_model,
             )
-            with llm_request_span(model=model, iteration=iteration) as span:
-                response = await self._sdk.messages.create(
-                    model=model,
-                    system=sdk_system,
-                    messages=payload_messages,
-                    tools=sdk_tools,
-                    max_tokens=max_tokens,
-                    extra_headers=extra_headers,
-                )
-                usage = response.usage
-                input_tokens = int(getattr(usage, "input_tokens", 0))
-                output_tokens = int(getattr(usage, "output_tokens", 0))
-                cache_read = int(getattr(usage, "cache_read_input_tokens", 0))
-                cache_write = int(getattr(usage, "cache_creation_input_tokens", 0))
-                # Per-TTL breakdown — exposed by anthropic-python>=0.51 via the
-                # nested cache_creation object. Older SDKs return no nested
-                # object; we keep aggregate-only behavior and report 0 for the
-                # breakdown so the operator can see "SDK doesn't expose it"
-                # rather than guessing.
-                cache_creation = getattr(usage, "cache_creation", None)
-                cache_write_5m = (
-                    int(getattr(cache_creation, "ephemeral_5m_input_tokens", 0))
-                    if cache_creation
-                    else 0
-                )
-                cache_write_1h = (
-                    int(getattr(cache_creation, "ephemeral_1h_input_tokens", 0))
-                    if cache_creation
-                    else 0
-                )
-                cumulative_in += input_tokens
-                cumulative_out += output_tokens
-                cumulative_cache_read += cache_read
-                cumulative_cache_write += cache_write
-                cumulative_cache_write_5m += cache_write_5m
-                cumulative_cache_write_1h += cache_write_1h
-                last_model = response.model
-
-                # Story 60-4: pass the per-TTL split so 1h writes are billed at
-                # the real 2x base rate instead of being aggregated into the 5m
-                # rate (compute_cost_usd previously had a single cache-write
-                # field that defaulted to the 5m rate). Fallback: if the SDK
-                # didn't expose the nested cache_creation breakdown (anthropic
-                # < 0.51) bill the aggregate at the 5m rate, matching the
-                # historical pricing behavior — no silent under-billing.
-                cost_kwargs: dict[str, Any] = {
+            span.set_attributes(
+                {
+                    "llm.caller": caller,
+                    "llm.input_tokens": input_tokens,
+                    "llm.output_tokens": output_tokens,
+                    "llm.cached_input_read_tokens": cache_read,
+                    "llm.cached_input_write_tokens": cache_write,
+                    "llm.cost_usd": cost,
+                }
+            )
+            subtype = getattr(result_msg, "subtype", None)
+            if subtype:
+                span.set_attribute("llm.stop_reason", str(subtype))
+            logger.info(
+                "narrator.sdk.usage caller=%s model=%s input=%d output=%d "
+                "cache_read=%d cache_write=%d cost_usd=%.6f",
+                caller,
+                last_model,
+                input_tokens,
+                output_tokens,
+                cache_read,
+                cache_write,
+                cost,
+            )
+            _watcher_publish_event(
+                "narrator.sdk.usage",
+                {
                     "input_tokens": input_tokens,
                     "output_tokens": output_tokens,
-                    "cached_input_read_tokens": cache_read,
-                    "model": response.model,
-                }
-                if cache_creation is not None:
-                    cost_kwargs["cached_input_write_5m_tokens"] = cache_write_5m
-                    cost_kwargs["cached_input_write_1h_tokens"] = cache_write_1h
-                else:
-                    cost_kwargs["cached_input_write_tokens"] = cache_write
-                cost = compute_cost_usd(**cost_kwargs)
-                cumulative_cost_usd += cost
-                span.set_attributes(
-                    {
-                        "llm.input_tokens": input_tokens,
-                        "llm.output_tokens": output_tokens,
-                        "llm.cached_input_read_tokens": cache_read,
-                        "llm.cached_input_write_tokens": cache_write,
-                        "llm.stop_reason": response.stop_reason,
-                        "llm.cost_usd": cost,
-                    }
-                )
-                # Per-iter ledger to /tmp/sidequest-server.log so cache
-                # hit/miss is visible without a WS tap (Task B3).
-                logger.info(
-                    "narrator.sdk.usage iter=%d input=%d output=%d "
-                    "cache_read=%d cache_write=%d 5m=%d 1h=%d cost_usd=%.6f",
-                    iteration,
-                    input_tokens,
-                    output_tokens,
-                    cache_read,
-                    cache_write,
-                    cache_write_5m,
-                    cache_write_1h,
-                    cost,
+                    "cost_usd": cost,
+                    "model": last_model,
+                    "cache_read_tokens": cache_read,
+                    "cache_write_tokens": cache_write,
+                },
+                component="narrator.sdk",
+                severity="info",
+            )
+            # Story 61-4 — cost-runaway fingerprint detector (session_id=None is
+            # a no-op). Story 61-followup-D — per-call cumulative + $10 ceiling.
+            self._maybe_emit_cost_runaway(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_usd=cost,
+                model=last_model,
+                session_id=session_id,
+                caller=caller,
+            )
+            if session_id is not None:
+                self._update_session_cumulative(
+                    session_id=session_id, cost_usd=cost, model=last_model
                 )
 
-                # Story 60-7 — Lie-detector for the iter=1 cache_control
-                # regression class. A healthy iter writes to exactly one
-                # cache tier (the explicit 1h marker fires; nothing else
-                # defaults to 5m). Both > 0 in a single iter means a
-                # breakpoint defaulted to 5m while another explicit 1h
-                # marker fired on overlapping content — the same waste
-                # pattern the 60-7 fix eliminated. Fires per offending
-                # iter (not aggregated per turn) so the GM panel can pin
-                # which iteration is leaking. severity=warn (lie-detector,
-                # not hard error — the call already succeeded; the
-                # observation is the waste).
-                if cache_write_5m > 0 and cache_write_1h > 0:
-                    both_writes_fields: dict[str, Any] = {
-                        "iteration": iteration,
-                        "cache_write_5m_tokens": cache_write_5m,
-                        "cache_write_1h_tokens": cache_write_1h,
-                        "model": response.model,
-                    }
-                    logger.warning(
-                        "narrator.cache.both_writes_fired iter=%d 5m=%d 1h=%d model=%s",
-                        iteration,
-                        cache_write_5m,
-                        cache_write_1h,
-                        response.model,
-                    )
-                    _watcher_publish_event(
-                        "narrator.cache.both_writes_fired",
-                        both_writes_fields,
-                        component="narrator.sdk",
-                        severity="warn",
-                    )
+        num_turns = int(getattr(result_msg, "num_turns", 1) or 1)
 
-                # Story 61-4 — Cost-runaway fingerprint detector. Check the
-                # just-observed call against the rolling baselines (or warmup
-                # floors), fire the watcher event if any trigger matches,
-                # then append to the baseline window so subsequent calls
-                # compare against PRIOR calls. The entire lifecycle
-                # (read → emit → append) lives inside
-                # ``_maybe_emit_cost_runaway`` to keep the detector's
-                # state management encapsulated. ``session_id=None``
-                # bypasses the detector entirely (non-narrator).
-                self._maybe_emit_cost_runaway(
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                    cost_usd=cost,
-                    model=response.model,
-                    session_id=session_id,
+        if getattr(result_msg, "is_error", False):
+            if getattr(result_msg, "subtype", "") == "error_max_turns":
+                # Story 82-9: the worst-latency turn still emits the summary span
+                # (marked loop_exceeded) before the fail-loud raise.
+                with narrator_tool_loop_span(
+                    iterations_used=num_turns,
+                    max_iterations=max_iterations,
+                    caller=caller,
+                    loop_exceeded=True,
+                ):
+                    pass
+                raise AnthropicSdkLoopExceeded(
+                    "agent-sdk tool loop did not converge "
+                    f"(subtype=error_max_turns, num_turns={num_turns}, "
+                    f"max_turns={max(2, max_iterations)})"
                 )
+            # An auth/credit/transport failure surfaces as is_error — raise, never
+            # return a degraded-success result that masks the missing credential.
+            raise AgentSdkAuthUnavailable(
+                "claude-agent-sdk query failed (is_error, "
+                f"subtype={getattr(result_msg, 'subtype', None)!r}) — subscription "
+                "login absent or query rejected; no PAYG fallback (No Silent "
+                "Fallbacks)."
+            )
 
-                # Story 61-followup-D §C.2 — per-iter cumulative update +
-                # threshold-cross detection. Each iter has already billed;
-                # the ceiling cannot un-bill the call that just landed. The
-                # check fires the typed event + raises so subsequent iters
-                # (and subsequent calls for this session) refuse without
-                # touching the SDK.
-                if session_id is not None:
-                    self._update_session_cumulative(
-                        session_id=session_id,
-                        cost_usd=cost,
-                        model=response.model,
-                    )
+        # Story 71-40 / 82-9: soft cap-hit + per-turn tool-loop summary span.
+        if iteration_cap is not None and num_turns >= iteration_cap:
+            with narrator_tool_loop_cap_hit_span(
+                iteration_cap=iteration_cap,
+                iterations_used=num_turns,
+                max_iterations=max_iterations,
+            ):
+                pass
+        with narrator_tool_loop_span(
+            iterations_used=num_turns,
+            max_iterations=max_iterations,
+            caller=caller,
+        ):
+            pass
+        if session_id is not None:
+            self._emit_cost_running_total(session_id=session_id, model=last_model)
 
-            text_chunks, tool_use_blocks = self._split_content(response.content)
-            text = "".join(text_chunks)
-            if on_text_delta is not None and text:
-                on_text_delta(text)
-            last_text = text or last_text
-
-            if response.stop_reason != "tool_use":
-                # Story 61-followup-D §C.3 — per-turn pulse for the GM
-                # panel live counter. Fires once per successful turn, not
-                # per tool-loop iteration; bypassed when session_id is
-                # None (non-narrator paths).
-                if session_id is not None:
-                    self._emit_cost_running_total(
-                        session_id=session_id,
-                        model=last_model,
-                    )
-
-                return ToolingResult(
-                    text=last_text,
-                    stop_reason=response.stop_reason,
-                    input_tokens=cumulative_in,
-                    output_tokens=cumulative_out,
-                    cached_input_read_tokens=cumulative_cache_read,
-                    cached_input_write_tokens=cumulative_cache_write,
-                    model=last_model,
-                    tool_calls=all_tool_uses,
-                    cumulative_cost_usd=cumulative_cost_usd,
-                    cached_input_write_5m_tokens=cumulative_cache_write_5m,
-                    cached_input_write_1h_tokens=cumulative_cache_write_1h,
-                )
-
-            if tool_dispatch is None:
-                raise AnthropicSdkClientError(
-                    "Model emitted tool_use but no tool_dispatch was provided."
-                )
-
-            assistant_blocks: list[dict[str, Any]] = []
-            user_results: list[dict[str, Any]] = []
-            for tu in tool_use_blocks:
-                all_tool_uses.append(tu)
-                assistant_blocks.append(
-                    {
-                        "type": "tool_use",
-                        "id": tu.id,
-                        "name": tu.name,
-                        "input": tu.arguments,
-                    }
-                )
-                maybe = tool_dispatch(tu)
-                if inspect.isawaitable(maybe):
-                    result = await maybe
-                else:
-                    result = maybe
-                user_results.append(
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": result.tool_use_id,
-                        "content": result.content,
-                        "is_error": result.is_error,
-                    }
-                )
-            running_messages = running_messages + [
-                {"role": "assistant", "content": assistant_blocks},
-                {"role": "user", "content": user_results},
-            ]
-
-        raise AnthropicSdkLoopExceeded(
-            f"Tool-use loop did not converge in {max_iterations} iterations"
+        text = getattr(result_msg, "result", None) or last_text
+        return ToolingResult(
+            text=text,
+            stop_reason="end_turn",
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cached_input_read_tokens=cache_read,
+            cached_input_write_tokens=cache_write,
+            model=last_model,
+            tool_calls=all_tool_uses,
+            cumulative_cost_usd=cost,
+            # OQ-6: the agent SDK does not expose the per-TTL cache-creation
+            # split (5m/1h). Documented-zero, NOT measured — the CLI owns
+            # caching; never report a measured 0 (No Silent Fallbacks).
+            cached_input_write_5m_tokens=0,
+            cached_input_write_1h_tokens=0,
         )
+
+    def _build_narration_mcp(
+        self,
+        tools: list[ToolDefinition],
+        tool_dispatch: Callable[[ToolUseBlock], Awaitable[ToolResultBlock] | ToolResultBlock]
+        | None,
+        accumulator: list[ToolUseBlock],
+    ) -> tuple[dict[str, Any], list[str]]:
+        """Build the per-turn in-process SDK-MCP server + allowed_tools list from
+        the ruleset-filtered tool catalog (spec §5).
+
+        Each ``ToolDefinition`` becomes a ``@tool``-decorated handler (the §5.3
+        dispatch bridge) collected under :data:`_NARRATION_SERVER_NAME`. The set
+        is rebuilt per call because it is ruleset-filtered (a static server would
+        advertise the wrong tools — No Silent Fallbacks). A toolless call (no
+        tools, or no ``tool_dispatch`` — the read-only aside / fabricated-roll
+        rewrite) advertises nothing.
+        """
+        if not tools or tool_dispatch is None:
+            return {}, []
+        sdk_tools = []
+        allowed: list[str] = []
+        for t in tools:
+            handler = _build_narration_tool_handler(
+                bare_name=t.name, tool_dispatch=tool_dispatch, accumulator=accumulator
+            )
+            sdk_tools.append(_sdk_tool(t.name, t.description, t.input_schema)(handler))
+            allowed.append(f"mcp__{_NARRATION_SERVER_NAME}__{t.name}")
+        server = create_sdk_mcp_server(name=_NARRATION_SERVER_NAME, tools=sdk_tools)
+        return {_NARRATION_SERVER_NAME: server}, allowed
+
 
     # ------------------------------------------------------------------
     # cost-runaway fingerprint alarm (Story 61-4)
@@ -593,6 +647,12 @@ class AnthropicSdkClient:
         """
         self._cost_baseline.pop(session_id, None)
         self._input_tokens_baseline.pop(session_id, None)
+        # Story 91-4: the Haiku adapters keep their own rolling baselines
+        # in the process-level ledger (keyed (session_id, caller)); the
+        # same close_store eviction drops those too. Ledger cumulative/
+        # announce state is intentionally NOT cleared — same scope as the
+        # instance windows above (ADR-134 flagged follow-up).
+        cost_safety.ledger().reset_baselines(session_id)
 
     def _maybe_emit_cost_runaway(
         self,
@@ -602,6 +662,7 @@ class AnthropicSdkClient:
         cost_usd: float,
         model: str,
         session_id: str | None,
+        caller: str = "narrator",
     ) -> None:
         """Fire ``cost_runaway_suspected`` if any trigger matches.
 
@@ -657,106 +718,22 @@ class AnthropicSdkClient:
         if session_id is None:
             return
 
-        cost_window = self._cost_baseline.get(session_id)
-        input_window = self._input_tokens_baseline.get(session_id)
-        # Warmup uses floors when EITHER window hasn't accumulated K
-        # observations yet. Both windows are populated together at the
-        # append site, so they advance in lock-step; the OR is a
-        # defensive read against a partial-init race that today can't
-        # occur but would be a silent comparator bug if it ever did.
-        warmup = (
-            cost_window is None or input_window is None or len(cost_window) < _BASELINE_WINDOW_K
+        # Story 91-4 — the warmup/clamp/trigger/priority comparator and
+        # the event emit moved to ``cost_safety.check_and_emit_runaway``
+        # so the Haiku adapters fire the SAME detector. This method keeps
+        # the narrator's window storage (per-instance, keyed on plain
+        # session_id — the 61-followup-A contract) and the append-after-
+        # check ordering; only the evaluation is shared.
+        cost_safety.check_and_emit_runaway(
+            cost_window=self._cost_baseline.get(session_id),
+            input_window=self._input_tokens_baseline.get(session_id),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost_usd=cost_usd,
+            model=model,
+            session_id=session_id,
+            caller=caller,
         )
-        if warmup:
-            baseline_cost = _WARMUP_COST_USD_FLOOR
-            baseline_input: float = _WARMUP_INPUT_TOKENS_FLOOR
-        else:
-            # Story 61-followup-D §A — clamp the rolling baseline at the
-            # ceiling so the comparator cannot self-train into silence
-            # under sustained ramps. The clamp is a CEILING (min, not
-            # fixed): healthy steady-state baselines below the ceiling
-            # are unchanged; only drifted baselines are clipped down.
-            # ``cost_window`` and ``input_window`` are non-None here
-            # because warmup is False (asserts on pyright path).
-            assert cost_window is not None and input_window is not None
-            observed_cost = sum(cost_window) / len(cost_window)
-            observed_input = sum(input_window) / len(input_window)
-            baseline_cost = min(observed_cost, _BASELINE_COST_CEILING)
-            baseline_input = min(observed_input, float(_BASELINE_INPUT_CEILING))
-
-        # Note: cost-multiple trigger erodes if a sustained runaway trains
-        # the baseline. The 61-followup-D §A clamp now lowers the trip
-        # threshold (5×$0.09=$0.45) against the drifted-baseline case;
-        # the absolute floor (>$0.30/call) remains the per-call safety
-        # net.
-        cost_triggered = cost_usd > _COST_TRIGGER_MULTIPLE * baseline_cost
-        io_triggered = (
-            input_tokens > _IO_FINGERPRINT_INPUT_MULTIPLE * baseline_input
-            and output_tokens < _IO_FINGERPRINT_OUTPUT_CEILING
-        )
-        # Story 61-followup-D §B — absolute input_tokens floor. Catches
-        # the high-output sibling of the 60K-in/12-out fingerprint
-        # (50K-in/800-out slips past io_fingerprint at output≥50 but is
-        # still a strong canary for snapshot bloat).
-        input_absolute_triggered = input_tokens > _ABSOLUTE_INPUT_TOKENS_FLOOR
-        # Architect spec-check A: absolute floor — fires regardless of how
-        # high the rolling baseline has self-trained. Safety net for the
-        # "trained-into-silence" case where a sustained runaway calibrates
-        # the rolling baseline upward.
-        absolute_triggered = cost_usd > _ABSOLUTE_COST_USD_FLOOR
-        any_triggered = (
-            cost_triggered or io_triggered or input_absolute_triggered or absolute_triggered
-        )
-
-        if any_triggered:
-            # Priority order (decision C, extended by 61-followup-D §B):
-            # 1. io_fingerprint (most diagnostic; matches 2026-05-23 shape)
-            # 2. input_absolute (input-axis canary independent of output)
-            # 3. cost_multiple (rolling-baseline-relative; existing trigger)
-            # 4. cost_absolute (safety net for trained-into-silence baseline)
-            if io_triggered:
-                trigger = "io_fingerprint"
-            elif input_absolute_triggered:
-                trigger = "input_absolute"
-            elif cost_triggered:
-                trigger = "cost_multiple"
-            else:
-                trigger = "cost_absolute"
-            fields: dict[str, Any] = {
-                "trigger": trigger,
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "cost_usd": cost_usd,
-                "baseline_cost_usd": baseline_cost,
-                "baseline_input_tokens": baseline_input,
-                "warmup": warmup,
-                "model": model,
-                # Story 61-followup-A: GM-panel attribution for interleaved
-                # multi-session events. session_id is non-None here (the
-                # bypass returned early above).
-                "session_id": session_id,
-            }
-            logger.error(
-                "narrator.cost_runaway_suspected trigger=%s input=%d "
-                "output=%d cost_usd=%.6f baseline_cost_usd=%.6f "
-                "baseline_input_tokens=%.1f warmup=%s model=%s "
-                "session_id=%s",
-                trigger,
-                input_tokens,
-                output_tokens,
-                cost_usd,
-                baseline_cost,
-                baseline_input,
-                warmup,
-                model,
-                session_id,
-            )
-            _watcher_publish_event(
-                "cost_runaway_suspected",
-                fields,
-                component="narrator.sdk",
-                severity="warn",
-            )
 
         # Story 61-followup-A — append AFTER the check so the comparator
         # always sees PRIOR observations. The append happens whether or
@@ -783,16 +760,13 @@ class AnthropicSdkClient:
         cumulative: float,
     ) -> AnthropicSdkCostCeilingExceeded:
         """Construct the typed ceiling-exceeded exception with the
-        canonical message + actionable fields. Centralized so the
-        three raise sites (pre-flight, already-announced re-raise,
-        first-crossing raise) cannot drift in wording or field shape.
+        canonical message + actionable fields. Centralized (now in
+        ``cost_safety.build_ceiling_exceeded``, 91-4) so no raise site —
+        narrator or adapter — can drift in wording or field shape.
         """
-        return AnthropicSdkCostCeilingExceeded(
-            f"Session {session_id!r} has exceeded its "
-            f"${self.session_cost_ceiling_usd:.2f} ceiling "
-            f"(cumulative=${cumulative:.4f}).",
+        return cost_safety.build_ceiling_exceeded(
             session_id=session_id,
-            cumulative_cost_usd=cumulative,
+            cumulative=cumulative,
             ceiling_usd=self.session_cost_ceiling_usd,
         )
 
@@ -800,15 +774,14 @@ class AnthropicSdkClient:
         """Pre-flight check at the entry of ``complete_with_tools``.
 
         Raises ``AnthropicSdkCostCeilingExceeded`` if the session's
-        cumulative has already crossed the ceiling on a prior call.
-        Terminal: the announce-set entry from the first crossing keeps
-        subsequent refusals silent on the watcher (single emit per
-        session), but the exception still re-raises so callers cannot
-        accidentally swallow the kill.
+        cumulative has already crossed the ceiling on a prior call —
+        on ANY call site (story 91-4: the ledger pot is shared with the
+        Haiku adapters). Terminal: the announce-set entry from the first
+        crossing keeps subsequent refusals silent on the watcher (single
+        emit per session), but the exception still re-raises so callers
+        cannot accidentally swallow the kill.
         """
-        cumulative = self._session_cumulative_cost_usd.get(session_id, 0.0)
-        if cumulative >= self.session_cost_ceiling_usd:
-            raise self._build_ceiling_exceeded(session_id=session_id, cumulative=cumulative)
+        cost_safety.ledger().check_ceiling(session_id, ceiling_usd=self.session_cost_ceiling_usd)
 
     def _update_session_cumulative(
         self,
@@ -824,47 +797,16 @@ class AnthropicSdkClient:
         raise ``AnthropicSdkCostCeilingExceeded``. The iter that crossed
         has ALREADY billed Anthropic — we cannot un-bill it. The kill
         is "no further calls", not "no further tokens for this call".
+        Implementation lives in ``cost_safety.SessionCostLedger`` (91-4)
+        so adapter spend feeds the same pot and the announce-once dedup
+        spans call sites.
         """
-        cumulative = self._session_cumulative_cost_usd.get(session_id, 0.0) + cost_usd
-        self._session_cumulative_cost_usd[session_id] = cumulative
-
-        if cumulative < self.session_cost_ceiling_usd:
-            return
-        # Already announced? Then we're in a re-raise path; do not emit
-        # again (single emit per session). This branch is only reachable
-        # when the same call's later iter crosses AFTER an earlier iter
-        # already crossed and the event already fired — should not
-        # happen in practice (the loop raises on first cross) but the
-        # guard is cheap.
-        if session_id in self._session_ceiling_announced:
-            raise self._build_ceiling_exceeded(session_id=session_id, cumulative=cumulative)
-
-        logger.error(
-            "session.cost_ceiling_exceeded session_id=%s "
-            "cumulative_cost_usd=%.6f ceiling_usd=%.2f model=%s",
-            session_id,
-            cumulative,
-            self.session_cost_ceiling_usd,
-            model,
+        cost_safety.ledger().update_cumulative(
+            session_id=session_id,
+            cost_usd=cost_usd,
+            model=model,
+            ceiling_usd=self.session_cost_ceiling_usd,
         )
-        _watcher_publish_event(
-            "session.cost_ceiling_exceeded",
-            {
-                "session_id": session_id,
-                "cumulative_cost_usd": cumulative,
-                "ceiling_usd": self.session_cost_ceiling_usd,
-                "model": model,
-            },
-            component="narrator.sdk",
-            severity="error",
-        )
-        # State cleanup ordering (lang-review §14): announce-set add
-        # MUST be after the side-effecting emit. If _watcher_publish_event
-        # raised, an earlier add would poison the announced set and the
-        # GM-panel event would be permanently lost on retry. Reviewer
-        # 2026-05-23 rule-checker finding.
-        self._session_ceiling_announced.add(session_id)
-        raise self._build_ceiling_exceeded(session_id=session_id, cumulative=cumulative)
 
     def _emit_cost_running_total(
         self,
@@ -894,156 +836,3 @@ class AnthropicSdkClient:
             component="narrator.sdk",
             severity="info",
         )
-
-    # ------------------------------------------------------------------
-    # helpers
-    # ------------------------------------------------------------------
-
-    def _build_messages_payload(
-        self,
-        running_messages: list[dict[str, Any]],
-        *,
-        is_continuation: bool,
-    ) -> list[dict[str, Any]]:
-        """Build the ``messages`` array for a single ``messages.create`` call.
-
-        Story 60-7 (supersedes 60-4): every iter — iter=1 included — marks the
-        LAST content block of the newest user message with
-        ``cache_control={'type':'ephemeral', 'ttl': self.cache_ttl}``.
-
-        Why marker every iter, not only on continuation: Anthropic auto-caches
-        content that sits past the last explicit breakpoint at the default 5m
-        TTL. The system_blocks[0] + tools[-1] prefix is marked at the
-        configured TTL (1h by default), but the user message + recency-zone
-        deltas added on iter=1 (~17K tok) carry no marker by default, so the
-        API auto-caches that tail at 5m. On iter=2 the 60-4 continuation
-        marker writes the same content at 1h, displacing the 5m one within
-        seconds — pure waste. Marking iter=1 at the configured TTL overrides
-        the auto-5m default so the iter=1 write lands at 1h directly and
-        iter=2 reads it. Probe evidence: per-turn cost
-        $0.137 → $0.096 (~30% savings); see
-        ``sprint/archive/60-7-session.md``.
-
-        ``is_continuation`` is retained as caller-facing intent (iter=1 vs
-        iter=2+) — useful to the call site and to test naming — but no
-        longer branches the implementation. Both paths apply the marker.
-
-        Bare-string content on the newest user message is promoted to a
-        single-text-block list so ``cache_control`` (a content-block
-        attribute) has somewhere to attach. The wire shape stays valid:
-        Anthropic accepts both bare strings and block-list user content.
-
-        Each call returns a fresh list of fresh message dicts (content blocks
-        are copied where they're dicts). Two reasons:
-
-        1. **Snapshot semantics.** The Anthropic SDK doesn't mutate the kwargs
-           we hand it, but observers (tests, OTEL middleware) may capture them
-           by reference. A fresh per-iteration payload guarantees prior calls'
-           captured kwargs reflect what was actually sent then, not what the
-           in-place mutation looks like now.
-        2. **Stale-marker cleanup.** Earlier continuations marked their own
-           newest user message; this iteration's marker must be on the *new*
-           newest message, with prior message-level markers cleared. Building
-           fresh achieves the cleanup without mutating shared state.
-        """
-        del is_continuation  # informational only; behavior is uniform across iters
-        out: list[dict[str, Any]] = []
-        for msg in running_messages:
-            new_msg: dict[str, Any] = {"role": msg["role"]}
-            content = msg.get("content")
-            if isinstance(content, list):
-                new_msg["content"] = [
-                    dict(block) if isinstance(block, dict) else block for block in content
-                ]
-            else:
-                new_msg["content"] = content
-            out.append(new_msg)
-
-        if not out:
-            return out
-
-        last_msg = out[-1]
-        last_content = last_msg.get("content")
-        if isinstance(last_content, str):
-            # Promote bare string → single text block so cache_control has a
-            # content-block to land on.
-            promoted: list[dict[str, Any]] = [{"type": "text", "text": last_content}]
-            last_msg["content"] = promoted
-            last_content = promoted
-        if isinstance(last_content, list) and last_content:
-            last_block = last_content[-1]
-            if isinstance(last_block, dict):
-                last_block["cache_control"] = {
-                    "type": "ephemeral",
-                    "ttl": self.cache_ttl,
-                }
-            else:
-                # No Silent Fallbacks: every live call site appends dict blocks
-                # to running_messages, so a non-dict last block means an
-                # upstream invariant has broken. Skipping the marker silently
-                # would re-introduce the iter=1 auto-5m write we are paying
-                # this whole story to eliminate — surface it loudly instead.
-                logger.warning(
-                    "_build_messages_payload: non-dict last block type=%s — "
-                    "cache_control marker skipped (upstream invariant broken)",
-                    type(last_block).__name__,
-                )
-
-        return out
-
-    def _build_system_array(self, system_blocks: list[CacheableBlock]) -> list[dict[str, Any]]:
-        out: list[dict[str, Any]] = []
-        for block in system_blocks:
-            entry: dict[str, Any] = {"type": "text", "text": block.text}
-            if block.cache:
-                # Echo the configured TTL unconditionally — no special-
-                # casing. Both "5m" and "1h" are valid cache_control TTLs;
-                # the 1h path additionally rides the beta header sent in
-                # complete_with_tools.
-                entry["cache_control"] = {"type": "ephemeral", "ttl": self.cache_ttl}
-            out.append(entry)
-        return out
-
-    def _build_tools_array(self, tools: list[ToolDefinition]) -> list[dict[str, Any]]:
-        out: list[dict[str, Any]] = [
-            {
-                "name": t.name,
-                "description": t.description,
-                "input_schema": t.input_schema,
-            }
-            for t in tools
-        ]
-        # The tools array is byte-stable across every turn — 27 definitions,
-        # ~7.6K tokens, no per-turn drift. A marker on the last entry requests
-        # caching of the whole tools array at the configured TTL (1h by
-        # default). See ADR-101 four-region cache layout amendment.
-        #
-        # Story 60-4 (2026-05-23): the continuation-append site in
-        # complete_with_tools now adds a moving cache_control breakpoint on
-        # the newest tool_result message, which covers the appended messages
-        # under the same cache and unlocks the 1h rebate this marker promised
-        # in isolation. Together with system_blocks[0]'s marker, both halves
-        # of the cached prefix now rebate on continuation calls.
-        if out:
-            out[-1]["cache_control"] = {"type": "ephemeral", "ttl": self.cache_ttl}
-        return out
-
-    @staticmethod
-    def _split_content(
-        content: list[Any],
-    ) -> tuple[list[str], list[ToolUseBlock]]:
-        text_chunks: list[str] = []
-        tool_uses: list[ToolUseBlock] = []
-        for block in content:
-            block_type = getattr(block, "type", None)
-            if block_type == "text":
-                text_chunks.append(block.text)
-            elif block_type == "tool_use":
-                tool_uses.append(
-                    ToolUseBlock(
-                        id=block.id,
-                        name=block.name,
-                        arguments=block.input,
-                    )
-                )
-        return text_chunks, tool_uses

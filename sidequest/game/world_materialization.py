@@ -35,6 +35,7 @@ from sidequest.game.creature_core import (
     HpPool,
     Inventory,
 )
+from sidequest.game.disposition import CHAPTER_BEAT_REASON
 from sidequest.game.history_chapter import (
     ChapterCharacter,
     ChapterNpc,
@@ -42,8 +43,9 @@ from sidequest.game.history_chapter import (
     HistoryChapter,
 )
 from sidequest.game.npc_pool import NpcPoolMember
-from sidequest.game.session import NarrativeEntry, Npc, TropeState
+from sidequest.game.session import NarrativeEntry, Npc, TropeState, upsert_quest_status
 from sidequest.genre.models.authored_npc import AuthoredNpc
+from sidequest.genre.models.ocean import OceanProfile
 
 
 def _auto_description(race: str, char_class: str) -> str:
@@ -276,7 +278,8 @@ class WorldBuilder:
             self._apply_npc(snap, npc_data)
 
         for quest_name, status in chapter.quests.items():
-            snap.quest_log[quest_name] = status
+            # Story 77-2: status-only upsert under the widened QuestEntry type.
+            upsert_quest_status(snap.quest_log, quest_name, status)
 
         for entry in chapter.lore:
             if entry not in snap.lore_established:
@@ -499,7 +502,19 @@ class WorldBuilder:
         existing: Npc | None = next((n for n in snap.npcs if n.core.name == npc_data.name), None)
         if existing is not None:
             if npc_data.disposition is not None:
+                before = int(existing.disposition)
                 existing.disposition = int(npc_data.disposition)
+                after = int(existing.disposition)
+                # ADR-136 (site 4/4): a chapter that moves an already-known
+                # NPC's standing is a relationship beat. The new-NPC branch
+                # below sets a baseline (no shift), so it records nothing.
+                # Zero-delta no-ops are dropped by the seam's guard.
+                existing.record_disposition_beat(
+                    turn=snap.turn_manager.interaction,
+                    delta=after - before,
+                    reason=CHAPTER_BEAT_REASON,
+                    location=npc_data.location or existing.location,
+                )
             if npc_data.description:
                 existing.core.description = npc_data.description
             if npc_data.location:
@@ -527,7 +542,6 @@ class WorldBuilder:
         snap.npcs.append(
             Npc(
                 core=core,
-                voice_id=None,
                 disposition=int(npc_data.disposition or 0),
                 location=npc_data.location,
                 pronouns=None,
@@ -788,15 +802,25 @@ def preload_authored_npcs(
 ) -> None:
     """Pre-load AuthoredNpcs into ``state.npcs`` as runtime ``Npc`` instances.
 
-    Fresh sessions only — defined as ``state.characters == []`` AND
-    ``state.turn_manager.interaction == 0``. Resumed sessions skip
-    pre-loading; their ``npcs`` / ``npc_pool`` are already populated
-    from prior turns and we do not retroactively rewrite them.
+    Fresh sessions only — discriminated by the **absence of a seated player
+    character** (``state.characters == []``). The sole production caller is the
+    chargen first-commit seam, which appends the player character *after* this
+    preload runs, so an empty ``characters`` list is the reliable fresh signal.
+    Resumed sessions (a PC already present) skip pre-loading; their ``npcs`` /
+    ``npc_pool`` are already populated from prior turns and we do not
+    retroactively rewrite them.
 
-    Emits ``npc.authored_loaded`` per pre-loaded NPC for GM-panel
-    visibility (CLAUDE.md "OTEL Observability Principle"). Empty
-    ``authored`` list is a hard no-op — neither the gate check nor any
-    span fires when there's nothing to load.
+    Story 71-7: we deliberately do NOT gate on ``turn_manager.interaction``. A
+    freshly materialized snapshot baselines at ``interaction == 1`` (the
+    ``TurnManager`` default), never 0, so the former ``interaction == 0`` clause
+    was unsatisfiable in production and silently skipped the authored crew on
+    every real fresh session.
+
+    Emits ``npc.authored_loaded`` per pre-loaded NPC for GM-panel visibility
+    (CLAUDE.md "OTEL Observability Principle"). On the resumed-session skip,
+    emits ``npc.authored_load_skipped`` with a ``reason`` so the skip is never a
+    silent fallback (CLAUDE.md "No Silent Fallbacks"). Empty ``authored`` list is
+    a hard no-op — there is genuinely nothing to load and nothing to observe.
 
     See ``docs/superpowers/specs/2026-05-01-canned-openings-design.md``
     §2.2.
@@ -804,14 +828,26 @@ def preload_authored_npcs(
     if not authored:
         return
 
-    is_fresh = (
-        not getattr(state, "characters", None)
-        and getattr(getattr(state, "turn_manager", None), "interaction", 0) == 0
+    from sidequest.telemetry.spans import (
+        SPAN_NPC_AUTHORED_LOAD_SKIPPED,
+        SPAN_NPC_AUTHORED_LOADED,
+        Span,
     )
-    if not is_fresh:
-        return
 
-    from sidequest.telemetry.spans import SPAN_NPC_AUTHORED_LOADED, Span
+    # Resumed session — a player character is already seated. Skip the preload,
+    # but emit a reason-carrying span so the GM panel can see the decision.
+    if getattr(state, "characters", None):
+        with Span.open(
+            SPAN_NPC_AUTHORED_LOAD_SKIPPED,
+            {
+                "reason": "resumed_session_player_character_present",
+                "authored_count": len(authored),
+                "genre_slug": getattr(state, "genre_slug", "") or "",
+                "world_slug": getattr(state, "world_slug", "") or "",
+            },
+        ):
+            pass
+        return
 
     for authored_npc in authored:
         # CreatureCore requires non-blank description + personality
@@ -834,7 +870,6 @@ def preload_authored_npcs(
         )
         runtime = Npc(
             core=core,
-            voice_id=None,
             disposition=int(authored_npc.initial_disposition),
             location=None,
             pronouns=authored_npc.pronouns or None,
@@ -843,7 +878,11 @@ def preload_authored_npcs(
             build=None,
             height=None,
             distinguishing_features=list(authored_npc.distinguishing_features),
-            ocean=authored_npc.ocean,
+            ocean=(
+                OceanProfile.from_authored(authored_npc.ocean).model_dump()
+                if authored_npc.ocean
+                else None
+            ),
             resolution_tier="spawn",
             non_transactional_interactions=0,
             jungian_id=None,

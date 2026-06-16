@@ -21,6 +21,7 @@ from sidequest.game.monster_manual import EntryState, ManualEncounter, ManualNpc
 from sidequest.game.session import GameSnapshot
 from sidequest.game.turn import TurnManager
 from sidequest.server.dispatch import monster_manual_inject
+from sidequest.server.dispatch.pregen import EncounterSeedError
 
 
 def _snapshot() -> GameSnapshot:
@@ -47,7 +48,11 @@ def _manual_with(
 
 
 def _human(
-    name: str, *, state: EntryState = EntryState.AVAILABLE, activated_location: str | None = None
+    name: str,
+    *,
+    state: EntryState = EntryState.AVAILABLE,
+    activated_location: str | None = None,
+    location_tags: list[str] | None = None,
 ) -> ManualNpc:
     return ManualNpc(
         data={
@@ -60,6 +65,7 @@ def _human(
         name=name,
         role="scavenger",
         culture="Scrapborn",
+        location_tags=list(location_tags or []),
         state=state,
         activated_location=activated_location,
     )
@@ -168,6 +174,205 @@ def test_ensure_loaded_swallows_seed_errors(
     assert sd.monster_manual is loaded
 
 
+def test_ensure_loaded_reraises_encounter_seed_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RED (story 90-5, item 6): a ruleset-module pack with no bestiary makes
+    ``seed_manual`` raise ``EncounterSeedError`` — and ``ensure_loaded`` must let
+    it PROPAGATE, crashing the session bind loud, rather than swallowing it into a
+    warning and binding an empty Monster Manual pool.
+
+    Keith's policy decision (2026-06-10): strict fail-loud. The broad
+    ``except Exception`` at ``monster_manual_inject.py:~95`` currently catches
+    ``EncounterSeedError`` (it subclasses ``RuntimeError``), so a missing-bestiary
+    misconfiguration degrades to a silently-empty pool at runtime — behaviorally
+    the 87-4 bug, with better logs. This test fails on current ``develop`` (the
+    error is swallowed and ``ensure_loaded`` returns the empty Manual); it goes
+    green once the except special-cases ``EncounterSeedError`` to re-raise.
+
+    Contrast ``test_ensure_loaded_swallows_seed_errors`` above: a GENERIC
+    ``RuntimeError`` (a transient encountergen outage) still degrades gracefully
+    per ADR-006 — only the typed contract violation is fatal."""
+
+    class _Pack:
+        source_dir = tmp_path / "packs" / "heavy_metal"
+
+    sd = _FakeSessionData(genre_slug="heavy_metal", world_slug="evropi", genre_pack=_Pack())
+
+    def _raise_seed_error(**_kwargs: object) -> None:
+        raise EncounterSeedError(
+            "encounter seeding failed for ruleset-module pack 'heavy_metal' "
+            "(ruleset=wwn): bestiary.yaml (REQUIRED for ruleset-module packs) missing"
+        )
+
+    monkeypatch.setattr(
+        "sidequest.server.dispatch.pregen.seed_manual",
+        _raise_seed_error,
+    )
+    with (
+        mock.patch(
+            "sidequest.game.monster_manual.MonsterManual._manuals_dir", return_value=tmp_path
+        ),
+        pytest.raises(EncounterSeedError),
+    ):
+        monster_manual_inject.ensure_loaded(sd)
+
+
+def _pack_with_authored(world_slug: str, *authored: object) -> object:
+    """A pack stand-in exposing only ``worlds`` for the backfill path."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(worlds={world_slug: SimpleNamespace(authored_npcs=list(authored))})
+
+
+def test_ensure_loaded_backfills_authored_into_seeded_manual(tmp_path: Path) -> None:
+    """H1: an existing, fully-seeded on-disk Manual (``needs_seeding()`` False)
+    must STILL backfill the world's authored cast.
+
+    The original bug: ``_seed_authored_npcs`` only ran inside ``seed_manual``,
+    which ``ensure_loaded`` gates behind ``needs_seeding()``. A Manual already
+    holding >=4 NPCs + an encounter never re-seeded, so the authored companions
+    (Scarecrow, Tin Woodman, Cowardly Lion) never entered the pool on an existing
+    save — the wry_whimsy/oz bug recurs on every prior save. Backfill must be
+    unconditional.
+    """
+    from sidequest.genre.models.authored_npc import AuthoredNpc
+
+    with mock.patch(
+        "sidequest.game.monster_manual.MonsterManual._manuals_dir", return_value=tmp_path
+    ):
+        # Pre-seed a healthy on-disk Manual: 4 generated walk-ons + an encounter
+        # so needs_seeding() is False (the old gate would skip authored seeding).
+        seeded = _manual_with(
+            npcs=[_human("Walkon1"), _human("Walkon2"), _human("Walkon3"), _human("Walkon4")],
+            encounters=[_creature_encounter(enemy_name="Salt Burrower")],
+        )
+        assert not seeded.needs_seeding()
+        seeded.save()
+
+        scarecrow = AuthoredNpc(
+            id="scarecrow", name="Scarecrow", role="companion", location_tags=["yellow brick road"]
+        )
+        sd = _FakeSessionData(genre_pack=_pack_with_authored("flickering_reach", scarecrow))
+
+        loaded = monster_manual_inject.ensure_loaded(sd)
+
+    assert loaded is not None
+    names = {n.name for n in loaded.npcs}
+    assert "Scarecrow" in names, "authored cast must backfill even when needs_seeding() is False"
+    # And it was persisted (not just held in memory) so the next process sees it.
+    with mock.patch(
+        "sidequest.game.monster_manual.MonsterManual._manuals_dir", return_value=tmp_path
+    ):
+        reloaded = MonsterManual.load("mutant_wasteland", "flickering_reach")
+    assert "Scarecrow" in {n.name for n in reloaded.npcs}
+
+
+def test_ensure_loaded_backfill_emits_span(tmp_path: Path, otel_capture) -> None:
+    """H1 (OTEL): the unconditional authored backfill is a subsystem decision, so
+    it fires a span the GM panel can read — proof the authored cast entered the
+    pool on an existing save, not silent improvisation."""
+    from sidequest.genre.models.authored_npc import AuthoredNpc
+    from sidequest.telemetry.spans.monster_manual import SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL
+
+    with mock.patch(
+        "sidequest.game.monster_manual.MonsterManual._manuals_dir", return_value=tmp_path
+    ):
+        seeded = _manual_with(
+            npcs=[_human("Walkon1"), _human("Walkon2"), _human("Walkon3"), _human("Walkon4")],
+            encounters=[_creature_encounter(enemy_name="Salt Burrower")],
+        )
+        seeded.save()
+        # Placed NPC (location_tags) so we also prove the placement-critical
+        # field survives the backfill — not just that the count incremented.
+        scarecrow = AuthoredNpc(
+            id="scarecrow", name="Scarecrow", role="companion", location_tags=["yellow brick road"]
+        )
+        sd = _FakeSessionData(genre_pack=_pack_with_authored("flickering_reach", scarecrow))
+        loaded = monster_manual_inject.ensure_loaded(sd)
+
+    fired = [
+        s
+        for s in otel_capture.get_finished_spans()
+        if s.name == SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL
+    ]
+    assert len(fired) == 1
+    assert dict(fired[0].attributes or {}).get("authored_backfilled") == 1
+    # location_tags threaded through the backfill, not dropped.
+    assert loaded is not None
+    backfilled_scarecrow = next(n for n in loaded.npcs if n.name == "Scarecrow")
+    assert backfilled_scarecrow.location_tags == ["yellow brick road"]
+
+
+def test_ensure_loaded_no_backfill_span_when_nothing_added(tmp_path: Path, otel_capture) -> None:
+    """The backfill span fires only when the Manual actually changes — a Manual
+    that already holds the authored cast (or a pack with no authored roster) is a
+    quiet no-op (no spurious span, no needless save)."""
+    from sidequest.telemetry.spans.monster_manual import SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL
+
+    with mock.patch(
+        "sidequest.game.monster_manual.MonsterManual._manuals_dir", return_value=tmp_path
+    ):
+        seeded = _manual_with(
+            npcs=[_human("Walkon1"), _human("Walkon2"), _human("Walkon3"), _human("Walkon4")],
+            encounters=[_creature_encounter(enemy_name="Salt Burrower")],
+        )
+        seeded.save()
+        # Pack with an empty authored roster → nothing to backfill.
+        sd = _FakeSessionData(genre_pack=_pack_with_authored("flickering_reach"))
+        monster_manual_inject.ensure_loaded(sd)
+
+    fired = [
+        s
+        for s in otel_capture.get_finished_spans()
+        if s.name == SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL
+    ]
+    assert fired == []
+
+
+def test_ensure_loaded_world_slug_absent_from_pack_warns_and_no_backfill(
+    tmp_path: Path, otel_capture, caplog
+) -> None:  # type: ignore[no-untyped-def]
+    """H3 at the ensure_loaded seam: when the session's ``world_slug`` is not a
+    key in ``pack.worlds`` (a config/wiring mismatch), the backfill must surface
+    a WARNING and add nothing — it must NOT crash session bind, and the backfill
+    span must NOT fire (its absence proves the world-miss path was taken)."""
+    import logging
+
+    from sidequest.genre.models.authored_npc import AuthoredNpc
+    from sidequest.telemetry.spans.monster_manual import SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL
+
+    with (
+        mock.patch(
+            "sidequest.game.monster_manual.MonsterManual._manuals_dir", return_value=tmp_path
+        ),
+        caplog.at_level(logging.WARNING),
+    ):
+        seeded = _manual_with(
+            npcs=[_human("Walkon1"), _human("Walkon2"), _human("Walkon3"), _human("Walkon4")],
+            encounters=[_creature_encounter(enemy_name="Salt Burrower")],
+        )
+        seeded.save()
+        scarecrow = AuthoredNpc(
+            id="scarecrow", name="Scarecrow", location_tags=["yellow brick road"]
+        )
+        # Pack only knows "oz"; the session is bound to "flickering_reach".
+        sd = _FakeSessionData(
+            world_slug="flickering_reach", genre_pack=_pack_with_authored("oz", scarecrow)
+        )
+        loaded = monster_manual_inject.ensure_loaded(sd)
+
+    assert loaded is not None
+    assert "Scarecrow" not in {n.name for n in loaded.npcs}  # nothing backfilled
+    assert any("world_not_found" in r.message for r in caplog.records)
+    fired = [
+        s
+        for s in otel_capture.get_finished_spans()
+        if s.name == SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL
+    ]
+    assert fired == []
+
+
 # ---------------------------------------------------------------------------
 # inject — patch generation
 # ---------------------------------------------------------------------------
@@ -213,6 +418,152 @@ def test_inject_filters_active_humans_by_location_substring() -> None:
     assert "FloatAvail" in names  # available NPCs always surface (top 3 cap)
 
 
+def test_inject_surfaces_placed_available_npc_at_matching_location() -> None:
+    """A placed AVAILABLE NPC (``location_tags``) materializes into the snapshot
+    where its tags match — the production-path mirror of
+    ``MonsterManual.available_at_location``. This is the wry_whimsy/oz fix at the
+    seam that actually feeds the narrator (``snapshot.npcs``)."""
+    sd = _FakeSessionData()
+    sd.monster_manual = _manual_with(
+        npcs=[
+            _human("Scarecrow", location_tags=["yellow brick road", "cornfield"]),
+            _human("Throne Guard", location_tags=["emerald city"]),
+        ],
+    )
+    snap = _snapshot()
+    monster_manual_inject.inject(
+        sd, snap, current_location="The Yellow Brick Road — Morning", in_combat=False
+    )
+    names = [n.core.name for n in snap.npcs]
+    assert "Scarecrow" in names  # placement matches the road
+    assert "Throne Guard" not in names  # placed for the Emerald City, gated out
+
+
+def test_inject_unplaced_available_npc_still_surfaces_anywhere() -> None:
+    """An AVAILABLE NPC with no ``location_tags`` keeps the legacy
+    everywhere-eligible behavior (generated walk-ons)."""
+    sd = _FakeSessionData()
+    sd.monster_manual = _manual_with(npcs=[_human("Field Mouse")])
+    snap = _snapshot()
+    monster_manual_inject.inject(sd, snap, current_location="Some Unrelated Place", in_combat=False)
+    assert "Field Mouse" in [n.core.name for n in snap.npcs]
+
+
+def test_inject_caps_active_at_location_humans() -> None:
+    """sq-playtest 2026-06-13 (oz entourage): the Active-at-location loop was
+    uncapped and re-surfaced every named NPC every turn. It is now bounded to
+    ``_ACTIVE_NPC_INJECT_LIMIT`` so a scene where the narrator named many NPCs
+    does not dangle the whole roster as "nearby" candidates each turn."""
+    from sidequest.server.dispatch.monster_manual_inject import _ACTIVE_NPC_INJECT_LIMIT
+
+    n_active = _ACTIVE_NPC_INJECT_LIMIT + 3
+    sd = _FakeSessionData()
+    sd.monster_manual = _manual_with(
+        npcs=[
+            _human(f"Active{i}", state=EntryState.ACTIVE, activated_location="The Dome")
+            for i in range(n_active)
+        ],
+    )
+    snap = _snapshot()
+    count = monster_manual_inject.inject(sd, snap, current_location="The Dome", in_combat=False)
+    # Only the cap's worth of Active-at-location humans inject (no Available NPCs
+    # exist in this manual, so the total equals the active cap exactly).
+    assert count == _ACTIVE_NPC_INJECT_LIMIT, (
+        f"active-at-location injection must be capped at {_ACTIVE_NPC_INJECT_LIMIT}; got {count}"
+    )
+    assert len(snap.npcs) == _ACTIVE_NPC_INJECT_LIMIT
+
+
+def test_inject_span_reports_active_capped_count(otel_capture) -> None:
+    """The cap is surfaced in the injection span (No Silent Fallbacks — the GM
+    panel sees the bench was bounded, not silently truncated)."""
+    from sidequest.server.dispatch.monster_manual_inject import _ACTIVE_NPC_INJECT_LIMIT
+    from sidequest.telemetry.spans import SPAN_MONSTER_MANUAL_INJECTED
+
+    dropped = 2
+    n_active = _ACTIVE_NPC_INJECT_LIMIT + dropped
+    sd = _FakeSessionData()
+    sd.monster_manual = _manual_with(
+        npcs=[
+            _human(f"Active{i}", state=EntryState.ACTIVE, activated_location="The Dome")
+            for i in range(n_active)
+        ],
+    )
+    snap = _snapshot()
+    monster_manual_inject.inject(sd, snap, current_location="The Dome", in_combat=False)
+
+    fired = [s for s in otel_capture.get_finished_spans() if s.name == SPAN_MONSTER_MANUAL_INJECTED]
+    assert len(fired) == 1, f"expected one {SPAN_MONSTER_MANUAL_INJECTED!r} span; got {len(fired)}"
+    attrs = dict(fired[0].attributes or {})
+    assert attrs.get("active_npcs_capped") == dropped, (
+        f"span must report {dropped} active humans capped; got {attrs.get('active_npcs_capped')}"
+    )
+    assert attrs.get("npcs_injected") == _ACTIVE_NPC_INJECT_LIMIT
+
+
+def test_inject_span_reports_placement_match_count(otel_capture) -> None:
+    """The injection span surfaces placement-aware selection so the GM panel can
+    see authored ``location_tags`` actually firing (wry_whimsy/oz fix)."""
+    from sidequest.telemetry.spans import SPAN_MONSTER_MANUAL_INJECTED
+
+    sd = _FakeSessionData()
+    sd.monster_manual = _manual_with(
+        npcs=[
+            _human("Scarecrow", location_tags=["yellow brick road"]),  # matches → surfaces
+            _human("Throne Guard", location_tags=["emerald city"]),  # placed elsewhere → gated
+            _human("Field Mouse"),  # unplaced → surfaces as fallback
+        ],
+    )
+    snap = _snapshot()
+    monster_manual_inject.inject(
+        sd, snap, current_location="The Yellow Brick Road — Morning", in_combat=False
+    )
+
+    fired = [s for s in otel_capture.get_finished_spans() if s.name == SPAN_MONSTER_MANUAL_INJECTED]
+    assert len(fired) == 1
+    attrs = dict(fired[0].attributes or {})
+    # One placed NPC (Scarecrow) matched and surfaced; Field Mouse was an
+    # unplaced fallback (not counted as placed-matched).
+    assert attrs.get("available_placed_matched") == 1
+    # Only Scarecrow is placement-eligible at this location (Throne Guard's tag
+    # does not overlap the road).
+    assert attrs.get("available_placed_eligible") == 1
+    # Nothing dropped — eligible (1) all surfaced (matched 1).
+    assert attrs.get("available_placed_dropped") == 0
+
+
+def test_inject_span_reports_placed_dropped_by_cap(otel_capture) -> None:
+    """M5: when more placed NPCs are eligible than the inject slice surfaces, the
+    span reports the dropped count so eligible-vs-matched isn't a silent gap.
+
+    Previously the span carried ``available_placed_eligible`` (uncapped) next to
+    ``available_placed_matched`` (capped) with no way to tell a cap-drop from a
+    placement miss — the oz road's 4 road companions surfaced 3 and silently
+    dropped 1. ``available_placed_dropped`` makes that bound visible.
+    """
+    from sidequest.server.dispatch.monster_manual_inject import _AVAILABLE_NPC_INJECT_LIMIT
+    from sidequest.telemetry.spans import SPAN_MONSTER_MANUAL_INJECTED
+
+    n_placed = _AVAILABLE_NPC_INJECT_LIMIT + 1  # one more than the slice surfaces
+    sd = _FakeSessionData()
+    sd.monster_manual = _manual_with(
+        npcs=[
+            _human(f"Companion{i}", location_tags=["yellow brick road"]) for i in range(n_placed)
+        ],
+    )
+    snap = _snapshot()
+    monster_manual_inject.inject(
+        sd, snap, current_location="The Yellow Brick Road — Morning", in_combat=False
+    )
+
+    fired = [s for s in otel_capture.get_finished_spans() if s.name == SPAN_MONSTER_MANUAL_INJECTED]
+    assert len(fired) == 1
+    attrs = dict(fired[0].attributes or {})
+    assert attrs.get("available_placed_eligible") == n_placed
+    assert attrs.get("available_placed_matched") == _AVAILABLE_NPC_INJECT_LIMIT
+    assert attrs.get("available_placed_dropped") == n_placed - _AVAILABLE_NPC_INJECT_LIMIT
+
+
 def test_inject_skips_dormant_humans() -> None:
     sd = _FakeSessionData()
     sd.monster_manual = _manual_with(
@@ -246,6 +597,49 @@ def test_inject_materializes_encounter_creatures_with_hostile_disposition() -> N
     assert npc.core.hp.max == 12
 
 
+def _pack_with_combat(enabled: bool) -> object:
+    """Minimal stand-in pack exposing only ``rules.combat_encounters``."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(rules=SimpleNamespace(combat_encounters=enabled))
+
+
+def test_inject_suppresses_encounter_creatures_when_combat_disabled() -> None:
+    """Playtest 2026-06-01: a social pack (combat_encounters=False) must NOT
+    inject combat-encounter enemies — no hostile -20 NPCs with combat stats in
+    a drawing-room mystery. Human NPCs still surface; the Manual's stale combat
+    encounters are skipped at the injection seam (defense-in-depth for cached
+    manuals seeded before the flag landed)."""
+    sd = _FakeSessionData(genre_pack=_pack_with_combat(False))
+    sd.monster_manual = _manual_with(
+        npcs=[_human("Lady Catherine")],
+        encounters=[_creature_encounter(enemy_name="Captain Macaskill", tier=2, hp=24)],
+    )
+    snap = _snapshot()
+    count = monster_manual_inject.inject(
+        sd, snap, current_location="The Drawing Room", in_combat=True
+    )
+    names = [n.core.name for n in snap.npcs]
+    assert count == 1
+    assert names == ["Lady Catherine"]
+    assert "Captain Macaskill" not in names
+    # No hostile combatants leaked in.
+    assert all(int(n.disposition) == 0 for n in snap.npcs)
+
+
+def test_inject_keeps_encounter_creatures_when_combat_enabled_pack() -> None:
+    """A combat-enabled pack (explicit True) still injects encounter creatures —
+    the flag only suppresses when explicitly False."""
+    sd = _FakeSessionData(genre_pack=_pack_with_combat(True))
+    sd.monster_manual = _manual_with(
+        encounters=[_creature_encounter(enemy_name="Salt Burrower", tier=2, hp=12)],
+    )
+    snap = _snapshot()
+    count = monster_manual_inject.inject(sd, snap, current_location="The Dome", in_combat=True)
+    assert count == 1
+    assert snap.npcs[0].core.name == "Salt Burrower"
+
+
 def test_inject_out_of_combat_caps_encounters() -> None:
     encs = [_creature_encounter(enemy_name=f"Mob{i}") for i in range(5)]
     sd = _FakeSessionData()
@@ -277,6 +671,117 @@ def test_inject_is_idempotent_across_turns() -> None:
     monster_manual_inject.inject(sd, snap, current_location="The Dome", in_combat=True)
     # _merge_npc_patch path — same name lands once.
     assert len(snap.npcs) == 1
+
+
+def test_reinjection_across_combat_turns_preserves_damaged_hp() -> None:
+    """BUG 2b (eh-opp-damage) WIRING: drive the REAL per-turn inject path twice,
+    damaging the materialized creature between turns, and assert the second
+    inject does NOT heal it back to full.
+
+    This is the exact playtest shape: ``monster_manual.injected ... in_combat=True``
+    fires every combat turn; before the fix the merge leg reset core.hp to a full
+    pool from the patch's hp claim, so a damaged (or dead) opponent sprang back.
+    Proves the session.py merge-seam fix is wired into the production injection
+    seam, not just unit-correct in isolation."""
+    sd = _FakeSessionData()
+    sd.monster_manual = _manual_with(
+        encounters=[_creature_encounter(enemy_name="Salt Burrower", hp=9)],
+    )
+    snap = _snapshot()
+
+    # Turn 1: creature materializes at full HP.
+    monster_manual_inject.inject(sd, snap, current_location="The Dome", in_combat=True)
+    npc = next(n for n in snap.npcs if n.core.name == "Salt Burrower")
+    assert npc.core.hp.current == 9
+
+    # Player damages it mid-combat to 2/9.
+    npc.core.hp.current = 2
+
+    # Turn 2: the per-turn inject re-emits the SAME creature with hp=9.
+    monster_manual_inject.inject(sd, snap, current_location="The Dome", in_combat=True)
+    npc = next(n for n in snap.npcs if n.core.name == "Salt Burrower")
+    assert npc.core.hp.current == 2, (
+        f"the per-turn re-injection must PRESERVE the damaged HP (2/9), not heal "
+        f"the enemy back to full; got {npc.core.hp.current}/{npc.core.hp.max}"
+    )
+    assert npc.core.hp.max == 9
+
+
+# ---------------------------------------------------------------------------
+# Playtest 2026-06-10 — junk-name cleansing at the injection boundary.
+#
+# The Monster Manual is a long-lived on-disk cache. A name minted by older
+# generator code (``Vesper (version)`` in a stale coyote_star manual)
+# survives every reload and reaches the player-facing snapshot verbatim.
+# inject() must strip never-valid junk (bracketed annotations, digits)
+# without touching intentional stylistic punctuation.
+# ---------------------------------------------------------------------------
+
+
+def test_inject_strips_parenthetical_annotation_from_creature_name() -> None:
+    """A stale ``Vesper (version)`` enemy must reach the snapshot as ``Vesper``."""
+    sd = _FakeSessionData()
+    sd.monster_manual = _manual_with(
+        encounters=[_creature_encounter(enemy_name="Vesper (version)", tier=1, hp=24)],
+    )
+    snap = _snapshot()
+    monster_manual_inject.inject(sd, snap, current_location="The Dome", in_combat=True)
+    assert [n.core.name for n in snap.npcs] == ["Vesper"]
+
+
+def test_inject_strips_parenthetical_annotation_from_human_name() -> None:
+    sd = _FakeSessionData()
+    sd.monster_manual = _manual_with(npcs=[_human("Demiloslava (npc)")])
+    snap = _snapshot()
+    monster_manual_inject.inject(sd, snap, current_location="The Dome", in_combat=False)
+    assert [n.core.name for n in snap.npcs] == ["Demiloslava"]
+
+
+def test_inject_preserves_intentional_callsign_and_drift_marker() -> None:
+    """Broken Drift mints quoted callsigns and comma drift-markers on purpose —
+    the cleanser must NOT mangle them (only brackets/digits are junk)."""
+    sd = _FakeSessionData()
+    sd.monster_manual = _manual_with(
+        npcs=[_human("Quija 'Salt'"), _human("Hush, off Tether")],
+    )
+    snap = _snapshot()
+    monster_manual_inject.inject(sd, snap, current_location="The Dome", in_combat=False)
+    names = [n.core.name for n in snap.npcs]
+    assert "Quija 'Salt'" in names
+    assert "Hush, off Tether" in names
+
+
+def test_inject_drops_unsalvageable_name() -> None:
+    """A name that is nothing but a bracketed token sanitizes to empty — drop
+    the patch rather than inject a nameless NPC (and never crash on the
+    NpcPatch non-blank validator)."""
+    sd = _FakeSessionData()
+    sd.monster_manual = _manual_with(
+        encounters=[_creature_encounter(enemy_name="(version)", tier=1, hp=9)],
+    )
+    snap = _snapshot()
+    count = monster_manual_inject.inject(sd, snap, current_location="The Dome", in_combat=True)
+    assert count == 0
+    assert snap.npcs == []
+
+
+def test_inject_emits_names_sanitized_span_count() -> None:
+    """The registry decision is observable: the injected span reports how many
+    names were cleansed so the GM panel (lie detector) can see it fire."""
+    sd = _FakeSessionData()
+    sd.monster_manual = _manual_with(
+        encounters=[_creature_encounter(enemy_name="Vesper (version)", tier=1, hp=24)],
+    )
+    snap = _snapshot()
+    with mock.patch.object(monster_manual_inject.Span, "open") as span_open:
+        monster_manual_inject.inject(sd, snap, current_location="The Dome", in_combat=True)
+    # Span.open(SPAN, {attrs}) — find the injected-span attrs payload.
+    attrs = next(
+        call.args[1]
+        for call in span_open.call_args_list
+        if len(call.args) >= 2 and "names_sanitized" in call.args[1]
+    )
+    assert attrs["names_sanitized"] == 1
 
 
 # ---------------------------------------------------------------------------

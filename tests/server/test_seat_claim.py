@@ -17,9 +17,6 @@ import pytest
 
 from sidequest.game.persistence import (
     GameMode,
-    SqliteStore,
-    db_path_for_slug,
-    upsert_game,
 )
 from sidequest.protocol import GameMessage
 from sidequest.protocol.enums import MessageType
@@ -32,19 +29,41 @@ _SLUG = "seat-claim-fixture"
 _FIXTURE_PACKS = Path(__file__).resolve().parents[1] / "fixtures" / "packs"
 
 
+@pytest.fixture(autouse=True)
+def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
+    """Bind the process pool to a per-worker throwaway PG db, clean per test
+    (ADR-115 F1: connect resolves the bootstrap row from Postgres)."""
+    import psycopg
+
+    from sidequest.game import db_pool
+
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    with psycopg.connect(plain, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+            "AND tablename <> 'alembic_version'"
+        ).fetchall()
+        if rows:
+            names = ", ".join(f'"{r[0]}"' for r in rows)
+            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+    yield
+    db_pool.close_pool()
+
+
 def _seed(tmp_path: Path, slug: str) -> None:
-    db = db_path_for_slug(tmp_path, slug)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore(db)
-    store.initialize()
-    upsert_game(
-        store,
+    """Register an empty MP session in Postgres (ADR-115 F1)."""
+    from sidequest.game import db_pool
+    from sidequest.server.session_state import _build_pg_repos_for_slug
+
+    _build_pg_repos_for_slug(
+        db_pool.get_pool(),
         slug=slug,
-        mode=GameMode.MULTIPLAYER,
+        mode=str(GameMode.MULTIPLAYER),
         genre_slug=_GENRE,
         world_slug=_WORLD,
     )
-    store.close()
 
 
 @pytest.mark.asyncio

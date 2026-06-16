@@ -1280,3 +1280,149 @@ class TestOrreryV2FixtureWiring:
             "label_collision_tier_max",
         ):
             assert key in attrs, f"chart.render span missing {key}"
+
+
+# =========================================================================
+# ADR-094 §4.4 — upright-flip for far-arc textpath labels (Story 71-2)
+# =========================================================================
+
+
+class TestUprightFlipADR094:
+    """Behavioral tests for the far-arc 180° upright-flip.
+
+    A far-arc label (midpoint y > 0 in SVG coords) must carry
+    transform="rotate(180 cx cy)" where (cx, cy) is the label's own
+    midpoint — NOT the chart origin.  Upper-arc labels (y ≤ 0) must
+    have no transform attribute.
+
+    Tests are structural / behavioral (assert SVG attribute shape), not
+    pixel-diff snapshots — they survive visual tweaks and font changes.
+    """
+
+    def _orbit_world(self) -> tuple[OrbitsConfig, ChartConfig]:
+        """Minimal world: one habitat body whose orbit is the textpath."""
+        orbits = _star_with(
+            {
+                "ring_planet": BodyDef(
+                    type=BodyType.HABITAT,
+                    parent="sun",
+                    semi_major_au=5.0,
+                    period_days=4000.0,
+                    epoch_phase_deg=0,
+                    label="RING PLANET",
+                ),
+            }
+        )
+        chart = ChartConfig(
+            version="0.1.0",
+            annotations=[
+                Annotation(
+                    kind="engraved_label",
+                    text="Ring Planet",
+                    curve_along="orbit_ring_planet",
+                ),
+            ],
+        )
+        return orbits, chart
+
+    def test_far_arc_flavor_label_has_rotate_transform(self):
+        """engraved_label via flavor layer: far-arc label has rotate(180 cx cy)."""
+        orbits, chart = self._orbit_world()
+        svg = _render_root(orbits, chart)
+        # The orbit path starts at the top; at startOffset=50% the text centre
+        # is at the bottom (far arc, y > 0).  Must carry a rotate transform.
+        assert "rotate(180" in svg, (
+            "Far-arc textpath label must have rotate(180 cx cy) transform. "
+            "Label midpoint is at the bottom of the orbit (y > 0 in SVG coords), "
+            "which is the far arc; without the flip it renders upside-down."
+        )
+
+    def test_far_arc_flavor_label_rotates_around_own_center_not_origin(self):
+        """rotate() must use the label's own centre — not the chart origin (0,0)."""
+        orbits, chart = self._orbit_world()
+        svg = _render_root(orbits, chart)
+        # rotate(180 0 0) or rotate(180 0.0 0.0) would rotate around chart origin.
+        assert "rotate(180 0 0)" not in svg, (
+            "rotate(180 0 0) rotates around the chart origin, not the label centre. "
+            "Use rotate(180 cx cy) with the label's own midpoint coordinates."
+        )
+        assert "rotate(180 0.0 0.0)" not in svg, (
+            "rotate(180 0.0 0.0) rotates around the chart origin, not the label centre."
+        )
+
+    def _belt_world(
+        self, *, epoch_phase_deg: float, arc_extent_deg: float, label: str
+    ) -> tuple[OrbitsConfig, ChartConfig]:
+        """A single arc_belt body with an engraved textpath label along it."""
+        orbits = _star_with(
+            {
+                "belt": BodyDef(
+                    type=BodyType.ARC_BELT,
+                    parent="sun",
+                    semi_major_au=3.0,
+                    period_days=1900.0,
+                    epoch_phase_deg=epoch_phase_deg,
+                    arc_extent_deg=arc_extent_deg,
+                    label=label.upper(),
+                ),
+            }
+        )
+        chart = ChartConfig(
+            version="0.1.0",
+            annotations=[
+                Annotation(kind="engraved_label", text=label, curve_along="body:belt"),
+            ],
+        )
+        return orbits, chart
+
+    def test_upper_arc_arc_belt_label_is_flipped(self):
+        """arc_belt whose midpoint is in the upper half MUST be flipped (Story M-D).
+
+        Regression for the "broken drift" bug: the `body:` arc is swept
+        from from_deg→to_deg, so at an upper-half midpoint the glyphs travel
+        leftward and read upside-down.  A `body:` arc belt flips on the
+        OPPOSITE side from the full-ring ellipse (which flips at its bottom).
+        """
+        # Arc belt at bearing 90° (12-o'clock).  from=75, to=105, mid=90
+        # → sin(90°) = 1 > 0 → leftward travel → needs the upright flip.
+        orbits, chart = self._belt_world(epoch_phase_deg=75, arc_extent_deg=30, label="Upper Belt")
+        svg = _render_root(orbits, chart)
+        assert "Upper Belt" in svg, "arc_belt label must still render"
+        assert "rotate(180" in svg, (
+            "Upper-half arc_belt label travels leftward and must carry "
+            "rotate(180 cx cy); without it the label reads upside-down."
+        )
+        assert "rotate(180 0 0)" not in svg and "rotate(180 0.0 0.0)" not in svg, (
+            "rotate must use the label's own midpoint, not the chart origin."
+        )
+
+    def test_broken_drift_shaped_belt_is_flipped(self):
+        """The exact coyote_star 'broken drift' shape (30°→120°, mid 75°) flips."""
+        # epoch_phase_deg=30, arc_extent_deg=90 → mid_deg=75, sin(75°) > 0 → flip.
+        orbits, chart = self._belt_world(
+            epoch_phase_deg=30, arc_extent_deg=90, label="broken drift"
+        )
+        svg = _render_root(orbits, chart)
+        assert "broken drift" in svg, "arc_belt label must still render"
+        assert "rotate(180" in svg, (
+            "The 'broken drift' arc belt (upper-half midpoint) must be flipped "
+            "upright — this is the Story M-D playtest regression."
+        )
+
+    def test_lower_arc_arc_belt_label_has_no_transform(self):
+        """arc_belt whose midpoint is in the lower half must NOT be flipped.
+
+        Counter-case to the ellipse: a `body:` arc swept through the bottom
+        travels rightward there (tangent_x = -sin(270°) = +1), so the glyphs
+        already read upright and must NOT be rotated.
+        """
+        # from=210, to=330, mid=270 → sin(270°) = -1 < 0 → rightward → no flip.
+        orbits, chart = self._belt_world(
+            epoch_phase_deg=210, arc_extent_deg=120, label="Lower Belt"
+        )
+        svg = _render_root(orbits, chart)
+        assert "Lower Belt" in svg, "arc_belt label must still render"
+        assert "rotate(180" not in svg, (
+            "Lower-half arc_belt label travels rightward and already reads "
+            "upright — it must NOT carry a rotate transform."
+        )

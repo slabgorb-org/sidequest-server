@@ -2,10 +2,22 @@
 
 Loads each shipped genre pack's rules.yaml and verifies the calibrated v1
 state. Filters on **resolution_mode** rather than type name — the ADR's
-"combat & chase" framing missed that space_opera's ship_combat also uses
-``resolution_mode: opposed_check`` (its category is "combat"). The
-resolution-mode filter is the invariant: anything resolved through the
-calibrated tie-band geometry must use the calibrated threshold.
+"combat & chase" framing missed that opposed_check confrontations can carry
+non-"combat" type names. The resolution-mode filter is the invariant: anything
+resolved through the calibrated tie-band geometry must use the calibrated
+threshold.
+
+NOTE (space_opera→SWN binding, Task 8): space_opera's combat AND ship_combat
+formerly used ``resolution_mode: opposed_check`` and so were swept up by these
+threshold tests. They have since moved to ``resolution_mode: beat_selection`` +
+``win_condition: hp_depletion`` (HP-to-0 resolution, no dual-dial metrics), so
+space_opera now has ZERO opposed_check confrontations. The resolution_mode
+filter handles this gracefully — those metricless combats are simply skipped by
+the opposed_check/sealed_letter threshold tests rather than asserted against.
+space_opera is consequently dropped from COMBAT_PACKS (the opposed_check
+existence guard) but stays in SHIPPED_PACKS, where its remaining dial
+(negotiation, chase) and sealed_letter (dogfight) confrontations are still
+checked.
 
 1. opponent_default_stats — no value equals 12 (the pre-calibration parity
    number). All present values must be 10 or below.
@@ -37,6 +49,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from sidequest.genre.models.rules import OPPONENT_RESERVED_STAT_KEYS
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 GENRE_PACKS_DIR = REPO_ROOT / "sidequest-content" / "genre_packs"
 
@@ -58,12 +72,50 @@ SHIPPED_PACKS = [
 # confrontation; without this, the parametrized calibration tests would pass
 # vacuously for any pack whose combat confrontations were accidentally
 # removed.
-COMBAT_PACKS = [
-    "caverns_and_claudes",
-    "elemental_harmony",
-    "mutant_wasteland",
-    "space_opera",
-]
+#
+# space_opera is excluded as of the space_opera→SWN binding (Task 8): its
+# combat/ship_combat confrontations moved off resolution_mode: opposed_check to
+# ruleset:swn beat_selection + win_condition: hp_depletion (combat resolves on
+# HP reaching 0, no dual-dial metrics). space_opera therefore intentionally
+# carries ZERO opposed_check confrontations, so requiring one here would be a
+# false failure. It still ships dial confrontations (negotiation, chase) and a
+# sealed_letter_lookup (dogfight); those remain covered by the SHIPPED_PACKS
+# threshold tests above, which filter by resolution_mode and so correctly skip
+# the metricless hp_depletion combats rather than asserting against them.
+#
+# elemental_harmony is excluded for the same reason as of the WWN binding: its
+# combat confrontation ("Martial Exchange") moved off resolution_mode:
+# opposed_check to ruleset:wwn beat_selection + win_condition: hp_depletion,
+# exactly mirroring the space_opera→SWN migration. elemental_harmony therefore
+# intentionally carries ZERO opposed_check confrontations. Its remaining dial
+# confrontations (negotiation "Diplomatic Council", chase "Pursuit") are still
+# covered by the SHIPPED_PACKS threshold tests above.
+#
+# mutant_wasteland is excluded as of the AWN binding (epic 88, design §6.4): its
+# combat confrontation ("Wasteland Brawl") moved off resolution_mode:
+# opposed_check to ruleset:awn beat_selection + win_condition: hp_depletion,
+# again mirroring the space_opera→SWN / elemental_harmony→WWN migrations.
+# mutant_wasteland therefore intentionally carries ZERO opposed_check
+# confrontations. Its remaining dial confrontations (negotiation "Wasteland
+# Parley", chase "Wasteland Pursuit") are still covered by the SHIPPED_PACKS
+# threshold tests above. This is the documented by-design calibration migration,
+# NOT a regression.
+#
+# caverns_and_claudes is excluded as of the WWN binding (2026-06-12 port): its
+# combat confrontation ("Dungeon Combat") moved off resolution_mode:
+# opposed_check to ruleset:wwn beat_selection + win_condition: hp_depletion,
+# exactly mirroring the elemental_harmony→WWN / space_opera→SWN migrations.
+# caverns_and_claudes therefore intentionally carries ZERO opposed_check
+# confrontations. Its remaining dial confrontations (chase "Corridor Pursuit",
+# negotiation) are still covered by the SHIPPED_PACKS threshold tests above.
+#
+# Every shipped combat pack has now migrated its combat confrontation to an
+# SRD ruleset (beat_selection + hp_depletion), so COMBAT_PACKS is empty: there
+# is no longer any pack that must expose an opposed_check confrontation. The
+# per-pack opposed_check existence guard below parametrizes over this empty
+# list and so makes no assertion — the SHIPPED_PACKS threshold tests remain the
+# active calibration coverage.
+COMBAT_PACKS: list[str] = []
 
 CALIBRATED_THRESHOLD = 7
 SEALED_LETTER_THRESHOLD = 30
@@ -103,6 +155,10 @@ def test_opponent_default_stats_no_parity_12_remains(pack_name: str):
             continue
         for stat_name, value in ods.items():
             if not isinstance(value, int):
+                continue
+            # hp / armor_class are reserved CreatureCore-seed keys, not
+            # ability scores — exempt from the ADR-093 stat ceiling.
+            if stat_name in OPPONENT_RESERVED_STAT_KEYS:
                 continue
             if value == PRE_CALIBRATION_PARITY_STAT or value > CALIBRATED_OPPONENT_STAT_CEILING:
                 offending.append((ctype, stat_name, value))

@@ -1,0 +1,4 @@
+# No `history` field — AC5 negative: the Timeline section must render without a
+# preamble container when the world authors no lore.history prose.
+world_name: Timeline Sorted Fixture
+geography: A test geography paragraph.

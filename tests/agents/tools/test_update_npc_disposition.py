@@ -29,7 +29,6 @@ from sidequest.agents.tools import (
 )
 from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.game.disposition import Disposition
-from sidequest.game.persistence import SqliteStore
 from sidequest.game.session import GameSnapshot, Npc
 from sidequest.game.turn import TurnManager
 
@@ -54,15 +53,13 @@ def _build_snapshot(*, npcs: list[Npc] | None = None) -> GameSnapshot:
     )
 
 
-def _store_with(snapshot: GameSnapshot) -> SqliteStore:
-    store = SqliteStore.open_in_memory()
-    store.initialize()
-    store.init_session(genre_slug=snapshot.genre_slug, world_slug=snapshot.world_slug)
-    store.save(snapshot)
-    return store
+def _store_with(snapshot: GameSnapshot):
+    from tests.agents.tools.conftest import pg_store_with
+
+    return pg_store_with(snapshot)
 
 
-def _make_ctx(store: SqliteStore, *, session_id: str = "s", turn: int = 3) -> ToolContext:
+def _make_ctx(store, *, session_id: str = "s", turn: int = 3) -> ToolContext:
     from unittest.mock import MagicMock
 
     return ToolContext(
@@ -70,7 +67,7 @@ def _make_ctx(store: SqliteStore, *, session_id: str = "s", turn: int = 3) -> To
         session_id=session_id,
         perspective_pc="Alice",
         turn_number=turn,
-        store=store,
+        repository=store,
         otel_span=MagicMock(),
         perception_filter=NarratorPerceptionFilter(),
     )
@@ -197,8 +194,9 @@ async def test_unknown_npc_returns_not_found() -> None:
 
 
 async def test_no_active_session_returns_fatal_error() -> None:
-    store = SqliteStore.open_in_memory()
-    store.initialize()
+    from tests.agents.tools.conftest import pg_empty_store
+
+    store = pg_empty_store()
     # No init_session/save — load() returns None.
     ctx = _make_ctx(store)
 
@@ -327,6 +325,56 @@ async def test_otel_perspective_pc_empty_string_when_none(otel_capture) -> None:
     assert attrs.get("tool.disposition.perspective_pc") == ""
     # axis defaults to "general"
     assert attrs.get("tool.disposition.axis") == "general"
+
+
+async def test_records_disposition_beat_with_reason_and_location() -> None:
+    """ADR-136 site 2: the tool persists a disposition beat (the *why*).
+
+    Drives the REAL registered handler through the existing fixture, reloads via
+    the store, and asserts the reloaded NPC's last beat carries the effective
+    (post-clamp) delta, the reason passed in, and the resolved party location.
+    Fails if the ``record_disposition_beat`` call is removed from the handler.
+    """
+    snap = _build_snapshot(npcs=[_npc("Bart", disposition=0)])
+    # Give the party a consensus location so party_location() resolves non-None.
+    snap.player_seats = {"seat-1": "Bart-PC"}
+    snap.character_locations = {"Bart-PC": "Tavern"}
+    store = _store_with(snap)
+    ctx = _make_ctx(store)
+
+    r = await _call(
+        {"npc_id": "Bart", "delta": 12, "reason": "shared a meal"},
+        ctx,
+    )
+    assert r.status is ToolResultStatus.OK
+
+    reloaded = store.load()
+    assert reloaded is not None
+    bart = next(n for n in reloaded.snapshot.npcs if n.core.name == "Bart")
+    assert bart.disposition_log, "no disposition beat persisted"
+    beat = bart.disposition_log[-1]
+    assert beat.delta == 12  # effective post-clamp change (0 → 12)
+    assert beat.reason == "shared a meal"
+    assert beat.location == "Tavern"
+    assert beat.turn == 1  # snapshot.turn_manager.interaction
+
+
+async def test_clamped_beat_records_effective_delta() -> None:
+    """The beat delta is the EFFECTIVE clamped change, not the requested delta."""
+    snap = _build_snapshot(npcs=[_npc("Bart", disposition=95)])
+    store = _store_with(snap)
+    ctx = _make_ctx(store)
+
+    r = await _call({"npc_id": "Bart", "delta": 999, "reason": "miracle"}, ctx)
+    assert r.status is ToolResultStatus.OK
+
+    reloaded = store.load()
+    assert reloaded is not None
+    bart = next(n for n in reloaded.snapshot.npcs if n.core.name == "Bart")
+    assert bart.disposition.value == 100
+    beat = bart.disposition_log[-1]
+    # Requested 999, but clamped 95 → 100 means the beat records +5.
+    assert beat.delta == 5
 
 
 async def test_parallel_update_runs_sequentially() -> None:

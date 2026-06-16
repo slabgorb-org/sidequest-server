@@ -200,11 +200,15 @@ def test_overlay_emit_called_from_encounter_transition_dispatch():
     from pathlib import Path
 
     import sidequest.server.websocket_session_handler as wsh
+    from sidequest.server.websocket_handlers import map_emit
 
+    # The helper definition now lives in websocket_handlers/map_emit.py; the
+    # two transition call sites remain in the session handler that drives the
+    # narration loop.
+    assert "def _maybe_emit_location_overlay_changed(" in Path(map_emit.__file__).read_text()
     handler_src = Path(wsh.__file__).read_text()
-    assert "def _maybe_emit_location_overlay_changed(" in handler_src
     call_count = handler_src.count("_maybe_emit_location_overlay_changed(")
-    # 1 def + 2 call sites (activate, deactivate) = 3 minimum.
-    assert call_count >= 3, (
-        f"expected definition + activate + deactivate call sites, found {call_count} mentions"
+    # 2 call sites (activate, deactivate) in the narration loop.
+    assert call_count >= 2, (
+        f"expected activate + deactivate call sites, found {call_count} call sites"
     )

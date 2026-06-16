@@ -13,8 +13,11 @@ Pins the post-rewrite contract:
   narrator-facing; the silent fallback at ``orchestrator.py:979,1003``
   (``patch.get("npcs_present", patch.get("npcs_met", []))``) is removed.
 
-* **AC-2.** ``len(NARRATOR_OUTPUT_ONLY) <= 13800`` bytes (~2,000 tok under
-  Anthropic's chars/4 rule-of-thumb). Today: ~24,784 bytes / ~3,600 tok.
+* **AC-2.** ``len(NARRATOR_OUTPUT_ONLY) <= 14900`` codepoints (~2,200 tok under
+  Anthropic's chars/4 rule-of-thumb). 61-12 compacted to 13,156; three later
+  load-bearing rules (anti-fabrication + ``is_creature`` + ``disengaged``) lifted
+  it to 14,813, so the ceiling was raised in steps 13,800 → 14,600 (2026-06-05) →
+  14,900 (2026-06-10) rather than re-compact.
 
 * **AC-3.** The three CRITICAL MAGIC banners — ``CRITICAL MAGIC EFFECT RULE``
   (§1), ``CRITICAL MAGIC RULE`` (§3 plugin-aware), ``CRITICAL MAGIC NEGATIVE
@@ -56,7 +59,6 @@ rewording. Never xfail, never skip.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
 import pytest
@@ -75,43 +77,24 @@ from sidequest.agents.prompt_framework.core import PromptRegistry
 from sidequest.agents.tooling_protocol import ToolingLlmClient
 
 
-# ---------------------------------------------------------------------------
-# Minimal fake SDK shaped like AsyncAnthropic — copied from
-# test_57_4_recency_guardrails_migration.py. The prompt-build path never
-# fires the SDK; the responses list stays empty.
-# ---------------------------------------------------------------------------
-@dataclass
-class _Usage:
-    input_tokens: int = 0
-    output_tokens: int = 0
-    cache_read_input_tokens: int = 0
-    cache_creation_input_tokens: int = 0
-
-
-@dataclass
-class _Resp:
-    content: list[Any]
-    stop_reason: str
-    usage: _Usage
-    model: str
-
-
-class _Msgs:
-    def __init__(self, responses: list[_Resp]) -> None:
-        self._responses = responses
-
-    async def create(self, **kwargs: Any) -> _Resp:
-        return self._responses.pop(0)
-
-
-class _Sdk:
-    def __init__(self, responses: list[_Resp] | None = None) -> None:
-        self.messages = _Msgs(responses or [])
+@pytest.fixture(autouse=True)
+def _subscription_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Story 119-3: claude-agent-sdk over the Max subscription — both PAYG
+    credentials must be UNSET (a SET key re-routes to PAYG and raises at call
+    time). The prompt-build path these tests drive never fires the transport,
+    but pin the absence so a polluted environment cannot leak in."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
 
 
 def _make_sdk_orchestrator() -> Orchestrator:
-    """SDK-path orchestrator — the only viable narrator backend post-61-9."""
-    client = AnthropicSdkClient(sdk=_Sdk())
+    """SDK-path orchestrator — the only viable narrator backend post-61-9.
+
+    Story 119-3: ``AnthropicSdkClient()`` takes no args (the legacy ``sdk=``
+    injection is gone; the transport is the late-bound module-level ``query``
+    seam). These tests drive only ``build_narrator_prompt``, which never fires
+    ``query``, so no fake stream is installed."""
+    client = AnthropicSdkClient()
     assert isinstance(client, ToolingLlmClient), (
         "AnthropicSdkClient must satisfy ToolingLlmClient — the backend gate "
         "discriminator misroutes otherwise."
@@ -255,19 +238,33 @@ def test_orchestrator_parser_has_no_npcs_met_silent_fallback() -> None:
 
 
 def test_output_only_prose_under_byte_budget() -> None:
-    """``NARRATOR_OUTPUT_ONLY`` post-rewrite is ≤ 13,800 bytes (~ 2,000
-    tok under Anthropic's chars/4 rule-of-thumb).
+    """``NARRATOR_OUTPUT_ONLY`` stays within the prompt token ceiling.
 
-    Today: 24,784 bytes / ~3,600 tok / 284 lines. Target reduction:
-    ~44 % bytes, matches the "~50 % prose reduction" story title with
-    headroom.
+    Story 61-12 compacted the file to 13,156 (from a pre-compaction
+    24,784). Three later commits each appended a load-bearing narrator
+    rule — the ANTI-FABRICATION guard (playtest #431, +557), the
+    ``is_creature`` routing field (npc #74, +625), and the ``disengaged``
+    opponent-departure field (sq-playtest 2026-06-10 long_foundry zombie
+    negotiation, +~400 after compaction) — which pushed it to 14,813.
+    Each rule is intentional and kept as terse as the instruction allows,
+    so the ceiling was lifted in deliberate steps (13,800 → 14,600 on
+    2026-06-05, then 14,600 → 14,900 on 2026-06-10) rather than
+    re-compacting prose at the risk of narrator-quality loss. The
+    ``disengaged`` field is the narrator-facing half of the ADR-116 §4
+    social end-on-no-Other fix — without it the narrator never emits the
+    departure signal and the engine half is dead in production. The
+    prompt is primacy-cached (ADR-112), so the marginal per-turn cost of
+    the extra tokens is amortized. The budget still guards against
+    unbounded growth — a future addition that crosses 14,900 must either
+    compact or make a fresh ceiling decision.
     """
     actual = len(NARRATOR_OUTPUT_ONLY)
-    assert actual <= 13_800, (
-        f"NARRATOR_OUTPUT_ONLY is {actual} bytes, exceeds the 13,800-byte "
-        f"budget (~ 2,000 tok ceiling). Story 61-12 AC-2 requires the "
-        f"file to compact to ≤ 13,800 bytes via the five preservation-by-"
-        f"rewrite passes in the story context. Today: 24,784 bytes."
+    assert actual <= 14_900, (
+        f"NARRATOR_OUTPUT_ONLY is {actual} codepoints, exceeds the "
+        f"14,900 budget (~ 2,200 tok ceiling). The narrator prompt grew "
+        f"past its growth-discipline ceiling — compact the prose "
+        f"(preservation-by-rewrite, keep every rule) or make a fresh "
+        f"ceiling decision. Pre-61-12 baseline was 24,784."
     )
 
 
@@ -498,15 +495,23 @@ def test_critical_and_mandatory_banner_count_under_ceiling() -> None:
 # updates phrase strings in those test files where the rewrite changes
 # wording, but the rule's general concept must remain expressible here.
 REQUIRED_TOKENS: tuple[str, ...] = (
-    # test_50_2_confrontation_trigger_prompt — confrontation type enum
-    "ship_combat",
-    "dogfight",
-    "social_duel",
-    "trial",
-    "auction",
-    "scandal",
-    "negotiation",
-    "chase",
+    # NOTE (story 61-14, 2026-05-27): the 8 confrontation-type tokens
+    # (ship_combat, dogfight, social_duel, trial, auction, scandal,
+    # negotiation, chase) were REMOVED from this list. They were "load-bearing
+    # for test_50_2_confrontation_trigger_prompt" — but that test no longer
+    # exists, and the rule it pinned migrated off the narrator surface. Per
+    # ADR-113 the narrator no longer chooses confrontation type; the Intent
+    # Router does, reading the closed enum from game_state.confrontation_types
+    # (sourced from pack.rules.confrontations at runtime — story 59-10). Live
+    # measurement 2026-05-27: none of the 8 tokens appear in the assembled SDK
+    # narrator prompt (the only viable backend post-61-9); the legacy guardrail
+    # injection of CONFRONTATION_TRIGGER_CONSTRAINT is gated to the non-SDK
+    # backend (_maybe_register_legacy_guardrail). Coverage of the new home is
+    # preserved by tests/server/test_intent_router_confrontation_vocabulary.py
+    # (mechanism + OTEL span, against a synthetic fixture pack — the genre type
+    # names are CONTENT, correctly not hard-asserted in engine tests per
+    # feedback_tests_not_point_at_content). Design Deviation logged in the
+    # 61-14 session. Silent omission is forbidden — hence this banner.
     # test_narrator_prompt — sidecar fields + side enum + tiers
     "side",
     "player",

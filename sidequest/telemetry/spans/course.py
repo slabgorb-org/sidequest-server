@@ -29,6 +29,11 @@ SPAN_COURSE_PLOT = "course.plot"
 SPAN_COURSE_PLOT_REJECTED = "course.plot.rejected"
 SPAN_COURSE_CANCEL = "course.cancel"
 SPAN_COURSE_RENDER_OVERLAY = "course.render_overlay"
+# Story 77-3 (ADR-137): the course's single read of quest_anchors. Distinct
+# from course.compute (which counts selected rows by source) — this fires at
+# the anchor-read decision point regardless of how many anchors survive
+# selection, so the GM panel sees what the scheduler consumed.
+SPAN_QUEST_ANCHORS_CONSUMED = "orbital.course.quest_anchors_consumed"
 
 FLAT_ONLY_SPANS.update(
     {
@@ -37,6 +42,7 @@ FLAT_ONLY_SPANS.update(
         SPAN_COURSE_PLOT_REJECTED,
         SPAN_COURSE_CANCEL,
         SPAN_COURSE_RENDER_OVERLAY,
+        SPAN_QUEST_ANCHORS_CONSUMED,
     }
 )
 
@@ -60,6 +66,21 @@ def emit_course_compute(
             "quest_count": int(quest),
             "dropped_by_cap": int(dropped_by_cap),
         },
+    ):
+        pass
+
+
+def emit_quest_anchors_consumed(*, anchor_count: int) -> None:
+    """Emit ``orbital.course.quest_anchors_consumed`` (Story 77-3, AC2 OTEL).
+
+    Fired inside ``compute_courses`` — the single point that reads the
+    promoted quest_anchors — so it covers every caller (orchestrator prompt
+    assembly AND the narration-apply course refresh) without per-call-site
+    wiring. ``anchor_count`` is the number of anchors the scheduler read,
+    before scope/cap selection."""
+    with Span.open(
+        SPAN_QUEST_ANCHORS_CONSUMED,
+        attrs={"anchor_count": int(anchor_count)},
     ):
         pass
 

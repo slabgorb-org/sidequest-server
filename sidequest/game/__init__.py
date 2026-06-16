@@ -6,7 +6,7 @@ Phase 1 exports:
 - StateDelta (game-layer), StateSnapshot, snapshot, compute_delta
 - TurnManager, TurnPhase
 - CommandHandler, CommandResult, BUILTIN_COMMANDS
-- SqliteStore, SavedSession, SessionMeta, PersistError
+- SavedSession, SessionMeta, PersistError
 - Resource pools (ADR-033): ResourcePool, ResourceThreshold,
   ResourcePatch, ResourcePatchOp, ResourcePatchResult, ResourcePatchError,
   UnknownResource, NotVoluntary, detect_crossings, mint_threshold_lore
@@ -74,7 +74,6 @@ from sidequest.game.persistence import (
     SavedSession,
     SerializationError,
     SessionMeta,
-    SqliteStore,
 )
 from sidequest.game.resource_pool import (
     NotVoluntary,
@@ -92,10 +91,12 @@ from sidequest.game.rig_composure_pool import (
     RigComposurePool,
 )
 from sidequest.game.rig_crash import (
+    CrashSaveResult,
     RigCrashResult,
     RigDamageResult,
     apply_rig_damage,
     handle_rig_crash,
+    resolve_crash_saves,
 )
 from sidequest.game.session import (
     AchievementTracker,
@@ -113,6 +114,11 @@ from sidequest.game.session import (
 )
 from sidequest.game.thresholds import detect_crossings
 from sidequest.game.turn import PreprocessedAction, TurnManager, TurnPhase
+from sidequest.game.vehicle_combat import (
+    RammingResult,
+    resolve_ramming,
+    vehicle_ac,
+)
 from sidequest.game.vessel_tags import (
     InvalidVesselTagsError,
     VesselTags,
@@ -174,7 +180,6 @@ __all__ = [
     "SavedSession",
     "SerializationError",
     "SessionMeta",
-    "SqliteStore",
     # resource_pool (ADR-033)
     "NotVoluntary",
     "ResourcePatch",
@@ -189,11 +194,18 @@ __all__ = [
     # rig_composure_pool (ADR-078, Epic 53)
     "RigComposureDeltaResult",
     "RigComposurePool",
-    # rig_crash (Epic 53, story 53-3 — Composure→0 consequences)
+    # rig_crash (Epic 53, story 53-3 — Composure→0 consequences;
+    # Epic 86, story 86-2 — CWN crash saves + two-pool transition)
+    "CrashSaveResult",
     "RigCrashResult",
     "RigDamageResult",
     "apply_rig_damage",
     "handle_rig_crash",
+    "resolve_crash_saves",
+    # vehicle_combat (Epic 86, story 86-2 — CWN vehicle AC + ramming)
+    "RammingResult",
+    "resolve_ramming",
+    "vehicle_ac",
     # session
     "AchievementTracker",
     "AxisValue",

@@ -1,20 +1,29 @@
-"""Reusable playtest fixture for the space_opera dogfight engine (T7).
+"""Reusable playtest fixture for the SWN dogfight engine (T7).
 
-A small helper module that constructs a live, real-content space_opera
-dogfight encounter wired through the production dispatch path, and
-exposes a clean API for driving turns. Used by integration tests and by
-manual playtest drivers.
+A small helper module that constructs a dogfight encounter from the
+``swn_test_pack`` FIXTURE pack wired through the production dispatch
+path, and exposes a clean API for driving turns. Used by integration
+tests and by manual playtest drivers.
+
+Story 96-1: this helper previously loaded the LIVE space_opera pack from
+sidequest-content, which broke when epic 94 migrated weapons to
+world-tier inventory — and violated the doctrine that content-only
+changes must never turn server tests red. It now loads the synthetic
+``swn_test_pack`` fixture and binds ``test_world`` so the dogfight
+weapon lookup exercises the same world-tier ``resolve_inventory``
+REPLACE path production uses for migrated packs.
 
 This is the "smallest viable playtest scaffold" demonstrating the full
 T1-T6 dogfight engine working end-to-end:
-    - Real content load (sidequest-content/genre_packs/space_opera/)
+    - Fixture content load (tests/fixtures/genre_packs/swn_test_pack/)
     - Production instantiation (assigns role=red/blue per T3)
     - Production dispatch (_apply_narration_result_to_snapshot, T5)
     - Sealed-letter resolution (per_actor_state mutation, OTEL spans)
 
 Per CLAUDE.md no-silent-fallbacks:
-    - Missing sidequest-content raises FileNotFoundError (callers can
-      pytest.skip on it).
+    - A missing fixture pack raises FixturePackNotFound. That is a repo
+      defect (fixtures ship with the tests), NOT a skippable environment
+      condition — callers must not pytest.skip on it.
     - Invalid maneuvers raise ValueError before dispatch.
     - All other errors propagate from the production code path.
 
@@ -33,23 +42,31 @@ from sidequest.agents.orchestrator import (
     NarrationTurnResult,
     NpcMention,
 )
+from sidequest.game.character import Character
+from sidequest.game.creature_core import CreatureCore
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.loader import load_genre_pack
 from sidequest.genre.models.pack import GenrePack
 from sidequest.genre.models.rules import ConfrontationDef
 from sidequest.server.dispatch.confrontation import find_confrontation_def
+from sidequest.server.dispatch.encounter_lifecycle import (
+    instantiate_encounter_from_trigger,
+)
 from sidequest.server.dispatch.sealed_letter import SealedLetterOutcome
 from sidequest.server.narration_apply import _apply_narration_result_to_snapshot
+from tests._helpers.fixture_packs import (
+    FIXTURE_PACKS_DIR,
+    SWN_TEST_PACK,
+    TEST_WORLD,
+)
 from tests._helpers.session_room import room_for
 
-# Default location of sidequest-content alongside sidequest-server. Mirrors
-# the path-walk in test_sealed_letter_dispatch_integration.py so that
-# subrepo layouts (oq-1, oq-2) resolve identically.
-DEFAULT_CONTENT_ROOT = (
-    Path(__file__).resolve().parents[2].parent / "sidequest-content" / "genre_packs"
-)
+# Story 96-1: fixture packs, not live sidequest-content. Kept as a module
+# constant so manual playtest drivers can still point pack_root elsewhere.
+DEFAULT_CONTENT_ROOT = FIXTURE_PACKS_DIR
 
-GENRE_SLUG = "space_opera"
+GENRE_SLUG = SWN_TEST_PACK
+WORLD_SLUG = TEST_WORLD
 DOGFIGHT_TYPE = "dogfight"
 
 
@@ -59,12 +76,15 @@ def make_dogfight_playtest_state(
     opponent_pilot_name: str = "Vulture",
     pack_root: Path | None = None,
 ) -> tuple[GameSnapshot, ConfrontationDef, GenrePack]:
-    """Construct a fresh GameSnapshot with an active space_opera dogfight.
+    """Construct a fresh GameSnapshot with an active SWN-fixture dogfight.
 
-    Loads real content from ``sidequest-content/genre_packs/space_opera/``
-    via the production loader, then drives a single instantiation turn
-    through ``_apply_narration_result_to_snapshot`` so the encounter is
-    built by the same code path the running server uses.
+    Loads the ``swn_test_pack`` fixture from
+    ``tests/fixtures/genre_packs/`` via the production loader, then
+    drives a single instantiation turn through
+    ``_apply_narration_result_to_snapshot`` so the encounter is built by
+    the same code path the running server uses. ``test_world`` is bound
+    on the snapshot so weapon lookups resolve through the world-tier
+    inventory catalog (epic 94 production shape).
 
     Args:
         player_pilot_name: Name to assign the red (player) actor.
@@ -81,26 +101,27 @@ def make_dogfight_playtest_state(
         for legal-maneuver validation, beat lists, etc.
 
     Raises:
-        FileNotFoundError: ``sidequest-content`` is not on disk at the
-            expected location. Callers in test contexts should
-            ``pytest.skip(...)`` on this rather than papering over it.
-        ValueError: Loaded space_opera pack lacks a dogfight ConfrontationDef
-            (content drift — surface loudly per CLAUDE.md).
+        FileNotFoundError: the fixture pack is not on disk at the expected
+            location. Fixture packs ship with the test suite, so this is a
+            repo defect — callers must NOT ``pytest.skip(...)`` on it.
+        ValueError: Loaded fixture pack lacks a dogfight ConfrontationDef
+            (fixture drift — surface loudly per CLAUDE.md).
         AssertionError: Production instantiation didn't produce the expected
             two-actor red/blue encounter (engine drift — caller wants to know).
 
     Side effects:
-        - Loads space_opera genre pack from disk.
+        - Loads the swn_test_pack fixture from disk.
         - Drives one narration turn through the production dispatch path
-          to instantiate the encounter (this is what makes per_actor_state
-          start at ``{}`` — matching production behavior, not pre-seeded).
+          to instantiate the encounter; per_actor_state is seeded with
+          frame_hp/frame_hp_max at instantiation by production code.
     """
     root = pack_root if pack_root is not None else DEFAULT_CONTENT_ROOT
     pack_path = root / GENRE_SLUG
     if not pack_path.is_dir():
         raise FileNotFoundError(
-            f"space_opera genre pack not found at {pack_path} — "
-            f"sidequest-content checkout missing or pack_root wrong"
+            f"{GENRE_SLUG} fixture pack not found at {pack_path} — "
+            f"the fixture ships with the test suite, so this is a repo "
+            f"defect, not an environment gap"
         )
 
     pack = load_genre_pack(pack_path)
@@ -108,35 +129,64 @@ def make_dogfight_playtest_state(
     cdef = find_confrontation_def(confrontations, DOGFIGHT_TYPE)
     if cdef is None:
         raise ValueError(
-            f"space_opera pack at {pack_path} has no '{DOGFIGHT_TYPE}' "
-            f"ConfrontationDef — content drift, expected the sealed-letter "
+            f"{GENRE_SLUG} fixture pack at {pack_path} has no '{DOGFIGHT_TYPE}' "
+            f"ConfrontationDef — fixture drift, expected the sealed-letter "
             f"dogfight definition (T1)"
         )
 
     snap = GameSnapshot(genre=GENRE_SLUG)
     snap.genre_slug = GENRE_SLUG
+    # Epic 94 production shape: the dogfight weapon lookup goes through
+    # resolve_inventory(pack, snapshot.world_slug) — binding the fixture
+    # world exercises the world-tier REPLACE path, like live migrated packs.
+    snap.world_slug = WORLD_SLUG
 
-    # Drive instantiation through the production path so role tagging
-    # (red/blue per T3) and any other instantiation-time wiring fire.
-    _apply_narration_result_to_snapshot(
-        snap,
-        NarrationTurnResult(
-            narration=(
-                f"{player_pilot_name} pushes the throttle as "
-                f"{opponent_pilot_name} screams in on the merge."
+    # Seed the player character so the SWN shot-resolution path in
+    # narration_apply can look up pc_char.stats (Reflex/Intellect modifiers
+    # feed the to-hit arithmetic). Matches the _make_pilot pattern in
+    # test_sealed_letter_dispatch_integration.py: both attrs at 10
+    # (modifier=0) so arithmetic is deterministic. pilot_skill /
+    # attack_bonus fall back to authored player_default_stats — not a
+    # silent fallback, that's the authored MVP default.
+    snap.characters = [
+        Character(
+            core=CreatureCore(
+                name=player_pilot_name,
+                description="Playtest pilot.",
+                personality="Calm.",
             ),
-            confrontation=DOGFIGHT_TYPE,
-            npcs_present=[
-                NpcMention(
-                    name=opponent_pilot_name,
-                    role="hostile",
-                    side="opponent",
-                ),
-            ],
-        ),
-        player_name=player_pilot_name,
+            backstory="A pilot.",
+            char_class="Pilot",
+            race="Human",
+            stats={"Reflex": 10, "Intellect": 10},
+        )
+    ]
+
+    # Story 59-17: instantiate through the LIVE production primitive.
+    # Confrontation engagement is router-driven (Story 59-4 / ADR-113); the
+    # narrator-initiated instantiation block inside
+    # ``_apply_narration_result_to_snapshot`` was removed, so the old
+    # ``confrontation=DOGFIGHT_TYPE`` call no longer seats an encounter
+    # (that was the 59-17 repro: ``snap.encounter`` stayed None). Drive the
+    # same instantiation primitive the router dispatch calls
+    # (``run_confrontation_dispatch`` → ``instantiate_encounter_from_trigger``)
+    # so role tagging (red/blue per T3) and instantiation-time wiring fire.
+    # We pass the opponent explicitly (the rarer router-with-mentions path);
+    # the location-fallback path is covered by
+    # ``test_dogfight_instantiation_production_path.py``.
+    instantiate_encounter_from_trigger(
+        snapshot=snap,
         pack=pack,
-        room=room_for(snap),
+        encounter_type=DOGFIGHT_TYPE,
+        player_name=player_pilot_name,
+        npcs_present=[
+            NpcMention(
+                name=opponent_pilot_name,
+                role="hostile",
+                side="opponent",
+            ),
+        ],
+        genre_slug=GENRE_SLUG,
     )
 
     enc = snap.encounter

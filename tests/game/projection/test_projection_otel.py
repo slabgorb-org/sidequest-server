@@ -32,7 +32,7 @@ def _setup_tracing() -> InMemorySpanExporter:
 def test_decide_span_emitted_with_attributes() -> None:
     exporter = _setup_tracing()
     filt = ComposedFilter.with_no_genre_rules()
-    view = SessionGameStateView(gm_player_id="gm", player_id_to_character={"alice": "alice_char"})
+    view = SessionGameStateView(player_id_to_character={"alice": "alice_char"})
     env = MessageEnvelope(kind="NARRATION", payload_json='{"text":"hi"}', origin_seq=42)
 
     filt.project(envelope=env, view=view, player_id="alice")

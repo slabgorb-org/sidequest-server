@@ -1,0 +1,170 @@
+# archetype_constraints.yaml — space_opera
+# Defines valid Jungian x RPG Role pairings for this genre
+# common: chargen default, NPC gen draws most
+# uncommon: shown if player explores, NPC diversity
+# rare: allowed but unusual, memorable characters
+# forbidden: genuinely nonsensical for this genre
+#
+# Space opera is a maximally permissive genre — diverse crews, alien perspectives,
+# factional politics. Almost every combination has a genre-true precedent.
+# Forbidden list is very short by design.
+
+valid_pairings:
+  common:
+    - [hero, dps]
+    - [hero, tank]
+    - [hero, jack_of_all_trades]
+    - [outlaw, stealth]
+    - [outlaw, dps]
+    - [outlaw, jack_of_all_trades]
+    - [sage, control]
+    - [sage, support]
+    - [sage, healer]
+    - [caregiver, healer]
+    - [caregiver, support]
+    - [ruler, tank]
+    - [ruler, support]
+    - [explorer, jack_of_all_trades]
+    - [explorer, stealth]
+    - [magician, control]
+    - [magician, support]
+    - [everyman, jack_of_all_trades]
+    - [everyman, support]
+    - [lover, support]
+    - [lover, healer]
+
+  uncommon:
+    - [hero, stealth]
+    - [hero, control]
+    - [outlaw, control]
+    - [outlaw, support]
+    - [sage, stealth]
+    - [sage, dps]
+    - [caregiver, control]
+    - [caregiver, stealth]
+    - [ruler, dps]
+    - [ruler, control]
+    - [explorer, control]
+    - [explorer, dps]
+    - [magician, stealth]
+    - [magician, dps]
+    - [magician, healer]
+    - [artist, support]
+    - [artist, control]
+    - [artist, jack_of_all_trades]
+    - [jester, support]
+    - [jester, stealth]
+    - [jester, jack_of_all_trades]
+    - [lover, stealth]
+    - [lover, dps]
+    - [lover, control]
+    - [innocent, healer]
+    - [innocent, support]
+    - [innocent, jack_of_all_trades]
+    - [everyman, tank]
+    - [everyman, dps]
+    - [everyman, stealth]
+    - [caregiver, dps]
+
+  rare:
+    - [jester, tank]
+    - [jester, dps]
+    - [jester, control]
+    - [innocent, control]
+    - [innocent, dps]
+    - [innocent, tank]
+    - [artist, dps]
+    - [artist, tank]
+    - [lover, tank]
+    - [caregiver, tank]
+    - [ruler, healer]
+    - [ruler, stealth]
+    - [ruler, jack_of_all_trades]
+
+  forbidden:
+    # Space opera is so broad that almost nothing is truly forbidden.
+    # The one combination that genuinely strains genre coherence:
+    - [innocent, stealth]
+    # A true innocent operating as a covert operative breaks the archetype's
+    # core tension — naivety requires visibility to function dramatically.
+
+# Genre-level fallback names and flavor for each axis value
+# Used when no world-level funnel claims a combination
+genre_flavor:
+  jungian:
+    hero:
+      speech_pattern: "terse, mission-focused, earns brevity through action"
+      equipment_tendency: "service sidearm, battered flight suit, crew patch on shoulder"
+      visual_cues: "zero-g calluses, regulation haircut grown out, eyes that track exits"
+    sage:
+      speech_pattern: "precise, cites data, pauses before answering to be sure"
+      equipment_tendency: "portable terminal, annotated star charts, analysis rig"
+      visual_cues: "pale from station lighting, ink-stained fingertips, habitually squinting"
+    outlaw:
+      speech_pattern: "clipped, evasive, dark humor about things that should be serious"
+      equipment_tendency: "unregistered holdout, forged transponder codes, three sets of papers"
+      visual_cues: "moves along walls, sits with sight lines covered, unmarked clothing"
+    caregiver:
+      speech_pattern: "direct but warm, asks follow-up questions, remembers what you said last time"
+      equipment_tendency: "field medkit, stim patches, emergency rations they give away"
+      visual_cues: "tired eyes, efficient movements, always knows where the hurt people are"
+    ruler:
+      speech_pattern: "measured, expects to be heard, comfortable with silence"
+      equipment_tendency: "rank insignia or its deliberate absence, encrypted command channel"
+      visual_cues: "upright even in zero-g, makes space into a head of table"
+    explorer:
+      speech_pattern: "enthusiastic about anomalies, casually mentions near-death as anecdote"
+      equipment_tendency: "deep-range scanner, survey kit, worn environmental suit"
+      visual_cues: "sun-bleached or radiation-weathered, restless hands, logs everything"
+    magician:
+      speech_pattern: "speaks in implications, comfortable with uncertainty others find paralyzing"
+      equipment_tendency: "custom-built interface rig, cryptographic keys, unmarked hardware"
+      visual_cues: "half-attention on something invisible, datajack or modification visible, deliberate stillness"
+    artist:
+      speech_pattern: "observational, finds unexpected metaphors, emotionally present in technical conversations"
+      equipment_tendency: "capture device, portable fabricator, sketchbook that travels every jump"
+      visual_cues: "pigment stains or fabricator residue, distracted focus, expressive in a crew of flat affect"
+    innocent:
+      speech_pattern: "earnest, asks questions others stopped asking, occasionally disarming in their directness"
+      equipment_tendency: "standard-issue kit, personal item from before the voyage, nothing tactical"
+      visual_cues: "open posture, slow to armor up emotionally, wide attention"
+    lover:
+      speech_pattern: "attentive, remembers names and anniversaries, notices the person not the role"
+      equipment_tendency: "token from someone, presentable shipboard clothes, something that smells like home"
+      visual_cues: "faces people fully, reads the room, warmth that doesn't feel performed"
+    jester:
+      speech_pattern: "deflects tension with precision timing, wry, never mean — usually"
+      equipment_tendency: "nothing threatening, something inexplicable, flask"
+      visual_cues: "animated in a crew of reserve, catches your eye during bad briefings, the grin"
+    everyman:
+      speech_pattern: "plain, crew dialect, says the thing everyone was thinking"
+      equipment_tendency: "practical loadout, nothing custom, worn but maintained"
+      visual_cues: "unremarkable in a good way, the one who knows where the spare parts are"
+
+  rpg_roles:
+    tank:
+      fallback_name: "Vanguard"
+    dps:
+      fallback_name: "Gunner"
+    control:
+      fallback_name: "Specialist"
+    healer:
+      fallback_name: "Medic"
+    stealth:
+      fallback_name: "Operative"
+    support:
+      fallback_name: "Pilot"
+    jack_of_all_trades:
+      fallback_name: "Crew"
+
+# NPC roles available in this genre (all 9 enabled — space opera supports the full range)
+npc_roles_available:
+  - mentor
+  - herald
+  - shadow
+  - threshold
+  - host
+  - artisan
+  - authority
+  - victim
+  - mook

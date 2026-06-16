@@ -431,3 +431,96 @@ async def test_inventory_route_is_single_source_no_double_emission(
         "expected exactly one item_recipient_resolved event for the single "
         f"gained item (got {len(resolved_events)}: {resolved_events})"
     )
+
+
+def test_is_consumable_item_gates_on_category_then_tag() -> None:
+    """``_is_consumable_item`` is the consume-lane gate: only a genuine
+    single-use item may be removed. ``category=consumable`` qualifies; a
+    ``consumable`` tag on an otherwise non-consumable category is the
+    fallback; every reusable category (tool/weapon/armor/quest) and an
+    untagged/blank item do not."""
+    from sidequest.server.narration_apply import _is_consumable_item
+
+    assert _is_consumable_item({"category": "consumable"}) is True
+    assert _is_consumable_item({"category": "CONSUMABLE"}) is True  # case-insensitive
+    assert _is_consumable_item({"category": "misc", "tags": ["ordinary", "consumable"]}) is True
+    assert _is_consumable_item({"category": "tool"}) is False
+    assert _is_consumable_item({"category": "weapon"}) is False
+    assert _is_consumable_item({"category": "armor"}) is False
+    assert _is_consumable_item({"category": "quest"}) is False
+    assert _is_consumable_item({"category": "tool", "tags": []}) is False
+    assert _is_consumable_item({}) is False
+
+
+@pytest.mark.asyncio
+async def test_items_consumed_preserves_reusable_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Playtest 2026-06-04 (oz turn 7): the narrator emitted ``items_consumed``
+    for the chargen Pocket Handkerchief (category=tool) after Susan wiped rust
+    with it, silently destroying a reusable item. The consume lane is
+    single-use only — a tool/weapon/armor/quest item must survive an incidental
+    narrated use, and the refusal must surface on the OTEL span as a
+    ``preserved`` entry (No Silent Fallbacks), not vanish."""
+    captured = await _setup(monkeypatch, "test-inventory-consume-preserve-tool")
+
+    pre_existing = [
+        {
+            "id": "pocket_handkerchief",
+            "name": "Pocket Handkerchief",
+            "description": "A clean square of cloth from home.",
+            "category": "tool",
+            "value": 2,
+            "weight": 0.0,
+            "rarity": "common",
+            "narrative_weight": 0.3,
+            "tags": [],
+            "equipped": False,
+            "quantity": 1,
+            "uses_remaining": None,
+            "state": "Carried",
+        },
+    ]
+    snapshot = GameSnapshot(
+        genre_slug="wry_whimsy",
+        world_slug="oz",
+        location="The Yellow Brick Road",
+        discovered_regions=["The Yellow Brick Road"],
+        quest_log={},
+        lore_established=[],
+        characters=[_make_character("Susan", items=pre_existing)],
+        turn_manager=TurnManager(),
+    )
+    snapshot.turn_manager.record_interaction()
+
+    result = NarrationTurnResult(
+        narration="Susan wipes the rust away with her handkerchief as she goes.",
+        items_consumed=[{"name": "Pocket Handkerchief"}],
+    )
+    _apply_narration_result_to_snapshot(
+        snapshot, result, player_name="Susan", room=room_for(snapshot)
+    )
+    await asyncio.sleep(0.05)
+
+    # The reusable tool survives — NOT consumed.
+    item_names = [str(it.get("name", "")) for it in snapshot.characters[0].core.inventory.items]
+    assert "Pocket Handkerchief" in item_names, "reusable tool must not be consumed"
+
+    typed = [
+        e
+        for e in captured
+        if e["event_type"] == "state_transition"
+        and e["component"] == "inventory"
+        and e["fields"].get("op") == "narrator_extracted"
+    ]
+    assert len(typed) == 1, (
+        "expected exactly one narrator_extracted state_transition "
+        f"(got {len(typed)}: {[e['fields'] for e in typed]})"
+    )
+    fields = typed[0]["fields"]
+    # Nothing was consumed; the refusal surfaces as a preserved entry so the
+    # GM panel can see the engine declined to destroy a reusable item.
+    assert fields["consumed"] == "[]"
+    assert fields["consumed_count"] == 0
+    assert fields["preserved"] == '["Pocket Handkerchief"]'
+    assert fields["preserved_count"] == 1

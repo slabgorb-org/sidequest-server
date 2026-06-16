@@ -80,6 +80,7 @@ def _make_dispatch(
         params=params or {},
         depends_on=[],
         idempotency_key=key,
+        confidence=1.0,
         visibility=visibility or _tag_all(),
     )
 

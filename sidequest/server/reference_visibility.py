@@ -78,7 +78,10 @@ PUBLIC_STEMS: frozenset[str] = frozenset(
         "openings",
         "lore",
         "locations",
-        # LORE_PACK_FLAVOR_FILES stems (overlap above plus factions)
+        # factions is a PUBLIC (non-spoiler) stem in its own right — this
+        # allowlist is independent of where/whether factions renders. (The
+        # lore-page pack-flavor merge that once surfaced it was removed in
+        # Story 63-10; the stem stays PUBLIC regardless.)
         "factions",
     }
 )
@@ -113,6 +116,34 @@ KEEPER: frozenset[Entry] = frozenset(
         # NPC versions of class abilities. Class name is at any position,
         # tier slot is the list-of-dict wildcard.
         ("power_tiers", ("*", "*", "npc")),
+        # history.points_of_interest keeper fields (Story 100-4). The POI section
+        # (build_poi_section) projects POIs through a public allowlist, but the
+        # SAME history.yaml is also projected as a generic-YAML node-tree, where
+        # classify() is the only gate. These spoiler-bearing POI fields must be
+        # KEEPER so they never cross via the generic path (spec C1).
+        # load_points_of_interest reads POIs in BOTH shapes — top-level
+        # points_of_interest[] AND chapters[].points_of_interest[] — so both
+        # key-path shapes are carved here (each entry has ≤2 wildcards).
+        ("history", ("points_of_interest", "*", "gm_notes")),
+        ("history", ("points_of_interest", "*", "secret")),
+        ("history", ("points_of_interest", "*", "trap")),
+        ("history", ("points_of_interest", "*", "hidden_exit")),
+        ("history", ("points_of_interest", "*", "draft")),
+        ("history", ("chapters", "*", "points_of_interest", "*", "gm_notes")),
+        ("history", ("chapters", "*", "points_of_interest", "*", "secret")),
+        ("history", ("chapters", "*", "points_of_interest", "*", "trap")),
+        ("history", ("chapters", "*", "points_of_interest", "*", "hidden_exit")),
+        ("history", ("chapters", "*", "points_of_interest", "*", "draft")),
+        # legends.related_tropes keeper field (Story 100-5). The Timeline section
+        # (build_timeline_section) projects legends through a public allowlist, but
+        # the SAME legends.yaml is also projected as a generic-YAML node-tree, where
+        # classify() is the only gate. related_tropes carries dormant-trope spoiler
+        # seeds (ADR-135 D1) and must be KEEPER so it never crosses via the generic
+        # path (spec C1). load_legends reads BOTH authoring forms — a flat top-level
+        # Vec<Legend> (item path ('*', 'related_tropes')) AND a {legends: [...]} map
+        # (item path ('legends', '*', 'related_tropes')) — so both are carved here.
+        ("legends", ("*", "related_tropes")),
+        ("legends", ("legends", "*", "related_tropes")),
     }
 )
 

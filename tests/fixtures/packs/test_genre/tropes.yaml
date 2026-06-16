@@ -196,3 +196,21 @@
     decelerators: [ignore, destroy radio, silence, jam]
     accelerator_bonus: 0.05
     decelerator_penalty: 0.03
+
+# Story 84-5 (WI-2) test fixtures: trope ids the lifecycle-render-wiring test
+# seeds onto the live snapshot (a progressing one to prove active-not-indexed,
+# a resolved one as the dormant control that MUST index). Minimal definitions —
+# the dormant-trope projector only reads id + name + description.
+- id: the_keeper_stirs
+  name: The Keeper Stirs
+  description: >-
+    Something ancient at the heart of the dungeon has noticed the intrusion
+    and begun, slowly, to wake.
+  category: dread
+
+- id: extraction_panic
+  name: Extraction Panic
+  description: >-
+    The way out is closing and the party knows it — every choice now weighed
+    against the dwindling chance of escape.
+  category: tension

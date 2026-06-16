@@ -12,7 +12,9 @@ them through ``SPAN_ROUTES``, and the hub publishes
 Same shape as ``test_inventory_wiring.py`` and ``test_npc_wiring.py``:
 local ``TracerProvider`` + ``WatcherSpanProcessor`` + monkeypatched
 ``spans_module.tracer`` so the encounter helpers resolve to the
-test's tracer regardless of the global provider state.
+test's tracer regardless of the global provider state. That harness
+(``watcher_setup`` + ``wait_for_state_transition``) is shared via
+``tests/integration/conftest.py`` (story 71-34).
 """
 
 from __future__ import annotations
@@ -20,7 +22,6 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from opentelemetry.sdk.trace import TracerProvider
 
 from sidequest.game.beat_kinds import apply_beat
 from sidequest.game.creature_core import CreatureCore, HpPool
@@ -31,9 +32,7 @@ from sidequest.game.encounter import (
 )
 from sidequest.genre.models.rules import BeatDef
 from sidequest.protocol.dice import RollOutcome
-from sidequest.server.watcher import WatcherSpanProcessor
-from sidequest.telemetry import spans as spans_module
-from sidequest.telemetry.watcher_hub import watcher_hub
+from tests.integration.conftest import wait_for_state_transition, watcher_setup
 
 
 def _enc() -> StructuredEncounter:
@@ -70,53 +69,17 @@ def _strike(target_edge_delta: int) -> BeatDef:
     )
 
 
-async def _setup(monkeypatch: pytest.MonkeyPatch, label: str) -> list[dict]:
-    """Bind the module hub to this loop, install a local TracerProvider
-    with the ``WatcherSpanProcessor``, and monkeypatch
-    ``spans_module.tracer`` so the production helper resolves to it."""
-    watcher_hub.bind_loop(asyncio.get_running_loop())
-    async with watcher_hub._lock:  # noqa: SLF001
-        watcher_hub._subscribers.clear()  # noqa: SLF001
-
-    captured: list[dict] = []
-
-    class _Sock:
-        async def send_json(self, data: dict) -> None:
-            captured.append(data)
-
-    await watcher_hub.subscribe(_Sock())  # type: ignore[arg-type]
-
-    provider = TracerProvider()
-    provider.add_span_processor(WatcherSpanProcessor(watcher_hub))
-    local_tracer = provider.get_tracer(label)
-    monkeypatch.setattr(spans_module, "tracer", lambda: local_tracer)
-
-    return captured
-
-
 async def _wait_for_event(
     captured: list[dict], field_value: str, *, timeout_s: float = 1.0
 ) -> dict:
     """Poll ``captured`` for a ``state_transition`` whose ``fields.field``
-    matches ``field_value``. Hub broadcast hops through
-    ``run_coroutine_threadsafe`` so tests need to yield repeatedly until
-    the queued coroutines drain."""
-    deadline = asyncio.get_event_loop().time() + timeout_s
-    while asyncio.get_event_loop().time() < deadline:
-        for evt in captured:
-            if (
-                evt.get("event_type") == "state_transition"
-                and evt.get("fields", {}).get("field") == field_value
-            ):
-                return evt
-        await asyncio.sleep(0.01)
-    summary = [
-        (e.get("event_type"), e.get("fields", {}).get("field"), e.get("fields", {}).get("name"))
-        for e in captured
-    ]
-    raise AssertionError(
-        f"Expected state_transition with field={field_value!r} within {timeout_s}s; "
-        f"captured {len(captured)} events: {summary}"
+    matches ``field_value`` (thin wrapper over the shared
+    ``wait_for_state_transition`` harness)."""
+    return await wait_for_state_transition(
+        captured,
+        lambda evt: evt.get("fields", {}).get("field") == field_value,
+        timeout_s=timeout_s,
+        describe=f"with field={field_value!r}",
     )
 
 
@@ -129,7 +92,7 @@ async def test_apply_beat_target_edge_delta_publishes_edge_debit_state_transitio
     proving ``apply_beat`` → ``encounter_edge_debit_span`` →
     ``WatcherSpanProcessor`` → ``SPAN_ROUTES[encounter.edge_debit]``
     is wired end-to-end."""
-    captured = await _setup(monkeypatch, "test-combat-edge-debit-wiring")
+    captured = await watcher_setup(monkeypatch, "test-combat-edge-debit-wiring")
 
     enc = _enc()
     sam = enc.find_actor("Sam")
@@ -164,7 +127,7 @@ async def test_apply_beat_composure_break_publishes_state_transition(
     """When a beat drops the target's edge to zero, both
     ``encounter.edge_debit`` AND ``encounter.composure_break`` must
     reach the hub as typed state_transitions."""
-    captured = await _setup(monkeypatch, "test-combat-composure-break-wiring")
+    captured = await watcher_setup(monkeypatch, "test-combat-composure-break-wiring")
 
     enc = _enc()
     sam = enc.find_actor("Sam")

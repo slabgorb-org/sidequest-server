@@ -57,12 +57,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from sidequest.agents.claude_client import ClaudeClient
-from sidequest.agents.orchestrator import Orchestrator
 from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore, Inventory
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.loader import DEFAULT_GENRE_PACK_SEARCH_PATHS, GenreLoader
+from tests._helpers.doubles import make_orchestrator
 
 # ---------------------------------------------------------------------------
 # Helpers — recreate the playtest-3 evropi cast that leaked into pumblestone's
@@ -120,11 +119,6 @@ def _ludzo() -> Character:
     return _make_character("Ludzo", pronouns="he/him", race="Dwarf", char_class="Fighter", level=3)
 
 
-def _make_orchestrator() -> Orchestrator:
-    client = MagicMock(spec=ClaudeClient)
-    return Orchestrator(client=client)
-
-
 def _make_room(*, playing_count: int, seat_map: dict[str, str] | None = None):
     """Mock a ``SessionRoom`` exposing exactly the surface ``_build_turn_context``
     reads. ``playing_player_count()`` is the source-of-truth for AC1/AC2.
@@ -161,7 +155,9 @@ def sd_factory():
             player_name=acting_player,
             player_id=f"p-{acting_player.lower().replace(' ', '_')}",
             snapshot=snap,
-            store=MagicMock(),
+            repository=MagicMock(),
+            dungeon_repository=MagicMock(),
+            telemetry_sink=MagicMock(),
             genre_pack=pack,
             orchestrator=MagicMock(),
         )
@@ -247,7 +243,7 @@ async def test_solo_session_prompt_contains_no_named_party_members(
     )
     ctx = _build_turn_context(sd, room=room)
 
-    orch = _make_orchestrator()
+    orch = make_orchestrator()
     prompt, registry = await orch.build_narrator_prompt("look around", ctx)
 
     # No party-peer roster section should be registered.
@@ -339,7 +335,7 @@ async def test_multiplayer_prompt_contains_peer_names(sd_factory) -> None:
     )
     ctx = _build_turn_context(sd, room=room)
 
-    orch = _make_orchestrator()
+    orch = make_orchestrator()
     prompt, registry = await orch.build_narrator_prompt("look around", ctx)
 
     assert "Rux" in prompt, (
@@ -580,7 +576,7 @@ async def test_wiring_solo_evropi_save_does_not_leak_canonical_party(
     )
     ctx = _build_turn_context(sd, room=room)
 
-    orch = _make_orchestrator()
+    orch = make_orchestrator()
     _, registry = await orch.build_narrator_prompt(
         "I take a careful look at the empty road.",
         ctx,
@@ -634,7 +630,7 @@ async def test_wiring_multiplayer_evropi_save_keeps_party_visible(
     )
     ctx = _build_turn_context(sd, room=room)
 
-    orch = _make_orchestrator()
+    orch = make_orchestrator()
     prompt, registry = await orch.build_narrator_prompt(
         "I greet my companions.",
         ctx,

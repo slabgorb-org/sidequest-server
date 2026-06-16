@@ -72,6 +72,7 @@ async def test_non_aside_player_action_does_not_strip(
         payload=PlayerActionPayload(
             action=NonBlankString.model_validate("[combat] I whisper to James"),
             aside=False,
+            round=0,
         ),
         player_id="player-1",
     )

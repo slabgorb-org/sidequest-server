@@ -359,6 +359,12 @@ class InventoryPayload(ProtocolBase):
     ``None`` when the genre pack doesn't declare one — UI falls back to
     a neutral default rather than hardcoding "gold" (which leaks fantasy
     tone into space/cyberpunk/etc. packs)."""
+    wealth_tier_label: str | None = None
+    """Player-facing wealth tier (ADR-021 track 3) — the ``gold`` balance
+    resolved against the pack's ``progression.wealth_tiers`` (e.g. "stocked",
+    "convoy legend"). ``None`` when the pack authors no wealth tiers; the UI
+    then shows the bare number. Mechanics-first legibility: wealth reads as a
+    tier, not just a count."""
 
 
 # ---------------------------------------------------------------------------
@@ -385,6 +391,69 @@ class ClassMove(ProtocolBase):
 
 
 # ---------------------------------------------------------------------------
+# CreationAnswer — durable chargen provenance (Story 93-2)
+# ---------------------------------------------------------------------------
+# Defined here (not in sidequest.game.character) for the same layering reason
+# as AbilityDefinition above: the Character model and the protocol sheet both
+# carry it, and game already depends on protocol. sidequest.game.character
+# re-exports it.
+# ---------------------------------------------------------------------------
+
+
+class CreationAnswer(BaseModel):
+    """One answered chargen scene — the player's words or their pick.
+
+    Story 93-2: the per-scene answer the player actually gave, recorded
+    durably on the Character (and carried in the snapshot sheet) instead of
+    being consumed for prose slots and discarded. Only ANSWERED scenes are
+    recorded — auto-advance acks and the arrangement confirm carry no
+    prompt/answer pair.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    scene_id: str
+    """The chargen scene that asked the question."""
+    prompt: str
+    """The scene's question/title, as the player saw it."""
+    kind: Literal["choice", "freeform"]
+    """How the player answered: a canned pick or their own words."""
+    value: str
+    """The chosen option LABEL (choice) or the player's verbatim text
+    (freeform) — never a derived/collapsed mechanical hint."""
+    archetype_inferred: bool = False
+    """True iff this answer's text fed the 93-1 Haiku archetype inference —
+    the UI badges these ('inferred from your words'). Marked at the chargen
+    confirm seam, never by builder.build() itself."""
+
+
+class LinkedLoreFragment(BaseModel):
+    """One creation-seed lore fragment linked to a character's History.
+
+    Story 93-4: a typed, sheet-ready projection of an ADR-048 lore fragment
+    that belongs to THIS character (its chosen chargen options), surfaced as
+    a 'Lore' subsection beneath the 93-3 origin block. Plumbing only — the
+    fragments are authored by chargen seeding (story 75-15 /
+    :func:`seed_lore_from_char_creation`), never minted here.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    fragment_id: str
+    """The ADR-048 store id (``lore_char_creation_<scene_id>_<choice_index>``)."""
+    title: str
+    """Display heading — the chosen option label."""
+    summary: str
+    """The fragment body (``"<label>: <description>"``)."""
+    source: str
+    """The fragment's LoreSource tag (``character_creation``)."""
+    lore_route: str | None = None
+    """Link to the fragment's lore page when one exists, else None. The UI
+    renders the title as a link only when this is set — never a fabricated
+    href (No Silent Fallbacks)."""
+
+
+# ---------------------------------------------------------------------------
 # CharacterSheetDetails — full character sheet nested inside PartyMember
 # ---------------------------------------------------------------------------
 
@@ -397,6 +466,14 @@ class CharacterSheetDetails(ProtocolBase):
 
     race: NonBlankString
     """Character race/origin. Non-blank post-chargen."""
+    origin_label: NonBlankString | None = None
+    """Display-only flavor label for Origin (the chosen chargen phrase, e.g.
+    "The Village Itself"). None when the label IS the mechanical archetype —
+    the UI falls back to ``race``. Diamonds-and-Coal: flavor on the sheet."""
+    calling_label: NonBlankString | None = None
+    """Display-only flavor label for Calling (e.g. "Country Veterinary
+    Surgeon"). None when the label IS the mechanical class — the UI falls
+    back to the top-level ``class``."""
     stats: dict[str, int]
     """Ability scores / stats."""
     abilities: list[AbilityDefinition]
@@ -412,11 +489,71 @@ class CharacterSheetDetails(ProtocolBase):
     """Pronouns. Optional. Non-blank when present."""
     equipment: list[str] = Field(default_factory=list)
     """Equipped/carried items as display strings."""
+    creation_answers: list[CreationAnswer] = Field(default_factory=list)
+    """Chargen provenance (Story 93-2): the player's per-scene answers in
+    scene-walk order — rendered by the 93-3 History section. Empty for
+    pre-93-2 characters."""
+    lore_fragments: list[LinkedLoreFragment] = Field(default_factory=list)
+    """Player-linked creation-seed lore fragments (Story 93-4) — rendered as
+    a 'Lore' subsection beneath the 93-3 origin block. Filtered to THIS
+    character's chosen chargen options; another player's picks never leak in.
+    Empty when the character has no linked fragments (legacy / no-store)."""
+    skills: dict[str, int] = Field(default_factory=dict)
+    """WN-family skill name → level mapping (ADR-143 Task 11). Empty for
+    non-WN characters and pre-ADR-143 saves. Rendered by the UI as a Skills
+    section only when non-empty (mechanics-first — Sebastien/Jade legibility)."""
+    foci: list[str] = Field(default_factory=list)
+    """WN-family focus ids (ADR-143 Task 11). Empty for non-WN characters.
+    Rendered by the UI as a Foci section only when non-empty."""
 
 
 # ---------------------------------------------------------------------------
 # PartyMember — character party snapshot
 # ---------------------------------------------------------------------------
+
+
+class AdvancementDelta(ProtocolBase):
+    """A player-facing level-up delta (ADR-021 track 1).
+
+    Surfaced so the player *sees the advancement and its driver* — not a
+    silent stat bump. Distinct from the ``progression.level_up`` OTEL/watcher
+    event, which is the dev/GM lie-detector (CLAUDE.md OTEL Observability
+    Principle); this is the player-UI channel (mechanics-first — Sebastien /
+    Jade want the math legible).
+    """
+
+    character_name: str
+    """Character that advanced."""
+    before: int
+    """Level before the crossing."""
+    after: int
+    """Level after the crossing."""
+    driver: str
+    """What drove the advancement (e.g. 'milestone')."""
+
+
+class AffinityTierUp(ProtocolBase):
+    """A player-facing affinity tier-promotion delta (ADR-021 track 2).
+
+    Surfaced so the player *sees which affinity advanced and to what tier* — not
+    a silent tier bump. The sibling of :class:`AdvancementDelta` (track 1
+    level-up); it additionally carries ``affinity_id`` because a character has
+    many affinities and several can advance in one turn. Distinct from the
+    ``progression.affinity_tier_up`` OTEL/watcher event, which is the dev/GM
+    lie-detector; this is the player-UI channel (mechanics-first — Sebastien /
+    Jade want the math legible).
+    """
+
+    character_name: str
+    """Character whose affinity advanced."""
+    affinity_id: str
+    """Which affinity advanced (matches ``Affinity.name``)."""
+    before: int
+    """Tier before the crossing."""
+    after: int
+    """Tier after the crossing."""
+    driver: str
+    """What drove the advancement (e.g. 'affinity')."""
 
 
 class PartyMember(ProtocolBase):
@@ -429,18 +566,35 @@ class PartyMember(ProtocolBase):
     """Player identifier. Non-blank — identity key."""
     name: NonBlankString
     """Player lobby name. Non-blank."""
+    player_identity: str | None = None
+    """Resolved player identity (Cf-Access email / dev Host). None when the player
+    is not currently connected (room-only store). Story 67-6 / ADR-119."""
     character_name: NonBlankString | None = None
     """In-game character name. Optional (None = still in chargen)."""
     current_hp: int
     """Current HP."""
     max_hp: int
     """Maximum HP."""
+    survivability_pool_label: str | None = None
+    """Story 68-1: per-genre label for the survivability pool (Composure /
+    Standing / Poise on social packs). None ⇒ the UI renders the default
+    "HP". Genre-level (uniform across the table); it rides the per-member
+    frame because it labels current_hp/max_hp directly above."""
     statuses: list[str]
     """Active statuses."""
     class_: NonBlankString = Field(alias="class")
     """Character class. Non-blank."""
     level: int
     """Character level."""
+    advancement: AdvancementDelta | None = None
+    """ADR-021 track 1: the most recent level-up delta (before/after/driver),
+    or None on turns with no advancement. Lets the player see the level change
+    and why, not a silent stat bump."""
+    affinity_advancements: list[AffinityTierUp] = Field(default_factory=list)
+    """ADR-021 track 2: affinity tier promotions this turn (each carries
+    affinity_id/before/after/driver), or empty on turns with none. A list
+    because several affinities can advance in one turn. Lets the player see the
+    tier change and why, not a silent bump."""
     portrait_url: str | None = None
     """Portrait URL."""
     current_location: NonBlankString | None = None
@@ -462,6 +616,27 @@ class PartyMember(ProtocolBase):
     """Maximum rig composure. None when character has no rig."""
     injury_tags: list[str] = Field(default_factory=list)
     """Crash-related injury statuses (e.g. 'injury', 'dismounted')."""
+    effort_available: int | None = Field(
+        default=None, json_schema_extra={"include_when_none": True}
+    )
+    """Story 102-6 (Sebastien/Jade legibility): free Effort the psychic can still
+    commit. None when the character has no Effort pool (non-psychic) — distinct
+    from 0 (a psychic with every point committed)."""
+    effort_committed: int | None = Field(
+        default=None, json_schema_extra={"include_when_none": True}
+    )
+    """Effort currently committed to active disciplines. None for non-psychics."""
+    effort_max: int | None = Field(default=None, json_schema_extra={"include_when_none": True})
+    """Maximum Effort pool. None for non-psychics."""
+    system_strain_current: int | None = Field(
+        default=None, json_schema_extra={"include_when_none": True}
+    )
+    """Story 102-6: accumulated System Strain (psionic pushes + lethality share
+    this one counter). None when the character has no strain pool."""
+    system_strain_max: int | None = Field(
+        default=None, json_schema_extra={"include_when_none": True}
+    )
+    """Maximum System Strain. None when the character has no strain pool."""
 
 
 # ---------------------------------------------------------------------------
@@ -616,6 +791,13 @@ class LocationDescriptionPayload(BaseModel):
     model_config = {"extra": "forbid"}
 
     region_id: str = Field(min_length=1)
+    # Authored human-readable display name for the region/room header. The
+    # source is the cartography ``Region.name`` (region-mode worlds) or the
+    # room YAML ``name``/``room_name`` (room-graph worlds). ``region_id`` stays
+    # the snake_case key used for the lore deep-link; ``region_name`` is what
+    # the player reads. None on old snapshots / sources with no authored name,
+    # in which case the UI falls back to rendering ``region_id``.
+    region_name: str | None = None
     prose: str
     terrain: str | None = None
     entities: list[LocationEntity] = Field(default_factory=list)
@@ -624,6 +806,12 @@ class LocationDescriptionPayload(BaseModel):
     # wiki. None when the region has no lore-page anchor (region-mode worlds,
     # old snapshots) — the UI then renders the header as plain text.
     reference_url: str | None = None
+    # POI landscape image URL for the region, built from the region_id VERBATIM
+    # (the authored slug == the R2 object key, e.g. munchkin_country.png) — no
+    # slugify, so it matches R2 directly. None on sources with no region. The UI
+    # renders it above the prose and hides it on a load error (a region with no
+    # rendered landscape 404s and degrades to text-only).
+    poi_image_url: str | None = None
 
 
 class LocationOverlayChangedPayload(BaseModel):
@@ -641,6 +829,275 @@ class LocationOverlayChangedPayload(BaseModel):
 
     region_id: str = Field(min_length=1)
     overlays: list[LocationDescriptionOverlaySummary] = Field(default_factory=list)
+
+
+class DispositionBeatPayload(BaseModel):
+    """One disposition shift surfaced to the player (ADR-136)."""
+
+    model_config = {"extra": "forbid"}
+
+    turn: int
+    delta: int
+    reason: str
+    location: str | None = None
+
+
+class RelationshipClaimPayload(BaseModel):
+    """A claim-to-party + coarse credibility hint (ADR-136 claims firewall)."""
+
+    model_config = {"extra": "forbid"}
+
+    text: str
+    credibility_hint: str
+
+
+class RelationshipEntry(BaseModel):
+    """One NPC's player-visible relationship state (ADR-136).
+
+    ``band`` is the 5-level display label; ``disposition`` is the raw reveal.
+    ``ocean`` is an OceanProfile dump (full keys, 0..10) or None. ``personality_read``
+    and ``claims`` are empty until Phases B/C.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    name: str
+    portrait_url: str | None = None
+    band: str
+    disposition: int
+    trend: str
+    last_seen_turn: int
+    last_seen_location: str | None = None
+    beats: list[DispositionBeatPayload] = Field(default_factory=list)
+    personality_read: str | None = None
+    ocean: dict[str, float] | None = None
+    claims: list[RelationshipClaimPayload] = Field(default_factory=list)
+
+
+class RelationshipsPayload(BaseModel):
+    """Full relationship roster snapshot (ADR-136)."""
+
+    model_config = {"extra": "forbid"}
+
+    entries: list[RelationshipEntry] = Field(default_factory=list)
+
+
+class QuestLoreEntry(BaseModel):
+    """One discovered lore fragment cohered under its quest (Story 117-5).
+
+    The player-facing "what I've learned about this job" surface. Projected by
+    the structural anchor→clue→fact join (ADR-053 + ADR-100 + ADR-146): a
+    ScenarioClue-sourced ``KnownFact`` whose ``fact_id`` (== originating clue id
+    per 50-14) belongs to a clue node touching this quest's ``anchor_id`` (via
+    ``ClueNode.locations``/``implicates``). ``fact_id`` is carried for UI dedup
+    against the broader KnownFacts surface; ``content`` is the readable fragment.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    fact_id: str
+    content: str
+
+
+class QuestLogEntry(BaseModel):
+    """One quest's player-visible state (ADR-137 / Story 77-8).
+
+    The wire projection of a stored ``QuestEntry`` (game/session.py), keyed by
+    its quest id. ``anchor_id`` links to the body/location anchor where the
+    objective resolves (orbital course planner consumes anchors per ADR-130).
+
+    ``related_lore`` (Story 117-5) coheres the discovered ScenarioClue facts the
+    party has learned about this quest's anchor — the "knowledge pulled into a
+    coherent picture" the playgroup was missing. Empty when nothing is learned;
+    never None.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    quest_id: str
+    title: str = ""
+    objective: str = ""
+    status: str = "active"
+    anchor_id: str | None = None
+    related_lore: list[QuestLoreEntry] = Field(default_factory=list)
+
+
+class QuestAnchorEntry(BaseModel):
+    """One quest anchor's player-visible state (ADR-137 / Story 77-8).
+
+    ``anchor_id`` is the stored body id (``GameSnapshot.quest_anchors``).
+    ``quest_id`` is the quest that owns this anchor (matched via
+    ``QuestEntry.anchor_id``), or None when no quest claims it — surfaced
+    explicitly rather than silently dropped (No Silent Fallbacks).
+    ``resolution`` is an optional human-readable beat/location resolution
+    where one is present; the bare anchor list carries none in v1.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    anchor_id: str
+    quest_id: str | None = None
+    resolution: str | None = None
+
+
+class QuestsPayload(BaseModel):
+    """Full quest-spine snapshot (ADR-137 / Story 77-8).
+
+    The RELATIONSHIPS-snapshot analog for the quest spine: log + anchors +
+    stakes travel together. An unpopulated spine yields empty lists and an
+    empty string — a clean, well-formed empty payload, never None.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    quest_log: list[QuestLogEntry] = Field(default_factory=list)
+    quest_anchors: list[QuestAnchorEntry] = Field(default_factory=list)
+    active_stakes: str = ""
+
+
+class FateSkillEntry(BaseModel):
+    """One skill on the Fate ladder (ADR-144 F3a / Story 118-1).
+
+    Carries both the numeric ``rating`` and its ladder ``ladder`` adjective
+    (``fate_resolution.ladder_name``) so the player UI shows the math AND the
+    name (Sebastien/Jade legibility). Negative rungs are valid (Terrible -2 ..).
+    """
+
+    model_config = {"extra": "forbid"}
+
+    name: str
+    rating: int
+    ladder: str
+
+
+class FateAspectEntry(BaseModel):
+    """One Fate aspect for the wire (ADR-144 F3a / Story 118-1).
+
+    ``kind`` is the aspect taxonomy (high_concept / trouble / character /
+    situation / consequence / boost); ``free_invokes`` is the count of unused
+    free invocations the invoke control (Story 118-4) reads.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    text: str
+    kind: str
+    free_invokes: int = 0
+
+
+class FateStressBox(BaseModel):
+    """One checkable stress box of a fixed ``value`` (ADR-144 F3a)."""
+
+    model_config = {"extra": "forbid"}
+
+    value: int
+    checked: bool = False
+
+
+class FateConsequenceEntry(BaseModel):
+    """One consequence slot (ADR-144 F3a / Story 118-1).
+
+    ``filled`` is True when the slot has been taken (it then carries the
+    consequence's ``text`` as an invokable aspect, SRD); an open slot reads
+    ``filled=False`` with an empty ``text``. ``value`` is the SRD absorption
+    value for the slot's ``level`` (mild 2 / moderate 4 / severe 6 / extreme 8).
+    """
+
+    model_config = {"extra": "forbid"}
+
+    level: str
+    value: int
+    filled: bool = False
+    text: str = ""
+
+
+class FateCharacterEntry(BaseModel):
+    """One PC's full Fate sheet for the wire (ADR-144 F3a / Story 118-1).
+
+    ``aspects`` is the named character aspects only (high_concept / trouble /
+    character) — a FILLED consequence is invokable but surfaces in
+    ``consequences``, not duplicated here. ``stress`` maps each track name
+    (``physical`` / ``mental``) to its ordered boxes.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    name: str
+    fate_points: int
+    refresh: int
+    skills: list[FateSkillEntry] = Field(default_factory=list)
+    aspects: list[FateAspectEntry] = Field(default_factory=list)
+    stress: dict[str, list[FateStressBox]] = Field(default_factory=dict)
+    consequences: list[FateConsequenceEntry] = Field(default_factory=list)
+
+
+class FateConflictParticipant(BaseModel):
+    """One participant in an active Fate conflict (ADR-144 F3a / Story 118-1).
+
+    ``side`` is the encounter actor's side (``player`` / ``opponent`` /
+    ``neutral``).
+    """
+
+    model_config = {"extra": "forbid"}
+
+    name: str
+    side: str
+
+
+class FateConflictEntry(BaseModel):
+    """The active Fate conflict's participants by side (ADR-144 F3a).
+
+    ``participants`` is in seating order — the engine's deterministic tiebreak
+    order (``fate_opponent._live_player_actors``). Live per-exchange initiative
+    (Notice/Empathy) is computed at resolution and surfaces in the F3f overlay,
+    not here.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    active: bool = True
+    participants: list[FateConflictParticipant] = Field(default_factory=list)
+
+
+class FateStatePayload(BaseModel):
+    """Full Fate-spine snapshot (ADR-144 F3a / Story 118-1).
+
+    The RELATIONSHIPS/QUESTS-snapshot analog for Fate: per-PC sheets + scene
+    situation aspects (incl. boosts) + the active conflict travel together. An
+    unpopulated payload is a clean empty-but-valid snapshot — never None.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    characters: list[FateCharacterEntry] = Field(default_factory=list)
+    scene_aspects: list[FateAspectEntry] = Field(default_factory=list)
+    conflict: FateConflictEntry | None = None
+
+
+class FateRollPayload(BaseModel):
+    """One resolved 4dF roll, surfaced to the player (ADR-144 F3c / Story 118-3).
+
+    The legibility surface for a Fate action: the four Fudge faces, the ladder
+    rating (value + adjective), the shift total, the outcome tier, and a
+    succeed-with-style flag. Built from the engine's ``FateOutcome`` (whose dice
+    tuple previously reached only the OTEL span) by ``build_fate_roll_payload``.
+    A roll is an EVENT, so this rides a dedicated ``FATE_ROLL`` message rather
+    than the change-gated ``FATE_STATE`` snapshot.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    #: The raw four Fudge faces, each -1 / 0 / +1.
+    dice: tuple[int, int, int, int]
+    roll_total: int
+    ladder_total: int
+    #: The Fate ladder adjective for ``ladder_total`` (e.g. "Great").
+    ladder_name: str
+    opposition: int
+    shifts: int
+    #: One of Fail / Tie / Succeed / SucceedWithStyle.
+    tier: str
+    succeeded_with_style: bool
 
 
 class LocationEntityResolution(BaseModel):

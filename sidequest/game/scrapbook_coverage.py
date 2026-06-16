@@ -28,7 +28,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
-from sidequest.game.persistence import SqliteStore
+from sidequest.game.repository import SaveRepository
 from sidequest.game.session import GameSnapshot
 from sidequest.telemetry.spans import (
     SPAN_SCRAPBOOK_COVERAGE_EVALUATED,
@@ -58,7 +58,7 @@ class ScrapbookCoverageReport:
 
 def detect_scrapbook_coverage_gaps(
     *,
-    store: SqliteStore,
+    repository: SaveRepository,
     snapshot: GameSnapshot,
     slug: str = "",
 ) -> ScrapbookCoverageReport:
@@ -69,30 +69,24 @@ def detect_scrapbook_coverage_gaps(
     and publishes a ``scrapbook_coverage_gap`` watcher event with severity
     ``warning`` only when ``gap_count > 0``.
 
-    Read-only. Threads through ``store._conn``; opens no new connections
+    Read-only. Uses typed repository methods; opens no new connections
     and writes nothing.
 
-    :param store: SqliteStore for the slot being resumed. Reuses its
-        connection — no new sqlite handles.
+    :param repository: SaveRepository for the slot being resumed.
+        ``PgSaveRepository`` satisfies this surface (ADR-115 D3); it
+        provides ``max_narrative_round`` and ``scrapbook_turn_ids``.
     :param snapshot: Loaded GameSnapshot. Read for span attribution
         (``genre``, ``world``); state is not mutated.
     :param slug: Optional slot slug for span attribution. Empty string on
         the legacy non-slug resume path.
     """
-    max_round = store.max_narrative_round()
+    max_round = repository.max_narrative_round()
 
     # Pull every distinct round that has at least one scrapbook entry.
     # Filter to the valid range — rows with turn_id <= 0 or > max_round
     # are noise (test fixture artifacts or pre-lockstep stragglers) and
     # would distort coverage_count / gap_rounds.
-    if max_round > 0:
-        rows = store._conn.execute(
-            "SELECT DISTINCT turn_id FROM scrapbook_entries WHERE turn_id >= 1 AND turn_id <= ?",
-            (max_round,),
-        ).fetchall()
-        covered = {int(r[0]) for r in rows}
-    else:
-        covered = set()
+    covered = repository.scrapbook_turn_ids(max_turn=max_round) if max_round > 0 else set()
 
     expected = set(range(1, max_round + 1)) if max_round > 0 else set()
     gap = sorted(expected - covered)

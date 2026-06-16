@@ -9,6 +9,9 @@ standalone unit-test seam).
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 from sidequest.dungeon.materializer import _stage_emit_room_yamls
 from sidequest.game.cookbook.models import GeneratedRoomDescription
@@ -113,74 +116,125 @@ def test_empty_composed_map_is_a_noop(tmp_path: Path) -> None:
         assert not any((world_dir / "rooms").iterdir())
 
 
-# ---------------------------------------------------------------------------
-# AC-11: wiring — _stage_emit_room_yamls has a non-test caller
-# ---------------------------------------------------------------------------
-
-
-def test_emit_helper_has_a_caller_in_production_code() -> None:
-    """CLAUDE.md 'Every Test Suite Needs a Wiring Test': the helper must
-    be CALLED FROM _stage_commit in the production materializer, not
-    just exist as a free function exercised by these tests.
-
-    def + at least one call site = ≥2 mentions of the symbol in
-    materializer.py.
-    """
-    src = (
-        Path(__file__).resolve().parents[2] / "sidequest" / "dungeon" / "materializer.py"
-    ).read_text()
-    assert "def _stage_emit_room_yamls(" in src, (
-        "_stage_emit_room_yamls must be defined in materializer.py."
-    )
-    assert src.count("_stage_emit_room_yamls(") >= 2, (
-        "_stage_emit_room_yamls must have a non-test caller in "
-        "materializer.py (def + call = ≥2 mentions). The wiring test "
-        "exists to prove the helper is reachable from production code."
+async def test_emit_runs_after_a_clean_materialize_commit(
+    monkeypatch: Any, migrated_db: str, tmp_path: Path
+) -> None:
+    """ADR-115 D6 relocated the per-region YAML emit out of _stage_commit and
+    into the coordinator's POST-COMMIT path (the coordinator now owns the
+    attach+commit transaction). Behavior contract: a clean materialize writes
+    the room YAMLs to disk. (Replaces the prior source-text wiring assertions,
+    which the project bans — CLAUDE.md 'No Source-Text Wiring Tests'.)"""
+    import sidequest.dungeon.materializer as _mat_module
+    import sidequest.telemetry.spans as _spans_module
+    from sidequest.dungeon.materializer import materialize
+    from tests.dungeon.conftest import build_pg_dungeon_repo
+    from tests.dungeon.test_materializer import (
+        MaterializationRequest_build,
+        _attach_pack,
+        _commit_palette,
+        _fresh_snapshot,
+        _otel_in_memory,
+        _real_cookbook_bundle,
+        _reflecting_sdk_client,
+        _seed_graph_themed,
     )
 
+    theme_id = "yaml_crypt"
+    palette = _commit_palette(theme_id)
+    graph = _seed_graph_themed(theme_id)
+    world_dir = tmp_path / "world"
 
-def test_emit_call_site_is_inside_stage_commit() -> None:
-    """Sharper wiring claim: the call site lives inside _stage_commit's
-    body (not in a sibling helper that isn't actually invoked during a
-    real materialization)."""
-    src = (
-        Path(__file__).resolve().parents[2] / "sidequest" / "dungeon" / "materializer.py"
-    ).read_text()
+    # _resolve_world_dir gates the emit on genre/world slug + a real pack on
+    # disk; for this behavior test we point it at a tmp dir directly.
+    monkeypatch.setattr(_mat_module, "_resolve_world_dir", lambda _request: world_dir)
 
-    # Find _stage_commit's body by locating its def and the next top-level def.
-    start = src.find("def _stage_commit(")
-    assert start >= 0, "_stage_commit must exist in materializer.py."
-    after_start = src[start + len("def _stage_commit(") :]
-    next_def = after_start.find("\ndef ")
-    body = after_start if next_def < 0 else after_start[:next_def]
-    assert "_stage_emit_room_yamls(" in body, (
-        "_stage_emit_room_yamls must be CALLED from inside _stage_commit's "
-        "body (not just defined elsewhere). Without this call site the "
-        "production materializer never emits the room YAMLs."
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+
+    _exporter, _provider, real_tracer = _otel_in_memory()
+    original_tracer_fn = _spans_module.tracer
+    _spans_module.tracer = lambda: real_tracer  # type: ignore[method-assign]
+    try:
+        await materialize(
+            MaterializationRequest_build(campaign_seed=7, expansion_id=1, spawn_depth_score=0.0),
+            graph=graph,
+            bundle=_real_cookbook_bundle(),
+            palette=palette,
+            dungeon_repository=repo,
+            snapshot=_fresh_snapshot(),
+            pack_tropes=_attach_pack("cave_in"),
+            claude_client=_reflecting_sdk_client(),
+        )
+    finally:
+        _spans_module.tracer = original_tracer_fn  # type: ignore[method-assign]
+
+    rooms_dir = world_dir / "rooms"
+    assert rooms_dir.is_dir(), (
+        "no rooms/ dir — the coordinator must emit per-region YAMLs after a "
+        "clean materialize commit (ADR-115 D6 post-commit emit)"
+    )
+    assert any(rooms_dir.glob("*.yaml")), "no room YAMLs written after a clean commit"
+
+
+async def test_emit_skipped_when_commit_rolls_back(
+    monkeypatch: Any, migrated_db: str, tmp_path: Path
+) -> None:
+    """Freeze invariant's temporal dimension (ADR-115 D6): a rolled-back
+    materialize must NOT deposit orphan YAMLs on disk. The emit is now in the
+    coordinator's post-commit path, so a PersistError inside the transaction
+    (which rolls the whole attach+commit back) skips the emit entirely."""
+    import sidequest.dungeon.materializer as _mat_module
+    import sidequest.telemetry.spans as _spans_module
+    from sidequest.dungeon.materializer import materialize
+    from sidequest.dungeon.persistence import PersistError
+    from sidequest.game.pg.dungeon import PgDungeonTransaction
+    from tests.dungeon.conftest import build_pg_dungeon_repo
+    from tests.dungeon.test_materializer import (
+        MaterializationRequest_build,
+        _attach_pack,
+        _commit_palette,
+        _fresh_snapshot,
+        _otel_in_memory,
+        _real_cookbook_bundle,
+        _reflecting_sdk_client,
+        _seed_graph_themed,
     )
 
+    theme_id = "yaml_rollback_crypt"
+    palette = _commit_palette(theme_id)
+    graph = _seed_graph_themed(theme_id)
+    world_dir = tmp_path / "world"
 
-def test_emit_runs_after_conn_commit() -> None:
-    """Freeze invariant has a temporal dimension: the YAML write must run
-    AFTER conn.commit() so a rolled-back expansion never produces orphan
-    YAMLs on disk. In source-order terms inside _stage_commit, the
-    emit call site must appear strictly after the conn.commit() line."""
-    src = (
-        Path(__file__).resolve().parents[2] / "sidequest" / "dungeon" / "materializer.py"
-    ).read_text()
-    start = src.find("def _stage_commit(")
-    assert start >= 0
-    after_start = src[start:]
-    next_def = after_start[len("def _stage_commit(") :].find("\ndef ")
-    body = after_start if next_def < 0 else after_start[: len("def _stage_commit(") + next_def]
+    monkeypatch.setattr(_mat_module, "_resolve_world_dir", lambda _request: world_dir)
 
-    commit_idx = body.find("conn.commit()")
-    emit_idx = body.find("_stage_emit_room_yamls(")
-    assert commit_idx >= 0, "conn.commit() must remain inside _stage_commit."
-    assert emit_idx >= 0, "_stage_emit_room_yamls() must be called from inside _stage_commit."
-    assert emit_idx > commit_idx, (
-        "AC-9 ordering: _stage_emit_room_yamls must be called AFTER "
-        "conn.commit() so a rolled-back expansion produces no orphan "
-        "YAMLs on disk. Found emit at offset "
-        f"{emit_idx}, commit at offset {commit_idx}."
+    def _boom_put_frontier(self: Any, fe: Any) -> None:
+        raise PersistError("injected mid-write failure")
+
+    monkeypatch.setattr(PgDungeonTransaction, "put_frontier", _boom_put_frontier)
+
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+
+    _exporter, _provider, real_tracer = _otel_in_memory()
+    original_tracer_fn = _spans_module.tracer
+    _spans_module.tracer = lambda: real_tracer  # type: ignore[method-assign]
+    try:
+        with pytest.raises(PersistError, match="injected mid-write"):
+            await materialize(
+                MaterializationRequest_build(
+                    campaign_seed=7, expansion_id=1, spawn_depth_score=0.0
+                ),
+                graph=graph,
+                bundle=_real_cookbook_bundle(),
+                palette=palette,
+                dungeon_repository=repo,
+                snapshot=_fresh_snapshot(),
+                pack_tropes=_attach_pack("cave_in"),
+                claude_client=_reflecting_sdk_client(),
+            )
+    finally:
+        _spans_module.tracer = original_tracer_fn  # type: ignore[method-assign]
+
+    rooms_dir = world_dir / "rooms"
+    assert not rooms_dir.exists() or not any(rooms_dir.glob("*.yaml")), (
+        "orphan room YAMLs were written despite a rolled-back materialize — "
+        "the emit must run only AFTER a clean commit (ADR-115 D6)"
     )

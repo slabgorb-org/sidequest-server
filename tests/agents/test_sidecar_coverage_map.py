@@ -25,6 +25,9 @@ COVERAGE_MAP: dict[str, str | None] = {
     "magic_effects": "apply_spell_effect",
     "trope_tick": "tick_tropes",
     "confrontation_advances": "advance_confrontation",
+    # Story 77-2 (ADR-137) — the legacy quest_updates extraction lane's
+    # successor is the typed record_quest tool. 77-4 retires the lane onto it.
+    "quest_updates": "record_quest",
 }
 
 
@@ -34,3 +37,17 @@ def test_phase_c_complete() -> None:
     assert not unmigrated, (
         f"Sidecar fields without tool successors: {unmigrated!r}. Phase D cannot proceed."
     )
+
+
+def test_quest_updates_successor_tool_is_registered() -> None:
+    """Story 77-2 — the named successor for the quest_updates sidecar field
+    must be a real, registered tool (CLAUDE.md "Verify Wiring, Not Just
+    Existence"): a coverage-map row pointing at a tool that doesn't exist is
+    a lie. Imports the barrel so registration goes through the production
+    path, not a test-only direct import."""
+    import sidequest.agents.tools  # noqa: F401  (barrel registers @tool adapters)
+    from sidequest.agents.tool_registry import default_registry
+
+    successor = COVERAGE_MAP["quest_updates"]
+    assert successor == "record_quest"
+    assert successor in default_registry.list_names()

@@ -251,6 +251,18 @@ async def test_dice_throw_with_no_encounter_returns_error_only():
         f"encounter-is-None case has no encounter_type for the clear "
         f"payload — handler returns ERROR only. Got {types!r}"
     )
+    # The isinstance dogfight guard must NOT have hijacked this MagicMock-sd
+    # path: a bare MagicMock's `pending_dogfight_shot` is truthy but is not a
+    # PendingDogfightShot, so the handler falls through to the real
+    # dispatch_dice_throw "active encounter" guard — NOT the dogfight error.
+    err_text = str(outbound[0].payload.message)
+    assert "dogfight pending shot" not in err_text, (
+        f"isinstance guard regressed — MagicMock sd wrongly entered the "
+        f"dogfight path. Got error: {err_text!r}"
+    )
+    assert "active encounter" in err_text, (
+        f"expected the dispatch_dice_throw active-encounter error; got {err_text!r}"
+    )
 
 
 @pytest.mark.asyncio

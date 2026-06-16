@@ -1,0 +1,55 @@
+# Minimal world-tier openings.yaml for the test_genre / flickering_reach
+# fixture. Authored as TEA test-infrastructure during story 45-30 because
+# the genre-pack loader rejects worlds without one (per the canned-openings
+# story). Two entries to satisfy the validator's solo + MP requirement;
+# content is the bare minimum needed for fixtures to load — no playtest
+# value, no spoiler implications.
+version: "0.1.0"
+world: flickering_reach
+genre: test_genre
+
+openings:
+  - id: solo_test_fixture
+    name: "Test Fixture — Solo"
+    triggers:
+      mode: solo
+      backgrounds: []
+    setting:
+      location_label: "a generic test location"
+      situation: >-
+        Test fixture opening for sidequest-server unit/integration tests.
+        Not authored for play.
+    tone:
+      register: neutral
+      stakes: none — fixture only
+      complication: none — fixture only
+      avoid_at_all_costs:
+        - using this in real play
+    establishing_narration: |
+      You are in a test fixture. This text is for sidequest-server
+      regression tests; it is not authored for play.
+    first_turn_invitation: |
+      The test continues.
+
+  - id: mp_test_fixture
+    name: "Test Fixture — Multiplayer"
+    triggers:
+      mode: multiplayer
+      min_players: 2
+      max_players: 6
+      backgrounds: []
+    setting:
+      location_label: "a generic test location"
+      situation: >-
+        Multiplayer test fixture opening. Not authored for play.
+    tone:
+      register: neutral
+      stakes: none — fixture only
+      complication: none — fixture only
+      avoid_at_all_costs:
+        - using this in real play
+    establishing_narration: |
+      Your party is in a test fixture. This text is for sidequest-server
+      regression tests; it is not authored for play.
+    first_turn_invitation: |
+      The test continues.

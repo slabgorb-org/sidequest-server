@@ -1,10 +1,14 @@
 """Tests for ``sidequest.server.dispatch.pregen``.
 
 Covers ``seed_manual``, the diverse pairing selector, the JSON-capturing
-CLI runner, and the partial-failure fallbacks. Uses the real
-``caverns_and_claudes`` genre pack so the integration covers actual
-content shape (the post-fold ``regions.{region}.creatures`` schema flows
-through encountergen into the Manual).
+CLI runner, and the partial-failure fallbacks. The end-to-end test runs the
+real namegen + encountergen subprocesses against a **dedicated test fixture**
+pack (``tests/fixtures/packs/test_genre`` / world ``flickering_reach``) so the
+integration covers actual content shape (the ``worlds/{world}/creatures.yaml``
+schema flows through encountergen into the Manual) without coupling to a live
+genre-pack world (operator decision 2026-06-03, story 72-15 — live content is
+mid-migration per 71-31; the fixture's world cultures use ``word_list`` given
+names so namegen runs hermetically with no corpus files).
 """
 
 from __future__ import annotations
@@ -31,11 +35,9 @@ from sidequest.server.dispatch.pregen import (
     seed_manual,
 )
 
-CONTENT_ROOT = Path(__file__).resolve().parents[3].parent / "sidequest-content" / "genre_packs"
-
-
-def _real_content_available() -> bool:
-    return (CONTENT_ROOT / "caverns_and_claudes" / "pack.yaml").exists()
+# Dedicated test fixture pack — always present in-repo, so the e2e never skips.
+# (Replaces the retired caverns_sunden live-world binding; story 72-15.)
+FIXTURE_PACKS = Path(__file__).resolve().parents[2] / "fixtures" / "packs"
 
 
 # ---------------------------------------------------------------------------
@@ -186,10 +188,24 @@ def _stub_pack(cultures: list[str], *, constraints: ArchetypeConstraints | None 
     """Build a minimal stand-in pack with the fields seed_manual reads."""
     from types import SimpleNamespace
 
-    return SimpleNamespace(
-        cultures=[SimpleNamespace(name=name) for name in cultures],
+    culture_objs = [SimpleNamespace(name=name) for name in cultures]
+    pack = SimpleNamespace(
+        cultures=culture_objs,
         archetype_constraints=constraints,
     )
+    # seed_manual resolves cultures via ``pack.effective_cultures(world)``
+    # (world-over-genre replacement — ADR-121 / story 72-11), which returns a
+    # 2-tuple ``(effective_list, source_tag)`` where each element exposes
+    # ``.name``. The stub has no world layer, so it ignores ``world`` and
+    # returns its own culture list tagged ``"stub"``.
+    pack.effective_cultures = lambda _world: (culture_objs, "stub")
+    # seed_manual gates namegen on ``spawnable_archetypes(pack.
+    # effective_archetypes(world))`` (playtest 2026-06-07, blackthorn_moor):
+    # an all-named_individual (or empty) pool skips minting entirely. Give
+    # the stub one spawnable archetype so the mint loop stays exercised.
+    spawnable = SimpleNamespace(name="Drifter", named_individual=False)
+    pack.effective_archetypes = lambda _world: ([spawnable], "stub")
+    return pack
 
 
 def test_seed_manual_with_cultures_generates_3_per_culture(
@@ -404,20 +420,23 @@ def test_seed_manual_writes_save_to_disk(monkeypatch: pytest.MonkeyPatch, tmp_pa
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not _real_content_available(), reason="sidequest-content not checked out")
-def test_e2e_seed_caverns_sunden_populates_manual(tmp_path: Path) -> None:
-    """Real-pack integration: connect-time seeding fills the Manual end-to-end."""
+def test_e2e_seed_fixture_world_populates_manual(tmp_path: Path) -> None:
+    """Real-subprocess integration against the dedicated test fixture pack:
+    connect-time seeding fills the Manual end-to-end (namegen + encountergen
+    actually run). Bound to ``test_genre``/``flickering_reach`` — a fixture, not a
+    live genre-pack world (story 72-15). The fixture world's cultures use
+    ``word_list`` given names, so namegen needs no corpus files."""
     with mock.patch.object(Path, "home", return_value=tmp_path):
-        manual = MonsterManual(genre="caverns_and_claudes", world="caverns_sunden")
+        manual = MonsterManual(genre="test_genre", world="flickering_reach")
         seed_manual(
-            genre_packs_path=CONTENT_ROOT,
-            genre="caverns_and_claudes",
-            world="caverns_sunden",
+            genre_packs_path=FIXTURE_PACKS,
+            genre="test_genre",
+            world="flickering_reach",
             manual=manual,
             rng=random.Random(0),
         )
 
-    # Cultures present in C&C should have produced at least one NPC
+    # The fixture world's cultures should have produced at least one NPC
     assert len(manual.npcs) >= 1
     assert all(n.state == EntryState.AVAILABLE for n in manual.npcs)
     # Both tier-1 and tier-2 encounters seeded

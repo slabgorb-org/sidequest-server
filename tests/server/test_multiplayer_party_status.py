@@ -68,7 +68,9 @@ def _sd(player_id: str, player_name: str, characters: list[Character]) -> _Sessi
             turn_manager=TurnManager(interaction=1),
             characters=list(characters),
         ),
-        store=MagicMock(),
+        repository=MagicMock(),
+        dungeon_repository=MagicMock(),
+        telemetry_sink=MagicMock(),
         genre_pack=load_genre_pack(CONTENT_GENRE_PACKS / "caverns_and_claudes"),
         orchestrator=MagicMock(),
         mode=GameMode.MULTIPLAYER,
@@ -156,6 +158,88 @@ def test_party_status_enumerates_all_pcs_in_multiplayer() -> None:
     # Self is the requesting socket's player_id
     shirley_member = members[0]
     assert str(shirley_member.player_id) == "p:shirley"
+
+
+def test_build_session_start_party_status_carries_player_identity_from_room() -> None:
+    """Wiring test (Story 67-6): the real ``build_session_start_party_status``
+    must read the room store and stamp each member's ``player_identity``.
+
+    The room knows the connected self player's identity (set via
+    ``set_player_identity``); the peer has NO room identity entry. The builder
+    must therefore stamp the self member with the room identity and leave the
+    peer's ``player_identity`` as None — never fabricating it from the
+    character name.
+
+    If the ``get_player_identity`` call is dropped from the builder, the self
+    assertion fails — this drives the load-bearing wiring of the story through
+    the real function, not a direct PartyMember construction.
+    """
+    laverne = _char("Laverne")
+    shirley = _char("Shirley")
+    sd = _sd("p:shirley", "Shirley", [laverne, shirley])
+
+    handler = WebSocketSessionHandler(save_dir=Path("/tmp/sq-test-saves"))
+    room = SessionRoom(slug="2026-05-31-identity-mp", mode=GameMode.MULTIPLAYER)
+    room.seat("p:laverne", character_slot="Laverne")
+    room.seat("p:shirley", character_slot="Shirley")
+    # Self (connected) has a resolved identity; peer does NOT.
+    room.set_player_identity("p:shirley", "shirley@example.com")
+    handler._room = room
+
+    msg = views.build_session_start_party_status(handler, sd, shirley, "p:shirley")
+    by_name = {str(m.character_name): m for m in msg.payload.members}
+
+    self_member = by_name["Shirley"]
+    peer_member = by_name["Laverne"]
+
+    # Self identity flows from the room store.
+    assert self_member.player_identity == "shirley@example.com"
+    # Peer has no room identity -> None, and is NEVER given the character name.
+    assert peer_member.player_identity is None
+    assert peer_member.player_identity != peer_member.character_name
+
+
+def test_build_session_start_party_status_connected_peer_identity_visible() -> None:
+    """Gap 1 (Story 67-6): a connected peer WITH a room identity entry shows
+    their identity in the PARTY_STATUS frame.
+
+    The prior test proved "no room entry -> None". This test pins the OTHER
+    side of the seam: when the peer IS connected and their identity WAS bound
+    via ``set_player_identity``, the builder must resolve it through
+    ``seat_map.get(char.core.name)`` -> ``get_player_identity(pid)`` and stamp
+    it onto the peer's PartyMember.
+
+    Mutation check: if ``get_player_identity`` is dropped from the builder, or
+    the pid used for the lookup doesn't match the pid the identity was stored
+    under, ``peer_member.player_identity`` becomes None and the assertion fails.
+    """
+    laverne = _char("Laverne")
+    shirley = _char("Shirley")
+    sd = _sd("p:shirley", "Shirley", [laverne, shirley])
+
+    handler = WebSocketSessionHandler(save_dir=Path("/tmp/sq-test-saves"))
+    room = SessionRoom(slug="2026-05-31-peer-identity-mp", mode=GameMode.MULTIPLAYER)
+    room.seat("p:laverne", character_slot="Laverne")
+    room.seat("p:shirley", character_slot="Shirley")
+    # Both players have resolved identities — peer is connected, not absent.
+    room.set_player_identity("p:shirley", "shirley@example.com")
+    room.set_player_identity("p:laverne", "laverne@example.com")
+    handler._room = room
+
+    msg = views.build_session_start_party_status(handler, sd, shirley, "p:shirley")
+    by_name = {str(m.character_name): m for m in msg.payload.members}
+
+    self_member = by_name["Shirley"]
+    peer_member = by_name["Laverne"]
+
+    # Self identity flows from the room store.
+    assert self_member.player_identity == "shirley@example.com"
+    # Connected peer's identity also flows from the room store — this is what
+    # the prior test did NOT cover.
+    assert peer_member.player_identity == "laverne@example.com"
+    # Sanity: neither identity value equals the character name (no fabrication).
+    assert self_member.player_identity != str(self_member.character_name)
+    assert peer_member.player_identity != str(peer_member.character_name)
 
 
 def test_party_status_falls_back_to_synthetic_peer_id_when_no_seat() -> None:
@@ -320,14 +404,14 @@ def test_two_handlers_share_room_snapshot_after_bind():
     handler_a._room = room
     sd_a = _sd("p:laverne", "Laverne", [])
     sd_a.snapshot = room.snapshot  # type: ignore[assignment]
-    sd_a.store = room.store  # type: ignore[assignment]
+    sd_a.repository = room.store  # type: ignore[assignment]
     handler_a._session_data = sd_a
 
     handler_b = WebSocketSessionHandler(save_dir=_Path("/tmp/sq-test-saves"))
     handler_b._room = room
     sd_b = _sd("p:shirley", "Shirley", [])
     sd_b.snapshot = room.snapshot  # type: ignore[assignment]
-    sd_b.store = room.store  # type: ignore[assignment]
+    sd_b.repository = room.store  # type: ignore[assignment]
     handler_b._session_data = sd_b
 
     # Mutate via handler_a's sd; handler_b sees it.
@@ -455,6 +539,44 @@ def test_party_member_uses_per_character_location_when_set() -> None:
 
     assert str(laverne_member.current_location) == "Galley"
     assert str(shirley_member.current_location) == "Cockpit"
+
+
+def test_party_member_projects_origin_calling_flavor_labels() -> None:
+    """#G2 live-panel extension: a Character carrying display-only
+    ``origin_label``/``calling_label`` (the chargen flavor the player chose)
+    must project them onto ``member.sheet`` so the live CharacterPanel renders
+    "Country Veterinary Surgeon · The Village Itself" instead of the collapsed
+    mechanical slug "Doctor · Servant". The mechanical race/class are untouched.
+    """
+    pc = _char("Vyvyan")
+    pc.origin_label = "The Village Itself"
+    pc.calling_label = "Country Veterinary Surgeon"
+    sd = _sd("p:vyvyan", "Vyvyan", [pc])
+
+    handler = WebSocketSessionHandler(save_dir=Path("/tmp/sq-test-saves"))
+    member = views.party_member_from_character(handler, sd, pc, "p:vyvyan", "Vyvyan")
+
+    assert member.sheet is not None
+    assert str(member.sheet.origin_label) == "The Village Itself"
+    assert str(member.sheet.calling_label) == "Country Veterinary Surgeon"
+    # Mechanical class/race slug still flows for systems that key on it.
+    assert str(member.class_) == "Delver"
+    assert str(member.sheet.race) == "Human"
+
+
+def test_party_member_omits_flavor_labels_when_absent() -> None:
+    """When chargen produced no distinct flavor label (label == archetype),
+    the sheet's ``origin_label``/``calling_label`` are None so the UI cleanly
+    falls back to the mechanical race/class slug — no empty-string leakage."""
+    pc = _char("Solo")  # _char leaves origin_label/calling_label = ""
+    sd = _sd("p:solo", "Solo", [pc])
+
+    handler = WebSocketSessionHandler(save_dir=Path("/tmp/sq-test-saves"))
+    member = views.party_member_from_character(handler, sd, pc, "p:solo", "Solo")
+
+    assert member.sheet is not None
+    assert member.sheet.origin_label is None
+    assert member.sheet.calling_label is None
 
 
 def test_party_member_omits_location_when_per_char_absent() -> None:

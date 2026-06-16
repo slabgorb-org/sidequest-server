@@ -7,12 +7,14 @@ from ._core import FLAT_ONLY_SPANS, SPAN_ROUTES, SpanRoute
 SPAN_CHARGEN_STAT_ROLL = "chargen.stat_roll"
 SPAN_CHARGEN_STATS_GENERATED = "chargen.stats_generated"
 SPAN_CHARGEN_BACKSTORY_COMPOSED = "chargen.backstory_composed"
+SPAN_CHARGEN_PORTRAIT_SELECT = "chargen.portrait_select"
 
 FLAT_ONLY_SPANS.update(
     {
         SPAN_CHARGEN_STAT_ROLL,
         SPAN_CHARGEN_STATS_GENERATED,
         SPAN_CHARGEN_BACKSTORY_COMPOSED,
+        SPAN_CHARGEN_PORTRAIT_SELECT,
     }
 )
 
@@ -56,6 +58,34 @@ SPAN_ROUTES[SPAN_CHARGEN_ARCHETYPE_GATE_EVALUATED] = SpanRoute(
         "player_id": (span.attributes or {}).get("player_id", ""),
     },
 )
+# Story 93-1: Haiku archetype inference for all-freeform chargen.
+#
+# When the archetype gate would block with ``missing_axes_with_pack_axes``
+# AND the player answered hint-bearing scenes via freeform text, a single
+# Haiku call infers the missing axis value(s) constrained to the pack's
+# valid ids. This span fires ONLY on a successful inference and is the
+# lie-detector entry that distinguishes "the engine inferred this pair
+# from the player's words" from "preset scenes accumulated it" — without
+# it the GM panel cannot tell which path produced the archetype.
+SPAN_CHARGEN_ARCHETYPE_INFERRED = "chargen.archetype_inferred"
+SPAN_ROUTES[SPAN_CHARGEN_ARCHETYPE_INFERRED] = SpanRoute(
+    event_type="state_transition",
+    component="character_creation",
+    extract=lambda span: {
+        "field": "archetype_inference",
+        "op": "inferred",
+        # Which axes the inference actually supplied (never a preset-set
+        # axis — the inference fills only missing ones).
+        "inferred_axes": (span.attributes or {}).get("inferred_axes", ""),
+        "jungian_hint": (span.attributes or {}).get("jungian_hint", ""),
+        "rpg_role_hint": (span.attributes or {}).get("rpg_role_hint", ""),
+        "source": (span.attributes or {}).get("source", ""),
+        "genre": (span.attributes or {}).get("genre", ""),
+        "world": (span.attributes or {}).get("world", ""),
+        "player_id": (span.attributes or {}).get("player_id", ""),
+    },
+)
+
 SPAN_CHARGEN_ARCHETYPE_GATE_BLOCKED = "chargen.archetype_gate_blocked"
 SPAN_ROUTES[SPAN_CHARGEN_ARCHETYPE_GATE_BLOCKED] = SpanRoute(
     event_type="state_transition",
@@ -117,6 +147,26 @@ SPAN_ROUTES[SPAN_CHARGEN_STARTING_KIT_DEDUP_EVALUATED] = SpanRoute(
         "player_id": (span.attributes or {}).get("player_id", ""),
     },
 )
+# Playtest 2026-06-07 (five_points): a class with NO ``starting_equipment``
+# entry completed chargen silently with an empty inventory — the player
+# discovered the content gap, not the operator. Fires when an inventory
+# config exists but the character's class matches neither
+# ``starting_equipment`` nor ``starting_gold`` (No Silent Fallbacks: the
+# gap is a content defect and must be loud at chargen time).
+SPAN_CHARGEN_STARTING_EQUIPMENT_MISSING = "chargen.starting_equipment_missing"
+SPAN_ROUTES[SPAN_CHARGEN_STARTING_EQUIPMENT_MISSING] = SpanRoute(
+    event_type="state_transition",
+    component="character_creation",
+    extract=lambda span: {
+        "field": "starting_equipment",
+        "op": "missing",
+        "class_name": (span.attributes or {}).get("class_name", ""),
+        "declared_classes": (span.attributes or {}).get("declared_classes", ""),
+        "genre": (span.attributes or {}).get("genre", ""),
+        "world": (span.attributes or {}).get("world", ""),
+        "player_id": (span.attributes or {}).get("player_id", ""),
+    },
+)
 SPAN_CHARGEN_STARTING_KIT_DEDUP_FIRED = "chargen.starting_kit_dedup_fired"
 SPAN_ROUTES[SPAN_CHARGEN_STARTING_KIT_DEDUP_FIRED] = SpanRoute(
     event_type="state_transition",
@@ -152,6 +202,29 @@ SPAN_ROUTES[SPAN_CHARGEN_CLASS_ABILITIES_SEEDED] = SpanRoute(
         "op": "seeded",
         "class_name": (span.attributes or {}).get("class_name", ""),
         "abilities_seeded": (span.attributes or {}).get("abilities_seeded", 0),
+        "genre": (span.attributes or {}).get("genre", ""),
+        "world": (span.attributes or {}).get("world", ""),
+        "player_id": (span.attributes or {}).get("player_id", ""),
+    },
+)
+
+
+# Story 89-5: World-tier origin trait applied (Barsoom Earthman gravity boon).
+# Fires when the builder seeds a chargen-choice-authored origin trait onto
+# character.abilities (source=Race) alongside its stat_bonuses edge. The
+# trait definition lives in a WORLD's char_creation.yaml — this event is the
+# GM-panel proof that the world-tier crunch exception actually engaged
+# (no unwired crunch, design D5/§9).
+SPAN_CHARGEN_ORIGIN_TRAIT_APPLIED = "chargen.origin_trait.applied"
+SPAN_ROUTES[SPAN_CHARGEN_ORIGIN_TRAIT_APPLIED] = SpanRoute(
+    event_type="state_transition",
+    component="character_creation",
+    extract=lambda span: {
+        "field": "chargen.origin_trait",
+        "op": "applied",
+        "origin": (span.attributes or {}).get("origin", ""),
+        "ability_names": (span.attributes or {}).get("ability_names", ""),
+        "stat_bonuses": (span.attributes or {}).get("stat_bonuses", ""),
         "genre": (span.attributes or {}).get("genre", ""),
         "world": (span.attributes or {}).get("world", ""),
         "player_id": (span.attributes or {}).get("player_id", ""),

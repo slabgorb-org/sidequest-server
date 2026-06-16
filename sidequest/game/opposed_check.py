@@ -83,9 +83,9 @@ def _tier_from_shift(shift: int) -> RollOutcome:
 def _ability_modifier(score: int) -> int:
     """D&D-style modifier: ``floor((score - 10) / 2)``.
 
-    Mirrors ``sidequest.server.dispatch.dice._stat_modifier`` so a stat
-    score sourced from a character sheet and one sourced from the genre
-    pack's ``opponent_default_stats`` produce the same modifier.
+    Mirrors ``sidequest.game.ruleset.native.NativeRulesetModule.stat_modifier``
+    so a stat score sourced from a character sheet and one sourced from the
+    genre pack's ``opponent_default_stats`` produce the same modifier.
     """
     return (score - 10) // 2
 
@@ -180,10 +180,14 @@ def resolve_opponent_modifier(
 
     score = _stat_score_from_actor(actor, stat_check)
     if score is None:
-        score = _stat_score_from_cdef_default(
-            getattr(cdef, "opponent_default_stats", None),
-            stat_check,
-        )
+        # Use the ability-score view (reserved hp/armor_class keys removed)
+        # so the combat-seed keys never resolve as ability modifiers.
+        ability_scores_fn = getattr(cdef, "opponent_ability_scores", None)
+        if callable(ability_scores_fn):
+            opponent_scores = ability_scores_fn()
+        else:
+            opponent_scores = getattr(cdef, "opponent_default_stats", None)
+        score = _stat_score_from_cdef_default(opponent_scores, stat_check)
     if score is None:
         cdef_default = getattr(cdef, "opponent_default_stats", None) or {}
         cdef_keys = sorted(cdef_default.keys()) if cdef_default else []

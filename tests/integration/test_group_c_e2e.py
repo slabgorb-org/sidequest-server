@@ -20,6 +20,7 @@ from sidequest.agents.claude_client import ClaudeClient
 from sidequest.agents.orchestrator import (
     Orchestrator,
 )
+from sidequest.agents.subsystems import BankResult
 from sidequest.game.character import Character
 from sidequest.game.creature_core import (
     CreatureCore,
@@ -71,7 +72,9 @@ def _session(genre_slug: str, world_slug: str, character: Character) -> _Session
         player_name="Alice",
         player_id="player:alice",
         snapshot=_snapshot(genre_slug, world_slug, character),
-        store=MagicMock(),
+        repository=MagicMock(),
+        dungeon_repository=MagicMock(),
+        telemetry_sink=MagicMock(),
         genre_pack=load_genre_pack(CONTENT_GENRE_PACKS / genre_slug),
         orchestrator=MagicMock(),
     )
@@ -92,6 +95,7 @@ async def test_zero_edge_pc_in_mutant_wasteland_injects_permadeath_directives():
     sd = _session("mutant_wasteland", "flickering_reach", _character("Alice", edge_current=0))
     ctx = _build_turn_context(sd)
     ctx.dispatch_package = _dispatch_package()
+    ctx.bank_result = BankResult()
 
     orch = Orchestrator(client=ClaudeClient(spawn_fn=make_spawn_fn("narration")))
     prompt, _ = await orch.build_narrator_prompt(
@@ -107,21 +111,35 @@ async def test_zero_edge_pc_in_mutant_wasteland_injects_permadeath_directives():
     assert "miraculous rescues" in prompt
 
 
-async def test_zero_edge_pc_in_caverns_injects_comedic_directives():
-    """caverns_and_claudes policy text ('slapstick') reaches the prompt."""
-    sd = _session("caverns_and_claudes", "mawdeep", _character("Alice", edge_current=0))
+async def test_zero_hp_pc_in_wry_whimsy_injects_recoverable_break_directives():
+    """A non-permadeath pack's recoverable-break lethality text reaches the prompt.
+
+    This proves the engine routes a pack's NON-lethal lethality_policy directives
+    all the way to the narrator prompt — the counterpart to the permadeath case
+    above. caverns_and_claudes was the comedic/no-permadeath example before its
+    2026-06-12 WWN port (now lethal_for_this_genre); wry_whimsy is the live pack
+    that still ships a recoverable, narrative-only break policy (Composure
+    substrate), so it stands in for the soft-lethality branch.
+    """
+    sd = _session("wry_whimsy", "oz", _character("Alice", edge_current=0))
     ctx = _build_turn_context(sd)
     ctx.dispatch_package = _dispatch_package()
+    ctx.bank_result = BankResult()
 
     orch = Orchestrator(client=ClaudeClient(spawn_fn=make_spawn_fn("narration")))
     prompt, _ = await orch.build_narrator_prompt(
         "retreat",
         ctx,
     )
-    # Comedic verdict — "humiliated" — with one-liner + slapstick cues:
-    assert "one-liner" in prompt or "slapstick" in prompt
-    # Must-not text surfaces too:
-    assert "permadeath" in prompt or "eulogy" in prompt
+    assert "must_narrate" in prompt
+    assert "must_not_narrate" in prompt
+    # Recoverable-break verdict — wry_whimsy's specific must_narrate text
+    # surfaces (not just any lethality prose; a vaguer match would mask a
+    # policy-routing regression):
+    assert "Render a BREAK, not a wound" in prompt
+    # Its specific must_not text surfaces too (no death / eulogy at this
+    # baseline):
+    assert "treats the loss as final or fatal at this lethality baseline" in prompt
 
 
 async def test_no_lethality_directives_when_character_above_zero_edge():
@@ -130,6 +148,7 @@ async def test_no_lethality_directives_when_character_above_zero_edge():
     sd = _session("mutant_wasteland", "flickering_reach", _character("Alice", edge_current=7))
     ctx = _build_turn_context(sd)
     ctx.dispatch_package = _dispatch_package()
+    ctx.bank_result = BankResult()
 
     orch = Orchestrator(client=ClaudeClient(spawn_fn=make_spawn_fn("narration")))
     prompt, _ = await orch.build_narrator_prompt(
@@ -160,7 +179,9 @@ async def test_adventurer_fallback_name_flows_through_turn_context():
             turn_manager=TurnManager(interaction=1),
             characters=[_character("Adventurer", edge_current=10)],
         ),
-        store=MagicMock(),
+        repository=MagicMock(),
+        dungeon_repository=MagicMock(),
+        telemetry_sink=MagicMock(),
         genre_pack=load_genre_pack(CONTENT_GENRE_PACKS / "caverns_and_claudes"),
         orchestrator=MagicMock(),
     )

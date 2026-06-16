@@ -35,6 +35,26 @@ def test_full_authored_npc_parses() -> None:
     assert npc.ocean == {"O": 0.5, "C": 0.7, "E": 0.4, "A": 0.5, "N": 0.4}
 
 
+def test_location_tags_default_empty() -> None:
+    """An authored NPC without placement has no ``location_tags`` (unplaced —
+    eligible everywhere via the Manual's legacy fallback)."""
+    npc = AuthoredNpc(id="x", name="X")
+    assert npc.location_tags == []
+
+
+def test_location_tags_parse() -> None:
+    """``location_tags`` carries lowercase location/biome substrings the Monster
+    Manual matches against the current location for placement-aware surfacing."""
+    npc = AuthoredNpc.model_validate(
+        {
+            "id": "scarecrow",
+            "name": "Scarecrow",
+            "location_tags": ["yellow brick road", "cornfield"],
+        }
+    )
+    assert npc.location_tags == ["yellow brick road", "cornfield"]
+
+
 def test_initial_disposition_below_min_rejected() -> None:
     with pytest.raises(ValidationError, match="greater than or equal to -100"):
         AuthoredNpc(id="x", name="X", initial_disposition=-101)

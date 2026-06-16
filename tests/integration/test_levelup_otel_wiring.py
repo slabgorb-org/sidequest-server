@@ -1,0 +1,264 @@
+"""End-to-end wiring for the milestone → level-up engine (ADR-021 track 1).
+
+Story 82-6. ``award_turn_xp`` already accumulates ``core.xp`` every turn and
+emits a ``component=progression`` watcher event — but nothing ever drives a
+*level-up* from that accumulation, so ``core.level`` is frozen at 1 forever.
+This is the gap: a runtime engine (``apply_level_ups``) that consumes the
+live accumulator, bumps the level when a milestone threshold is crossed, and
+emits an OTEL/watcher event the GM panel can read (mirroring
+``SPAN_DISPOSITION_SHIFT`` / the ``award_turn_xp`` progression emit).
+
+Same harness shape as ``tests/integration/test_disposition_otel_wiring.py``.
+
+RED: ``apply_level_ups`` / ``LevelUp`` do not exist yet — this module fails
+to import on current ``develop``.
+"""
+
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+from opentelemetry.sdk.trace import TracerProvider
+
+from sidequest.game.character import Character
+from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
+from sidequest.game.session import GameSnapshot
+from sidequest.genre.models.progression import ProgressionConfig
+from sidequest.server.dispatch.encounter_lifecycle import LevelUp, apply_level_ups
+from sidequest.server.watcher import WatcherSpanProcessor
+from sidequest.telemetry import spans as spans_module
+from sidequest.telemetry.watcher_hub import watcher_hub
+
+# Field name on the progression state_transition watcher event. Mirrors
+# ``disposition.shift`` (component=disposition) and the existing
+# ``award_turn_xp`` emit (component=progression).
+LEVEL_UP_FIELD = "progression.level_up"
+
+
+def _make_pc(name: str, *, xp: int = 0, level: int = 1) -> Character:
+    core = CreatureCore(
+        name=name,
+        description="x",
+        personality="x",
+        inventory=Inventory(),
+        hp=HpPool(current=10, max=10, base_max=10),
+        xp=xp,
+        level=level,
+    )
+    return Character(core=core, char_class="Fighter", race="Human", backstory=f"{name}")
+
+
+def _progression(*, per_level: int, max_level: int) -> ProgressionConfig:
+    return ProgressionConfig(
+        milestone_categories=["combat"],
+        milestones_per_level=per_level,
+        max_level=max_level,
+    )
+
+
+async def _setup(monkeypatch: pytest.MonkeyPatch, label: str) -> list[dict]:
+    watcher_hub.bind_loop(asyncio.get_running_loop())
+    async with watcher_hub._lock:  # noqa: SLF001
+        watcher_hub._subscribers.clear()  # noqa: SLF001
+
+    captured: list[dict] = []
+
+    class _Sock:
+        async def send_json(self, data: dict) -> None:
+            captured.append(data)
+
+    await watcher_hub.subscribe(_Sock())  # type: ignore[arg-type]
+
+    provider = TracerProvider()
+    provider.add_span_processor(WatcherSpanProcessor(watcher_hub))
+    local_tracer = provider.get_tracer(label)
+    monkeypatch.setattr(spans_module, "tracer", lambda: local_tracer)
+
+    return captured
+
+
+async def _wait_for_event(
+    captured: list[dict], field_value: str, *, timeout_s: float = 1.0
+) -> dict:
+    deadline = asyncio.get_event_loop().time() + timeout_s
+    while asyncio.get_event_loop().time() < deadline:
+        for evt in captured:
+            if (
+                evt.get("event_type") == "state_transition"
+                and evt.get("fields", {}).get("field") == field_value
+            ):
+                return evt
+        await asyncio.sleep(0.01)
+    raise AssertionError(
+        f"Expected state_transition with field={field_value!r} within {timeout_s}s; "
+        f"captured: {[(e.get('event_type'), e.get('fields', {}).get('field')) for e in captured]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_level_up_mutates_level_and_publishes_state_transition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A character with accumulation past the ceiling levels up and the
+    engine emits a typed ``state_transition`` with ``component=progression``
+    and ``field=progression.level_up`` carrying the before/after levels, so
+    the GM panel can confirm the subsystem engaged."""
+    captured = await _setup(monkeypatch, "test-levelup-wiring")
+
+    # Seed accumulation far past any sane threshold so the result caps at
+    # max_level regardless of the engine's xp→milestone conversion ratio.
+    pc = _make_pc("Rux", xp=100_000, level=1)
+    snapshot = GameSnapshot(genre_slug="caverns_and_claudes", characters=[pc])
+
+    apply_level_ups(snapshot, _progression(per_level=3, max_level=5))
+    await asyncio.sleep(0)
+
+    assert snapshot.characters[0].core.level == 5, "must clamp to max_level"
+
+    evt = await _wait_for_event(captured, LEVEL_UP_FIELD)
+    assert evt["component"] == "progression"
+    assert evt["fields"]["character_name"] == "Rux"
+    assert evt["fields"]["before"] == 1
+    assert evt["fields"]["after"] == 5
+
+
+@pytest.mark.asyncio
+async def test_level_up_returns_player_facing_delta_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC3 (data contract): the engine returns a structured advancement
+    delta — character, before, after, and the driver — so a player-facing
+    surface can render *what changed and why*, not just a silent stat bump.
+    Distinct from the GM/OTEL emit above."""
+    await _setup(monkeypatch, "test-levelup-delta")
+
+    pc = _make_pc("Rux", xp=100_000, level=1)
+    snapshot = GameSnapshot(genre_slug="caverns_and_claudes", characters=[pc])
+
+    deltas = apply_level_ups(snapshot, _progression(per_level=3, max_level=5))
+
+    assert deltas, "a crossing must return at least one LevelUp delta"
+    delta = deltas[0]
+    assert isinstance(delta, LevelUp)
+    assert delta.character_name == "Rux"
+    assert delta.before == 1
+    assert delta.after == 5
+    # Pin the exact driver value (rule #6: a bare truthy check would pass for
+    # any non-empty string and miss a regression that renamed the driver).
+    assert delta.driver == "milestone"
+
+
+@pytest.mark.asyncio
+async def test_no_crossing_is_silent_no_level_no_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A character below the first threshold must NOT level up and must NOT
+    emit a level-up event — no phantom advancement (the lie-detector must
+    only fire on a real crossing)."""
+    captured = await _setup(monkeypatch, "test-levelup-noop")
+
+    pc = _make_pc("Rux", xp=0, level=1)
+    snapshot = GameSnapshot(genre_slug="caverns_and_claudes", characters=[pc])
+
+    deltas = apply_level_ups(snapshot, _progression(per_level=3, max_level=5))
+    await asyncio.sleep(0.05)
+
+    assert snapshot.characters[0].core.level == 1
+    assert deltas == []
+    level_up_events = [e for e in captured if e.get("fields", {}).get("field") == LEVEL_UP_FIELD]
+    assert level_up_events == [], f"unexpected level-up event: {level_up_events}"
+
+
+@pytest.mark.asyncio
+async def test_unconfigured_progression_never_levels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pack that doesn't author progression (per_level==0, the default)
+    must no-op cleanly even with huge accumulation — No Silent Fallbacks /
+    no ZeroDivisionError, no phantom level-up."""
+    captured = await _setup(monkeypatch, "test-levelup-unconfigured")
+
+    pc = _make_pc("Rux", xp=100_000, level=1)
+    snapshot = GameSnapshot(genre_slug="caverns_and_claudes", characters=[pc])
+
+    deltas = apply_level_ups(snapshot, _progression(per_level=0, max_level=0))
+    await asyncio.sleep(0.05)
+
+    assert snapshot.characters[0].core.level == 1
+    assert deltas == []
+    assert not [e for e in captured if e.get("fields", {}).get("field") == LEVEL_UP_FIELD]
+
+
+@pytest.mark.asyncio
+async def test_character_already_at_max_level_does_not_re_level_or_emit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No-downgrade / no-re-fire guard (`new_level <= before`): a character
+    already AT max_level with accumulation past the ceiling must NOT level up
+    again and must NOT emit a phantom ``progression.level_up`` event. (A
+    ``<=`` → ``<`` regression would spam the GM panel with phantom crossings
+    every turn for a maxed character.)"""
+    captured = await _setup(monkeypatch, "test-levelup-at-max")
+
+    pc = _make_pc("Rux", xp=100_000, level=5)  # already at the cap
+    snapshot = GameSnapshot(genre_slug="caverns_and_claudes", characters=[pc])
+
+    deltas = apply_level_ups(snapshot, _progression(per_level=3, max_level=5))
+    await asyncio.sleep(0.05)
+
+    assert snapshot.characters[0].core.level == 5, "must not advance past or re-fire at cap"
+    assert deltas == []
+    assert not [e for e in captured if e.get("fields", {}).get("field") == LEVEL_UP_FIELD]
+
+
+@pytest.mark.asyncio
+async def test_last_advancement_is_cleared_on_a_later_no_crossing_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The per-turn notification is transient: a character who crossed on a
+    prior call must have ``last_advancement`` reset to None on a later call
+    that produces no new crossing — otherwise a stale "you leveled up!" delta
+    would re-surface every turn forever."""
+    await _setup(monkeypatch, "test-levelup-reset")
+
+    pc = _make_pc("Rux", xp=100_000, level=1)
+    snapshot = GameSnapshot(genre_slug="caverns_and_claudes", characters=[pc])
+    progression = _progression(per_level=3, max_level=5)
+
+    # First call: a real crossing sets the player-facing delta.
+    first = apply_level_ups(snapshot, progression)
+    assert first, "first call must produce a crossing"
+    assert pc.last_advancement is not None
+    assert pc.last_advancement.after == 5
+
+    # Second call: already at the cap → no new crossing → delta cleared.
+    second = apply_level_ups(snapshot, progression)
+    assert second == []
+    assert pc.last_advancement is None, "stale delta must be cleared on a no-crossing turn"
+
+
+@pytest.mark.asyncio
+async def test_multi_character_snapshot_levels_each_pc_independently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The engine iterates every PC: in a party where one character crosses
+    and another doesn't, only the crosser advances and emits — proving the
+    per-character loop (not a break/return after the first) and correct
+    ``character_name`` attribution on the event."""
+    captured = await _setup(monkeypatch, "test-levelup-multi-pc")
+
+    crosser = _make_pc("Ritali", xp=100_000, level=1)
+    bystander = _make_pc("Catalina", xp=0, level=1)
+    snapshot = GameSnapshot(genre_slug="space_opera", characters=[crosser, bystander])
+
+    deltas = apply_level_ups(snapshot, _progression(per_level=3, max_level=5))
+    await asyncio.sleep(0.05)
+
+    assert crosser.core.level == 5
+    assert bystander.core.level == 1
+    assert [d.character_name for d in deltas] == ["Ritali"]
+
+    events = [e for e in captured if e.get("fields", {}).get("field") == LEVEL_UP_FIELD]
+    assert len(events) == 1, f"exactly one PC crossed; got {len(events)} events"
+    assert events[0]["fields"]["character_name"] == "Ritali"

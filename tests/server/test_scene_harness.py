@@ -2,8 +2,9 @@
 
 Wire-level + watcher-level integration tests for the scene-harness HTTP
 endpoint specified in ADR-092. The endpoint hydrates a fixture YAML into
-a GameSnapshot, persists via SqliteStore, and returns the minted slug —
-all gated behind ``DEV_SCENES=1`` so production builds carry zero surface.
+a GameSnapshot, persists to Postgres (ADR-115 F1), and returns the minted
+slug — all gated behind ``DEV_SCENES=1`` so production builds carry zero
+surface.
 
 Contract under test (ADR-092 §Decision):
 
@@ -11,9 +12,8 @@ Contract under test (ADR-092 §Decision):
    set when ``create_app()`` runs. With the env var unset, the route does
    not appear in ``app.routes`` and a POST to it returns 404 (FastAPI's
    default for an unmatched path).
-2. On success, returns ``{"slug": "<game_slug>"}`` and the save file is
-   present at ``db_path_for_slug(save_dir, slug)`` with the hydrated
-   snapshot in ``game_state``.
+2. On success, returns ``{"slug": "<game_slug>"}`` and the hydrated
+   snapshot is loadable from Postgres by the minted slug.
 3. Missing fixture → 404 with the missing path in the JSON body.
 4. Hydration error → 422 with field-level detail.
 5. OTEL: emits ``scene_harness.intent.load``, ``.hydrate.ok``, ``.persist.ok``
@@ -29,13 +29,59 @@ exist yet (ADR-092 implementation-status: partial; ADR-087 P0).
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from fastapi.testclient import TestClient
 
+if TYPE_CHECKING:
+    from sidequest.game.persistence import SavedSession
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CANONICAL_FIXTURES_DIR = REPO_ROOT / "scenarios" / "fixtures"
+
+
+@pytest.fixture(autouse=True)
+def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
+    """Bind the process pool to a per-worker throwaway PG db, clean per test.
+
+    ADR-115 F1: the scene harness persists the hydrated snapshot to Postgres
+    (the legacy SQLite save.db write was retired), and these wire tests read
+    it back from PG via the minted slug.
+    """
+    import psycopg
+
+    from sidequest.game import db_pool
+
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    with psycopg.connect(plain, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+            "AND tablename <> 'alembic_version'"
+        ).fetchall()
+        if rows:
+            names = ", ".join(f'"{r[0]}"' for r in rows)
+            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+    yield
+    db_pool.close_pool()
+
+
+def _load_pg_snapshot(slug: str) -> SavedSession | None:
+    """Load the saved session for ``slug`` from Postgres — the store the
+    scene-harness route persists to under ADR-115 F1."""
+    from sidequest.game import db_pool
+    from sidequest.server.session_state import _build_pg_repos_for_slug
+
+    repo, _dungeon, _sink = _build_pg_repos_for_slug(
+        db_pool.get_pool(),
+        slug=slug,
+        mode="solo",
+        genre_slug="",
+        world_slug="",
+    )
+    return repo.load()
 
 
 # ── Fixtures: capture watcher events ────────────────────────────────────────
@@ -133,15 +179,15 @@ def test_scene_post_response_body_has_slug_field(
     )
 
 
-def test_scene_post_persists_save_file_at_slug_path(
+def test_scene_post_persists_save_to_pg(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """ADR-092 §Decision point 2: persist via the existing SqliteStore.
+    """ADR-092 §Decision point 2 (ADR-115 F1): persist via Postgres.
 
-    After a successful POST, the save file MUST exist at
-    ``db_path_for_slug(save_dir, slug)`` — the same path the slug-keyed
-    connect handler (dispatch_connect) will look at."""
+    After a successful POST, the saved snapshot MUST be loadable from PG by
+    the minted slug — the same store the slug-keyed connect handler
+    (dispatch_connect) reads on resume."""
     app = _build_dev_scenes_app(monkeypatch, save_dir=tmp_path)
     client = TestClient(app)
 
@@ -149,12 +195,9 @@ def test_scene_post_persists_save_file_at_slug_path(
     assert r.status_code == 200
     slug = r.json()["slug"]
 
-    from sidequest.game.persistence import db_path_for_slug
-
-    expected = db_path_for_slug(tmp_path, slug)
-    assert expected.exists(), (
-        f"save file missing at expected slug path {expected!s}; "
-        f"scene-harness must persist via SqliteStore so dispatch_connect can find it"
+    saved = _load_pg_snapshot(slug)
+    assert saved is not None, (
+        "scene-harness must persist the snapshot to Postgres so dispatch_connect can find it"
     )
 
 
@@ -175,12 +218,8 @@ def test_scene_post_persisted_snapshot_carries_fixture_genre_and_world(
     assert r.status_code == 200
     slug = r.json()["slug"]
 
-    from sidequest.game.persistence import SqliteStore, db_path_for_slug
-
-    store = SqliteStore(db_path_for_slug(tmp_path, slug))
-    store.initialize()
-    saved = store.load()
-    assert saved is not None, "save file exists but SqliteStore.load returned None"
+    saved = _load_pg_snapshot(slug)
+    assert saved is not None, "snapshot present but PG load returned None"
 
     # ``SavedSession.snapshot`` is the hydrated GameSnapshot.
     snapshot = saved.snapshot
@@ -203,11 +242,7 @@ def test_scene_post_persisted_snapshot_carries_fixture_character(
     r = client.post("/dev/scene/combat_brawl_wasteland")
     slug = r.json()["slug"]
 
-    from sidequest.game.persistence import SqliteStore, db_path_for_slug
-
-    store = SqliteStore(db_path_for_slug(tmp_path, slug))
-    store.initialize()
-    saved = store.load()
+    saved = _load_pg_snapshot(slug)
     assert saved is not None
     snapshot = saved.snapshot
 
@@ -422,7 +457,7 @@ def test_dev_scene_route_persists_four_pc_party_snapshot(
     Production-path wiring (CLAUDE.md "Every Test Suite Needs a Wiring
     Test"): the hydrator change is reachable from real code paths —
     route registered by ``create_app()``, route calls ``hydrate_fixture``,
-    result persisted via ``SqliteStore``, ``slug-connect`` can subsequently
+    result persisted via Postgres, ``slug-connect`` can subsequently
     find N characters in the save.
 
     A unit-only suite would not catch a hydrator that returns the right
@@ -457,13 +492,9 @@ def test_dev_scene_route_persists_four_pc_party_snapshot(
     )
     slug = r.json()["slug"]
 
-    from sidequest.game.persistence import SqliteStore, db_path_for_slug
-
-    store = SqliteStore(db_path_for_slug(save_dir, slug))
-    store.initialize()
-    saved = store.load()
+    saved = _load_pg_snapshot(slug)
     assert saved is not None, (
-        "save file exists but SqliteStore.load returned None — "
+        "snapshot present but PG load returned None — "
         "the route either didn't persist or wrote to the wrong path"
     )
 
@@ -574,7 +605,7 @@ def test_dev_scene_route_persists_scenario_state_end_to_end(
     tmp_path: Path,
 ) -> None:
     """AC#16: POST /dev/scene/{name} with a mystery fixture → snapshot
-    persists with scenario_state populated → SqliteStore round-trip
+    persists with scenario_state populated → Postgres round-trip
     preserves clue_graph, discovered_clues, npc_roles, guilty_npc, tension.
 
     The integration probe that proves Wave 2 mystery fixtures will work:
@@ -637,19 +668,15 @@ def test_dev_scene_route_persists_scenario_state_end_to_end(
     )
     slug = r.json()["slug"]
 
-    from sidequest.game.persistence import SqliteStore, db_path_for_slug
-
-    store = SqliteStore(db_path_for_slug(save_dir, slug))
-    store.initialize()
-    saved = store.load()
+    saved = _load_pg_snapshot(slug)
     assert saved is not None, (
-        "save file exists but SqliteStore.load returned None — persistence failed after hydration"
+        "snapshot present but PG load returned None — persistence failed after hydration"
     )
     snapshot = saved.snapshot
 
     state = snapshot.scenario_state
     assert state is not None, (
-        "scenario_state must round-trip through SqliteStore for slug-connect "
+        "scenario_state must round-trip through Postgres for slug-connect "
         "to inherit the pre-populated state"
     )
     assert [n.id for n in state.clue_graph.nodes] == [
@@ -678,7 +705,7 @@ def test_dev_scene_route_persists_encounter_end_to_end(
     tmp_path: Path,
 ) -> None:
     """AC-6 (story 50-21): POST /dev/scene/{name} with an encounter fixture →
-    snapshot persists with encounter populated → SqliteStore round-trip
+    snapshot persists with encounter populated → Postgres round-trip
     preserves encounter_type and the per-metric threshold override.
 
     The integration probe that proves Wave 2 pre-armed combat fixtures
@@ -714,19 +741,16 @@ def test_dev_scene_route_persists_encounter_end_to_end(
     slug = r.json()["slug"]
 
     from sidequest.game.encounter import StructuredEncounter
-    from sidequest.game.persistence import SqliteStore, db_path_for_slug
 
-    store = SqliteStore(db_path_for_slug(save_dir, slug))
-    store.initialize()
-    saved = store.load()
+    saved = _load_pg_snapshot(slug)
     assert saved is not None, (
-        "save file exists but SqliteStore.load returned None — persistence failed after hydration"
+        "snapshot present but PG load returned None — persistence failed after hydration"
     )
     snapshot = saved.snapshot
 
     enc = snapshot.encounter
     assert isinstance(enc, StructuredEncounter), (
-        "encounter must round-trip through SqliteStore for slug-connect to "
+        "encounter must round-trip through Postgres for slug-connect to "
         f"inherit the pre-armed combat state; got {type(enc).__name__}"
     )
     assert enc.encounter_type == "combat", (
@@ -799,10 +823,10 @@ def test_dev_scene_route_rejects_scenario_state_dag_violation_with_422(
 # ── Story 50-22: magic_state + character.abilities through the HTTP path ─────
 #
 # AC-6 (wiring): a synthetic fixture declaring BOTH new blocks must hydrate
-# via the real ``/dev/scene/{name}`` route, persist through SqliteStore, and
+# via the real ``/dev/scene/{name}`` route, persist through Postgres, and
 # load back with both fields intact. This is the CLAUDE.md-mandated
 # integration test — it proves the 50-22 hydration branch is reachable from
-# the production HTTP code path (router → hydrate_fixture → SqliteStore),
+# the production HTTP code path (router → hydrate_fixture → Postgres),
 # not merely unit-correct.
 
 _MAGIC_FIXTURE_50_22 = (
@@ -852,7 +876,7 @@ def test_scene_post_persists_magic_state_and_abilities_round_trip(
     """AC-6: the new blocks survive the full production round-trip.
 
     POST the synthetic fixture through ``/dev/scene/{name}``, then load the
-    saved DB with ``SqliteStore`` and assert ``snapshot.magic_state`` is a
+    saved snapshot from Postgres and assert ``snapshot.magic_state`` is a
     non-None MagicState with the declared config + control_tier AND
     ``snapshot.characters[0].abilities`` carries the declared ability.
 
@@ -875,16 +899,12 @@ def test_scene_post_persists_magic_state_and_abilities_round_trip(
     )
     slug = r.json()["slug"]
 
-    from sidequest.game.persistence import SqliteStore, db_path_for_slug
-
-    store = SqliteStore(db_path_for_slug(save_dir, slug))
-    store.initialize()
-    saved = store.load()
-    assert saved is not None, "save file exists but SqliteStore.load returned None"
+    saved = _load_pg_snapshot(slug)
+    assert saved is not None, "snapshot present but PG load returned None"
     snapshot = saved.snapshot
 
     assert snapshot.magic_state is not None, (
-        "magic_state must survive the SqliteStore round-trip, not be None"
+        "magic_state must survive the Postgres round-trip, not be None"
     )
     assert snapshot.magic_state.config.world_slug == "coyote_star"
     assert snapshot.magic_state.control_tier == {"practitioner": 2}, (
@@ -928,20 +948,34 @@ def test_scene_harness_emits_magic_state_hydrated_span(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """50-22 OTEL wiring (CLAUDE.md observability principle + "Every Test
-    Suite Needs a Wiring Test"): hydrating a ``magic_state:`` fixture must
-    emit a ``magic.state_hydrated`` watcher event so the GM panel can
-    confirm the fixture staged real magic state rather than the narrator
-    improvising one.
+    """50-22 OTEL wiring, re-pinned by story 90-8 to the ROUTED-SPAN contract
+    (CLAUDE.md observability principle + "Every Test Suite Needs a Wiring
+    Test"): hydrating a ``magic_state:`` fixture must open a
+    ``magic.state_hydrated`` OTEL span whose SPAN_ROUTES extract carries the
+    hydrated identity, so the event reaches the typed GM-panel Subsystems
+    feed — not just the dashboard RAW console (the 90-7 Reviewer finding:
+    a raw publish_event with an event_type outside the UI union is invisible
+    to the typed tabs).
 
-    Found by simplify-quality during verify: the event was emitted but
-    unasserted, and the original bound-import (`publish_event as
-    _watcher_publish`) made it uncapturable by the standard
-    ``_capture_events`` harness. The emitter was realigned to the
-    ``scene_harness_router`` convention (`_hub.publish_event`) so this
-    test exercises the real production path.
+    The raw ``publish_event`` emit must be retired with the span's arrival —
+    a double emit would put one raw + one typed event per hydration on the
+    dashboard.
     """
     captured = _capture_events(monkeypatch)
+
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    import sidequest.telemetry.spans as spans_module
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    local_tracer = provider.get_tracer("test-scene-harness-90-8")
+    monkeypatch.setattr(spans_module, "tracer", lambda: local_tracer)
 
     fixtures_dir = tmp_path / "fixtures"
     fixtures_dir.mkdir()
@@ -954,12 +988,21 @@ def test_scene_harness_emits_magic_state_hydrated_span(
     r = client.post("/dev/scene/magic_otel")
     assert r.status_code == 200, f"fixture must hydrate; got {r.status_code} body={r.text}"
 
-    magic_events = [e for e in captured if e[0] == "magic.state_hydrated"]
-    assert magic_events, (
-        f"hydrating magic_state: must emit a 'magic.state_hydrated' watcher event; "
-        f"captured event types: {sorted({e[0] for e in captured})!r}"
+    magic_spans = [
+        s for s in exporter.get_finished_spans() if s.name == "magic.state_hydrated"
+    ]
+    assert magic_spans, (
+        f"hydrating magic_state: must open a 'magic.state_hydrated' span; "
+        f"finished spans: {sorted({s.name for s in exporter.get_finished_spans()})!r}"
     )
-    event_type, fields, meta = magic_events[0]
+
+    from sidequest.telemetry.spans import SPAN_ROUTES
+
+    assert "magic.state_hydrated" in SPAN_ROUTES, (
+        "magic.state_hydrated must be routed in SPAN_ROUTES — without a route "
+        "the typed Subsystems feed never sees it (the exact 90-8 gap)"
+    )
+    fields = SPAN_ROUTES["magic.state_hydrated"].extract(magic_spans[0])
     # Field-level identity — the lie-detector needs real values, not a bare
     # truthy (a silently-empty-hydrated fixture would carry wrong slugs).
     assert fields["world_slug"] == "coyote_star", (
@@ -969,6 +1012,13 @@ def test_scene_harness_emits_magic_state_hydrated_span(
     assert fields["control_tier_actors"] == 1, (
         f"event must report the 1 control_tier actor from the fixture; got {fields!r}"
     )
-    assert meta["component"] == "magic", (
-        f"event must be tagged component=magic for the Subsystems tab; got {meta!r}"
+    assert SPAN_ROUTES["magic.state_hydrated"].component == "magic", (
+        "route must be tagged component=magic for the Subsystems tab; got "
+        f"{SPAN_ROUTES['magic.state_hydrated'].component!r}"
+    )
+
+    raw_magic_events = [e for e in captured if e[0] == "magic.state_hydrated"]
+    assert raw_magic_events == [], (
+        f"the raw publish_event emit must be retired by the routed span "
+        f"(no double emit); got {raw_magic_events!r}"
     )

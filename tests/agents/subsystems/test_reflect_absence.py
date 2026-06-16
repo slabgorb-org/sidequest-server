@@ -27,6 +27,7 @@ async def test_reflect_absence_emits_must_not_and_must_directives():
         params={"addressee_hint": "no party"},
         depends_on=[],
         idempotency_key="idem:t:p:0",
+        confidence=1.0,
         visibility=_tag_all(),
     )
     out = await run_reflect_absence(dispatch)
@@ -56,6 +57,7 @@ async def test_reflect_absence_propagates_visibility_tag():
         params={},
         depends_on=[],
         idempotency_key="idem:x",
+        confidence=1.0,
         visibility=tag,
     )
     out = await run_reflect_absence(dispatch)

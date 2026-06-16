@@ -1,0 +1,299 @@
+mood_tracks:
+  exploration:
+    - path: audio/music/themed/exploration/exploration_theremin_drift.ogg
+      title: "Theremin Drift"
+      bpm: 95
+    - path: audio/music/themed/exploration/exploration_solo_piano_starlight.ogg
+      title: "Starlight Piano"
+      bpm: 90
+    - path: audio/music/themed/exploration/exploration_glass_harmonica.ogg
+      title: "Glass Harmonica"
+      bpm: 85
+    - path: audio/music/themed/exploration/exploration_throat_singing_cosmos.ogg
+      title: "Throat Singing Cosmos"
+      bpm: 80
+    - path: audio/music/scifi_atmosphere_full.ogg
+      title: "Atmosphere — Full"
+      bpm: 60
+    - path: audio/music/streets_of_seattle_2072.ogg
+      title: "Streets of Seattle 2072"
+      bpm: 60
+    - path: audio/music/angelic_voices.ogg
+      title: "Angelic Voices"
+      bpm: 70
+  combat:
+    - path: audio/music/themed/combat/combat_synth_dogfight.ogg
+      title: "Synth Dogfight"
+      bpm: 145
+    - path: audio/music/themed/combat/combat_war_drums_fleet.ogg
+      title: "War Drums Fleet"
+      bpm: 140
+    - path: audio/music/themed/combat/combat_throat_singing_berserker.ogg
+      title: "Throat Singing Berserker"
+      bpm: 150
+    - path: audio/music/sabotage.ogg
+      title: "Sabotage"
+      bpm: 90
+    - path: audio/music/black_ice.ogg
+      title: "Black ICE"
+      bpm: 95
+    - path: audio/music/action_sequence.ogg
+      title: "Action Sequence"
+      bpm: 120
+  tension:
+    - path: audio/music/themed/tension/tension_dissonant_strings.ogg
+      title: "Dissonant Strings"
+      bpm: 70
+    - path: audio/music/themed/tension/tension_radar_ping.ogg
+      title: "Radar Ping"
+      bpm: 65
+    - path: audio/music/scifi_atmosphere_pulse_texture.ogg
+      title: "Atmosphere — Pulse and Texture"
+      bpm: 70
+    - path: audio/music/scifi_reactor_intense.ogg
+      title: "Reactor — Intense"
+      bpm: 75
+  rest:
+    - path: audio/music/themed/rest/rest_music_box_lullaby.ogg
+      title: "Music Box Lullaby"
+      bpm: 60
+    - path: audio/music/themed/rest/rest_acoustic_guitar_viewport.ogg
+      title: "Acoustic Guitar Viewport"
+      bpm: 65
+  galley:
+    - path: audio/music/themed/cantina/cantina_sitar_nebula.ogg
+      title: "Sitar Nebula"
+      bpm: 85
+    - path: audio/music/themed/cantina/cantina_steel_drums_orbital.ogg
+      title: "Steel Drums Orbital"
+      bpm: 90
+    - path: audio/music/themed/cantina/cantina_throat_singing_tavern.ogg
+      title: "Throat Singing Tavern"
+      bpm: 80
+  drift:
+    - path: audio/music/set-1/void_sparse.ogg
+      title: "Void Sparse"
+      bpm: 55
+    - path: audio/music/set-1/void_resolution.ogg
+      title: "Void Resolution"
+      bpm: 50
+    - path: audio/music/scifi_atmosphere_texture.ogg
+      title: "Atmosphere — Texture"
+      bpm: 50
+    - path: audio/music/scifi_reactor_movement.ogg
+      title: "Reactor — Movement"
+      bpm: 60
+    - path: audio/music/syndicate.ogg
+      title: "Syndicate"
+      bpm: 55
+  docking:
+    - path: audio/music/set-1/cantina_full.ogg
+      title: "Port of Call"
+      bpm: 105
+    - path: audio/music/scifi_reactor_full.ogg
+      title: "Reactor — Full"
+      bpm: 65
+  void:
+    - path: audio/music/themed/void/void_whale_song.ogg
+      title: "Whale Song"
+      bpm: 40
+    - path: audio/music/themed/void/void_bowed_metal.ogg
+      title: "Bowed Metal"
+      bpm: 35
+    - path: audio/music/themed/void/void_throat_singing_abyss.ogg
+      title: "Throat Singing Abyss"
+      bpm: 45
+    - path: audio/music/themed/void/void_solo_cello_drift.ogg
+      title: "Solo Cello Drift"
+      bpm: 40
+    - path: audio/music/scifi_reactor_dark.ogg
+      title: "Reactor — Dark"
+      bpm: 40
+    - path: audio/music/planet_x.ogg
+      title: "Planet X"
+      bpm: 45
+
+  # --- Coyote Star world overrides ---
+  # World-specific moods for the frontier-western/voidborn/Tsveri blend.
+  # Fired by world-aware narrator context, not by the genre defaults.
+  coyote_frontier:
+    - path: audio/music/themed/coyote_star/coyote_frontier_full.ogg
+      title: "Mendes' Post"
+      bpm: 80
+  coyote_voidborn:
+    - path: audio/music/themed/coyote_star/coyote_voidborn_full.ogg
+      title: "Turning Hub Ceremony"
+      bpm: 90
+  coyote_tsveri:
+    - path: audio/music/themed/coyote_star/coyote_tsveri_full.ogg
+      title: "Deep Root Hum"
+      bpm: 35
+  coyote_governor:
+    - path: audio/music/themed/coyote_star/coyote_governor_full.ogg
+      title: "Vaskov Centrum"
+      bpm: 65
+  coyote_outer_dark:
+    - path: audio/music/themed/coyote_star/coyote_outer_dark_full.ogg
+      title: "The Long Hum"
+      bpm: 30
+  coyote_smuggler:
+    - path: audio/music/themed/coyote_star/coyote_smuggler_full.ogg
+      title: "Blind Corner Run"
+      bpm: 95
+
+sfx_library:
+  blaster_fire:
+    - audio/sfx/blaster_fire.ogg
+  blaster_impact:
+    - audio/sfx/blaster_impact.ogg
+  ship_hum:
+    - audio/sfx/ship_hum.ogg
+  airlock_cycle:
+    - audio/sfx/airlock_cycle.ogg
+  hull_creak:
+    - audio/sfx/hull_creak.ogg
+  alarm_klaxon:
+    - audio/sfx/alarm_klaxon.ogg
+  decompression:
+    - audio/sfx/decompression.ogg
+  jump_drive:
+    - audio/sfx/jump_drive.ogg
+  comms_chatter:
+    - audio/sfx/comms_chatter.ogg
+  footsteps_metal:
+    - audio/sfx/footsteps_metal.ogg
+  door_hiss:
+    - audio/sfx/door_hiss.ogg
+  engine_failure:
+    - audio/sfx/engine_failure.ogg
+  docking_clamp:
+    - audio/sfx/docking_clamp.ogg
+
+mixer:
+  music_volume: 0.35
+  sfx_volume: 0.7
+  crossfade_default_ms: 4000
+
+ai_generation:
+  enabled: true
+  model: musicgen_small
+  max_generation_time_s: 15
+  cache_generated: true
+
+themes:
+  - name: exploration
+    mood: exploration
+    base_prompt: ""
+    variations:
+      - type: full
+        path: audio/music/set-1/exploration_full.ogg
+      - type: ambient
+        # R2 object replaced 2026-06-07 with purchased audio (SciFi Atmosphere
+        # Loops Vol1 — "3 Dark"); see genre_packs/PURCHASED_AUDIO.md. The old
+        # ACE-Step track at this key was nuked by operator decision. No
+        # *_input_params.json exists for this key — do not regenerate.
+        path: audio/music/set-1/exploration_ambient.ogg
+      - type: overture
+        path: audio/music/set-1/exploration_overture.ogg
+      - type: resolution
+        path: audio/music/set-1/exploration_resolution.ogg
+      - type: sparse
+        path: audio/music/set-1/exploration_sparse.ogg
+      - type: tension_build
+        path: audio/music/set-1/exploration_tension_build.ogg
+  - name: combat
+    mood: combat
+    base_prompt: ""
+    variations:
+      - type: full
+        path: audio/music/set-1/combat_full.ogg
+      - type: ambient
+        path: audio/music/set-1/combat_ambient.ogg
+      - type: overture
+        path: audio/music/set-1/combat_overture.ogg
+      - type: resolution
+        path: audio/music/set-1/combat_resolution.ogg
+      - type: sparse
+        path: audio/music/set-1/combat_sparse.ogg
+      - type: tension_build
+        path: audio/music/set-1/combat_tension_build.ogg
+  - name: tension
+    mood: tension
+    base_prompt: ""
+    variations:
+      - type: full
+        path: audio/music/set-1/tension_full.ogg
+      - type: ambient
+        path: audio/music/set-1/tension_ambient.ogg
+      - type: overture
+        path: audio/music/set-1/tension_overture.ogg
+      - type: resolution
+        path: audio/music/set-1/tension_resolution.ogg
+      - type: sparse
+        path: audio/music/set-1/tension_sparse.ogg
+      - type: tension_build
+        path: audio/music/set-1/tension_tension_build.ogg
+  - name: rest
+    mood: rest
+    base_prompt: ""
+    variations:
+      - type: full
+        path: audio/music/set-1/rest_full.ogg
+      - type: ambient
+        path: audio/music/set-1/rest_ambient.ogg
+      - type: overture
+        path: audio/music/set-1/rest_overture.ogg
+      - type: resolution
+        path: audio/music/set-1/rest_resolution.ogg
+      - type: sparse
+        path: audio/music/set-1/rest_sparse.ogg
+      - type: tension_build
+        path: audio/music/set-1/rest_tension_build.ogg
+  - name: chase
+    mood: chase
+    base_prompt: ""
+    variations:
+      - type: full
+        path: audio/music/set-1/chase_full.ogg
+      - type: ambient
+        path: audio/music/set-1/chase_ambient.ogg
+      - type: overture
+        path: audio/music/set-1/chase_overture.ogg
+      - type: resolution
+        path: audio/music/set-1/chase_resolution.ogg
+      - type: sparse
+        path: audio/music/set-1/chase_sparse.ogg
+      - type: tension_build
+        path: audio/music/set-1/chase_tension_build.ogg
+  - name: cantina
+    mood: galley
+    base_prompt: ""
+    variations:
+      - type: full
+        path: audio/music/set-1/cantina_full.ogg
+      - type: ambient
+        path: audio/music/set-1/cantina_ambient.ogg
+      - type: overture
+        path: audio/music/set-1/cantina_overture.ogg
+      - type: resolution
+        path: audio/music/set-1/cantina_resolution.ogg
+      - type: sparse
+        path: audio/music/set-1/cantina_sparse.ogg
+      - type: tension_build
+        path: audio/music/set-1/cantina_tension_build.ogg
+  - name: void
+    mood: drift
+    base_prompt: ""
+    variations:
+      - type: full
+        path: audio/music/set-1/void_full.ogg
+      - type: ambient
+        path: audio/music/set-1/void_ambient.ogg
+      - type: overture
+        path: audio/music/set-1/void_overture.ogg
+      - type: resolution
+        path: audio/music/set-1/void_resolution.ogg
+      - type: sparse
+        path: audio/music/set-1/void_sparse.ogg
+      - type: tension_build
+        path: audio/music/set-1/void_tension_build.ogg

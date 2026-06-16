@@ -28,7 +28,7 @@ import re
 from collections.abc import Iterable
 from typing import Literal
 
-from sidequest.game.persistence import LocationPromotionRow, SqliteStore
+from sidequest.game.pg.promotions import PgLocationPromotionRow
 from sidequest.protocol.models import (
     EncounterLocationOverlay,
     LocationEntity,
@@ -64,7 +64,7 @@ def _id_from_label(label: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _apply_promotion(authored: LocationEntity, row: LocationPromotionRow) -> LocationEntity:
+def _apply_promotion(authored: LocationEntity, row: PgLocationPromotionRow) -> LocationEntity:
     """Layer a promotion row on top of an authored entity. Returns a NEW
     ``LocationEntity`` via ``model_copy`` — never mutates input."""
     return authored.model_copy(
@@ -77,7 +77,7 @@ def _apply_promotion(authored: LocationEntity, row: LocationPromotionRow) -> Loc
     )
 
 
-def _minted_entity_from_row(row: LocationPromotionRow) -> LocationEntity:
+def _minted_entity_from_row(row: PgLocationPromotionRow) -> LocationEntity:
     # Pack and world are not in scope at this pure-function level — the resolver
     # is called from multiple paths and deliberately carries no session context.
     # Emit a skipped span for observability; the reference_url is None.
@@ -108,7 +108,7 @@ def _minted_entity_from_row(row: LocationPromotionRow) -> LocationEntity:
 def _build_effective_manifest(
     *,
     authored: Iterable[LocationEntity],
-    promotions: list[LocationPromotionRow],
+    promotions: list[PgLocationPromotionRow],
     overlays: Iterable[EncounterLocationOverlay] = (),
 ) -> list[tuple[LocationEntity, bool]]:
     """Return ``(entity, from_promotion)`` for each effective entity.
@@ -171,14 +171,12 @@ def _match_label(
 
 def _promote_flavor_to_yes_and(
     *,
-    store: SqliteStore,
-    save_id: str,
+    store: object,
     region_id: str,
     entity: LocationEntity,
     turn_number: int,
 ) -> LocationEntity:
-    row = LocationPromotionRow(
-        save_id=save_id,
+    row = PgLocationPromotionRow(
         region_id=region_id,
         entity_id=entity.id,
         provenance="yes_and_promoted",
@@ -197,15 +195,13 @@ def _promote_flavor_to_yes_and(
 
 def _mint_yes_and(
     *,
-    store: SqliteStore,
-    save_id: str,
+    store: object,
     region_id: str,
     label: str,
     turn_number: int,
 ) -> LocationEntity:
     entity_id = _id_from_label(label)
-    row = LocationPromotionRow(
-        save_id=save_id,
+    row = PgLocationPromotionRow(
         region_id=region_id,
         entity_id=entity_id,
         provenance="yes_and_minted",
@@ -227,8 +223,7 @@ def _mint_yes_and(
 
 def resolve(
     *,
-    store: SqliteStore,
-    save_id: str,
+    store: object,
     region_id: str,
     authored_entities: Iterable[LocationEntity],
     label: str,
@@ -244,7 +239,7 @@ def resolve(
     callers pass active encounter overlays (Story 54-7) so overlay-only
     entities can be matched without being persisted to promotions.
     """
-    promotions = store.list_location_promotions(save_id=save_id, region_id=region_id)
+    promotions = store.list_location_promotions(region_id=region_id)  # type: ignore[union-attr]
     manifest = _build_effective_manifest(
         authored=authored_entities, promotions=promotions, overlays=overlays
     )
@@ -263,7 +258,6 @@ def resolve(
         # player_initiated miss → mint a new yes_and entity.
         minted = _mint_yes_and(
             store=store,
-            save_id=save_id,
             region_id=region_id,
             label=label,
             turn_number=turn_number,
@@ -283,7 +277,6 @@ def resolve(
     if entity.tier == "flavor_only" and engagement_kind == "mechanical":
         promoted = _promote_flavor_to_yes_and(
             store=store,
-            save_id=save_id,
             region_id=region_id,
             entity=entity,
             turn_number=turn_number,

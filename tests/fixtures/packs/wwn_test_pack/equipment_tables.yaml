@@ -1,0 +1,25 @@
+# Genre-tier equipment tables (fixture for story 120-4).
+# Deliberately minimal + synthetic ids — the resolver/merge tests assert on the
+# EquipmentTables STRUCTURE (per-slot append, grants-by-kit_id), not on item
+# resolution, so these ids need not exist in any item_catalog.
+#
+# wwn_test_pack has no equipment_generation chargen scene, so adding this file is
+# INERT for the existing chargen tests (no kit is rolled) — it only gives the
+# resolver a genre tier to merge a world override over.
+tables:
+  weapon: [genre_blade]
+  utility: [genre_rope]
+rolls_per_slot:
+  weapon: 1
+  utility: 1
+class_tables:
+  warrior_kit:
+    weapon: [genre_blade]
+    utility: [genre_rope]
+  expert_kit:
+    weapon: [genre_blade]
+guaranteed_grants:
+  warrior_kit:
+    - {item: genre_tonic}
+  tables:
+    - {item: genre_tonic}

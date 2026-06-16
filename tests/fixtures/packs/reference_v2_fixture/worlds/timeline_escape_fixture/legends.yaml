@@ -1,0 +1,4 @@
+legends:
+  - name: The War of Swords
+    era: "the war of <swords> & <spears>"
+    description: A legend whose era string carries HTML-special characters.

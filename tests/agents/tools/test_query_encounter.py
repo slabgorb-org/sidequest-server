@@ -46,7 +46,6 @@ from sidequest.game.encounter import (
     EncounterPhase,
     StructuredEncounter,
 )
-from sidequest.game.persistence import SqliteStore
 from sidequest.game.session import GameSnapshot, Npc
 from sidequest.game.turn import TurnManager
 
@@ -126,16 +125,14 @@ def _build_snapshot(
     )
 
 
-def _store_with(snapshot: GameSnapshot) -> SqliteStore:
-    store = SqliteStore.open_in_memory()
-    store.initialize()
-    store.init_session(genre_slug=snapshot.genre_slug, world_slug=snapshot.world_slug)
-    store.save(snapshot)
-    return store
+def _store_with(snapshot: GameSnapshot):
+    from tests.agents.tools.conftest import pg_store_with
+
+    return pg_store_with(snapshot)
 
 
 def _make_ctx(
-    store: SqliteStore | MagicMock,
+    store: object,
     *,
     perspective_pc: str | None = None,
 ) -> ToolContext:
@@ -144,7 +141,7 @@ def _make_ctx(
         session_id="s",
         perspective_pc=perspective_pc,
         turn_number=1,
-        store=store,
+        repository=store,
         otel_span=MagicMock(),
         perception_filter=NarratorPerceptionFilter(),
     )

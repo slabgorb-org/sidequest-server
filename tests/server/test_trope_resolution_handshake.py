@@ -122,7 +122,8 @@ class TestFreshResolution:
         # The entry text is deterministic — must reference the
         # interaction so the next narrator's state_summary anchors the
         # resolution in time.
-        assert "17" in snap.quest_log["trope_extraction_panic"], (
+        # Story 77-2: quest_log values are QuestEntry; turn marker is in status.
+        assert "17" in snap.quest_log["trope_extraction_panic"].status, (
             "quest_log entry text must include the interaction number (turn marker)."
         )
 

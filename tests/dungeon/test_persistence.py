@@ -464,18 +464,30 @@ def test_serde_exact_inverse_over_seed_sweep(campaign_seed: int) -> None:
     assert all(reloaded.nodes[rid].depth_score == g.nodes[rid].depth_score for rid in g.nodes)
 
 
-def test_wiring_contract_runs_on_real_save_db_connection() -> None:
-    """Plan-7 deferral contract: DungeonStore must work on a connection
-    configured exactly like the real save DB. We reuse the production
-    _configure_connection so a PRAGMA drift in game/persistence.py
-    breaks THIS test — proving Plan 7 can pass it the live connection.
-    """
-    from sidequest.game.persistence import _configure_connection
+def _configure_dungeon_connection(conn: sqlite3.Connection) -> None:
+    """The standalone dungeon SQLite PRAGMA contract.
 
+    ADR-115 F1 retired the shared save-DB ``SqliteStore`` (and its
+    ``_configure_connection``); the dungeon store keeps its own SQLite file.
+    These are the PRAGMAs DungeonStore relies on — WAL + foreign keys +
+    row factory + a generous busy_timeout — so a connection drift breaks
+    THIS test.
+    """
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=5000")
+
+
+def test_wiring_contract_runs_on_real_save_db_connection() -> None:
+    """DungeonStore must work on a SQLite connection configured with the
+    WAL + foreign-keys + busy_timeout contract it relies on (ADR-115 F1: the
+    dungeon SQLite file is standalone now that the shared save-DB SqliteStore
+    is retired)."""
     with tempfile.TemporaryDirectory() as d:
         db = str(_Path(d) / "caverns_beneath_sunden.db")
         conn = sqlite3.connect(db)
-        _configure_connection(conn)  # the REAL save-DB PRAGMA contract
+        _configure_dungeon_connection(conn)  # the dungeon-DB PRAGMA contract
 
         g = _seed_graph()
         exp = _generate_and_attach(g, campaign_seed=42, expansion_id=1, attach_ids=["entrance"])

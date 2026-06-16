@@ -17,17 +17,35 @@ from fastapi.testclient import TestClient
 from sidequest.game.event_log import EventLog
 from sidequest.game.persistence import (
     GameMode,
-    SqliteStore,
-    db_path_for_slug,
-    upsert_game,
 )
-from sidequest.game.sqlite_repository import SqliteSaveRepository
 from sidequest.genre.loader import DEFAULT_GENRE_PACK_SEARCH_PATHS
 from sidequest.server.app import create_app
 
 _GENRE = "caverns_and_claudes"
 _WORLD = "grimvault"
 _SLUG_BASE = "2026-04-22-grimvault-replay"
+
+
+@pytest.fixture(autouse=True)
+def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
+    """Bind the process pool to a per-worker throwaway PG db (ADR-115 F1)."""
+    import psycopg
+
+    from sidequest.game import db_pool
+
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    with psycopg.connect(plain, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+            "AND tablename <> 'alembic_version'"
+        ).fetchall()
+        if rows:
+            names = ", ".join(f'"{r[0]}"' for r in rows)
+            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+    yield
+    db_pool.close_pool()
 
 
 def _genre_packs_path() -> Path | None:
@@ -38,22 +56,17 @@ def _genre_packs_path() -> Path | None:
 
 
 def _seed_with_events(tmp_path: Path, slug: str) -> None:
-    """Create game row and seed 3 NARRATION events (seq 1/2/3)."""
-    db = db_path_for_slug(tmp_path, slug)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore(db)
-    store.initialize()
-    upsert_game(
-        store,
-        slug=slug,
-        mode=GameMode.SOLO,
-        genre_slug=_GENRE,
-        world_slug=_WORLD,
+    """Register a SOLO session in Postgres + seed 3 NARRATION events (ADR-115 F1)."""
+    from sidequest.game import db_pool
+    from sidequest.server.session_state import _build_pg_repos_for_slug
+
+    repo, _dungeon, _sink = _build_pg_repos_for_slug(
+        db_pool.get_pool(), slug=slug, mode=str(GameMode.SOLO),
+        genre_slug=_GENRE, world_slug=_WORLD,
     )
-    log = EventLog(SqliteSaveRepository(store))
+    log = EventLog(repo)
     for i in range(3):
         log.append(kind="NARRATION", payload_json=f'{{"text":"beat {i + 1}","seq":0}}')
-    store.close()
 
 
 def test_connect_with_last_seen_seq_replays_missed_events(tmp_path: Path) -> None:

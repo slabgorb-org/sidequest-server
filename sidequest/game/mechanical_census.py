@@ -122,11 +122,13 @@ def build_trope_census(snapshot, round_number: int) -> dict:
     }
 
 
-def emit_mechanical_census(room, snapshot) -> None:
+def emit_mechanical_census(room, snapshot, *, tx, event_seq) -> None:
     """Emit one component='mechanical' census per SEATED PC + one session
     trope_census, via Phase 1's publish_event sink. MUST be called from
-    inside emit_event's open C2 `with conn:` block (R1) so each row rides
-    the turn txn (event_seq attributed, atomic with events).
+    inside emit_event's open turn transaction (R1) with that turn's ``tx``
+    and ``event_seq`` so each row rides the turn txn on the SAME connection
+    (event_seq attributed, atomic with events). The tx is threaded EXPLICITLY
+    — publish_event does no connection-state sniffing (ADR-115 D5).
 
     Sealed rounds (ADR-036): every seated PC every round, keyed by
     player_id, no acting-player concept. Fully wrapped: ANY failure
@@ -176,13 +178,13 @@ def emit_mechanical_census(room, snapshot) -> None:
                 round_number=round_number,
                 location=locations.get(name),
             )
-            publish_event("census", census, component="mechanical")
+            publish_event("census", census, component="mechanical", tx=tx, event_seq=event_seq)
         except Exception:  # noqa: BLE001 — isolate one PC's failure
             logger.warning("mechanical_census.build_failed pc=%s", pid, exc_info=True)
             continue
 
     try:
         trope = build_trope_census(snapshot, round_number)
-        publish_event("trope_census", trope, component="mechanical")
+        publish_event("trope_census", trope, component="mechanical", tx=tx, event_seq=event_seq)
     except Exception:  # noqa: BLE001
         logger.warning("mechanical_census.trope_build_failed", exc_info=True)

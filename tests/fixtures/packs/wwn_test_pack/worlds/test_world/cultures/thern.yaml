@@ -1,0 +1,61 @@
+name: Thern
+summary: White-skinned false priests of the southern death-cult — wig-wearing
+  pretenders to holiness who prey on the pilgrims voyaging down the River Iss
+description: >-
+  The Therns are a white-skinned race of the far south, smooth-bodied
+  and hairless, who hide their baldness beneath flowing yellow wigs and
+  pass themselves off as a holy people set above all the rest of
+  Barsoom. They hold the Golden Cliffs and the Valley Dor at the mouth
+  of the River Iss, and they have built upon the whole world's oldest
+  faith the cruelest of frauds: that the aged and the despairing who
+  voyage down the Iss come to a paradise, when in truth they come to be
+  hunted, enslaved, and devoured. The Therns believe — or profess to
+  believe — that they alone are exempt from death's road and will be
+  taken up by the goddess. They are learned, cold, and certain of their
+  own divinity, and they keep their secret by killing any who would
+  carry it back up the river. A few, in a long false-eternal life,
+  begin to doubt the lie they were raised inside.
+slots:
+  given_name:
+    corpora:
+      - corpus: barsoom_thern.txt
+        weight: 1.0
+    lookback: 3
+  family_name:
+    corpora:
+      - corpus: barsoom_thern.txt
+        weight: 1.0
+    lookback: 3
+  rank:
+    word_list:
+      - Hekkador
+      - Holy Thern
+      - Lesser Thern
+      - Dator
+      - Father
+      - Priest
+  place_noun:
+    word_list:
+      - temple
+      - cliff
+      - garden
+      - sanctuary
+      - hall
+      - terrace
+      - shrine
+  adjective:
+    word_list:
+      - golden
+      - holy
+      - white
+      - blessed
+      - high
+      - eternal
+      - hidden
+person_patterns:
+  - '{given_name} {family_name}'
+  - '{given_name} {family_name}, {rank}'
+  - '{rank} {given_name}'
+place_patterns:
+  - '{adjective} {place_noun}'
+  - 'the {place_noun} of {given_name}'

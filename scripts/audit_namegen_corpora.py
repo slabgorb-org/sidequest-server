@@ -1,19 +1,26 @@
-"""Audit Markov namegen corpora across every genre pack (Story 45-28).
+"""Audit Markov namegen corpora across every genre pack (Stories 45-28, 64-7).
 
-Walks every genre pack via ``sidequest.genre.load_genre_pack``, resolves
-each culture's slot ``corpora`` references to disk paths, counts words
-in each corpus, and reports per-culture per-corpus status:
+Walks every genre pack's cultures (genre + world tiers), resolves each
+culture's slot ``corpora`` references to a disk path — the pack's own
+``corpus/`` dir first, then the centralized
+``sidequest-content/corpus/shared/`` fallback the runtime resolver uses
+(``generator.py:_resolve_corpus_file``; the shared fallback was added to
+this audit in Story 64-7 so it stops reporting false MISSING for files
+that resolve fine at runtime) — counts words, and reports per-culture
+per-corpus status:
 
 - **OK** — corpus has ≥ ``WARN_BELOW_WORDS`` (1000) words.
 - **THIN** — ``FAIL_BELOW_WORDS`` (200) ≤ corpus < ``WARN_BELOW_WORDS``.
 - **FAIL** — corpus < ``FAIL_BELOW_WORDS`` (200) words. Cannot
   produce coherent Markov output.
+- **MISSING** — corpus found in neither the pack ``corpus/`` nor the
+  shared fallback (No Silent Fallbacks: a genuine absence still surfaces).
 
 Exit code:
 
-- ``0`` if no FAIL rows (THIN allowed — those are operator warnings,
-  not CI gates).
-- ``1`` if any FAIL row.
+- ``0`` if no FAIL and no MISSING rows (THIN allowed — those are operator
+  warnings, not CI gates).
+- ``1`` if any FAIL or MISSING row.
 - ``2`` for invocation errors (missing pack root, no genre packs found).
 
 This is the AC1 deliverable for Story 45-28. Modeled on
@@ -70,6 +77,32 @@ def _classify(word_count: int) -> str:
     return "OK"
 
 
+def _resolve_corpus_path(filename: str, corpus_dir: Path, fallback_dirs: list[Path]) -> Path | None:
+    """Resolve a corpus filename to a path, mirroring the runtime resolver.
+
+    Search order matches
+    ``sidequest.genre.names.generator._resolve_corpus_file``: the pack's
+    own ``corpus/`` dir first, then each fallback dir (the centralized
+    ``sidequest-content/corpus/shared/``). A pack that ships no per-pack
+    copy resolves the file from the shared fallback at runtime, so the
+    audit must search the same place or it reports false MISSING.
+
+    Returns ``None`` when the file is found nowhere. The runtime resolver
+    raises ``FileNotFoundError`` in that case; the audit's job is to
+    *report* the gap as a MISSING row, not abort — so it records the miss
+    instead of raising (No Silent Fallbacks: a genuine absence still
+    surfaces).
+    """
+    primary = corpus_dir / filename
+    if primary.exists():
+        return primary
+    for fdir in fallback_dirs:
+        candidate = fdir / filename
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def _load_cultures(cultures_yaml: Path) -> list[Culture]:
     """Validate ``cultures.yaml`` against the Culture model.
 
@@ -93,11 +126,61 @@ def _load_cultures(cultures_yaml: Path) -> list[Culture]:
     return cultures
 
 
+def _load_world_cultures(world_dir: Path) -> list[Culture]:
+    """Discover a world's cultures, mirroring the loader (loader.py ~L895-914).
+
+    Worlds author cultures in one of two shapes, and the loader picks
+    between them with an ``if/else`` (the directory REPLACES the single
+    file — it does not merge):
+
+    - **Per-culture directory** — ``worlds/<world>/cultures/*.yaml``, one
+      Culture *mapping* per file (the model used by e.g. space_opera's
+      ``aureate_span`` / ``perseus_cloud``). ``.gitkeep`` is skipped, and so
+      is any mapping without a ``name`` key — those are art-pipeline
+      visual-token overlays that live in ``cultures/`` for the daemon image
+      pipeline, not name-generation cultures (loader.py L902-906).
+    - **Single file** — ``worlds/<world>/cultures.yaml``, a *list* of Culture
+      mappings (handled by :func:`_load_cultures`).
+
+    When a ``cultures/`` directory is present, the sibling ``cultures.yaml``
+    is ignored, exactly as the loader does.
+    """
+    cultures_dir = world_dir / "cultures"
+    if cultures_dir.is_dir():
+        cultures: list[Culture] = []
+        for f in sorted(cultures_dir.glob("*.yaml")):
+            if f.name == ".gitkeep":
+                continue
+            raw = yaml.safe_load(f.read_text(encoding="utf-8"))
+            # Skip art-pipeline visual-token overlays (have visual_tokens, not name).
+            if not isinstance(raw, dict) or "name" not in raw:
+                continue
+            try:
+                cultures.append(Culture.model_validate(raw))
+            except ValidationError:
+                # Schema-broken cultures are surfaced by audit_content_drift.py;
+                # this audit's scope is corpus sizes, not schema. Skip.
+                continue
+        return cultures
+
+    world_cultures_yaml = world_dir / "cultures.yaml"
+    if world_cultures_yaml.is_file():
+        return _load_cultures(world_cultures_yaml)
+    return []
+
+
 def _audit_pack(pack_dir: Path) -> list[CorpusEntry]:
     """Walk one genre pack's cultures (genre + world tiers) and audit corpora."""
     entries: list[CorpusEntry] = []
     pack_name = pack_dir.name
     corpus_dir = pack_dir / "corpus"
+    # Mirror the runtime resolver's fallback: a pack that ships no per-pack
+    # corpus/<file> still resolves from the centralized
+    # sidequest-content/corpus/shared/ at runtime (generator.py
+    # :_resolve_corpus_file, fed pack.source_dir.parent.parent/"corpus"/"shared"
+    # by narration_apply.py and the namegen/encountergen CLIs). pack_dir IS the
+    # pack source dir here, so the shared dir is pack_dir.parent.parent/corpus/shared.
+    fallback_dirs = [pack_dir.parent.parent / "corpus" / "shared"]
 
     def _walk_cultures(cultures: list[Culture], tier: str) -> None:
         for culture in cultures:
@@ -105,8 +188,8 @@ def _audit_pack(pack_dir: Path) -> list[CorpusEntry]:
                 if not slot_config.corpora:
                     continue
                 for corpus_ref in slot_config.corpora:
-                    corpus_path = corpus_dir / corpus_ref.corpus
-                    if not corpus_path.exists():
+                    corpus_path = _resolve_corpus_path(corpus_ref.corpus, corpus_dir, fallback_dirs)
+                    if corpus_path is None:
                         entries.append(
                             CorpusEntry(
                                 pack=pack_name,
@@ -140,12 +223,9 @@ def _audit_pack(pack_dir: Path) -> list[CorpusEntry]:
         for world_dir in sorted(worlds_dir.iterdir()):
             if not world_dir.is_dir():
                 continue
-            world_cultures_yaml = world_dir / "cultures.yaml"
-            if world_cultures_yaml.is_file():
-                _walk_cultures(
-                    _load_cultures(world_cultures_yaml),
-                    tier=f"world:{world_dir.name}",
-                )
+            world_cultures = _load_world_cultures(world_dir)
+            if world_cultures:
+                _walk_cultures(world_cultures, tier=f"world:{world_dir.name}")
 
     return entries
 
@@ -235,7 +315,9 @@ def main(argv: list[str] | None = None) -> int:
         has_genre_cultures = (pack_dir / "cultures.yaml").is_file()
         worlds_dir = pack_dir / "worlds"
         has_world_cultures = worlds_dir.is_dir() and any(
-            (w / "cultures.yaml").is_file() for w in worlds_dir.iterdir() if w.is_dir()
+            (w / "cultures.yaml").is_file() or (w / "cultures").is_dir()
+            for w in worlds_dir.iterdir()
+            if w.is_dir()
         )
         if not (has_genre_cultures or has_world_cultures):
             continue

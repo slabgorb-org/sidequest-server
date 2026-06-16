@@ -1,0 +1,12 @@
+name: timeline_fixture
+description: >-
+  Primary world for story 65-12 — the lore-page world Timeline section. Five
+  legends whose temporal values use FOUR different dialects (absolute fantasy
+  year "-11540", relative "15 years ago", named-age period "early Second
+  Rising", and a prose date) so they are NOT uniformly parseable: the spine must
+  render in AUTHORED order (sort_mode == "authored_order"). Four of the five are
+  dated (three carry `era`, one carries `period`-only); the fifth (The Nameless
+  Age) carries neither and must land in the undated tail. lore.yaml carries a
+  `history` prose blob (the AC5 timeline preamble) and history.yaml carries a
+  dormant-trope campaign chapter whose spoiler tokens must NEVER leak into the
+  public Timeline section (AC7 / ADR-135 D1).

@@ -45,8 +45,6 @@ class MessageType(StrEnum):
     RENDER_QUEUED = "RENDER_QUEUED"
     IMAGE = "IMAGE"
     AUDIO_CUE = "AUDIO_CUE"
-    VOICE_SIGNAL = "VOICE_SIGNAL"
-    VOICE_TEXT = "VOICE_TEXT"
     ACTION_QUEUE = "ACTION_QUEUE"
     CHAPTER_MARKER = "CHAPTER_MARKER"
     ERROR = "ERROR"
@@ -80,6 +78,14 @@ class MessageType(StrEnum):
     DICE_REQUEST = "DICE_REQUEST"
     DICE_THROW = "DICE_THROW"
     DICE_RESULT = "DICE_RESULT"
+    # Non-beat SWN skill check or save (2d6 / d20). Client rolls in the 3D
+    # overlay and submits settled faces; the server resolves via dispatch_check
+    # and broadcasts DiceRequest + DiceResult to the room.
+    CHECK_THROW = "CHECK_THROW"
+    # ADR-144: a Fate-bound pack's player action (one of the three proactive Fate
+    # actions or a concession). Routed to FateActionHandler → fate_conflict, gated
+    # by isinstance(ruleset, FateRulesetModule). Distinct from DICE_THROW (beat+d20).
+    FATE_ACTION = "FATE_ACTION"
     BEAT_SELECTION = "BEAT_SELECTION"
     SCRAPBOOK_ENTRY = "SCRAPBOOK_ENTRY"
     YIELD = "YIELD"
@@ -90,9 +96,9 @@ class MessageType(StrEnum):
     GAME_RESUMED = "GAME_RESUMED"
     SECRET_NOTE = "SECRET_NOTE"
     # Reserved event kinds for Group B/C going-forward corpus capture.
-    # Payload schemas live in sidequest/corpus/going_forward.py. These are
-    # NOT yet filter-reachable (not in _KIND_TO_MESSAGE_CLS) — emitters land
-    # with the group that owns each subsystem.
+    # Payload schemas land with the emitter (per No-Stubbing — schemas are not
+    # pre-reserved as empty shells). These are NOT yet filter-reachable (not in
+    # _KIND_TO_MESSAGE_CLS) — emitters land with the group that owns each subsystem.
     DISPATCH_PACKAGE = "DISPATCH_PACKAGE"
     NARRATOR_DIRECTIVE_USED = "NARRATOR_DIRECTIVE_USED"
     VERDICT_OVERRIDE = "VERDICT_OVERRIDE"
@@ -111,6 +117,8 @@ class MessageType(StrEnum):
     # snapshot. Emitted on current_room change and session resume. The
     # LOCATION_OVERLAY_CHANGED delta variant lands in Story 54-7.
     LOCATION_DESCRIPTION = "LOCATION_DESCRIPTION"
+    # ADR-136: player-facing relationship surface (reactive, per-domain).
+    RELATIONSHIPS = "RELATIONSHIPS"
     # Story 54-7 / ADR-109: delta channel for encounter location overlay
     # state changes. Fires when an encounter with a non-None
     # location_overlay activates or deactivates touching a bound_room_id.
@@ -122,6 +130,32 @@ class MessageType(StrEnum):
     # this is it (do NOT revive MAP_UPDATE). The UI MapWidget routes this
     # through its Automapper region-graph path.
     DUNGEON_MAP = "DUNGEON_MAP"
+    # ADR-137 / Story 77-8: player-facing quest spine projection. The
+    # RELATIONSHIPS-snapshot analog for quests — carries quest_log +
+    # quest_anchors + active_stakes together, reactive on seed/record_quest/
+    # set_stakes. Transient broadcast (never event-sourced), consumed by the
+    # UI quest/objective panel (Story 77-5).
+    QUESTS = "QUESTS"
+    # ADR-144 F3a / Story 118-1: player-facing Fate Core spine projection. The
+    # RELATIONSHIPS/QUESTS-snapshot analog for Fate — per-PC fate points/refresh,
+    # skills->ladder, aspects, stress boxes, consequence slots, scene situation
+    # aspects+boosts, and the active conflict's participants by side. Reactive
+    # (on-change, NOT per-turn), ruleset=='fate'-gated, transient broadcast
+    # (never event-sourced), consumed by the UI Fate panel (Story 118-2).
+    FATE_STATE = "FATE_STATE"
+    # The 4dF roll, surfaced to the player (ADR-144 F3c, Story 118-3). An EVENT
+    # (like DICE_RESULT), not change-gated state: the four Fudge faces, the
+    # ladder rating, the shift total, the outcome tier, and the succeed-with-
+    # style flag. The dice tuple previously lived only on the OTEL span.
+    FATE_ROLL = "FATE_ROLL"
+    # sq-playtest 2026-06-07 (heavy_metal/barsoom-3, blocking): a PC the genre
+    # lethality policy ruled dead kept full agency for four rounds with no
+    # death surface. Emitted at the moment a PC is taken OUT of play (LETHAL
+    # verdict) and again if a downed seat tries to act. PC-scoped
+    # (payload.character_name); the UI locks that seat's input and surfaces a
+    # death banner / re-roll CTA. The server-side turn-intake gate is the
+    # authority — this message is the player-facing mirror.
+    CHARACTER_INCAPACITATED = "CHARACTER_INCAPACITATED"
 
 
 class NarratorVerbosity(StrEnum):
@@ -174,4 +208,17 @@ class NarratorVocabulary(StrEnum):
     @classmethod
     def default(cls) -> NarratorVocabulary:
         """Return the default vocabulary (Literary)."""
+        return cls.literary
+
+    @classmethod
+    def default_for_player_count(cls, player_count: int) -> NarratorVocabulary:
+        """Return the default vocabulary for a given player count.
+
+        Per ADR-049 the vocabulary axis is player-count-invariant — both solo
+        (n=1) and multiplayer (n>1) default to Literary. This method exists for
+        *interface parity* with :meth:`NarratorVerbosity.default_for_player_count`
+        so the TurnContext fallback can resolve both axes through the same call
+        shape without special-casing one. ``player_count`` is accepted and
+        ignored deliberately.
+        """
         return cls.literary

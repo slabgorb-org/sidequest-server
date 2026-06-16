@@ -112,21 +112,12 @@ def build_game_state_view(handler: WebSocketSessionHandler) -> SessionGameStateV
     co-located with the viewer. Per-item ownership is not yet tracked
     and stays at the conservative default.
 
-    **GM identity wiring (C1, still partial):**
-
-    - Solo sessions have no separate GM player by design; ``gm_player_id``
-      is correctly ``None`` there. ``CoreInvariantStage`` never
-      short-circuits on ``is_gm()`` for solo — which is the right
-      behavior, because in solo play the single player is the only
-      recipient and has no counterpart to be "GM" to.
-    - Multiplayer sessions *should* name a GM player (e.g. the session
-      creator or a designated seat) so that ``unless: is_gm()`` in
-      ``projection.yaml`` can exempt them. That wiring lives downstream
-      of MP-02 seating — ``SessionRoom`` does not yet carry a GM seat
-      designation, so we still fall through to ``None`` for multiplayer
-      with a logged warning. Genre packs that ship ``unless: is_gm()``
-      rules today will mask the GM identically to a regular player
-      (the safe direction: over-redact rather than leak).
+    **No GM seat (71-35):** SideQuest's thesis is *the narrator is the
+    GM; every human is a player*. The narrator reads canonical state
+    server-side and is not a projection recipient at all, so there is no
+    ``is_gm()`` predicate, no ``gm_player_id``, and no GM short-circuit in
+    the firewall — it stands on player-identity predicates alone
+    (is_self / is_owner_of / in_same_zone / visible_to / in_same_party).
 
     **Player-character mapping:** ``Character`` does not yet carry a
     ``player_id`` attribute, so the session's active player_id
@@ -138,35 +129,11 @@ def build_game_state_view(handler: WebSocketSessionHandler) -> SessionGameStateV
     that depend on ``character_of()`` evaluate to ``False`` (the
     masked direction).
     """
-    from sidequest.game.persistence import GameMode  # noqa: PLC0415 — break import cycle
     from sidequest.game.projection.view import SessionGameStateView
 
     sd = handler._session_data
     if sd is None:
-        return SessionGameStateView(gm_player_id=None, player_id_to_character={})
-
-    # Solo: no human GM. None is correct; CoreInvariantStage's
-    # gm-sees-all branch never fires for the single player.
-    gm_player_id: str | None = None
-    if (
-        sd.mode is not None
-        and sd.mode != GameMode.SOLO
-        and not getattr(handler, "_gm_wiring_warned", False)
-    ):
-        # Multiplayer: GM seat assignment not yet plumbed through
-        # SessionRoom. Log one warning per build so GM-panel users
-        # can see that ``unless: is_gm()`` rules are currently
-        # over-masking the GM in multiplayer sessions.
-        logger.warning(
-            "projection.gm_identity_unwired slug=%s mode=%s — "
-            "multiplayer sessions do not yet carry a GM-seat "
-            "designation; `unless: is_gm()` rules will mask the "
-            "GM like any other player until MP-02 GM seating "
-            "lands.",
-            sd.game_slug,
-            sd.mode,
-        )
-        handler._gm_wiring_warned = True
+        return SessionGameStateView(player_id_to_character={})
 
     snapshot = sd.snapshot
 
@@ -260,7 +227,6 @@ def build_game_state_view(handler: WebSocketSessionHandler) -> SessionGameStateV
             hidden_characters.add(name)
 
     return SessionGameStateView(
-        gm_player_id=gm_player_id,
         player_id_to_character=mapping,
         character_zones=character_zones,
         hidden_characters=hidden_characters,
@@ -324,6 +290,12 @@ def backfill_last_narration_block(
     raised the cap from 1 narration → ``limit`` so a player who refreshes
     after several turns lands with a coherent scrollback, not just the
     most recent line.
+
+    ADR-115 D3: the four raw ``store._conn.execute(...)`` reads have been
+    replaced by a single ``repository.read_narration_backfill(...)`` call
+    (see ``sidequest.game.pg.narrative.PgNarrativeStore``).  The assembly
+    step — ``_build_message_for_kind`` per ``BackfillRow`` — remains here
+    because the adapter is protocol-layer-agnostic.
     """
     from sidequest.server.session_handler import _build_message_for_kind
 
@@ -331,71 +303,16 @@ def backfill_last_narration_block(
         return []
     if limit <= 0:
         return []
-    store = handler._event_log.store
 
-    # Find the seq of the oldest narration we want in the window — the
-    # Nth-most-recent. Fewer than ``limit`` narrations is fine; we just
-    # take what's there.
-    with store._conn:
-        narration_seq_rows = store._conn.execute(
-            "SELECT seq FROM events WHERE kind = 'NARRATION' ORDER BY seq DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-    if not narration_seq_rows:
-        return []
-    oldest_narration_seq = int(narration_seq_rows[-1][0])
-
-    # Capture the chapter marker that precedes the oldest narration in
-    # our window (without crossing an even-earlier narration), so the
-    # first emitted block has its header attached. Subsequent chapters
-    # interleaved between narrations are picked up by the range read
-    # below.
-    with store._conn:
-        chapter_row = store._conn.execute(
-            "SELECT seq FROM events "
-            "WHERE kind = 'CHAPTER_MARKER' AND seq < ? "
-            "  AND seq > COALESCE("
-            "    (SELECT MAX(seq) FROM events "
-            "     WHERE kind = 'NARRATION' AND seq < ?),"
-            "    0"
-            "  ) "
-            "ORDER BY seq DESC LIMIT 1",
-            (oldest_narration_seq, oldest_narration_seq),
-        ).fetchone()
-
-    lower_bound = oldest_narration_seq
-    if chapter_row is not None:
-        lower_bound = int(chapter_row[0])
-
-    with store._conn:
-        rows = store._conn.execute(
-            "SELECT seq, kind FROM events "
-            "WHERE kind IN ('NARRATION', 'CHAPTER_MARKER') AND seq >= ? "
-            "ORDER BY seq ASC",
-            (lower_bound,),
-        ).fetchall()
-
-    def _cached_payload(seq: int) -> str | None:
-        with store._conn:
-            row = store._conn.execute(
-                "SELECT include, payload_json FROM projection_cache "
-                "WHERE player_id = ? AND event_seq = ?",
-                (player_id, seq),
-            ).fetchone()
-        if row is None or not bool(row[0]) or row[1] is None:
-            return None
-        return str(row[1])
+    repository = handler._event_log.repository
+    backfill_rows = repository.read_narration_backfill(player_id=player_id, limit=limit)
 
     messages: list[object] = []
-    for seq_raw, kind in rows:
-        seq_i = int(seq_raw)
-        cached = _cached_payload(seq_i)
-        if cached is None:
-            continue
+    for row in backfill_rows:
         built = _build_message_for_kind(
-            kind=str(kind),
-            payload_json=cached,
-            seq=seq_i,
+            kind=row.kind,
+            payload_json=row.payload_json,
+            seq=row.seq,
         )
         if built is None:
             continue
@@ -409,6 +326,7 @@ def party_member_from_character(
     character: Character,
     player_id: str,
     player_name: str,
+    player_identity: str | None = None,
 ) -> PartyMember:
     """Build a single PartyMember from a Character object.
 
@@ -416,6 +334,7 @@ def party_member_from_character(
     same construction can run for the requesting socket's PC and for
     peer PCs that landed in the snapshot via multiplayer chargen.
     """
+    from sidequest.foundation.asset_urls import resolve_player_portrait_url
     from sidequest.protocol.models import (
         CharacterSheetDetails,
         InventoryItem,
@@ -454,8 +373,39 @@ def party_member_from_character(
             filtered_ids, _index_beats(sd.genre_pack.rules.confrontations)
         )
 
+    # Story 93-4: link the character's own creation-seed lore fragments from
+    # the per-session ADR-048 store so the History 'Lore' subsection can
+    # render them. Plumbing only — fragments are seeded at chargen confirm.
+    from sidequest.game.lore_linking import linked_lore_for_character
+
+    lore_fragments = linked_lore_for_character(sd.lore_store, character)
+    if character.creation_answers:
+        # GM-panel lie detector (CLAUDE.md OTEL Observability Principle): prove
+        # how many fragments actually reached the surface, per character.
+        from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
+
+        _watcher_publish(
+            "lore_retrieval",
+            {
+                "reason": "character_history_link",
+                "resolved_count": len(lore_fragments),
+                "answered_scenes": len(character.creation_answers),
+                "player_name": player_name,
+                "genre_slug": sd.genre_slug,
+                "world_slug": sd.world_slug,
+            },
+            component="rag",
+        )
+
     sheet = CharacterSheetDetails(
         race=NonBlankString(character.race),
+        # Display-only flavor labels — None when chargen produced no distinct
+        # label (label == archetype), so the UI cleanly falls back to the
+        # mechanical race/class slug.
+        origin_label=NonBlankString(character.origin_label) if character.origin_label else None,
+        calling_label=(
+            NonBlankString(character.calling_label) if character.calling_label else None
+        ),
         stats=stats,
         abilities=abilities,
         class_moves=class_moves,
@@ -463,14 +413,58 @@ def party_member_from_character(
         personality=NonBlankString(character.core.personality),
         pronouns=NonBlankString(character.pronouns) if character.pronouns else None,
         equipment=equipment,
+        # Story 93-2: chargen provenance rides the sheet so the 93-3
+        # History section can render the player's own answers.
+        creation_answers=list(character.creation_answers),
+        # Story 93-4: player-linked creation-seed lore for the History
+        # 'Lore' subsection beneath the origin block.
+        lore_fragments=lore_fragments,
+        # ADR-143 Task 11: WN-family skills/foci reach the player-facing
+        # sheet (DD-6 — ride the existing sheet dict, no new top-level key).
+        # Empty dicts/lists for non-WN characters; the UI renders sections
+        # only when non-empty (mechanics-first — Sebastien/Jade legibility).
+        skills=dict(character.skills),
+        foci=list(character.foci),
     )
 
     # Currency noun from inventory.yaml::currency.name (pingpong
     # 2026-04-24 fantasy-leak bug). None → UI neutral fallback;
     # no silent default to "gold".
+    # Epic 94: inventory (incl. the currency noun) is a world-tier CAST/CATALOG
+    # surface — resolve world-first with genre fallback. Reading
+    # ``sd.genre_pack.inventory`` directly returned None for migrated packs and
+    # silently leaked the UI's "coin" fallback into worlds that declare credits /
+    # marks / dollars.
+    from sidequest.server.dispatch.inventory_resolve import resolve_inventory
+
+    resolved_inventory = resolve_inventory(sd.genre_pack, sd.world_slug)
     currency_name: str | None = None
-    if sd.genre_pack.inventory is not None and sd.genre_pack.inventory.currency is not None:
-        currency_name = sd.genre_pack.inventory.currency.name
+    if resolved_inventory is not None and resolved_inventory.currency is not None:
+        currency_name = resolved_inventory.currency.name
+
+    # Wealth tier (ADR-021 track 3): resolve the gold balance against the
+    # pack's authored ``progression.wealth_tiers`` into a player-facing label,
+    # and emit an OTEL span so the GM panel can confirm the tier was
+    # engine-resolved rather than narrator-improvised. No tiers authored →
+    # None label and no span (No Silent Fallbacks — show the bare number).
+    from sidequest.genre.models.progression import resolve_wealth_tier
+    from sidequest.telemetry.spans import inventory_wealth_tier_span
+
+    wealth_tiers = sd.genre_pack.progression.wealth_tiers
+    gold = character.core.inventory.gold
+    wealth_tier_label: str | None = None
+    resolved_tier = resolve_wealth_tier(gold, wealth_tiers)
+    if resolved_tier is not None:
+        wealth_tier_label = resolved_tier.label
+        tier_index = next(i for i, t in enumerate(wealth_tiers) if t is resolved_tier)
+        with inventory_wealth_tier_span(
+            player_name=player_name,
+            gold=gold,
+            label=resolved_tier.label,
+            tier_index=tier_index,
+            currency_name=currency_name or "",
+        ):
+            pass
 
     inventory_payload = InventoryPayload(
         items=[
@@ -487,6 +481,7 @@ def party_member_from_character(
         ],
         gold=character.core.inventory.gold,
         currency_name=currency_name,
+        wealth_tier_label=wealth_tier_label,
     )
 
     location_nbs: NonBlankString | None = None
@@ -510,7 +505,7 @@ def party_member_from_character(
     # Reference URL for the class rules page. class_def being non-None means
     # this class is in classes.yaml — use it as the registry check directly
     # (the lookup was already done above for class_moves). No second lookup needed.
-    from sidequest.server.reference_anchors import reference_url_for_class
+    from sidequest.foundation.reference_anchors import reference_url_for_class
     from sidequest.telemetry.spans.reference import (
         reference_url_attached_span,
         reference_url_skipped_span,
@@ -552,16 +547,47 @@ def party_member_from_character(
         if s.text in (INJURY_STATUS_TEXT, DISMOUNTED_STATUS_TEXT)
     ]
 
+    # Story 102-6 (Sebastien/Jade legibility): project the psychic's Effort pool
+    # (committed / free / max) and System Strain so the mechanical resource game
+    # is legible in the party panel. None for non-psychics (no Effort pool) —
+    # distinct from 0 (a psychic with everything committed). Effort is aggregated
+    # across every source pool (SWN psionics use one; a WWN caster may carry
+    # class-source pools too).
+    effort_available: int | None = None
+    effort_committed: int | None = None
+    effort_max: int | None = None
+    if character.core.effort:
+        effort_available = sum(p.available for p in character.core.effort.values())
+        effort_committed = sum(p.committed for p in character.core.effort.values())
+        effort_max = sum(p.max for p in character.core.effort.values())
+
+    system_strain_current: int | None = None
+    system_strain_max: int | None = None
+    if character.core.system_strain is not None:
+        system_strain_current = character.core.system_strain.current
+        system_strain_max = character.core.system_strain.max
+
     return PartyMember(
         player_id=NonBlankString(player_id or "anon"),
         name=NonBlankString(player_name or "Player"),
+        player_identity=player_identity,
         character_name=char_name_nbs,
         current_hp=character.core.hp.current,
         max_hp=character.core.hp.max,
+        # Story 68-1: genre-level survivability label (None ⇒ UI default "HP").
+        survivability_pool_label=sd.genre_pack.rules.survivability_pool_label,
         statuses=[s.text for s in character.core.statuses],
         **{"class": class_nbs},  # type: ignore[arg-type]
         level=character.core.level,
-        portrait_url=None,
+        # ADR-021 track 1: the most recent level-up delta (None on turns with
+        # no advancement), so the player sees the change and its driver.
+        advancement=character.last_advancement,
+        # ADR-021 track 2: affinity tier promotions this turn (empty on turns
+        # with none), so the player sees which affinity advanced and why.
+        affinity_advancements=character.last_affinity_tier_ups,
+        portrait_url=resolve_player_portrait_url(
+            sd.genre_slug, sd.world_slug, character.portrait_ref
+        ),
         current_location=location_nbs,
         sheet=sheet,
         inventory=inventory_payload,
@@ -569,6 +595,11 @@ def party_member_from_character(
         rig_composure_current=rig_composure_current,
         rig_composure_max=rig_composure_max,
         injury_tags=injury_tags,
+        effort_available=effort_available,
+        effort_committed=effort_committed,
+        effort_max=effort_max,
+        system_strain_current=system_strain_current,
+        system_strain_max=system_strain_max,
     )
 
 
@@ -622,7 +653,12 @@ def build_session_start_party_status(
     player_id via the room. Falls back to ``peer:<name>`` when
     no seat record is available.
     """
-    from sidequest.protocol.messages import PartyStatusMessage, PartyStatusPayload
+    from sidequest.protocol.messages import (
+        PartyStatusMessage,
+        PartyStatusPayload,
+        ResourcePoolPayload,
+        ResourceThresholdPayload,
+    )
 
     seat_map: dict[str, str] = {}
     if handler._room is not None:
@@ -645,7 +681,19 @@ def build_session_start_party_status(
         else:
             pid = seat_map.get(char.core.name) or f"peer:{char.core.name}"
             pname = char.core.name
-        members.append(party_member_from_character(handler, sd, char, pid, pname))
+        member_identity = (
+            handler._room.get_player_identity(pid) if handler._room is not None else None
+        )
+        members.append(
+            party_member_from_character(
+                handler,
+                sd,
+                char,
+                pid,
+                pname,
+                player_identity=member_identity,
+            )
+        )
 
     from sidequest.protocol.models import CompanionMember
     from sidequest.protocol.types import NonBlankString
@@ -672,8 +720,37 @@ def build_session_start_party_status(
                 exc,
             )
 
+    # Project the snapshot's resource pools onto the wire so the UI's
+    # CharacterPanel light gauge (and the generic resource bars) render from
+    # real PARTY_STATUS data. The engine model stores the live amount as
+    # ``current``; the wire renames it to ``value`` to match what the UI reads
+    # (CharacterPanel.ResourcePool.value). Empty dict — never None — when the
+    # snapshot declares no pools, matching the UI's optional handling.
+    resources: dict[str, ResourcePoolPayload] = {}
+    for pool_name, pool in (sd.snapshot.resources or {}).items():
+        resources[pool_name] = ResourcePoolPayload(
+            name=pool.name,
+            label=pool.label,
+            value=pool.current,
+            min=pool.min,
+            max=pool.max,
+            voluntary=pool.voluntary,
+            thresholds=[
+                ResourceThresholdPayload(
+                    value=t.at,
+                    label=t.narrator_hint,
+                    direction="low" if t.direction == "down" else "high",
+                )
+                for t in pool.thresholds
+            ],
+        )
+
     return PartyStatusMessage(
         type="PARTY_STATUS",  # type: ignore[arg-type]
-        payload=PartyStatusPayload(members=members, companions=companions),
+        payload=PartyStatusPayload(
+            members=members,
+            resources=resources,
+            companions=companions,
+        ),
         player_id=player_id,
     )

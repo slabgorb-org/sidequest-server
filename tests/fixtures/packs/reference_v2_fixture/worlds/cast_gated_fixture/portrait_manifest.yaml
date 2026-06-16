@@ -1,0 +1,28 @@
+# Public NPC projection for the 65-9 Cast-gate fixture.
+# Two characters. Both are authored here (so both are "public cast"); only
+# Vivian Harbormaster has a rendered portrait on R2 (her world-scoped key is in
+# tests/fixtures/r2_manifest.json). Thessaly Dunmore is authored-but-absent.
+#
+# Slug derivation (server/utils.slugify_player_name, mirror of the daemon's
+# _slugify_name): lowercase, whitespace -> "_", drop punctuation except _ and -.
+#   "Vivian Harbormaster" -> vivian_harbormaster   (IN the fixture manifest)
+#   "Thessaly Dunmore"    -> thessaly_dunmore       (NOT in the fixture manifest)
+
+characters:
+  - name: Vivian Harbormaster
+    role: Keeper of the Drowned Coast tide-ledgers
+    type: npc_major
+    appearance: >-
+      A weather-creased woman in oilskins, lantern-jawed and grey at the
+      temples, salt crusted in the seams of her coat.
+    culture_aesthetic: Drowned-coast freeholder — practical, unadorned.
+    element_visual: A storm-lantern held low; brass tide-rule at her belt.
+
+  - name: Thessaly Dunmore
+    role: Factor of the sunken counting-house
+    type: npc_supporting
+    appearance: >-
+      A narrow, ink-stained clerk in a moth-eaten frock coat, spectacles
+      mended with wire, forever clutching a ledger the tides have warped.
+    culture_aesthetic: Drowned-coast freeholder — threadbare gentility.
+    element_visual: A warped ledger; cracked spectacles; a guttering candle.

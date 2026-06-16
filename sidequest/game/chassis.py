@@ -209,7 +209,9 @@ def init_chassis_registry(snapshot, genre_pack) -> None:
 
     Slice scope: fresh-session only. Returning-player save rehydration is
     deferred to a follow-on. Graceful no-op when:
-      - pack.chassis_classes is None (genre doesn't use rigs)
+      - the bound world has no chassis_classes (world doesn't use rigs).
+        Epic 94 moved chassis_classes from the genre tier to the world tier
+        (genre = rulebook only); read it world-first off the bound World.
       - pack.source_dir is None (in-memory pack with no on-disk YAML)
       - the world has no rigs.yaml authored
 
@@ -224,7 +226,13 @@ def init_chassis_registry(snapshot, genre_pack) -> None:
 
     from sidequest.genre.models.rigs_world import RigsWorldConfig
 
-    if genre_pack.chassis_classes is None:
+    # Epic 94: chassis_classes is a world-tier surface. Resolve world-first off
+    # the bound World; the old genre-tier pack.chassis_classes is None for
+    # migrated packs. No silent fallback to the genre tier — a world with no
+    # chassis_classes simply doesn't use rigs.
+    world = genre_pack.worlds.get(snapshot.world_slug)
+    world_chassis_classes = world.chassis_classes if world is not None else None
+    if world_chassis_classes is None:
         return
     if genre_pack.source_dir is None:
         return

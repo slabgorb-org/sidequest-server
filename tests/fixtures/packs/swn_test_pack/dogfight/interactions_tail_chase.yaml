@@ -1,0 +1,375 @@
+# Dogfight Interaction Table — Tail Chase starting state
+#
+# A 16-cell lookup keyed by (red_maneuver, blue_maneuver). Red is the
+# PURSUER (behind), Blue is the EVADER (ahead). Asymmetric geometry:
+# the pursuer has positional advantage but must close the gun cone;
+# the evader has escape options but must reverse to fight back.
+#
+# RPS SHIFT FROM MERGE:
+#
+#   In merge, the triangle is symmetric. In tail-chase:
+#   - straight (pursuer) = MAINTAIN PURSUIT — strong, closes gun cone
+#   - straight (evader)  = FLEE — weak, can't outrun guns at close range
+#   - bank (pursuer)     = ANTICIPATE BREAK — covers the evader's escape
+#   - bank (evader)      = BREAK TURN — strong, forces overshoot
+#   - loop (pursuer)     = OVERSHOOT RECOVERY — expensive, repositions
+#   - loop (evader)      = SPLIT-S — inverted dive to change plane
+#   - kill_rotation (pursuer) = SNAP SHOT — close-range committed burst
+#   - kill_rotation (evader)  = REVERSAL — desperate flip to face pursuer
+#
+# The pursuer's natural advantage means more cells give Red a shot.
+# The evader must use evasive maneuvers (bank) to survive. Committing
+# to offense (kill_rotation) as the evader is the high-risk reversal —
+# if the pursuer is also committing to offense, it's a mutual gunline.
+
+version: "0.1.0"
+starting_state: tail_chase
+maneuvers_consumed: [straight, bank, loop, kill_rotation]
+
+cells:
+
+  # =========================================================================
+  # Row 1 — Red (pursuer): straight — maintain pursuit
+  # =========================================================================
+
+  - pair: [straight, straight]
+    name: "Pursuer closes on fleeing target"
+    shape: "pursuit vs flee — pursuer gains"
+    red_view:
+      target_bearing: "12"
+      target_range: close
+      target_aspect: tail_on
+      closure: closing
+      gun_solution: true
+    blue_view:
+      target_bearing: "06"
+      target_range: close
+      target_aspect: head_on
+      closure: closing
+      gun_solution: false
+    narration_hint: >-
+      Blue holds course, engines wide open, but Red is faster in a straight
+      line at this range. The gun cone slides onto Blue's exhaust nozzles.
+      Red has a clean firing solution on a fleeing target.
+
+  - pair: [straight, bank]
+    name: "Evader breaks, pursuer overshoots"
+    shape: "pursuit vs break turn — evader escapes"
+    red_view:
+      target_bearing: "0230"
+      target_range: close
+      target_aspect: quartering
+      closure: opening
+      gun_solution: false
+    blue_view:
+      target_bearing: "0830"
+      target_range: close
+      target_aspect: quartering
+      closure: opening
+      gun_solution: false
+    narration_hint: >-
+      Blue snaps into a hard break turn just as Red commits to the straight
+      pursuit. Red's nose slides past the break point — Blue is already
+      carving away on a divergent heading. The pursuit geometry dissolves.
+
+  - pair: [straight, loop]
+    name: "Evader dives, pursuer loses angle"
+    shape: "pursuit vs Split-S — evader repositions"
+    red_view:
+      target_bearing: "12"
+      target_range: medium
+      target_aspect: crossing
+      closure: opening
+      gun_solution: false
+    blue_view:
+      target_bearing: "06"
+      target_range: medium
+      target_aspect: crossing
+      closure: opening
+      gun_solution: false
+    narration_hint: >-
+      Blue rolls inverted and pulls — a Split-S, diving out of Red's gun
+      plane. Red holds the pursuit line but finds empty sky where Blue's
+      exhaust was. Blue is below, accelerating in a new direction.
+
+  - pair: [straight, kill_rotation]
+    name: "Evader reverses into pursuer's face"
+    shape: "pursuit vs reversal — mutual gunline"
+    red_view:
+      target_bearing: "12"
+      target_range: close
+      target_aspect: head_on
+      closure: closing_fast
+      gun_solution: true
+    blue_view:
+      target_bearing: "12"
+      target_range: close
+      target_aspect: head_on
+      closure: closing_fast
+      gun_solution: true
+    narration_hint: >-
+      Blue fires attitude jets — a desperate 180-degree flip, trading
+      all forward velocity to face the pursuer head-on. Red, closing fast
+      on what was a tail shot, suddenly stares into Blue's gun barrels.
+      Both pilots have a shot. Blue's is shaky — fired while spinning.
+
+  # =========================================================================
+  # Row 2 — Red (pursuer): bank — anticipate break
+  # =========================================================================
+
+  - pair: [bank, straight]
+    name: "Pursuer banks, target flies straight"
+    shape: "anticipate vs flee — pursuer loses angle"
+    red_view:
+      target_bearing: "0130"
+      target_range: close
+      target_aspect: tail_on
+      closure: stable
+      gun_solution: false
+    blue_view:
+      target_bearing: "0730"
+      target_range: close
+      target_aspect: quartering
+      closure: stable
+      gun_solution: false
+    narration_hint: >-
+      Red banks to cover the expected break turn — but Blue just flies
+      straight. Red's bank takes the nose off Blue's exhaust line. The
+      pursuit angle widens, but the range holds.
+
+  - pair: [bank, bank]
+    name: "Matched break turns"
+    shape: "anticipate vs break — pursuit maintained"
+    red_view:
+      target_bearing: "12"
+      target_range: close
+      target_aspect: tail_on
+      closure: stable
+      gun_solution: true
+    blue_view:
+      target_bearing: "06"
+      target_range: close
+      target_aspect: head_on
+      closure: stable
+      gun_solution: false
+    narration_hint: >-
+      Blue breaks hard — but Red anticipated it, banking in the same
+      direction at the same instant. The pursuit geometry holds: Red
+      is still behind Blue, still in the gun cone, still closing. Blue's
+      break bought nothing. Red has a snapshot.
+
+  - pair: [bank, loop]
+    name: "Pursuer banks, evader dives past"
+    shape: "anticipate vs Split-S — geometry reset"
+    red_view:
+      target_bearing: "09"
+      target_range: medium
+      target_aspect: crossing
+      closure: opening
+      gun_solution: false
+    blue_view:
+      target_bearing: "03"
+      target_range: medium
+      target_aspect: crossing
+      closure: opening
+      gun_solution: false
+    narration_hint: >-
+      Red banks to cover the break. Blue doesn't break — Blue dives.
+      The Split-S carries Blue through a vertical plane Red isn't in.
+      Both ships end up on crossing headings, the tail-chase dissolved.
+
+  - pair: [bank, kill_rotation]
+    name: "Pursuer banks, evader flips to fight"
+    shape: "anticipate vs reversal — evader gets angle"
+    red_view:
+      target_bearing: "10"
+      target_range: close
+      target_aspect: quartering
+      closure: opening
+      gun_solution: false
+    blue_view:
+      target_bearing: "02"
+      target_range: close
+      target_aspect: quartering
+      closure: opening
+      gun_solution: true
+    narration_hint: >-
+      Red banks to cover the break — but Blue isn't breaking. Blue flips
+      to face backwards and finds Red sliding across the gun cone during
+      the bank. The reversal catches Red in a quartering angle. Blue has
+      a clean shot at Red's belly.
+
+  # =========================================================================
+  # Row 3 — Red (pursuer): loop — overshoot recovery
+  # =========================================================================
+
+  - pair: [loop, straight]
+    name: "Pursuer loops over fleeing target"
+    shape: "overshoot recovery vs flee — pursuer repositions"
+    red_view:
+      target_bearing: "12"
+      target_range: close
+      target_aspect: tail_on
+      closure: closing
+      gun_solution: true
+    blue_view:
+      target_bearing: "06"
+      target_range: close
+      target_aspect: head_on
+      closure: closing
+      gun_solution: false
+    narration_hint: >-
+      Red pulls up and over in a high loop, using altitude to bleed
+      speed and drop back into the pursuit slot. Blue holds course.
+      Red's loop brings the nose back onto Blue's tail — a brief
+      snapshot through the top of the arc.
+
+  - pair: [loop, bank]
+    name: "Pursuer loops, evader breaks underneath"
+    shape: "overshoot recovery vs break — evader escapes"
+    red_view:
+      target_bearing: "06"
+      target_range: medium
+      target_aspect: crossing
+      closure: opening
+      gun_solution: false
+    blue_view:
+      target_bearing: "12"
+      target_range: medium
+      target_aspect: crossing
+      closure: opening
+      gun_solution: false
+    narration_hint: >-
+      Red commits to the vertical — up and over. Blue reads the loop
+      and breaks hard underneath. When Red comes out of the loop, Blue
+      is already on a divergent heading below. The pursuit is broken.
+
+  - pair: [loop, loop]
+    name: "Parallel loops — chase maintained"
+    shape: "overshoot recovery vs Split-S — stalemate"
+    red_view:
+      target_bearing: "12"
+      target_range: close
+      target_aspect: tail_on
+      closure: stable
+      gun_solution: false
+    blue_view:
+      target_bearing: "06"
+      target_range: close
+      target_aspect: head_on
+      closure: stable
+      gun_solution: false
+    narration_hint: >-
+      Both pilots pull into vertical maneuvers at the same instant —
+      Red loops high, Blue dives low. When both level out, they're
+      back where they started: Red behind Blue, same range, same angle.
+      Neither pilot gained or lost. The chase continues.
+
+  - pair: [loop, kill_rotation]
+    name: "Mutual commitment — high angle gunline"
+    shape: "overshoot recovery vs reversal — mutual kill risk"
+    red_view:
+      target_bearing: "12"
+      target_range: close
+      target_aspect: head_on
+      closure: closing_fast
+      gun_solution: true
+    blue_view:
+      target_bearing: "12"
+      target_range: close
+      target_aspect: head_on
+      closure: closing_fast
+      gun_solution: true
+    narration_hint: >-
+      Red pulls into a high loop just as Blue fires the reversal jets.
+      Red comes over the top, nose dropping — and finds Blue facing
+      straight back, guns hot. Both pilots have a shot through a
+      high-deflection angle. Neither has a clean solution.
+
+  # =========================================================================
+  # Row 4 — Red (pursuer): kill_rotation — snap shot
+  # =========================================================================
+
+  - pair: [kill_rotation, straight]
+    name: "Pursuer's snap shot on fleeing target"
+    shape: "snap shot vs flee — devastating hit"
+    red_view:
+      target_bearing: "12"
+      target_range: close
+      target_aspect: tail_on
+      closure: opening_fast
+      gun_solution: true
+    blue_view:
+      target_bearing: "06"
+      target_range: close
+      target_aspect: head_on
+      closure: opening_fast
+      gun_solution: false
+    narration_hint: >-
+      Red commits everything — attitude jets fire, the ship slews to put
+      guns exactly on Blue's engine bell. Blue is flying straight and level,
+      the worst possible posture against a committed pursuer. Red fires a
+      full burst directly up Blue's exhaust. Devastating.
+
+  - pair: [kill_rotation, bank]
+    name: "Snap shot misses the break"
+    shape: "snap shot vs break — evader dodges"
+    red_view:
+      target_bearing: "0230"
+      target_range: close
+      target_aspect: quartering
+      closure: opening_fast
+      gun_solution: false
+    blue_view:
+      target_bearing: "0830"
+      target_range: close
+      target_aspect: quartering
+      closure: opening
+      gun_solution: false
+    narration_hint: >-
+      Red fires the snap shot — but Blue is already breaking. The
+      attitude jets slew Red's nose onto the space where Blue was a
+      half-second ago. The cannon burst rakes empty starfield. Blue's
+      break turn carries them out of the kill zone.
+
+  - pair: [kill_rotation, loop]
+    name: "Snap shot through the dive"
+    shape: "snap shot vs Split-S — grazing hit"
+    red_view:
+      target_bearing: "12"
+      target_range: close
+      target_aspect: crossing
+      closure: opening
+      gun_solution: true
+    blue_view:
+      target_bearing: "06"
+      target_range: close
+      target_aspect: crossing
+      closure: opening
+      gun_solution: false
+    narration_hint: >-
+      Red fires the snap shot as Blue rolls into the Split-S. The
+      burst catches Blue's underside during the roll — a glancing hit
+      across the ventral hull. Blue completes the dive trailing sparks,
+      but the airframe holds.
+
+  - pair: [kill_rotation, kill_rotation]
+    name: "Mutual reversal — head-on knife fight"
+    shape: "snap shot vs reversal — mutual kill risk"
+    red_view:
+      target_bearing: "12"
+      target_range: close
+      target_aspect: head_on
+      closure: stable
+      gun_solution: true
+    blue_view:
+      target_bearing: "12"
+      target_range: close
+      target_aspect: head_on
+      closure: stable
+      gun_solution: true
+    narration_hint: >-
+      Both pilots fire attitude jets at the same instant. Red slews
+      for the snap shot; Blue flips to face the pursuer. The tail-chase
+      collapses into a head-on knife fight at point-blank range. Both
+      guns trained, both pilots exposed, both committed. Someone bleeds.

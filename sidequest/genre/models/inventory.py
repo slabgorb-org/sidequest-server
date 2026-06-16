@@ -5,15 +5,37 @@ Port of sidequest-genre/src/models/inventory.rs.
 
 from __future__ import annotations
 
+import random
 import re
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from sidequest.protocol.dice import DieSides
 
 _DICE_RE = re.compile(r"^(?P<count>\d+)d(?P<faces>\d+)$")
+
+# Licenses that permit verbatim reproduction of an SRD mechanical envelope
+# (ADR-145 D4). The Without Number line is "wn-free"; nothing else permits
+# verbatim reuse. Single source of truth for the verbatim-license invariant,
+# enforced structurally in ItemProvenance and (defense in depth) in the
+# extraction tool.
+_VERBATIM_LICENSES = frozenset({"wn-free"})
+
+# Parity die (the tabletop "no d2 in the bag" move): a d2 is realized by
+# throwing a real, renderable die and reading its parity — even → 1, odd → 2.
+# The 3D overlay (ADR-074/075) only meshes d4/d6/d8/d10/d12/d20/d100, so a
+# literal d2 cannot animate; the backing d6 does. This is the single source of
+# truth for the mapping, shared by ``DamageSpec.roll`` (server-side) and the
+# overlay damage path (``dispatch/damage_roll.py``).
+_PARITY_FACES = 2
+PARITY_BACKING_SIDES = DieSides.D6
+
+
+def parity_value(face: int) -> int:
+    """Map a backing-die face to its d2 value: even → 1, odd → 2."""
+    return 1 if face % 2 == 0 else 2
 
 
 class CurrencyConfig(BaseModel):
@@ -39,8 +61,40 @@ class DamageSpec(BaseModel):
 
     model_config = {"extra": "forbid"}
 
-    dice: str          # "NdM" — M must be a supported DieSides face count
+    dice: str  # "NdM" — M must be a supported DieSides face count
     bonus: int = 0
+    armor_piercing: int = Field(default=0, ge=0)  # AP: reduces target Armor before subtraction
+
+    # CWN lethality (spec 2026-05-28). All default to "off" so non-CWN content
+    # validates unchanged. trauma_die: weapon's Trauma Die rolled vs the victim's
+    # Trauma Target; on a Traumatic Hit total damage is multiplied by trauma_rating.
+    # trauma_target overrides the victim's default Trauma Target when the weapon
+    # itself sets the bar (rare; usually None → cfg default).
+    #
+    # CWN "Shock X/AC Y" (two decoupled numbers):
+    #   shock    — the chip amount X applied on a MISS.
+    #   shock_ac — the Melee-AC ceiling Y. Shock only fires when the target's
+    #              Melee AC <= shock_ac.
+    # A v1 simplification collapsed X and Y into the single `shock` value, which
+    # meant a katana with shock=2 only ever chipped vs AC<=2 targets — Shock
+    # never fired against real opponents. They are now separate fields.
+    trauma_die: str | None = None
+    trauma_rating: int = Field(default=1, ge=1)
+    trauma_target: int | None = Field(default=None, ge=2)
+    shock: int = Field(default=0, ge=0)
+    shock_ac: int | None = Field(default=None, ge=1)
+
+    @field_validator("trauma_die")
+    @classmethod
+    def _valid_trauma_die(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        m = _DICE_RE.match(v.strip())
+        if not m:
+            raise ValueError(f"trauma_die {v!r} is not NdM notation")
+        if DieSides.from_wire(int(m["faces"])) is DieSides.Unknown:
+            raise ValueError(f"trauma_die {v!r} uses unsupported face count")
+        return v
 
     @field_validator("dice")
     @classmethod
@@ -51,9 +105,81 @@ class DamageSpec(BaseModel):
         count, faces = int(m["count"]), int(m["faces"])
         if count < 1:
             raise ValueError(f"damage dice {v!r} needs at least 1 die")
+        # d2 is a parity die — legal even though it has no overlay mesh; it is
+        # realized by a backing d6 read for parity (see PARITY_BACKING_SIDES).
+        if faces == _PARITY_FACES:
+            return v
         if DieSides.from_wire(faces) is DieSides.Unknown:
             raise ValueError(f"damage dice {v!r} uses unsupported face count d{faces}")
         return v
+
+    @property
+    def is_parity_die(self) -> bool:
+        """True when ``dice`` is an Nd2 parity die (backed by a real d6)."""
+        m = _DICE_RE.match(self.dice.strip())
+        return m is not None and int(m["faces"]) == _PARITY_FACES
+
+    @model_validator(mode="after")
+    def _shock_requires_ceiling(self) -> DamageSpec:
+        # No Silent Fallbacks: a shock weapon without an AC ceiling can never
+        # fire (the "Shock X/AC Y" rule needs both numbers). Fail at load
+        # rather than silently never-chipping.
+        if self.shock > 0 and self.shock_ac is None:
+            raise ValueError(
+                "shock>0 requires shock_ac (the 'Shock X/AC Y' ceiling); "
+                "a shock weapon without a ceiling is a content error"
+            )
+        return self
+
+    def roll(self, rng: random.Random) -> int:
+        """Roll this damage to a concrete total (sum of N d<faces> + bonus).
+
+        Server-side dice for cases where the result isn't a client physics
+        throw (e.g. NPC/ship-gunnery damage). ``dice`` is validated NdM at
+        construction, so the parse here is safe.
+
+        A parity die (Nd2) is rolled as N backing d6 reads mapped even→1/odd→2,
+        matching the overlay path so the two never diverge."""
+        m = _DICE_RE.match(self.dice.strip())
+        count, faces = int(m["count"]), int(m["faces"])  # type: ignore[union-attr]
+        if faces == _PARITY_FACES:
+            backing = PARITY_BACKING_SIDES.faces()
+            assert backing is not None  # PARITY_BACKING_SIDES is never Unknown
+            return sum(parity_value(rng.randint(1, backing)) for _ in range(count)) + self.bonus
+        return sum(rng.randint(1, faces) for _ in range(count)) + self.bonus
+
+
+class ItemProvenance(BaseModel):
+    """Where a catalog item's mechanics came from (ADR-145 D2).
+
+    Strict, first-class data — not a YAML comment — so the extraction tool
+    (114-3) and the licensing audit can read it. ``mode`` describes the
+    *mechanical envelope* only; presentation (``name``/``description``) is
+    always freely reskinnable regardless of mode (ADR-145 D1).
+    """
+
+    model_config = {"extra": "forbid"}
+
+    mode: Literal["verbatim", "derived", "bespoke"]
+    srd: str | None = None  # "wwn" | "cwn" | "swn" | "awn"; None iff bespoke
+    srd_ref: str | None = None  # SRD section/table, e.g. "WWN SRD §3.0.1 Armor"
+    # "wn-free" = Without Number SRD free-use terms (all four WN SRDs);
+    # "ccby" = Fate Core; "none"/"na" = no verbatim permission.
+    license: Literal["wn-free", "ccby", "none", "na"] = "na"
+    extracted_by: str | None = None  # extraction-tool version stamp; None for hand-authored bespoke
+
+    @model_validator(mode="after")
+    def _verbatim_requires_permitting_license(self) -> ItemProvenance:
+        # No Silent Fallbacks (ADR-145 D4): a verbatim record may only claim a
+        # license that permits verbatim reuse. Enforced structurally here so NO
+        # construction path — not just the extraction tool — can mint a
+        # self-inconsistent verbatim item. Mirrors DamageSpec._shock_requires_ceiling.
+        if self.mode == "verbatim" and self.license not in _VERBATIM_LICENSES:
+            raise ValueError(
+                f"provenance mode='verbatim' requires a license permitting verbatim reuse "
+                f"(one of {sorted(_VERBATIM_LICENSES)}); got license={self.license!r} (ADR-145 D4)"
+            )
+        return self
 
 
 class CatalogItem(BaseModel):
@@ -73,8 +199,82 @@ class CatalogItem(BaseModel):
     lore: str = ""
     narrative_weight: Any = None  # accepts string or numeric
     resource_ticks: int | None = None
-    damage: DamageSpec | None = None    # weapons
-    mitigation: int | None = None       # armor: flat damage reduction (SWN soak)
+    damage: DamageSpec | None = None  # weapons
+    mitigation: int | None = None  # armor: flat damage reduction (SWN soak)
+    armor_class: int | None = (
+        None  # armor: SWN ascending AC the attack rolls against (distinct from mitigation soak)
+    )
+    heal_amount: str | None = (
+        None  # consumable: HP restored on use, NdM[+B] (e.g. "1d6+2"); applied at consume (Story 106-4)
+    )
+    # ADR-145 D2 schema delta. None-defaulted so existing melee/armor items
+    # validate unchanged; populated by SRD extraction (114-3).
+    provenance: ItemProvenance | None = None  # where the mechanics came from
+    tech_level: int | None = None  # SWN/AWN/CWN TL tag
+    range_band: str | None = None  # ranged: "thrown" | "pistol" | "rifle" | ... (SRD bands)
+    magazine: int | None = None  # ranged: shots per reload
+    # CWN cyberware: the System Strain cost of installing this item (ADR-145 D4
+    # names system_strain as the WN-schema "category extra for cyberware"; story
+    # 114-5). A typed, non-negative number — never free-form prose. It is a
+    # **float**, not an int: the CWN SRD prices its most common cyberware in
+    # fractional strain (Cybereyes/Cyberears/Skillplug Jack I = 0.25; Viper
+    # Sting/Skillplug Jack II = 0.5), so an int would truncate 0.25→0 and make
+    # the genre's iconic chrome "free" — a verbatim-fidelity violation (Keith's
+    # ruling, 2026-06-14). None on non-cyberware items. It is a verbatim
+    # mechanical field, so the inventory merge locks it against world re-stat
+    # (see inventory_resolve._MECHANICAL_FIELDS).
+    system_strain: float | None = Field(default=None, ge=0)
+
+
+# ---------------------------------------------------------------------------
+# Fate gear model (ADR-144 §D5-seam, ADR-145 §D5; design 2026-06-15)
+#
+# Fate has NO equipment economy — no value, weight, or damage table. So Fate
+# "gear" is not a carried inventory of CatalogItems; it is a thin authoring shim
+# that compiles into the existing FateSheet at chargen (a piece of gear becomes
+# an aspect, a stunt, or a permission). These models live ALONGSIDE the WN-shaped
+# CatalogItem, which stays untouched (no union rot — design A2-i).
+# ---------------------------------------------------------------------------
+
+
+class GearGrantAspect(BaseModel):
+    """An aspect a piece of Fate gear grants. ``kind`` is narrower than the
+    sheet's ``AspectKind`` — gear may only author a ``character`` aspect or a
+    ``permission`` (a narrator-read capability, never an engine gate — P-i)."""
+
+    model_config = {"extra": "forbid"}
+
+    text: str
+    kind: Literal["character", "permission"] = "character"
+
+
+class GearGrantStunt(BaseModel):
+    """A stunt a piece of Fate gear grants. There is deliberately NO per-stunt
+    cost field: a Fate stunt costs exactly one refresh (SRD), so cost is the
+    stunt *count* against the pack's ``free_stunts`` allotment (the refresh
+    invariant) — a single source of truth beats a redundant cost field."""
+
+    model_config = {"extra": "forbid"}
+
+    name: str
+    description: str = ""
+
+
+class GearDef(BaseModel):
+    """A piece of Fate starting gear. Compiles into FateSheet entries at chargen.
+
+    Fate has no equipment economy: no value, weight, damage, or provenance fields
+    exist here (every GearDef is bespoke-by-construction — Fate Core ships no
+    equipment chapter). A gear item with neither grant is pure narrative flavor
+    (legal: a hat is a hat)."""
+
+    model_config = {"extra": "forbid"}
+
+    id: str
+    name: str
+    description: str = ""
+    grants_aspects: list[GearGrantAspect] = Field(default_factory=list)
+    grants_stunts: list[GearGrantStunt] = Field(default_factory=list)
 
 
 class CarryMode(StrEnum):
@@ -110,6 +310,11 @@ class InventoryConfig(BaseModel):
 
     currency: CurrencyConfig | None = None
     item_catalog: list[CatalogItem] = Field(default_factory=list)
+    # Genre-tier-only ship/vehicle weapons referenced by native subsystems (the
+    # dogfight, ADR-077) — NOT personal gear, so they live OFF item_catalog and are
+    # exempt from the ADR-145 D3 genre-baseline-no-bespoke check (story 114-15). The
+    # dogfight resolves player_weapon/opponent_weapon against this collection only.
+    ship_weapons: list[CatalogItem] = Field(default_factory=list)
     starting_equipment: dict[str, list[str]] = Field(default_factory=dict)
     starting_gold: dict[str, int] = Field(default_factory=dict)
     philosophy: InventoryPhilosophy | None = None

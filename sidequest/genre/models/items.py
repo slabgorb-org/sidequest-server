@@ -1,7 +1,7 @@
 """World-tier items catalog.
 
 A world's ``items.yaml`` is the canonical inventory of named, mechanical,
-and narrative items the narrator can draw on. Five sections are recognized,
+and narrative items the narrator can draw on. Six sections are recognized,
 each shaped for a different gameplay lane:
 
 * ``named_items`` — NPC-shaped items (item_legacy_v1 plugin shape):
@@ -14,6 +14,9 @@ each shaped for a different gameplay lane:
   notoriety acceleration.
 * ``consumable_items`` — single-use scrolls/potions, often
   ``replaces_baseline`` shimming over a default item table.
+* ``implants`` — Sleeper System-Strain item sources (103-2); each
+  carries a positive ``strain_cost`` charged through the existing
+  CWN/AWN strain pool on use.
 
 The per-item shape varies by section — they were authored against
 different design docs and there is no single normalised schema yet.
@@ -44,7 +47,7 @@ class WorldItem(BaseModel):
 
 
 class WorldItemsCatalog(BaseModel):
-    """A world's full items.yaml — all five sections plus header keys.
+    """A world's full items.yaml — all six sections plus header keys.
 
     Empty sections default to ``[]``. Worlds without an ``items.yaml``
     are represented as ``World.items = None`` rather than an empty
@@ -62,6 +65,11 @@ class WorldItemsCatalog(BaseModel):
     reliquaries: list[WorldItem] = Field(default_factory=list)
     crimson_remnants: list[WorldItem] = Field(default_factory=list)
     consumable_items: list[WorldItem] = Field(default_factory=list)
+    # System-Strain item sources (103-2): Sleeper implants. Each entry
+    # carries a positive integer ``strain_cost``; use charges through the
+    # existing CwnRulesetModule.apply_system_strain pool (no parallel
+    # implant economy). See sidequest.mutation.stocks.use_implant.
+    implants: list[WorldItem] = Field(default_factory=list)
 
     def all_items(self) -> list[WorldItem]:
         """Return every item across every section in declaration order."""
@@ -71,6 +79,7 @@ class WorldItemsCatalog(BaseModel):
             *self.reliquaries,
             *self.crimson_remnants,
             *self.consumable_items,
+            *self.implants,
         ]
 
     def section_counts(self) -> dict[str, int]:
@@ -81,4 +90,5 @@ class WorldItemsCatalog(BaseModel):
             "reliquaries": len(self.reliquaries),
             "crimson_remnants": len(self.crimson_remnants),
             "consumable_items": len(self.consumable_items),
+            "implants": len(self.implants),
         }

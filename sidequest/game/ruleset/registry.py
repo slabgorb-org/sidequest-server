@@ -1,0 +1,28 @@
+from __future__ import annotations
+
+from sidequest.game.ruleset.awn import AwnRulesetModule
+from sidequest.game.ruleset.base import RulesetModule, UnknownRulesetError
+from sidequest.game.ruleset.cwn import CwnRulesetModule
+from sidequest.game.ruleset.fate import FateRulesetModule
+from sidequest.game.ruleset.native import NativeRulesetModule
+from sidequest.game.ruleset.swn import SwnRulesetModule
+from sidequest.game.ruleset.wwn import WwnRulesetModule
+
+# Modules are stateless behavior -> safe singletons. New modules register here as their plans land.
+_REGISTRY: dict[str, RulesetModule] = {
+    NativeRulesetModule.slug: NativeRulesetModule(),
+    SwnRulesetModule.slug: SwnRulesetModule(),
+    CwnRulesetModule.slug: CwnRulesetModule(),
+    WwnRulesetModule.slug: WwnRulesetModule(),
+    AwnRulesetModule.slug: AwnRulesetModule(),
+    FateRulesetModule.slug: FateRulesetModule(),
+}
+
+
+def get_ruleset_module(slug: str) -> RulesetModule:
+    """Resolve a registered ruleset module. Fails loud — never returns a default/fallback."""
+    module = _REGISTRY.get(slug)
+    if module is None:
+        known = ", ".join(sorted(_REGISTRY)) or "(none)"
+        raise UnknownRulesetError(f"Unknown ruleset {slug!r}; registered rulesets: {known}")
+    return module

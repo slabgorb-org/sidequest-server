@@ -86,11 +86,13 @@ def test_init_chassis_registry_world_without_rigs_is_noop() -> None:
     assert snap.chassis_registry == {}
 
 
-def test_init_chassis_registry_genre_without_chassis_classes_is_noop() -> None:
-    """Genres without chassis_classes.yaml — no-op even if a rigs.yaml existed.
+def test_init_chassis_registry_world_without_chassis_classes_is_noop() -> None:
+    """Worlds without chassis_classes — no-op even if a rigs.yaml existed.
 
-    For the slice, the function gracefully no-ops when pack.chassis_classes is None,
-    matching the slice spec's graceful-absence pattern.
+    Epic 94 (genre/world boundary): chassis_classes is a world-tier surface
+    (genre = rulebook only). The function resolves the bound World world-first
+    and gracefully no-ops when ``World.chassis_classes`` is None — no silent
+    fallback to a genre default.
     """
     from sidequest.game.chassis import init_chassis_registry
     from sidequest.game.session import GameSnapshot
@@ -101,10 +103,15 @@ def test_init_chassis_registry_genre_without_chassis_classes_is_noop() -> None:
         location="Unknown",
     )
 
-    # Build a minimal mock that mirrors GenrePack.chassis_classes is None.
+    # Build a minimal mock whose bound world carries no chassis_classes — the
+    # epic-94 no-op gate (the genre-tier pack.chassis_classes is irrelevant now).
+    class _FakeWorld:
+        chassis_classes = None
+
     class _FakePack:
         chassis_classes = None
         source_dir = None
+        worlds = {"any_world": _FakeWorld()}
 
     init_chassis_registry(snap, _FakePack())
     assert snap.chassis_registry == {}

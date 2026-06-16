@@ -97,7 +97,7 @@ class UpdateNpcDispositionArgs(BaseModel):
     category=ToolCategory.WRITE,
 )
 async def update_npc_disposition(args: UpdateNpcDispositionArgs, ctx: ToolContext) -> ToolResult:
-    session = ctx.store.load()
+    session = ctx.repository.load()
     if session is None:
         return ToolResult.error("no active session", recoverable=False)
 
@@ -107,7 +107,52 @@ async def update_npc_disposition(args: UpdateNpcDispositionArgs, ctx: ToolContex
         None,
     )
     if npc is None:
-        return ToolResult.not_found(f"unknown npc: {args.npc_id!r}")
+        # Story 97-1: a narrator valence beat is itself the world's commitment
+        # to a pool-tier identity (the Rifenna "deal struck" case) — the
+        # valence trigger of the 97-1 design spec. The member is promoted to a
+        # full Npc and the beat lands on the promoted entity. A live combat
+        # Other is excluded by the #742 hostile-context gate; the decline is
+        # span-visible (npc.promotion_skipped) — never a silent no-op.
+        member = next(
+            (m for m in snapshot.npc_pool if m.name == args.npc_id),
+            None,
+        )
+        if member is None:
+            return ToolResult.not_found(f"unknown npc: {args.npc_id!r}")
+        # Function-local import: tools are wired into narration by the server
+        # layer at runtime; importing at module scope would invert the
+        # server→agents dependency direction (same precedent as
+        # long_rest.py's dispatch import).
+        from sidequest.server.narration_apply import (
+            _engagement_is_hostile_context,
+            _promote_engaged_pool_member,
+        )
+
+        if _engagement_is_hostile_context(snapshot, None, member):
+            from sidequest.telemetry.spans import Span
+
+            with Span.open(
+                "npc.promotion_skipped",
+                {"npc_name": member.name, "reason": "hostile_context", "trigger": "valence_beat"},
+            ):
+                pass
+            return ToolResult.ok(
+                {
+                    "npc_id": args.npc_id,
+                    "skipped": "hostile_context",
+                    "detail": (
+                        "disposition does not move for an NPC the party is actively "
+                        "fighting; re-attempt after the encounter resolves"
+                    ),
+                }
+            )
+        npc = _promote_engaged_pool_member(
+            snapshot=snapshot,
+            member=member,
+            turn_num=snapshot.turn_manager.interaction,
+            trigger="valence_beat",
+            actor_loc=snapshot.party_location(perspective=args.perspective_pc or None),
+        )
 
     before_value = npc.disposition.value
     before_attitude = npc.disposition.attitude().value
@@ -117,7 +162,19 @@ async def update_npc_disposition(args: UpdateNpcDispositionArgs, ctx: ToolContex
     after_value = npc.disposition.value
     after_attitude = npc.disposition.attitude().value
 
-    ctx.store.save(snapshot)
+    # ADR-136: persist the why behind this narrator-declared shift. turn +
+    # location are not passed to the tool; read them from the snapshot. delta is
+    # the EFFECTIVE clamped change (after_value - before_value), not args.delta.
+    turn_num = snapshot.turn_manager.interaction
+    location = snapshot.party_location(perspective=args.perspective_pc or None)
+    npc.record_disposition_beat(
+        turn=turn_num,
+        delta=after_value - before_value,
+        reason=args.reason,
+        location=location,
+    )
+
+    ctx.repository.save(snapshot)
 
     ctx.otel_span.set_attribute("tool.disposition.npc_id", args.npc_id)
     ctx.otel_span.set_attribute("tool.disposition.axis", args.axis)

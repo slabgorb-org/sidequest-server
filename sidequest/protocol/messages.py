@@ -21,7 +21,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
-from pydantic import Field, RootModel
+from pydantic import Field, RootModel, model_validator
 
 from sidequest.protocol.base import ProtocolBase
 from sidequest.protocol.dice import (
@@ -30,16 +30,21 @@ from sidequest.protocol.dice import (
     DiceThrowPayload,
 )
 from sidequest.protocol.enums import MessageType, NarratorVerbosity, NarratorVocabulary
+from sidequest.protocol.fate import FateActionPayload
 from sidequest.protocol.models import (
     ClassRequirement,
     CompanionMember,
     CreationChoice,
+    FateRollPayload,
+    FateStatePayload,
     Footnote,
     InitialState,
     JournalEntry,
     LocationDescriptionPayload,
     LocationOverlayChangedPayload,
     PartyMember,
+    QuestsPayload,
+    RelationshipsPayload,
     RolledStat,
     StateDelta,
     TacticalGridPayload,
@@ -62,6 +67,13 @@ class PlayerActionPayload(ProtocolBase):
     """The action text the player typed. Non-blank."""
     aside: bool = False
     """True if this is an out-of-character aside."""
+    round: int = Field(ge=0)
+    """Round (ADR-051) the action was submitted in. Required and non-negative —
+    a missing round fails loud (No Silent Fallbacks) rather than letting a client
+    silently default to round 0. Consumed UI-side: the client's own buildSegments
+    anchors the peer-action transcript by this round (Story 71-10). The server
+    validates the field but does not read it; outbound round stamps use the
+    authoritative ``turn_manager.round``."""
 
 
 # ---------------------------------------------------------------------------
@@ -242,6 +254,11 @@ class ScrapbookEntryNpcRef(ProtocolBase):
     name: str
     role: str = "neutral"
     disposition: str = ""
+    # Story 65-6: world-scoped portrait URL, attached when the invoked NPC
+    # matches a portrait_manifest entry for the current world. ``None`` when
+    # the NPC has no authored portrait (the common case — most invoked NPCs
+    # are ad-hoc). The UI renders a thumbnail next to the name when present.
+    portrait_url: str | None = None
 
 
 class ScrapbookEntryPayload(ProtocolBase):
@@ -269,42 +286,6 @@ class ScrapbookEntryPayload(ProtocolBase):
 
 
 # ---------------------------------------------------------------------------
-# NarrationDeltaPayload / NarrationDelta — ephemeral streaming message
-# ---------------------------------------------------------------------------
-
-
-class NarrationDeltaPayload(ProtocolBase):
-    """Ephemeral prose-delta payload — broadcast to all sockets, NOT event-sourced.
-
-    Streamed during a single narrator turn, identified by turn_id. Concatenating
-    all chunks for a turn_id in seq order yields the prose-only portion of the
-    canonical narration text. The PART-2 game_patch fence content is excluded
-    from deltas — only PART-1 prose ships live.
-    """
-
-    turn_id: str
-    chunk: str
-    seq: int
-
-
-class NarrationDelta(ProtocolBase):
-    """Streaming narration delta — broadcast to all sockets, NOT event-sourced.
-
-    Companion message type to canonical ``narration`` events. Delivered live as
-    the narrator generates prose, then superseded by the canonical narration
-    event at end-of-stream (which carries the authoritative full text plus
-    per-recipient perception filtering).
-
-    Uses ``kind`` (not ``type``) and carries no ``player_id`` — this message is
-    intentionally outside the ``GameMessage`` discriminated union and does NOT
-    go through ``emit_event()`` or the EventLog.
-    """
-
-    kind: Literal["narration.delta"] = "narration.delta"
-    payload: NarrationDeltaPayload
-
-
-# ---------------------------------------------------------------------------
 # NarrationEndPayload
 # ---------------------------------------------------------------------------
 
@@ -317,6 +298,14 @@ class NarrationEndPayload(ProtocolBase):
 
     state_delta: StateDelta | None = None
     """Optional state changes at end of narration."""
+
+    round: int | None = None
+    """The round this turn RESOLVED (pre-``record_interaction()`` bump) —
+    matches the ``round`` on the turn's ACTION_REVEAL entries. Ping-pong
+    2026-06-07 ("stale peer quote pinned at the bottom"): the UI anchors
+    persisted peer-action quotes by round, and dice-driven turns carry no
+    own PLAYER_ACTION round, so NARRATION_END is the anchor that works for
+    every turn shape. ``None`` on legacy frames."""
 
 
 # ---------------------------------------------------------------------------
@@ -375,6 +364,29 @@ class SessionEventPayload(ProtocolBase):
 # ---------------------------------------------------------------------------
 
 
+class StockDeltas(ProtocolBase):
+    """Mechanical deltas of one stock option (story 103-2).
+
+    Rendered by the client BEFORE confirmation — the legible-math surface
+    for mechanics-first players. ``granted_mutations`` carries DISPLAY
+    NAMES (never catalog ids)."""
+
+    attr_mods: dict[str, int] = Field(default_factory=dict)
+    move: int | None = None
+    ac: int | None = None
+    trauma_target_mod: int = 0
+    granted_mutations: list[str] = Field(default_factory=list)
+
+
+class StockOption(ProtocolBase):
+    """One stock on the chargen stock step (input_type 'stock', 103-2)."""
+
+    id: str
+    label: str
+    description: str = ""
+    deltas: StockDeltas = Field(default_factory=StockDeltas)
+
+
 class CharacterCreationPayload(ProtocolBase):
     """Character creation flow payload.
 
@@ -417,6 +429,19 @@ class CharacterCreationPayload(ProtocolBase):
     action: str | None = None
     """Navigation action from client: 'back'."""
 
+    # --- the stock step (server → client, story 103-2) ---
+    stock_options: list[StockOption] | None = None
+    """Stock options with per-stock mechanical deltas; present only when
+    ``input_type`` is ``"stock"``. Aligned 1:1 with the scene's choices so
+    the standard ``{phase: "scene", choice: "<index+1>"}`` response maps."""
+
+    # --- the bones step (server → client, story 103-3) ---
+    reroll_budget_remaining: int | None = None
+    """Roll the Bones rerolls left (2 → 1 → 0); present only when
+    ``input_type`` is ``"roll_the_bones"``. Rolled values travel in the
+    existing ``rolled_stats`` field; per-die faces broadcast via
+    DiceResultMessage (ADR-074 visibility)."""
+
     # --- the_arrangement (server → client) ---
     pool: list[int] | None = None
     """Six 3d6 totals waiting to be assigned to stat slots."""
@@ -429,6 +454,16 @@ class CharacterCreationPayload(ProtocolBase):
     confirm_enabled: bool | None = None
     """Whether the Confirm button on the_arrangement is enabled (all slots filled
     and ≥1 qualifying class)."""
+    ability_names: list[str] | None = None
+    """Ability-score names in declaration order, for the arrange panel's slots
+    (flavor-named packs like elemental_harmony use non-STR/DEX names).
+
+    The arrange render ALWAYS populates this with the pack's authoritative
+    ability-score names — standard STR/DEX/CON/INT/WIS/CHA or flavor names
+    alike — so the server is the single source of truth for slot labels. The
+    type is ``| None`` only for backward/forward compatibility with payloads
+    that omit the field (e.g. older servers, non-arrange phases); it is never
+    sent as explicit null, and the arrange path never leaves it unset."""
 
     # --- the_story (server → client) ---
     pronouns_options: list[str] | None = None
@@ -459,6 +494,16 @@ class CharacterCreationPayload(ProtocolBase):
     """Description prose for story_confirm."""
     seed: int | None = None
     """Optional seed for story_autogen reroll-determinism."""
+
+    # --- the portrait picker step (Epic 66) ---
+    selected_portrait_ref: str | None = None
+    """Player's chosen portrait slug (client → server, phase=portrait_confirm)."""
+    portraits_available: bool | None = None
+    """Server → client: whether this world ships any picker portraits."""
+    suggest_archetype: str | None = None
+    """Server → client: in-progress build archetype, for UI soft-suggest."""
+    suggest_culture: str | None = None
+    """Server → client: in-progress build culture hint, for UI soft-suggest."""
 
 
 # ---------------------------------------------------------------------------
@@ -573,18 +618,72 @@ class AsideAnswerPayload(ProtocolBase):
 # ---------------------------------------------------------------------------
 
 
+class ResourceThresholdPayload(ProtocolBase):
+    """Compact projection of a :class:`~sidequest.game.resource_pool.ResourceThreshold`
+    for the client resource surface.
+
+    Field names match the UI's ``GenericResourceBar.ResourceThreshold``
+    (``value``/``label``/``direction``) — NOT the engine model's
+    ``at``/``event_id``/``narrator_hint``. The engine's ``narrator_hint``
+    is GM-facing prose; the player-facing ``label`` reuses it as the
+    crossing caption. ``direction`` maps engine ``down``→``low`` and
+    ``up``→``high`` to match the UI bar's semantics.
+    """
+
+    value: float
+    """Boundary the pool value crosses (engine ``at``)."""
+    label: str = ""
+    """Player-facing caption for the crossing (engine ``narrator_hint``)."""
+    direction: Literal["low", "high"] = "low"
+    """``low`` fires on downward crossing, ``high`` on upward."""
+
+
+class ResourcePoolPayload(ProtocolBase):
+    """Compact projection of a :class:`~sidequest.game.resource_pool.ResourcePool`
+    onto the PARTY_STATUS wire.
+
+    The UI's ``CharacterPanel`` reads ``pool.value`` / ``pool.max`` /
+    ``pool.thresholds`` and the ``LightGauge`` reads ``current``/``max``
+    via ``pool.value``. The engine model stores the live amount as
+    ``current``; this payload renames it to ``value`` so the field name the
+    UI reads is the field the server projects (no lossy client-side cast).
+    """
+
+    name: str
+    """Pool key (e.g. ``"light"``, ``"fuel"``)."""
+    label: str = ""
+    """Human label declared by the genre pack (e.g. ``"Light"``)."""
+    value: float
+    """Live amount in the pool (engine ``current``)."""
+    min: float
+    """Floor of the pool range."""
+    max: float
+    """Ceiling of the pool range."""
+    voluntary: bool = False
+    """Whether players may spend this pool directly."""
+    thresholds: list[ResourceThresholdPayload] = Field(default_factory=list)
+    """Crossing boundaries, projected to the UI threshold shape."""
+
+
 class PartyStatusPayload(ProtocolBase):
     """Full party snapshot.
 
     Port of sidequest_protocol::PartyStatusPayload.
 
     ``companions`` was added in the 2026-05-06 recruitment wiring fix.
-    Older clients that don't know the field render only ``members`` —
+    ``resources`` was added in the 2026-06-13 Light & Darkness survival-clock
+    wiring fix — the UI's ``CharacterPanel`` light gauge consumes
+    ``payload.resources["light"]``; before this field existed the gauge was
+    dead in production (the consumer read a path the producer never sent).
+    Older clients that don't know either field render only ``members`` —
     forward-compat is fine because the payload is a strict superset.
     """
 
     members: list[PartyMember]
     """All party members."""
+    resources: dict[str, ResourcePoolPayload] = Field(default_factory=dict)
+    """Genre/world resource pools (light, fuel, luck, …) keyed by pool name.
+    Empty dict (never ``None``) when the snapshot declares no pools."""
     companions: list[CompanionMember] = Field(default_factory=list)
     """Narrator-recruited NPC companions on contract with the party.
     Empty when no companions have been hired."""
@@ -760,7 +859,8 @@ class ConfrontationPayload(ProtocolBase):
     """Payload for CONFRONTATION — drives the ConfrontationOverlay UI.
 
     Shape mirrors sidequest-ui/src/components/ConfrontationOverlay.tsx
-    ``ConfrontationData`` (L42-58). ``active=False`` signals the overlay
+    ``ConfrontationData`` (L42-58, + win_condition/player_hp/opponent_hp
+    pending UI mirror). ``active=False`` signals the overlay
     to unmount. Story 3.4.
 
     Task 12 (2026-04-25): dual-dial migration — ``metric`` replaced by
@@ -778,12 +878,72 @@ class ConfrontationPayload(ProtocolBase):
     genre_slug: str
     mood: str | None = None
     active: bool = True
+    # space_opera → SWN binding (Task 6): surface the resolution model and,
+    # under hp_depletion, the primary combatants' HP so the player-facing
+    # overlay can render the math (Sebastien/Jade legibility goal). Dial
+    # packs emit ``win_condition="dial_threshold"`` and omit the hp fields,
+    # which keeps the pre-existing payload shape additive. ``player_hp`` /
+    # ``opponent_hp`` are ``{"current": int, "max": int}`` when present.
+    # NOTE: the sidequest-ui ``ConfrontationData`` mirror needs these fields
+    # added (named follow-up — UI HP track is out of scope for this task).
+    win_condition: str | None = None
+    player_hp: dict[str, int] | None = None
+    opponent_hp: dict[str, int] | None = None
+    # Story 73-4: player-facing beat-kind impact descriptor for the last beat the
+    # PLAYER resolved — server-derived in beat_kinds.describe_beat_impact and
+    # surfaced by build_confrontation_payload. MUST be a declared field: this
+    # model is extra="forbid", so an undeclared key raises at
+    # ConfrontationPayload(**payload_dict) and crashes the broadcast. Shape:
+    # {"effect": str, "dial_moved": bool, "summary": str, "own": int,
+    #  "opponent": int, "resolution": bool, "tag": str|None}. Absent (None) on
+    # legacy payloads / before any beat — keeps the payload shape additive.
+    last_beat_impact: dict[str, Any] | None = None
+    # Story 73-7 — opponent-side sibling of last_beat_impact. Same serialized
+    # BeatImpact shape; absent (None) when the opponent hasn't acted. Declared
+    # because the model is extra="forbid".
+    opponent_last_beat_impact: dict[str, Any] | None = None
     # Pingpong 2026-04-26 S2-BUG: required so ``_emit_event`` can fan out
     # CONFRONTATION frames to peer sockets (its recipient-rebuild path
     # injects the EventLog seq alongside the filtered payload). Mirrors
     # NarrationPayload.seq / SecretNotePayload.seq. Default 0 keeps
     # legacy actor-only construction sites working.
     seq: int = 0
+    # SWN P4: 1d8+DEX resolution order, rolled once at instantiation. Plain list
+    # for the UI (no 3D dice overlay). None/empty for rulesets with no ordering.
+    initiative_order: list[dict[str, int | str]] | None = None
+    # Free-for-all N-seat table (poker / auction): per-recipient projected
+    # table frame. Pre-showdown: only the recipient's own seat private_state
+    # (their hand / valuation) is included; other seats' private_state is
+    # redacted. At showdown (resolved_winner set): all hands reveal.
+    # None for every non-table confrontation.
+    table_state: dict[str, Any] | None = None
+    # Story 85-3 (Tier B): the session's active stakes, surfaced on the
+    # CONFRONTATION channel so the promoted dockview panel can render a stakes
+    # banner without racing the separate QUESTS message (Architect decision
+    # 2026-06-04). ALWAYS present (None when the session has no active stakes —
+    # empty string normalizes to None in build_confrontation_payload), NOT
+    # additive-conditional like the hp keys. Declared because the model is
+    # extra="forbid".
+    stakes: str | None = None
+    # Story 102-2: WWN spellcasting state for the recipient (caster economy:
+    # prepared spells, casts_remaining, casts_per_day). The overlay's "Work a
+    # Spell" picker needs this to render the prepared-spell list and show
+    # casts_remaining (player-visible math per Sebastien/Jade legibility goal).
+    # ``None`` for non-casters / B/X packs — never a fabricated empty economy.
+    # ALWAYS present on the wire (like ``stakes``), so the UI gates the picker
+    # on the value, not on key presence. Declared because the model is
+    # extra="forbid". Shape when non-None: {"casts_remaining": int,
+    # "casts_per_day": int, "prepared": list[str]} (prepared spell IDs).
+    spellcasting: dict[str, Any] | None = None
+    # Story 102-4: the WN sealed-round commit ledger — player-side actor names
+    # whose Main Action is sealed this round. Drives the overlay's
+    # committed-vs-waiting indicators (ADR-036 submit-and-wait visibility).
+    # Additive-conditional: the key is set by build_confrontation_payload only
+    # while a WN round has sealed commits, so native/dial frames and
+    # between-round WN frames keep the legacy shape. Declared because the
+    # model is extra="forbid" — an undeclared key would crash the mid-turn
+    # CONFRONTATION emit on the first sealed MP commit.
+    committed_actors: list[str] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -1128,6 +1288,62 @@ class DiceThrowMessage(ProtocolBase):
     player_id: str = ""
 
 
+class FateActionMessage(ProtocolBase):
+    """GameMessage::FateAction — a Fate-bound pack's player action (ADR-144)."""
+
+    type: Literal[MessageType.FATE_ACTION] = MessageType.FATE_ACTION
+    payload: FateActionPayload
+    player_id: str = ""
+
+
+class CheckThrowPayload(ProtocolBase):
+    """Client -> server: initiate a non-beat SWN skill check or save.
+
+    ``kind="skill_check"`` resolves 2d6 via ``ruleset.check_params``;
+    ``kind="save"`` resolves 1d20 via ``ruleset.save_params``.
+    ``faces`` carries the physics-settled die values from the client 3D overlay
+    — the server uses them via ``resolve_dice_with_faces`` (physics-is-the-roll,
+    ADR-074) so the outcome matches what the player saw animate.
+    """
+
+    kind: str
+    """``"skill_check"`` | ``"save"``."""
+    attribute: str | None = None
+    """Stat name for skill_check (e.g. ``"DEXTERITY"``). None for save."""
+    save: str | None = None
+    """Save category for save: ``"physical"`` | ``"evasion"`` | ``"mental"``."""
+    skill_level: int = 0
+    """Skill rank modifier (0–4 per SWN)."""
+    difficulty_key: str | None = None
+    """Difficulty ladder key for skill_check (e.g. ``"tricky"``, ``"hard"``)."""
+    label: str = ""
+    """Human-readable label surfaced in DiceRequest.context and OTEL span."""
+    faces: list[int]
+    """Physics-settled die face values from the client 3D overlay."""
+
+    @model_validator(mode="after")
+    def _require_kind_fields(self) -> CheckThrowPayload:
+        if self.kind == "skill_check":
+            if self.attribute is None or self.difficulty_key is None:
+                raise ValueError("skill_check requires 'attribute' and 'difficulty_key'")
+        elif self.kind == "save":
+            if self.save is None:
+                raise ValueError("save requires 'save' category")
+        else:
+            raise ValueError(
+                f"CheckThrowPayload.kind must be 'skill_check' or 'save', got {self.kind!r}"
+            )
+        return self
+
+
+class CheckThrowMessage(ProtocolBase):
+    """GameMessage::CheckThrow — client submits faces for a non-beat SWN check/save."""
+
+    type: Literal[MessageType.CHECK_THROW] = MessageType.CHECK_THROW
+    payload: CheckThrowPayload
+    player_id: str = ""
+
+
 class DiceResultMessage(ProtocolBase):
     """GameMessage::DiceResult — server broadcasts resolved outcome."""
 
@@ -1200,6 +1416,104 @@ class LocationOverlayChangedMessage(ProtocolBase):
     player_id: str = ""
 
 
+class RelationshipsMessage(ProtocolBase):
+    """GameMessage::Relationships — player-facing relationship roster (ADR-136).
+
+    Emitted reactively when the relationship set changes (a disposition shift, a
+    new NPC promoted into the stateful roster, or a claim recorded) — not every
+    turn (Cost Scales with Drama). Global payload, broadcast to all seated PCs.
+    """
+
+    type: Literal[MessageType.RELATIONSHIPS] = MessageType.RELATIONSHIPS
+    payload: RelationshipsPayload
+    player_id: str = ""
+
+
+class QuestsMessage(ProtocolBase):
+    """GameMessage::Quests — player-facing quest spine (ADR-137 / Story 77-8).
+
+    The RELATIONSHIPS-snapshot analog for quests. Emitted reactively when the
+    spine changes (a quest minted/updated, an anchor added, stakes set) — not
+    every turn (Cost Scales with Drama). Global payload, broadcast to all
+    seated PCs. Transient (never event-sourced), like its LOCATION_DESCRIPTION
+    / RELATIONSHIPS siblings.
+    """
+
+    type: Literal[MessageType.QUESTS] = MessageType.QUESTS
+    payload: QuestsPayload
+    player_id: str = ""
+
+
+class FateStateMessage(ProtocolBase):
+    """GameMessage::FateState — player-facing Fate spine (ADR-144 F3a / Story 118-1).
+
+    The RELATIONSHIPS/QUESTS-snapshot analog for Fate Core. Emitted reactively
+    when the Fate state changes (a fate-point spend, an aspect created, stress/
+    consequence taken, a conflict starting/ending) — not every turn (Cost Scales
+    with Drama) — and only on a ``ruleset=='fate'`` pack. Global payload,
+    broadcast to all seated PCs. Transient (never event-sourced), like its
+    LOCATION_DESCRIPTION / RELATIONSHIPS / QUESTS siblings.
+    """
+
+    type: Literal[MessageType.FATE_STATE] = MessageType.FATE_STATE
+    payload: FateStatePayload
+    player_id: str = ""
+
+
+class FateRollMessage(ProtocolBase):
+    """GameMessage::FateRoll — one resolved 4dF roll, surfaced to the player
+    (ADR-144 F3c / Story 118-3).
+
+    The legibility EVENT for a Fate action (the four Fudge faces, ladder rating,
+    shifts, tier, succeed-with-style) — a momentary roll like ``DICE_RESULT``,
+    distinct from the change-gated ``FATE_STATE`` snapshot. Global broadcast;
+    transient (never event-sourced).
+    """
+
+    type: Literal[MessageType.FATE_ROLL] = MessageType.FATE_ROLL
+    payload: FateRollPayload
+    player_id: str = ""
+
+
+# ---------------------------------------------------------------------------
+# CHARACTER_INCAPACITATED — a PC taken out of play (sq-playtest barsoom-3).
+# ---------------------------------------------------------------------------
+
+
+class CharacterIncapacitatedPayload(ProtocolBase):
+    """A PC has been taken OUT of play by the genre lethality policy.
+
+    Emitted at the moment of death (the kill turn's dispatch) and again if a
+    downed seat tries to submit an action. PC-scoped via ``character_name`` so
+    the UI locks only that seat's input (the rest of the band plays on — SOUL.md
+    The Guitar Solo).
+    """
+
+    character_name: str
+    """The downed PC's name — the UI matches this against the local character."""
+    verdict: str
+    """The lethality verdict: ``dead`` | ``dying`` (the LETHAL partition)."""
+    status_text: str
+    """The applied status, e.g. ``"Downed — dead (mortally wounded)"``."""
+    headline: str
+    """Player-facing death line for the banner, e.g. ``"Abinthe Moridusk has fallen."``"""
+    can_reroll: bool = True
+    """Whether the UI offers a new-character CTA (retention-positive death loop)."""
+
+
+class CharacterIncapacitatedMessage(ProtocolBase):
+    """GameMessage::CharacterIncapacitated — player-facing death surface.
+
+    The durable input lock is server-side (``handlers.player_action`` refuses a
+    downed PC's actions); this message is the UI mirror — death banner, seat
+    input lock, optional re-roll CTA.
+    """
+
+    type: Literal[MessageType.CHARACTER_INCAPACITATED] = MessageType.CHARACTER_INCAPACITATED
+    payload: CharacterIncapacitatedPayload
+    player_id: str = ""
+
+
 # ---------------------------------------------------------------------------
 # DUNGEON_MAP — Beneath Sünden BETTER fix (seam 3). ADR-019 MAP_UPDATE was
 # deleted in the Rust→Python port; this is the NEW ADR-055 map frame (do
@@ -1214,10 +1528,14 @@ class LocationOverlayChangedMessage(ProtocolBase):
 
 class DungeonMapExit(ProtocolBase):
     """One typed adjacency. ``target`` is the EXACT region-graph node id;
-    ``exit_type`` is the edge kind (corridor|stairs|shaft|chute|secret)."""
+    ``exit_type`` is the edge kind (corridor|stairs|shaft|chute|secret).
+    ``bearing`` is the stable, distinct direction this exit leaves the
+    region by (north/east/south/west or up/down) — the geometry the UI can
+    place an exit by and the same label the narrator names it with."""
 
     target: str
     exit_type: str
+    bearing: str = ""
 
 
 class DungeonMapLocation(ProtocolBase):
@@ -1391,12 +1709,19 @@ _Phase1Variant = Annotated[
     | AudioCueMessage
     | DiceRequestMessage
     | DiceThrowMessage
+    | FateActionMessage
+    | CheckThrowMessage
     | DiceResultMessage
     | OrbitalIntentMessage
     | OrbitalChartMessage
     | TacticalGridMessage
     | LocationDescriptionMessage
     | LocationOverlayChangedMessage
+    | RelationshipsMessage
+    | QuestsMessage
+    | FateStateMessage
+    | FateRollMessage
+    | CharacterIncapacitatedMessage
     | DungeonMapMessage
     | JournalRequestMessage
     | JournalResponseMessage

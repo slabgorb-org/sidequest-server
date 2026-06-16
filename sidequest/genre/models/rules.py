@@ -8,11 +8,24 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from sidequest.game.beat_kinds import BeatKind
 from sidequest.game.disposition import AttitudeThresholds
-from sidequest.genre.models.inventory import DamageSpec
+from sidequest.genre.models.inventory import DamageSpec, GearDef
+
+# Keys inside ``ConfrontationDef.opponent_default_stats`` that are NOT
+# ability scores. ``hp`` seeds the opponent CreatureCore HP pool and
+# ``armor_class`` seeds the SWN ascending AC the attack rolls against
+# (hp_depletion combats). ``dexterity`` seeds the opponent's SWN
+# initiative (1d8 + DEX mod) for hp_depletion combats. ``armor`` is the
+# SWN flat damage-soak value for dogfight ship frames. ``pilot_skill``
+# and ``attack_bonus`` are dogfight ship-gunnery to-hit terms. All of
+# these are popped out before ability-score / modifier resolution so they
+# never leak into opposed_check lookups or the ADR-093 calibration ceiling.
+OPPONENT_RESERVED_STAT_KEYS: frozenset[str] = frozenset(
+    {"hp", "armor_class", "dexterity", "armor", "pilot_skill", "attack_bonus"}
+)
 
 
 class MoraleTrigger(StrEnum):
@@ -159,8 +172,19 @@ class BeatDef(BaseModel):
     # hit) — the separation is intentional so social/push beats never
     # accidentally acquire an HP channel.
     damage_channel: DamageChannel = DamageChannel.none
-    damage_override: DamageSpec | None = None    # creature natural attack (no catalog weapon)
-    mitigation_override: int | None = None       # brace beat with no armor item
+    damage_override: DamageSpec | None = None  # creature natural attack (no catalog weapon)
+    mitigation_override: int | None = None  # brace beat with no armor item
+    # SWN attack parameters — only meaningful when the pack binds `ruleset: swn`.
+    # ``attack_bonus`` is the attacker's class/level attack-bonus progression value.
+    # ``combat_skill`` is the relevant Combat/* skill level (0 = untrained).
+    # Both default to 0 so native-module packs require no YAML changes.
+    attack_bonus: int = 0
+    combat_skill: int = 0
+    # AWN Plan 2 §6.3 wiring marker (story 102-7) — when True, applying this
+    # beat routes through sidequest.mutation.use_ops via the
+    # ``BeatSelection.mutation_id`` sidecar instead of bare narration (the
+    # cast_spell precedent). False everywhere a pack has no mutation system.
+    mutation_resolution: bool = False
 
     @model_validator(mode="after")
     def _validate(self) -> BeatDef:
@@ -274,6 +298,20 @@ class SavingThrowsTable(BaseModel):
         return getattr(self, category.value)
 
 
+class WinCondition(StrEnum):  # noqa: UP042 — matches project convention
+    """How a confrontation decides victory.
+
+    - ``dial_threshold``: a side's metric dial reaching ``threshold`` ends it (default; every
+      existing pack).
+    - ``hp_depletion``: a side's primary combatant reaching 0 HP ends it (SWN combat). Metrics
+      are dropped; resolution reads CreatureCore HP.
+    """
+
+    dial_threshold = "dial_threshold"
+    hp_depletion = "hp_depletion"
+    table_showdown = "table_showdown"
+
+
 class ResolutionMode(StrEnum):  # noqa: UP042 — matches project convention (see protocol/enums.py)
     """How a confrontation resolves each turn.
 
@@ -293,6 +331,7 @@ class ResolutionMode(StrEnum):  # noqa: UP042 — matches project convention (se
     beat_selection = "beat_selection"
     sealed_letter_lookup = "sealed_letter_lookup"
     opposed_check = "opposed_check"
+    table_resolution = "table_resolution"
 
 
 class InteractionCell(BaseModel):
@@ -327,8 +366,6 @@ class InteractionTable(BaseModel):
     starting_state: str
     maneuvers_consumed: list[str] = Field(default_factory=list)
     cells: list[InteractionCell] = Field(default_factory=list)
-    damage_increments: dict[str, int] | None = None
-    starting_hull: int | None = None
 
     @model_validator(mode="after")
     def _validate(self) -> InteractionTable:
@@ -344,14 +381,48 @@ class InteractionTable(BaseModel):
                     f"duplicate interaction cell pair: ({cell.pair[0]}, {cell.pair[1]})"
                 )
             seen.add(key)
-        if self.damage_increments is not None:
-            for tier in ("graze", "clean", "devastating"):
-                val = self.damage_increments.get(tier)
-                if val is None:
-                    raise ValueError(f"damage_increments missing required severity tier: '{tier}'")
-                if val <= 0:
-                    raise ValueError(f"damage_increments '{tier}' must be positive, got {val}")
         return self
+
+
+class GeometryModifiers(BaseModel):
+    """Maneuver-cell geometry -> ship-gunnery to-hit modifier (dogfight SWN layer).
+
+    Authored & tunable in content. ``aspect`` keys match the cell view's
+    ``target_aspect`` value (tail_on/quartering/crossing/head_on); ``range``
+    keys match ``target_range`` (gun/close/medium/far). The matched aspect and
+    range modifiers are summed and will feed the ship-gunnery to-hit modifier.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    aspect: dict[str, int] = Field(default_factory=dict)
+    range: dict[str, int] = Field(default_factory=dict)
+
+
+class OpponentAttackDef(BaseModel):
+    """The opponent's attack profile for the server-driven enemy turn.
+
+    In ``beat_selection`` + ``win_condition: hp_depletion`` combat (SWN) the
+    player rolls attack beats that ablate the enemy's HP, but the engine has no
+    automatic enemy turn — so without this the opponent never hits back and the
+    player can win but never lose (playtest perseus_cloud, session 894). When a
+    combat declares ``opponent_attack``, the enemy reprisal fires each round:
+    d20 + ``attack_bonus`` + ``combat_skill`` + the ``stat_check`` attribute mod
+    vs the player's AC; on a hit ``damage`` ablates the player's HP.
+
+    ``damage`` is required — an enemy attack with no damage is a content bug, not
+    a silent zero (No Silent Fallbacks). Optional on the cdef: a confrontation
+    with no authored reprisal (dial/opposed_check social, or combat not yet
+    wired) simply gets no enemy turn, and the engine emits a lie-detector span so
+    the gap is visible rather than silent.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    stat_check: str
+    attack_bonus: int = 0
+    combat_skill: int = 0
+    damage: DamageSpec
 
 
 class ConfrontationDef(BaseModel):
@@ -363,8 +434,9 @@ class ConfrontationDef(BaseModel):
     label: str
     category: str
     resolution_mode: ResolutionMode = ResolutionMode.beat_selection
-    player_metric: MetricDef
-    opponent_metric: MetricDef
+    win_condition: WinCondition = WinCondition.dial_threshold
+    player_metric: MetricDef | None = None
+    opponent_metric: MetricDef | None = None
     beats: list[BeatDef] = Field(default_factory=list)
     secondary_stats: list[SecondaryStatDef] = Field(default_factory=list)
     escalates_to: str | None = None
@@ -379,7 +451,38 @@ class ConfrontationDef(BaseModel):
     # ``None`` means the pack has not migrated this confrontation to
     # opposed_check — only valid when ``resolution_mode`` is something
     # other than ``opposed_check``.
+    #
+    # RESERVED KEYS: the keys in ``OPPONENT_RESERVED_STAT_KEYS`` (hp,
+    # armor_class, dexterity, armor, pilot_skill, attack_bonus) are NOT
+    # ability scores. When present they seed the opponent's runtime
+    # CreatureCore / SWN combat block (HP pool + ascending AC, initiative
+    # DEX, ship-frame soak + gunnery to-hit terms) — see ``opponent_hp`` /
+    # ``opponent_armor_class`` and the seating seam in
+    # ``encounter_lifecycle._publish_combat_edge_to_npcs``. They are popped
+    # out of the ability-score map by ``opponent_ability_scores()`` so they
+    # never leak into modifier resolution. All other keys are raw ability
+    # scores (3..20 D&D-style; modifier = floor((score-10)/2)).
     opponent_default_stats: dict[str, int] | None = None
+    # Server-driven enemy turn (hp_depletion combat). See OpponentAttackDef.
+    # None = no enemy reprisal authored (engine no-ops + emits a lie-detector span).
+    opponent_attack: OpponentAttackDef | None = None
+    opponent_weapon: str | None = None  # dogfight: opponent ace's weapon catalog id
+    player_weapon: str | None = None  # dogfight: PC frame's weapon catalog id
+    # Opponent's reprisal damage for hp_depletion combat whose strike beat has
+    # no damage_override (e.g. personal `combat`, where `shoot` resolves the
+    # PLAYER's weapon from inventory). The seeded opponent NPC has no inventory,
+    # so without this the enemy hits but deals 0 HP (playtest 67-10: opponent hit
+    # twice, opponent_damage_spec_missing both times, player took no damage). The
+    # reprisal reads this BEFORE the beat/inventory resolution, so it never caps
+    # the player's own weapon. None ⇒ fall back to beat damage_override / weapon.
+    opponent_damage: DamageSpec | None = None
+    geometry_modifiers: GeometryModifiers | None = None
+    # Free-for-all N-seat table (table_resolution mode). ``table_game`` is the
+    # resolver discriminator ("poker" | "auction"); ``max_decision_points``
+    # bounds the abstracted betting loop. Both None/0 for non-table types.
+    table_game: str | None = None
+    max_decision_points: int = 0
+    player_default_stats: dict[str, int] = Field(default_factory=dict)
     morale: MoraleDef | None = None
     intent_verbs: list[str] | None = None
     on_intent_mismatch: Literal["warn", "soft_suggest", "reprompt"] = "warn"
@@ -401,16 +504,93 @@ class ConfrontationDef(BaseModel):
     def _validate(self) -> ConfrontationDef:
         if not self.confrontation_type:
             raise ValueError("confrontation type must not be empty")
-        valid_categories = {"combat", "social", "pre_combat", "movement"}
+        if self.resolution_mode == ResolutionMode.table_resolution:
+            if not self.table_game:
+                raise ValueError(
+                    f"confrontation '{self.confrontation_type}' uses "
+                    "resolution_mode 'table_resolution' but declares no "
+                    "table_game (e.g. 'poker' | 'auction')"
+                )
+            if self.win_condition != WinCondition.table_showdown:
+                raise ValueError(
+                    f"confrontation '{self.confrontation_type}' uses "
+                    "resolution_mode 'table_resolution' but win_condition is "
+                    f"{self.win_condition.value!r}; it must be 'table_showdown'"
+                )
+            if self.max_decision_points < 1:
+                raise ValueError(
+                    f"confrontation '{self.confrontation_type}' uses "
+                    "table_resolution but max_decision_points="
+                    f"{self.max_decision_points} (must be >= 1)"
+                )
+            # table_showdown reads table_state, never the dials — return before
+            # the dial_threshold requirement below.
+            return self
+        if self.win_condition == WinCondition.dial_threshold and (
+            self.player_metric is None or self.opponent_metric is None
+        ):
+            raise ValueError(
+                f"confrontation '{self.confrontation_type}' uses win_condition "
+                "'dial_threshold' but is missing player_metric/opponent_metric"
+            )
+        # Task 9: a COMBAT hp_depletion confrontation resolves vs the
+        # opponent's content-authored AC and depletes its content HP — both
+        # reserved keys MUST be present at LOAD time so a content author
+        # (e.g. Jade authoring space_opera) discovers a missing stat block
+        # before a player ever triggers the encounter, not mid-seating.
+        # Gated on category=="combat": non-combat hp_depletion confrontations
+        # (e.g. a social attrition contest) do not seed an opponent
+        # CreatureCore and carry no reserved keys — leave them valid.
+        if self.category == "combat" and self.win_condition == WinCondition.hp_depletion:
+            ods = self.opponent_default_stats or {}
+            hp = ods.get("hp")
+            ac = ods.get("armor_class")
+            if hp is None or ac is None:
+                raise ValueError(
+                    f"combat confrontation '{self.confrontation_type}' uses "
+                    "win_condition 'hp_depletion' but its opponent_default_stats "
+                    f"is missing reserved combat keys (hp={hp!r}, armor_class={ac!r}); "
+                    "author both `hp` and `armor_class` under opponent_default_stats"
+                )
+            if int(hp) < 1:
+                raise ValueError(
+                    f"combat confrontation '{self.confrontation_type}' has "
+                    f"opponent_default_stats.hp={hp!r}; HP must be >= 1 "
+                    "(a 0/negative pool would be silently clamped — fail loud instead)"
+                )
+            if int(ac) < 1:
+                raise ValueError(
+                    f"combat confrontation '{self.confrontation_type}' has "
+                    f"opponent_default_stats.armor_class={ac!r}; AC must be >= 1 "
+                    "(a 0/negative AC would auto-hit — fail loud instead)"
+                )
+            dex = ods.get("dexterity")
+            if dex is None:
+                raise ValueError(
+                    f"combat confrontation '{self.confrontation_type}' uses "
+                    "win_condition 'hp_depletion' but its opponent_default_stats is "
+                    f"missing reserved combat key (dexterity={dex!r}); author "
+                    "`dexterity` (SWN DEX score) so 1d8+DEX initiative can roll for "
+                    "the opponent (SWN P4 — no silent +0 fallback)"
+                )
+            if int(dex) < 3:
+                raise ValueError(
+                    f"combat confrontation '{self.confrontation_type}' has "
+                    f"opponent_default_stats.dexterity={dex!r}; must be >= 3 "
+                    "(SWN ability-score floor)"
+                )
+        valid_categories = {"combat", "social", "pre_combat", "movement", "hacking"}
         if self.category not in valid_categories:
             raise ValueError(
                 f"invalid confrontation category '{self.category}': "
                 f"must be one of {valid_categories}"
             )
-        if not self.beats:
-            raise ValueError(
-                f"confrontation '{self.confrontation_type}' must have at least one beat"
-            )
+        # The "at least one beat" invariant is NOT enforced here: a combat /
+        # hp_depletion def under a bound Without Number ruleset authors ZERO
+        # native beats (the WN initiative engine owns the action set — story
+        # 108-7, ADR-143), and this model validator can't see the pack ruleset.
+        # The gate moved to genre/loader.py::_validate_confrontation_beats,
+        # where rules.ruleset is known. Native packs still fail loud there.
         seen: set[str] = set()
         for beat in self.beats:
             if beat.id in seen:
@@ -433,6 +613,62 @@ class ConfrontationDef(BaseModel):
                 verbs.update(tokenize(v))
         object.__setattr__(self, "intent_verb_set", frozenset(verbs))
         return self
+
+    def opponent_ability_scores(self) -> dict[str, int] | None:
+        """``opponent_default_stats`` with reserved combat keys removed.
+
+        ``hp`` and ``armor_class`` are not ability scores; they seed the
+        opponent CreatureCore. This returns only the ability-score entries
+        so opposed_check modifier resolution never sees the reserved keys.
+        Returns ``None`` when the underlying map is unset.
+        """
+        if self.opponent_default_stats is None:
+            return None
+        return {
+            k: v
+            for k, v in self.opponent_default_stats.items()
+            if k not in OPPONENT_RESERVED_STAT_KEYS
+        }
+
+    @property
+    def opponent_hp(self) -> int | None:
+        """Content-authored opponent HP pool, or ``None`` if not authored."""
+        if not self.opponent_default_stats:
+            return None
+        raw = self.opponent_default_stats.get("hp")
+        return int(raw) if raw is not None else None
+
+    @property
+    def opponent_armor_class(self) -> int | None:
+        """Content-authored opponent ascending AC, or ``None`` if not set."""
+        if not self.opponent_default_stats:
+            return None
+        raw = self.opponent_default_stats.get("armor_class")
+        return int(raw) if raw is not None else None
+
+    @property
+    def opponent_dexterity(self) -> int | None:
+        """Content-authored opponent DEX score (SWN P4 initiative), or ``None``."""
+        if not self.opponent_default_stats:
+            return None
+        raw = self.opponent_default_stats.get("dexterity")
+        return int(raw) if raw is not None else None
+
+    @property
+    def player_hp(self) -> int | None:
+        """Content-authored player-frame HP pool, or ``None`` if not authored."""
+        if not self.player_default_stats:
+            return None
+        raw = self.player_default_stats.get("hp")
+        return int(raw) if raw is not None else None
+
+    @property
+    def player_armor_class(self) -> int | None:
+        """Content-authored player-frame ascending AC, or ``None`` if not set."""
+        if not self.player_default_stats:
+            return None
+        raw = self.player_default_stats.get("armor_class")
+        return int(raw) if raw is not None else None
 
 
 class CrossingDirection(StrEnum):
@@ -593,16 +829,285 @@ class LuckRules(BaseModel):
     recovery: LuckRecovery | None = None
 
 
+class SwnConfig(BaseModel):
+    """SWN universal constants (per-class/per-item numbers live in pack content).
+
+    All values sourced verbatim from Stars Without Number Revised Edition
+    Free Edition (Sine Nomine Publishing, 2017):
+
+    - unarmored_ac=10: ascending AC baseline for an unarmoured target (SRD p.51,
+      "Examples of Murder": "Yaddle, who has an AC of 10").
+    - save_base=15: "Your character's saving throw scores start at 15, and
+      decrease by one point each time you advance a level." (SRD p.46,
+      Saving Throws section).  The per-call formula is:
+          target = save_base - (level - 1) = 16 - level
+      modified by the best of two attribute modifiers (Physical: better of
+      Str/Con; Evasion: better of Dex/Int; Mental: better of Cha/Wis).
+    - difficulties: 2d6 skill-check difficulty ladder (SRD p.47, "Skill Check
+      Difficulties" table): easy=6, routine=8, tricky=10, hard=12, formidable=14.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    unarmored_ac: int = 10  # SRD p.51 — ascending AC for unarmoured target
+    save_base: int = 15  # SRD p.46 — level-1 saving throw target (decreases by 1/level)
+    difficulties: dict[str, int] = Field(
+        default_factory=lambda: {
+            "easy": 6,
+            "routine": 8,
+            "tricky": 10,
+            "hard": 12,
+            "formidable": 14,
+        }
+    )
+    # SWN attribute name -> this pack's flavor stat (ability_score_names entry).
+    # Required (non-empty, all six keys) when ruleset == "swn"; validated on RulesConfig
+    # where ability_score_names is reachable. No default map — fail loud if unauthored.
+    attribute_map: dict[str, str] = Field(default_factory=dict)
+
+
+class SystemStrainConfig(BaseModel):
+    """CWN System Strain tuning (genre-level, content-authorable).
+
+    max_source: the CANONICAL attribute whose flavor-stat score caps strain
+      (CWN: CONSTITUTION). Validated on RulesConfig to be a key of cwn.attribute_map.
+    rest_recovery_per_night: strain removed per night of rest (down to the
+      permanent floor).
+    first_aid_cost: temporary strain added per first-aid application.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    max_source: str = "CONSTITUTION"
+    rest_recovery_per_night: int = 1
+    first_aid_cost: int = 1
+
+
+class TraumaConfig(BaseModel):
+    """CWN combat-lethality tuning (genre-level, content-authorable).
+
+    default_trauma_target: the Trauma Target an unarmored human presents — the
+      number a weapon's Trauma Die must MEET OR EXCEED for a Traumatic Hit
+      (CWN: 6). A weapon may override per-strike via DamageSpec.trauma_target.
+    mortal_injury_rounds: rounds a downed (0-HP) character survives before death
+      unless stabilized (CWN: 6).
+    major_injury_save: the save category rolled when a Traumatic Hit dropped the
+      character this scene (CWN: a Physical save). Must be a save the bound
+      module's save_params understands ("physical", "evasion", "mental", "luck").
+    """
+
+    model_config = {"extra": "forbid"}
+
+    default_trauma_target: int = 6
+    mortal_injury_rounds: int = 6
+    major_injury_save: str = "physical"
+
+
+class HackingConfig(BaseModel):
+    """CWN cyberspace security tuning (genre-level, content-authorable).
+
+    security_tiers: named security level -> 2d6 difficulty in 2..12 (CWN
+      published security ratings are 7-12). A net_run resolves Program checks
+      against the tier's DC.
+    default_tier: the tier stamped on a net_run opened without a named tier.
+      An AUTHORED fallback declared in content (honors No Silent Fallbacks) —
+      NOT a silent code default; it must be a key of security_tiers.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    default_tier: str
+    security_tiers: dict[str, int]
+
+    @model_validator(mode="after")
+    def _validate(self) -> HackingConfig:
+        if not self.security_tiers:
+            raise ValueError("cwn.hacking.security_tiers must be non-empty")
+        if self.default_tier not in self.security_tiers:
+            raise ValueError(
+                f"cwn.hacking.default_tier {self.default_tier!r} "
+                f"not in security_tiers {sorted(self.security_tiers)}"
+            )
+        return self
+
+
+class CwnConfig(SwnConfig):
+    """Cities Without Number universal constants (Sine Nomine, CC0).
+
+    CWN shares SWN's resolution engine, so this inherits SwnConfig verbatim:
+    - unarmored_ac=10, save_base=15 (CWN's "16 - level" == "save_base - (level-1)").
+    - the 6/8/10/12/14 difficulty ladder.
+    - attribute_map: CWN attribute -> this pack's flavor stat (all six keys
+      required when ruleset == 'cwn'; validated on RulesConfig).
+    System Strain is configured via ``system_strain`` (System Strain plan).
+    Trauma is configured via ``trauma`` (Combat Lethality plan).
+    Hacking is configured via ``hacking`` (optional; a net_run requires it).
+    """
+
+    model_config = {"extra": "forbid"}
+
+    system_strain: SystemStrainConfig = Field(default_factory=SystemStrainConfig)
+    trauma: TraumaConfig = Field(default_factory=TraumaConfig)
+    hacking: HackingConfig | None = None
+
+
+class AwnConfig(CwnConfig):
+    """Ashes Without Number universal constants (Sine Nomine, CC0).
+
+    AWN personal combat is mechanically identical to CWN, so this inherits
+    CwnConfig verbatim: unarmored_ac=10, save_base=15 (AWN's "16 - level" ==
+    "save_base - (level-1)"), the 6/8/10/12/14 difficulty ladder, the
+    System Strain and Trauma tuning, and the six-key attribute_map. ``hacking``
+    stays the inherited ``None`` default — AWN has the "Program" skill but no
+    cyberspace net-run ladder, so the hacking gates correctly skip it. Empty
+    body in Plan 1; AWN-only tuning (radiation, mutations) lands in later plans.
+    NOT a fallback — selected explicitly by `ruleset: awn`.
+    """
+
+    model_config = {"extra": "forbid"}
+
+
+class MagicConfig(BaseModel):
+    """WWN magic ruleset constants (Sine Nomine, CC0). Per-class tables (Effort
+    sources, casts/day, max spell level) live on the class def (WwnClassMagic),
+    NOT here — this holds engine-level constants only. Spells name their own save;
+    default_spell_save is the fallback when a spell omits one."""
+
+    model_config = {"extra": "forbid"}
+
+    effort_base: int = 1  # Effort max = effort_base + skill + attr mod
+    killing_blow_divisor: int = 2  # Killing Blow adds ceil(level / divisor)
+    day_reclaim_requires_comfort: bool = True  # day-Effort needs a comfortable rest
+    default_spell_save: str = "mental"
+
+
+class WwnConfig(SwnConfig):
+    """Worlds Without Number universal constants (Sine Nomine, CC0).
+
+    WWN shares the SWN/CWN resolution engine, so this inherits SwnConfig
+    verbatim (unarmored_ac=10, save_base=15, the 6/8/10/12/14 ladder,
+    attribute_map). It carries the same System Strain and Trauma tuning CWN
+    uses (reused models), but has NO hacking — WWN has no cyberspace. Magic
+    (Effort / spell slots / Fray Die) is configured via the `magic` block added
+    in Plan 2. NOT a fallback — selected explicitly by `ruleset: wwn`.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    system_strain: SystemStrainConfig = Field(default_factory=SystemStrainConfig)
+    trauma: TraumaConfig = Field(default_factory=TraumaConfig)
+    magic: MagicConfig = Field(default_factory=MagicConfig)
+
+
+class FateStuntDef(BaseModel):
+    """One entry in a Fate genre's stunt catalog (ADR-144). Genre-tier so it
+    carries NO dependency on ``sidequest.game`` (the layering rule: game depends
+    on genre, never the reverse — so this cannot reuse ``game.fate_sheet.Stunt``).
+    The mechanical effect is authored prose for the narrator; the engine spine
+    only carries name/description."""
+
+    model_config = {"extra": "forbid"}
+
+    name: str
+    description: str = ""
+
+
+class FateConfig(BaseModel):
+    """Fate Core per-genre content schema (ADR-144 F4a). The genre authors the
+    mechanical identity — the skill list and its starting ratings, the refresh,
+    aspect templates, and the stunt catalog; the world layers flavor (Crunch in
+    the Genre, Flavor in the World). Present only when ``ruleset == "fate"``.
+
+    Used by ``FateRulesetModule.seed_chargen_resources`` to seed a valid, populated
+    ``FateSheet`` at chargen, and (story 121-7 / F4a2) to drive the interactive Fate
+    chargen flow.
+
+    - ``skills``: the per-genre skill list as ``name -> default starting ladder
+      rating`` (e.g. noir: Investigate 3, Contacts 2). Copied verbatim onto the
+      seeded sheet's ``skills``.
+    - ``refresh``: SRD starting refresh; a new sheet starts with ``fate_points ==
+      refresh``.
+    - ``default_high_concept`` / ``default_trouble``: aspect templates seeded onto
+      a new sheet. A player refines them in play (and, in 121-7, authors their own
+      at chargen).
+    - ``stunts``: the available stunt catalog. Loaded-but-unconsumed by F4a's
+      default seed (a default PC takes no stunts); the interactive chargen flow
+      (121-7) consumes it when the player picks stunts. This typed-but-unconsumed
+      forward contract mirrors the ``standoff_rules`` precedent above.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    skills: dict[str, int] = Field(default_factory=dict)
+    refresh: int = 3
+    default_high_concept: str = ""
+    default_trouble: str = ""
+    stunts: list[FateStuntDef] = Field(default_factory=list)
+    # Interactive chargen (story 121-7 / F4a2). The skill-pyramid SHAPE is
+    # pack-tunable (Crunch in the Genre): ``chargen_pyramid[i]`` skills sit at
+    # ladder rating ``chargen_apex_rating - i`` (apex first). SRD default is
+    # [1,2,3,4] @ apex 4 → 1 Great / 2 Good / 3 Fair / 4 Average. ``free_aspect_count``
+    # is the free aspects beyond High-Concept + Trouble (→ 5 total at default 3).
+    # ``free_stunts`` is the stunts free before refresh is debited — shared with the
+    # gear model (114-10): each extra stunt (authored or gear-granted) debits 1
+    # refresh, floored at 1.
+    chargen_pyramid: list[int] = Field(default_factory=lambda: [1, 2, 3, 4])
+    chargen_apex_rating: int = 4
+    free_aspect_count: int = 3
+    free_stunts: int = 3
+    # Gear refresh invariant (114-10, ADR-144 gear model). ``base_refresh`` is the
+    # pack's starting refresh before any stunt-gear debit; ``free_stunts`` (above,
+    # shared with interactive chargen) is how many stunts a PC may carry at
+    # base_refresh before each further stunt debits one refresh. SRD default 3 when
+    # omitted (a pack tunes it per genre tone) — never hardcoded globally.
+    base_refresh: int = 3
+    # The pack's shared signature starting gear — gear ids (resolved against the
+    # loaded gear.yaml) compiled onto every PC's FateSheet at chargen (the coat,
+    # the badge, the hat each archetype inherently carries; design K-i).
+    gear: list[str] = Field(default_factory=list)
+    # Loader-injected: the genre-tier GearDef set from gear.yaml. NOT authored in
+    # rules.yaml — the genre loader populates it so the seed can resolve ``gear``
+    # ids without the builder needing the whole GenrePack. World-tier gear merge is
+    # not wired today (no pack authors world-distinct gear). Default empty for
+    # non-fate / synthetic configs.
+    gear_catalog: list[GearDef] = Field(default_factory=list)
+
+    @field_validator("chargen_pyramid")
+    @classmethod
+    def _chargen_pyramid_apex_narrowest(cls, v: list[int]) -> list[int]:
+        """A legal Fate pyramid never widens toward the apex: each rung holds at
+        most as many skills as the rung below it (``v[i] <= v[i+1]``). [2,1] and
+        [4,3,2,1] are illegal. Fail loud — No Silent Fallbacks."""
+        if any(count < 1 for count in v):
+            raise ValueError(f"chargen_pyramid rung counts must be >= 1, got {v}")
+        for i in range(len(v) - 1):
+            if v[i] > v[i + 1]:
+                raise ValueError(
+                    f"chargen_pyramid must be apex-narrowest (v[i] <= v[i+1]); {v} widens "
+                    f"at rung {i} ({v[i]} > {v[i + 1]})"
+                )
+        return v
+
+
 class RulesConfig(BaseModel):
     """Game rules configuration."""
 
     model_config = {"extra": "forbid"}
 
+    ruleset: str = (
+        "native"  # bound RulesetModule slug (pluggable-SRD Spec 0). Default = current dial engine.
+    )
     tone: str = ""
     lethality: str = ""
     magic_level: str = ""
     stat_generation: str = ""
     point_buy_budget: int = 0
+    # ADR-142 Step 2A: per-pack standard array for `stat_generation:
+    # standard_array`. None ⇒ the engine's legacy default [15, 14, 13, 12,
+    # 10, 8] (D&D 5e). WWN packs author [14, 12, 11, 10, 9, 7]. Fail-loud:
+    # when set it must carry at least as many entries as there are ability
+    # scores, so every score name gets a value (validated below).
+    standard_array: list[int] | None = None
     ability_score_names: list[str] = Field(default_factory=list)
     allowed_classes: list[str] = Field(default_factory=list)
     allowed_races: list[str] = Field(default_factory=list)
@@ -616,6 +1121,33 @@ class RulesConfig(BaseModel):
     default_race: str | None = None
     race_label: str | None = None
     class_label: str | None = None
+    # Story 68-1: per-genre display label for the survivability (HP) pool.
+    # Social-register packs reskin the shared ablative-HP mechanic (ADR-114)
+    # with a flavor-true noun — Composure / Standing / Poise — instead of the
+    # default "HP" / "Vitality". None ⇒ the UI falls back to "HP" (mechanical
+    # packs are unaffected). The mechanic is unchanged; only the label moves.
+    survivability_pool_label: str | None = None
+    # Playtest 2026-06-01 (blackthorn_moor): does this pack have combat
+    # encounters? The Monster Manual pre-generates B/X-style combat enemies
+    # (HP, Strike/Power-Strike abilities, hostile disposition) and injects them
+    # into ``snapshot.npcs`` every turn. A social, Composure-only pack
+    # (``tea_and_murder``) has no combat — encountergen falls back to humanoid
+    # "enemies" built from the pack's social ``allowed_classes``, seeding
+    # drawing-room guests as ``disposition=-20`` combatants. ``False`` suppresses
+    # both Monster-Manual encounter *seeding* (pregen) and encounter *injection*
+    # (monster_manual_inject). ``True`` (default) leaves every combat pack
+    # unchanged. Declared explicitly per No Silent Fallbacks (extra="forbid").
+    combat_encounters: bool = True
+    # Genre-level unarmed-strike damage floor (ping-pong: barsoom Ruximus hit for
+    # 0). When a strike beat resolves no damage_override, no equipped weapon, and
+    # no catalog weapon, ``resolve_damage_spec_from_beat_and_actor`` falls back to
+    # this so an empty-handed hit still deals HP instead of landing weightless.
+    # Priority 4 (last) — an equipped weapon always wins, so authoring this never
+    # clobbers armed actors. None ⇒ no unarmed floor (the pre-existing fail-loud
+    # "damage_spec_missing" skip). Per-pack values are a content decision (WWN
+    # canon = 1d2; EH unarmed-martial benchmark = 1d6). Mirrors ``opponent_damage``
+    # on ConfrontationDef, which already floors the enemy reprisal.
+    unarmed_damage: DamageSpec | None = None
     # Per-pack character-sheet vocabulary. Keys are the canonical chargen
     # field names (``name``, ``race``, ``class``, ``personality``,
     # ``pronouns``, ``stats``, ``mutation``, ``affinity``, ``rig``,
@@ -648,6 +1180,257 @@ class RulesConfig(BaseModel):
     reputation_factions: list[ReputationFaction] = Field(default_factory=list)
     reputation_effects: ReputationEffects | None = None
     luck_rules: LuckRules | None = None
+    # Present only when ruleset == "swn"; None for all other rulesets.
+    swn: SwnConfig | None = None
+    # Present only when ruleset == "cwn"; None for all other rulesets.
+    cwn: CwnConfig | None = None
+    # Present only when ruleset == "wwn"; None for all other rulesets.
+    wwn: WwnConfig | None = None
+    # Present only when ruleset == "awn"; None for all other rulesets.
+    awn: AwnConfig | None = None
+    # Present only when ruleset == "fate"; None for all other rulesets (ADR-144 F4a).
+    fate: FateConfig | None = None
+    # ADR-113 confidence gate (Story 71-16): per-subsystem engagement
+    # thresholds. Keys are dispatch subsystem names (``confrontation``,
+    # ``magic_working``, ``scenario_clue``, ``npc_agency``, ``movement``,
+    # ``distinctive_detail_hint``, ``reflect_absence``); values are the minimum
+    # router confidence required to engage that subsystem's engine. A subsystem
+    # absent from this map uses the 0.6 default (run_dispatch_bank). Empty by
+    # default — packs opt in to per-subsystem tuning.
+    dispatch_confidence_thresholds: dict[str, float] = Field(default_factory=dict)
+
+    @field_validator("dispatch_confidence_thresholds")
+    @classmethod
+    def _validate_dispatch_thresholds(cls, value: dict[str, float]) -> dict[str, float]:
+        """Fail loud on a malformed per-subsystem threshold (No Silent Fallbacks).
+
+        A threshold outside [0.0, 1.0] is a config error, not something to clamp
+        or silently default — raise so the pack fails to load.
+        """
+        for subsystem, threshold in value.items():
+            if not 0.0 <= threshold <= 1.0:
+                raise ValueError(
+                    f"dispatch_confidence_thresholds[{subsystem!r}] = {threshold} "
+                    f"is out of range; confidence thresholds must be in [0.0, 1.0]"
+                )
+        return value
+
+    @model_validator(mode="after")
+    def _validate_swn(self) -> RulesConfig:
+        """Enforce a complete attribute_map when ruleset == 'swn'; raises ValueError if the swn block omits one."""
+        if self.ruleset != "swn":
+            return self
+        if self.swn is None:
+            object.__setattr__(self, "swn", SwnConfig())
+        required = {"STRENGTH", "CONSTITUTION", "DEXTERITY", "INTELLIGENCE", "WISDOM", "CHARISMA"}
+        # self.swn cannot be None here — the branch above ensures it; assert for pyright.
+        assert self.swn is not None
+        amap = self.swn.attribute_map
+        if not amap:
+            raise ValueError(
+                "ruleset 'swn' requires rules.swn.attribute_map (SWN attribute -> flavor stat); "
+                "none authored — no silent default"
+            )
+        missing = required - amap.keys()
+        if missing:
+            raise ValueError(f"swn attribute_map missing required keys: {sorted(missing)}")
+        declared = set(self.ability_score_names)
+        for swn_attr, flavor in amap.items():
+            if flavor not in declared:
+                raise ValueError(
+                    f"swn attribute_map[{swn_attr!r}] = {flavor!r} is not in "
+                    f"ability_score_names {sorted(declared)}"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_standard_array(self) -> RulesConfig:
+        """ADR-142 Step 2A: when a pack authors `standard_array`, it must carry
+        at least as many entries as there are ability scores so every score
+        name receives a value. Fail loud (No Silent Fallbacks) rather than
+        leave a stat unmapped at chargen.
+        """
+        if self.standard_array is None:
+            return self
+        needed = len(self.ability_score_names)
+        if needed and len(self.standard_array) < needed:
+            raise ValueError(
+                f"rules.standard_array has {len(self.standard_array)} entries but "
+                f"{needed} ability scores are declared ({self.ability_score_names}); "
+                "author one value per ability score — no silent padding"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_cwn(self) -> RulesConfig:
+        """Enforce a complete attribute_map when ruleset == 'cwn'; raises ValueError if omitted."""
+        if self.ruleset != "cwn":
+            return self
+        if self.cwn is None:
+            object.__setattr__(self, "cwn", CwnConfig())
+        required = {"STRENGTH", "CONSTITUTION", "DEXTERITY", "INTELLIGENCE", "WISDOM", "CHARISMA"}
+        assert self.cwn is not None
+        amap = self.cwn.attribute_map
+        if not amap:
+            raise ValueError(
+                "ruleset 'cwn' requires rules.cwn.attribute_map (CWN attribute -> flavor stat); "
+                "none authored — no silent default"
+            )
+        missing = required - amap.keys()
+        if missing:
+            raise ValueError(f"cwn attribute_map missing required keys: {sorted(missing)}")
+        declared = set(self.ability_score_names)
+        for cwn_attr, flavor in amap.items():
+            if flavor not in declared:
+                raise ValueError(
+                    f"cwn attribute_map[{cwn_attr!r}] = {flavor!r} is not in "
+                    f"ability_score_names {sorted(declared)}"
+                )
+        strain_source = self.cwn.system_strain.max_source
+        if strain_source not in amap:
+            raise ValueError(
+                f"cwn.system_strain.max_source = {strain_source!r} is not a key of "
+                f"cwn.attribute_map {sorted(amap.keys())}"
+            )
+        valid_saves = {"physical", "evasion", "mental", "luck"}
+        if self.cwn.trauma.major_injury_save not in valid_saves:
+            raise ValueError(
+                f"cwn.trauma.major_injury_save = {self.cwn.trauma.major_injury_save!r} "
+                f"is not one of {sorted(valid_saves)}"
+            )
+        if self.cwn.hacking is not None:
+            # HackingConfig's own model_validator already enforces non-empty +
+            # default-in-ladder. Cross-check tier DCs are sane 2d6 numbers so a
+            # typo (e.g. 0 or 99) fails loud at pack load, not at dispatch.
+            for tier, dc in self.cwn.hacking.security_tiers.items():
+                if not (2 <= dc <= 12):
+                    raise ValueError(
+                        f"cwn.hacking.security_tiers[{tier!r}] = {dc} is not a "
+                        "valid 2d6 difficulty (must be 2..12)"
+                    )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_fate(self) -> RulesConfig:
+        """Enforce that a ``ruleset: fate`` pack authors its ``fate`` block (ADR-144
+        F4a). Fate has no d20 attribute_map; its required content is the FateConfig
+        itself (the skill list / refresh / aspect templates the seed reads). A fate
+        pack with no fate block fails loud — No Silent Fallbacks — mirroring the
+        swn/cwn/wwn "attribute_map required" validators."""
+        if self.ruleset != "fate":
+            return self
+        if self.fate is None:
+            raise ValueError(
+                "ruleset 'fate' requires rules.fate (FateConfig: skill list, refresh, "
+                "aspect templates); none authored — no silent default"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_wwn(self) -> RulesConfig:
+        """Enforce a complete attribute_map when ruleset == 'wwn'; raises ValueError if omitted."""
+        if self.ruleset != "wwn":
+            return self
+        if self.wwn is None:
+            object.__setattr__(self, "wwn", WwnConfig())
+        required = {"STRENGTH", "CONSTITUTION", "DEXTERITY", "INTELLIGENCE", "WISDOM", "CHARISMA"}
+        assert self.wwn is not None
+        amap = self.wwn.attribute_map
+        if not amap:
+            raise ValueError(
+                "ruleset 'wwn' requires rules.wwn.attribute_map (WWN attribute -> flavor stat); "
+                "none authored — no silent default"
+            )
+        missing = required - amap.keys()
+        if missing:
+            raise ValueError(f"wwn attribute_map missing required keys: {sorted(missing)}")
+        declared = set(self.ability_score_names)
+        for wwn_attr, flavor in amap.items():
+            if flavor not in declared:
+                raise ValueError(
+                    f"wwn attribute_map[{wwn_attr!r}] = {flavor!r} is not in "
+                    f"ability_score_names {sorted(declared)}"
+                )
+        strain_source = self.wwn.system_strain.max_source
+        if strain_source not in amap:
+            raise ValueError(
+                f"wwn.system_strain.max_source = {strain_source!r} is not a key of "
+                f"wwn.attribute_map {sorted(amap.keys())}"
+            )
+        valid_saves = {"physical", "evasion", "mental", "luck"}
+        if self.wwn.trauma.major_injury_save not in valid_saves:
+            raise ValueError(
+                f"wwn.trauma.major_injury_save = {self.wwn.trauma.major_injury_save!r} "
+                f"is not one of {sorted(valid_saves)}"
+            )
+        if self.wwn.magic.default_spell_save not in valid_saves:
+            raise ValueError(
+                f"wwn.magic.default_spell_save = {self.wwn.magic.default_spell_save!r} "
+                f"is not one of {sorted(valid_saves)}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_awn(self) -> RulesConfig:
+        """Enforce a complete attribute_map when ruleset == 'awn'; raises ValueError if omitted.
+
+        Mirrors ``_validate_cwn`` (AWN combat == CWN combat). AwnConfig has no
+        hacking in practice (the field stays None), so no hacking cross-check.
+        """
+        if self.ruleset != "awn":
+            return self
+        if self.awn is None:
+            object.__setattr__(self, "awn", AwnConfig())
+        required = {"STRENGTH", "CONSTITUTION", "DEXTERITY", "INTELLIGENCE", "WISDOM", "CHARISMA"}
+        assert self.awn is not None
+        amap = self.awn.attribute_map
+        if not amap:
+            raise ValueError(
+                "ruleset 'awn' requires rules.awn.attribute_map (AWN attribute -> flavor stat); "
+                "none authored — no silent default"
+            )
+        missing = required - amap.keys()
+        if missing:
+            raise ValueError(f"awn attribute_map missing required keys: {sorted(missing)}")
+        declared = set(self.ability_score_names)
+        for awn_attr, flavor in amap.items():
+            if flavor not in declared:
+                raise ValueError(
+                    f"awn attribute_map[{awn_attr!r}] = {flavor!r} is not in "
+                    f"ability_score_names {sorted(declared)}"
+                )
+        strain_source = self.awn.system_strain.max_source
+        if strain_source not in amap:
+            raise ValueError(
+                f"awn.system_strain.max_source = {strain_source!r} is not a key of "
+                f"awn.attribute_map {sorted(amap.keys())}"
+            )
+        valid_saves = {"physical", "evasion", "mental", "luck"}
+        if self.awn.trauma.major_injury_save not in valid_saves:
+            raise ValueError(
+                f"awn.trauma.major_injury_save = {self.awn.trauma.major_injury_save!r} "
+                f"is not one of {sorted(valid_saves)}"
+            )
+        return self
+
+    def ruleset_config(self) -> SwnConfig | FateConfig | None:
+        """The config block for the bound ruleset, or None for engines that carry none.
+
+        Dispatch resolves the cfg this way instead of hardcoding `.swn`, so a
+        `cwn` pack receives its own block. `native` carries no config (None).
+        `fate` returns its FateConfig (not a SwnConfig subclass — the union widens).
+        """
+        if self.ruleset == "swn":
+            return self.swn
+        if self.ruleset == "cwn":
+            return self.cwn
+        if self.ruleset == "wwn":
+            return self.wwn
+        if self.ruleset == "awn":
+            return self.awn
+        if self.ruleset == "fate":
+            return self.fate
+        return None
 
     @property
     def intent_verbs_by_type(self) -> dict[str, frozenset[str]]:

@@ -17,6 +17,7 @@ import re
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
+from sidequest.agents.npc_context import build_npc_working_set
 from sidequest.agents.orchestrator import (
     RECENT_NARRATIVE_WINDOW_K,
     NpcMention,
@@ -25,11 +26,9 @@ from sidequest.agents.orchestrator import (
 from sidequest.game.builder import humanize_snake_case
 from sidequest.game.creature_core import CreatureCore
 from sidequest.game.npc_pool import NpcPoolMember
-from sidequest.game.npc_scene import (
-    is_npc_anchored_by_encounter,
-    is_npc_in_scene,
-)
 from sidequest.game.projection.envelope import MessageEnvelope
+from sidequest.game.retrieval_orchestration import RetrievedEntities, render_entity_section
+from sidequest.game.ruleset.fate_projection import build_fate_projection
 from sidequest.game.session import (
     GameSnapshot,
     PartyPeer,
@@ -38,8 +37,11 @@ from sidequest.game.shared_world_delta import (
     build_shared_world_delta,
     merge_shared_delta_into_snapshot,
 )
+from sidequest.game.status import Status
+from sidequest.genre.models.ocean import DramaThresholds
 from sidequest.genre.models.pack import GenrePack
 from sidequest.protocol.dispatch import DispatchPackage
+from sidequest.protocol.enums import NarratorVerbosity, NarratorVocabulary
 from sidequest.protocol.messages import (
     CartographyMapMessage,
     CartographyMapPayload,
@@ -49,7 +51,25 @@ from sidequest.protocol.messages import (
     PlayerPresencePayload,
 )
 from sidequest.protocol.types import NonBlankString
+
+# Story 82-10 / ADR-110 amendment — the Phase B drop list and Phase C
+# projection helper moved to ``sidequest.server.snapshot_slimming`` so the
+# Intent Router pass (the second snapshot-dump consumer) can apply the same
+# audited cut. Re-exported here verbatim so the 61-5 governance gate
+# (``test_snapshot_field_governance.py``) and the 61-2 projection contract
+# tests keep their import surface unchanged. Field-audit provenance for the
+# drop list: context-story-57-5.md §Phase B + .session/57-5-session.md;
+# ``narrative_log`` joined via the 61-5 architecture-gate amendment.
+from sidequest.server.snapshot_slimming import (
+    _DISCOVERED_CLUES_CAP,  # noqa: F401  (re-export: 61-2 test contract)
+    _KNOWN_FACTS_TAIL_K,  # noqa: F401  (re-export: 61-2 test contract)
+    _PHASE_B_DROP_FIELDS,  # noqa: F401  (re-export: 61-5 governance gate)
+    _apply_phase_c_projections,  # noqa: F401  (re-export: 61-2 test contract)
+    apply_snapshot_slimming,
+)
 from sidequest.telemetry.spans import (
+    cartography_map_emitted_span,
+    narrator_settings_span,
     npc_auto_mint_skipped_span,
     npc_auto_minted_from_prose_span,
     npc_observation_gate_promoted_span,
@@ -57,32 +77,9 @@ from sidequest.telemetry.spans import (
     npc_recurring_presence_missed_span,
     npc_reinvented_span,
     orchestrator_notorious_party_gate_span,
+    pacing_hint_span,
     prompt_game_state_bytes_span,
     room_state_injected_span,
-)
-
-# Story 57-5 / ADR-110 — fields dropped from the per-turn <game_state>
-# blob because the narrator reads them from dedicated prompt sections
-# (Recency-zone pending_trope_context, Valley-zone active_trope_summary,
-# narrative_axis sections) or they belong to deferred subsystems with no
-# consumer. Each entry is audit-evidenced — see context-story-57-5.md
-# §Phase B and the Field Audit in .session/57-5-session.md.
-#
-# Story 61-5 / ADR-110 architecture-gate amendment — ``narrative_log``
-# joins the registry. It was already being dropped via an explicit
-# ``state_summary_payload.pop("narrative_log", None)`` below (story 49-1),
-# but the named registry is now the single source of truth for "dropped
-# top-level fields" enforced by the
-# ``test_snapshot_field_governance`` gate (see
-# ``tests/server/test_snapshot_field_governance.py``). The explicit
-# pop remains for defense-in-depth (idempotent) until the gate
-# subsumes it cleanly in a follow-up refactor.
-_PHASE_B_DROP_FIELDS: tuple[str, ...] = (
-    "active_tropes",
-    "axis_values",
-    "genie_wishes",
-    "achievement_tracker",
-    "narrative_log",
 )
 
 # Story 61-5 / ADR-110 architecture gate — fields that DO ride into
@@ -102,7 +99,8 @@ _PHASE_B_DROP_FIELDS: tuple[str, ...] = (
 #
 # **Governance vs. dispatch.** This registry is a governance artefact
 # consumed by ``test_snapshot_field_governance.py``, NOT a runtime
-# dispatch table. ``_apply_phase_c_projections`` (below) independently
+# dispatch table. ``_apply_phase_c_projections`` (now in
+# ``sidequest.server.snapshot_slimming``, story 82-10) independently
 # hard-codes the same four names — the registry asserts the
 # categorization decision; the helper performs the work. Keeping them
 # in sync is the un-tightened seam called out as a deferred deviation
@@ -158,7 +156,10 @@ _EXCLUDED_FROM_DUMP: tuple[str, ...] = (
 #       resource pool keys, quest ids, region/room/route slugs) where
 #       the key cardinality is itself a finite gameplay quantity.
 #   (e) List bounded by gameplay convention to small cardinality
-#       (companions, active_seeds, next_turn_directives, etc).
+#       (companions, active_seeds, etc). NOTE: next_turn_directives moved
+#       to _PHASE_B_DROP_FIELDS (sq-playtest 2026-06-13 directive-leak) —
+#       it is consumed into a dedicated Recency guardrail and must not ride
+#       the raw <game_state> JSON.
 #
 # Genuinely growing lists that the narrator reads in full but are
 # small-by-gameplay-convention (``lore_established``, ``world_history``,
@@ -180,8 +181,15 @@ _BOUNDED_BY_CONSTRUCTION: tuple[str, ...] = (
     "current_region",
     "days_elapsed",
     "genre_slug",
+    "last_lull_fire_turn",
     "last_saved_at",
+    # 82-2 (ADR-049) added these enum-scalar narrator-tuning fields to
+    # GameSnapshot but never categorized them; classify here (enums are
+    # bounded by construction) so the 61-5 governance gate is green.
+    "narrator_verbosity",
+    "narrator_vocabulary",
     "party_body_id",
+    "pending_escalation_directive",
     "player_dead",
     "time_of_day",
     "total_beats_fired",
@@ -190,6 +198,9 @@ _BOUNDED_BY_CONSTRUCTION: tuple[str, ...] = (
     # single-record optionals / single-record structs
     "encounter",
     "magic_state",
+    # AWN mutation state (Plan 2) — single-record optional, same
+    # rationale as ``magic_state``.
+    "mutation_state",
     "pending_resolution_signal",
     "pending_time_skip_summary",
     "plotted_course",
@@ -201,6 +212,12 @@ _BOUNDED_BY_CONSTRUCTION: tuple[str, ...] = (
     "pc_regions",
     "chassis_autofire_cooldowns",
     "chassis_registry",
+    # 117-3 added ``pending_quest_offers: dict[str, QuestSeed]`` keyed on
+    # ``quest_id`` (resume-safe offer ledger, session.py:846) but never
+    # categorized it — story 123-1 classifies it here under category (d):
+    # the key domain (quest ids) is a finite gameplay quantity, exactly
+    # like ``quest_log``.
+    "pending_quest_offers",
     "player_seats",
     "quest_log",
     "resources",
@@ -211,193 +228,12 @@ _BOUNDED_BY_CONSTRUCTION: tuple[str, ...] = (
     "discovered_rooms",
     "discovered_routes",
     "lore_established",
-    "next_turn_directives",
     "notes",
     "npc_pool",
     "quest_anchors",
     "seed_ghosts",
     "world_history",
 )
-
-# Story 61-2 / ADR-110 — projection tunings for the four growing fields
-# that DO ride into ``snapshot.model_dump()``. See
-# ``.session/61-2-session.md`` and the test contract at
-# ``tests/server/test_61_2_snapshot_seven_field_projection.py``.
-#
-# ``known_facts`` tail mirrors ``persistence.py:889`` (journal-render
-# tail-of-8 pattern). ``discovered_clues`` cap is from ADR-110 Phase C
-# (size-only — discovered_clues is a set, ordering keyed by clue id for
-# determinism — open question #3 in red-phase notes settled here).
-_KNOWN_FACTS_TAIL_K = 8
-_DISCOVERED_CLUES_CAP = 12
-
-
-def _apply_phase_c_projections(
-    snapshot: GameSnapshot,
-    payload: dict,
-    *,
-    current_room_id: str | None,
-) -> dict[str, int]:
-    """Mutate ``payload`` in place to apply the 61-2 per-field projections.
-
-    ``current_room_id`` is resolved ONCE by the caller from
-    ``snapshot.party_location(perspective=...)``; the caller is also
-    responsible for emitting the ``actor_location_empty`` warning (and
-    deciding whether the turn is salvageable). This split exists because
-    a per-NPC ``snapshot.party_location(...)`` call would fan out N+1
-    ``snapshot.party_location_query`` OTEL spans per turn and drown
-    Sebastien's lie-detector signal in the GM panel.
-
-    When ``current_room_id`` is ``None`` or empty the ``room_states``
-    and ``npcs`` projections are SKIPPED — degraded actor location is
-    NOT the same as "no rooms exist" / "no NPCs exist" and silently
-    stripping them is the projection-as-gaslighter pattern this story
-    exists to NOT introduce. The ``known_facts`` and
-    ``discovered_clues`` projections are PC/scenario-scoped and still
-    run (they don't depend on actor location).
-
-    Returns a dict of projection counts (for the
-    ``prompt.game_state.bytes`` span attributes — the GM-panel
-    lie-detector contract):
-
-    * ``room_states_dropped`` — count of room ids removed from
-      ``payload["room_states"]`` (zero when the projection was skipped).
-    * ``npcs_dropped`` — count of NPCs filtered out by the in-scene
-      predicate as legitimately off-stage (zero when the projection
-      was skipped). Excludes unresolvable-name drops (counted
-      separately below).
-    * ``known_facts_truncated_total`` — sum across PCs of facts
-      truncated past the tail-K window.
-    * ``clues_truncated`` — count of ``discovered_clues`` over the cap.
-    * ``encounter_anchored_count`` (Story 61-7) — count of NPCs kept
-      because they appear in the active encounter's ``actors`` list,
-      not because their location matched. Zero when the projection
-      was skipped.
-    * ``npcs_unresolvable_name_dropped`` (Story 61-8 §D1) — count of
-      NPC payload entries whose ``core.name`` / top-level ``name``
-      extraction yielded a falsy value (data-shape drift,
-      GM-panel-actionable). Reported separately from ``npcs_dropped``
-      so a serialization regression doesn't masquerade as legitimate
-      off-scene filtering.
-    """
-    counts: dict[str, int] = {
-        "room_states_dropped": 0,
-        "npcs_dropped": 0,
-        "known_facts_truncated_total": 0,
-        "clues_truncated": 0,
-        # Story 61-7 (review-fix round 2) — OTEL Observability Principle:
-        # the GM panel must distinguish NPCs kept by location match from
-        # NPCs kept by the encounter-actor override branch. ``npcs_dropped``
-        # alone is silent on which branch fired. See
-        # ``sidequest.game.npc_scene.is_npc_anchored_by_encounter``.
-        "encounter_anchored_count": 0,
-        # Story 61-8 §D1 — silent-failure-hunter follow-up. The
-        # in-scene filter loop below silently drops payload entries
-        # whose ``core.name`` / ``name`` extraction yields a falsy
-        # value (typically ``None`` from a malformed dict in the
-        # pre-projection snapshot serialization). Pre-§D1 these were
-        # rolled into ``npcs_dropped`` and indistinguishable from
-        # legitimate off-scene drops — the GM panel had no way to see
-        # data-shape drift. Now reported separately.
-        "npcs_unresolvable_name_dropped": 0,
-    }
-
-    # ---------------------------------------------------------------
-    # room_states + npcs — both depend on actor location. When the
-    # caller couldn't resolve it (and has already logged the
-    # actor_location_empty warning), skip both projections rather than
-    # gaslight the narrator with "no rooms / no NPCs". The pass-through
-    # path costs a few more bytes; the alternative is the narrator
-    # confabulating into an empty world.
-    # ---------------------------------------------------------------
-    if current_room_id:
-        # room_states — keep only the acting PC's current room.
-        room_states = payload.get("room_states", {})
-        before = len(room_states)
-        if current_room_id in room_states:
-            payload["room_states"] = {current_room_id: room_states[current_room_id]}
-        else:
-            # current_room_id is set but no RoomState exists for it yet
-            # (no container retrieval recorded). Empty dict preserves
-            # the structural anchor; every other room id is dropped.
-            payload["room_states"] = {}
-        counts["room_states_dropped"] = before - len(payload["room_states"])
-
-        # npcs — in-scene-only projection + nested belief_state strip.
-        # Story 61-7 unifies the in-scene predicate with the
-        # ``list_npcs_in_scene`` tool — see
-        # ``sidequest.game.npc_scene.is_npc_in_scene``. ``npc.core.name``
-        # is guaranteed non-empty by ``CreatureCore.name_non_blank``
-        # field validator (``sidequest/game/creature_core.py:239``);
-        # the set-add cannot silently collapse identities under the
-        # current model invariant. See
-        # ``test_upstream_creaturecore_validator_blocks_empty_npc_names``
-        # for the regression guard that pins the invariant.
-        encounter = snapshot.encounter
-        encounter_anchored = 0
-        npcs_payload = payload.get("npcs", [])
-        in_scene_names: set[str] = set()
-        for npc in snapshot.npcs:
-            if is_npc_in_scene(npc, current_room=current_room_id, encounter=encounter):
-                in_scene_names.add(npc.core.name)
-                if is_npc_anchored_by_encounter(npc, encounter):
-                    encounter_anchored += 1
-        counts["encounter_anchored_count"] = encounter_anchored
-        before = len(npcs_payload)
-        kept: list[dict] = []
-        unresolvable_name_dropped = 0
-        for entry in npcs_payload:
-            core = entry.get("core")
-            entry_name = core.get("name") if isinstance(core, dict) else entry.get("name")
-            # Story 61-8 §D1 — distinguish "name shape was wrong" (data
-            # drift, GM-panel actionable) from "NPC is off-scene" (the
-            # projection working as designed). A name-key that yields a
-            # falsy value (None, empty string) cannot match
-            # ``in_scene_names`` (which is sourced from
-            # ``CreatureCore.name_non_blank``-validated NPCs); count
-            # those separately so the GM panel can spot serialization
-            # regressions instead of attributing them to legitimate
-            # drops.
-            if not entry_name:
-                unresolvable_name_dropped += 1
-                continue
-            if entry_name in in_scene_names:
-                # Strip nested belief_state — dispatch-side state, not
-                # prompt-side (ADR-053 gossip propagation).
-                entry.pop("belief_state", None)
-                kept.append(entry)
-        payload["npcs"] = kept
-        counts["npcs_dropped"] = before - len(kept) - unresolvable_name_dropped
-        counts["npcs_unresolvable_name_dropped"] = unresolvable_name_dropped
-
-    # ---------------------------------------------------------------
-    # characters[*].known_facts — per-PC tail-K projection. PC-scoped,
-    # runs regardless of actor location.
-    # ---------------------------------------------------------------
-    chars_payload = payload.get("characters", [])
-    truncated_total = 0
-    for char_entry in chars_payload:
-        facts = char_entry.get("known_facts")
-        if isinstance(facts, list) and len(facts) > _KNOWN_FACTS_TAIL_K:
-            truncated_total += len(facts) - _KNOWN_FACTS_TAIL_K
-            char_entry["known_facts"] = facts[-_KNOWN_FACTS_TAIL_K:]
-    counts["known_facts_truncated_total"] = truncated_total
-
-    # ---------------------------------------------------------------
-    # scenario_state.discovered_clues — size cap (ordered by clue id
-    # for determinism; the field is a set in the source so insertion
-    # order is not preserved). Scenario-scoped, runs regardless of
-    # actor location.
-    # ---------------------------------------------------------------
-    scenario_payload = payload.get("scenario_state")
-    if isinstance(scenario_payload, dict):
-        clues = scenario_payload.get("discovered_clues")
-        if isinstance(clues, list) and len(clues) > _DISCOVERED_CLUES_CAP:
-            counts["clues_truncated"] = len(clues) - _DISCOVERED_CLUES_CAP
-            scenario_payload["discovered_clues"] = sorted(clues)[:_DISCOVERED_CLUES_CAP]
-
-    return counts
-
 
 if TYPE_CHECKING:
     from sidequest.server.session_room import SessionRoom
@@ -536,12 +372,38 @@ def _resolve_acting_character_name(sd: _SessionData, room: SessionRoom | None) -
     return snapshot.characters[0].core.name
 
 
+def player_log_content(action: str, merged_player_actions: list[tuple[str, str]] | None) -> str:
+    """The verbatim player text to persist into ``narrative_log``.
+
+    sq-playtest 2026-06-07 barsoom (#177 defect a): the narrative_log
+    player-turn entry recorded the *scaffolded* narrator input — the
+    ``[INITIATIVE ORDER] …`` preamble (``initiative_preamble``) prepended to
+    the ``"Name: action"`` join that ``dispatch_fired_barrier`` hands the
+    narrator. James's actual words were buried (or, in the transcript view,
+    lost entirely) behind the engine's resolution-order scaffold, and the
+    corruption rode through to journal / scrapbook / replay.
+
+    The clean source is ``TurnContext.merged_player_actions`` — the per-PC
+    ``(character_name, raw_action)`` tuples drained from the barrier buffer,
+    which NEVER carry the preamble. Solo (one tuple) → the raw text alone;
+    MP (N tuples) → name-tagged declarations, one per line, so the GM panel
+    keeps per-speaker attribution. When ``merged`` is absent (the room-is-None
+    solo path and the dice-replay re-entry both pass a clean ``action`` with
+    no preamble), fall back to ``action`` verbatim.
+    """
+    if not merged_player_actions:
+        return action
+    if len(merged_player_actions) == 1:
+        return merged_player_actions[0][1]
+    return "\n".join(f"{name}: {act}" for name, act in merged_player_actions)
+
+
 def _project_current_region(sd: _SessionData, snapshot: GameSnapshot) -> object | None:
     """Beneath Sünden BETTER fix (seam 1+2) — per-turn region projection.
 
-    Re-derive the party's current region from the live ``DungeonStore``
-    (SQLite is the single source of truth — never mirrored onto the
-    persisted snapshot, which has a documented divergence disease). The
+    Re-derive the party's current region from the live ``DungeonRepository``
+    (Postgres is the single source of truth, ADR-115 — never mirrored onto
+    the persisted snapshot, which has a documented divergence disease). The
     result rides ``TurnContext.region_projection`` and renders as the
     Early-zone "you are here" section + the constrained move vocabulary.
 
@@ -590,17 +452,16 @@ def _project_current_region(sd: _SessionData, snapshot: GameSnapshot) -> object 
             )
             return None
 
-        from sidequest.dungeon.persistence import DatabaseError, DungeonStore
         from sidequest.dungeon.seed_bootstrap import ENTRANCE_ID
         from sidequest.dungeon.themes import load_theme_palette
+        from sidequest.game.persistence import DatabaseError
         from sidequest.genre.loader import (
             DEFAULT_GENRE_PACK_SEARCH_PATHS,
             GenreLoader,
         )
 
-        store = DungeonStore(sd.store.connection())
         try:
-            graph = store.load_map(entrance_id=ENTRANCE_ID)
+            graph = sd.dungeon_repository.load_map(entrance_id=ENTRANCE_ID)
         except DatabaseError as exc:
             span.set_attribute("outcome", "no_dungeon")
             span.set_attribute("reason", f"no_dungeon_schema: {exc}")
@@ -716,8 +577,9 @@ def _project_current_region(sd: _SessionData, snapshot: GameSnapshot) -> object 
 
         loader = GenreLoader(search_paths=DEFAULT_GENRE_PACK_SEARCH_PATHS)
         world_dir = loader.find(sd.genre_slug) / "worlds" / sd.world_slug
-        # pack root holds themes/ — mirrors session_integration._theme_pack_root
-        palette = load_theme_palette(world_dir.parent.parent)
+        # ADR-140 (story 113-1): themes/ is world-tier — resolve from the world
+        # dir, mirroring session_integration._theme_pack_root.
+        palette = load_theme_palette(world_dir)
 
         try:
             proj = project_region(graph, current_region, palette)
@@ -743,19 +605,51 @@ def _project_current_region(sd: _SessionData, snapshot: GameSnapshot) -> object 
         return proj
 
 
+def refresh_turn_context_post_dispatch(
+    turn_context: TurnContext,
+    *,
+    sd: _SessionData,
+    snapshot: GameSnapshot,
+) -> None:
+    """Refresh the TurnContext projections the dispatch bank may have
+    invalidated (ADR-113 engine-first: the bank mutates the snapshot BEFORE
+    the narrator prompt is built, but ``_build_turn_context`` ran before the
+    bank).
+
+    - ``npcs``: the bank may have materialized opponents into
+      ``snapshot.npcs`` (the pre-existing refresh, consolidated here).
+    - ``region_projection``: a resolved movement dispatch has already
+      advanced ``pc_regions`` + the ``current_region`` anchor; without the
+      re-projection the narrator's YOU-ARE-HERE names the room the party
+      just LEFT on exactly the turns a move lands — the narrator must just
+      get the updated map (sq-playtest 2026-06-12, Keith).
+
+    Emits a second ``dungeon.region_projection`` span on dungeon worlds
+    (pre/post-dispatch pair) — the GM panel sees both sides of the move.
+    """
+    turn_context.npcs = list(snapshot.npcs)
+    turn_context.region_projection = _project_current_region(sd, snapshot)
+
+
 def _build_turn_context(
     sd: _SessionData,
     *,
     opening_directive: str | None = None,
+    opening_seed_shown: bool = False,
     lore_context: str | None = None,
+    entity_retrieval: RetrievedEntities | None = None,
     room: SessionRoom | None = None,
 ) -> TurnContext:
     """Assemble :class:`TurnContext` for one narration turn (Slice H).
 
     ``opening_directive`` is consumed turn 0 only (caller clears the
-    session field). ``lore_context`` is the pre-rendered <lore> block.
-    ``room`` provides the seat map so MP can identify the acting PC by
-    player_id rather than guessing snapshot.characters[0].
+    session field). ``opening_seed_shown`` marks the seeded-opening case
+    where the action IS the already-cold-opened ``first_turn_invitation``
+    (pingpong 2026-06-05 [BAR-1] — the prompt builder reframes the
+    recency action block so the narrator does not restate it).
+    ``lore_context`` is the pre-rendered <lore> block. ``room`` provides
+    the seat map so MP can identify the acting PC by player_id rather
+    than guessing snapshot.characters[0].
     """
     from sidequest.agents.encounter_render import render_encounter_summary
     from sidequest.server.dispatch.confrontation import find_confrontation_def
@@ -935,14 +829,6 @@ def _build_turn_context(
         exclude_defaults=True,
         exclude_none=True,
     )
-    # Story 57-5 / ADR-110 Phase B — field-pruning allowlist. These
-    # fields are either re-rendered in dedicated prompt sections
-    # (active_tropes, axis_values) or belong to deferred subsystems
-    # (genie_wishes, achievement_tracker). ``pop`` with default tolerates
-    # the Phase-A case where ``exclude_defaults`` has already removed
-    # an empty entry.
-    for _drop_field in _PHASE_B_DROP_FIELDS:
-        state_summary_payload.pop(_drop_field, None)
     # Story 49-1 — drop narrative_log from the Valley-zone state_summary
     # JSON dump. The last K=2 entries (57-1) now ride into the narrator prompt
     # via the Recency-zone ``recent_narrative_context`` section (see
@@ -950,9 +836,9 @@ def _build_turn_context(
     # would put the same prose in two zones — high-attention Recency
     # AND decayed Valley — re-creating the attention-decay disease this
     # story exists to cure.
-    # Also enforced via the ``_PHASE_B_DROP_FIELDS`` loop above (story
-    # 61-5 added ``narrative_log`` to the registry); this pop is kept
-    # for defense-in-depth pending follow-up consolidation.
+    # Also enforced via ``apply_snapshot_slimming``'s Phase B drop below
+    # (story 61-5 added ``narrative_log`` to the registry); this pop is
+    # kept for defense-in-depth pending follow-up consolidation.
     state_summary_payload.pop("narrative_log", None)
     # Story 45-8 — when the gate is engaged, also redact non-self PCs
     # from the state_summary JSON. Without this redaction the canonical
@@ -995,14 +881,19 @@ def _build_turn_context(
             snapshot.turn_manager.interaction,
         )
 
-    # Story 61-2 / ADR-110 Phase C — projections for the four growing
-    # snapshot fields that 57-5's Phase B missed: room_states (project to
-    # acting PC's current room), npcs (in-scene only + drop nested
-    # belief_state), characters[*].known_facts (tail-K=8 per PC),
-    # scenario_state.discovered_clues (cap=12). Counts ride on the
-    # prompt.game_state.bytes span below so the GM panel can verify the
-    # cut engaged per-field (Sebastien's lie-detector contract).
-    _projection_counts = _apply_phase_c_projections(
+    # Story 57-5/61-2 → 82-10 / ADR-110 Phase B + C via the shared
+    # ``apply_snapshot_slimming`` seam (extracted so the Intent Router
+    # pass applies the same audited cut): Phase B field-pruning drop
+    # list, then projections for the four growing snapshot fields —
+    # room_states (project to acting PC's current room), npcs (in-scene
+    # only + drop nested belief_state), characters[*].known_facts
+    # (tail-K=8 per PC), scenario_state.discovered_clues (cap=12).
+    # Counts ride on the prompt.game_state.bytes span below so the GM
+    # panel can verify the cut engaged per-field (the lie-detector
+    # contract). Phase B running after the 45-8 redaction above is
+    # order-independent: the redaction touches only ``characters``,
+    # which is not in the drop list.
+    _projection_counts = apply_snapshot_slimming(
         snapshot,
         state_summary_payload,
         current_room_id=current_room_id,
@@ -1124,7 +1015,133 @@ def _build_turn_context(
         recent_body_mentions = list(sess.recent_body_mentions)
         quest_anchors = list(snapshot.quest_anchors)
 
+    # Story 75-5 (ADR-118 §D4): render the universal-retrieval fill into typed
+    # Valley blocks. Only non-empty tiers render — an empty tier stays None so
+    # orchestrator registers no section (zero-byte-leak). The floor is NOT
+    # rendered here; it rides ``npc_working_set`` already (no double-injection).
+    retrieved_entity_npcs: str | None = None
+    retrieved_entity_locations: str | None = None
+    retrieved_entity_factions: str | None = None
+    retrieved_entity_relationships: str | None = None
+    retrieved_entity_quests: str | None = None
+    retrieved_entity_tropes: str | None = None
+    if entity_retrieval is not None:
+        if entity_retrieval.retrieved_npcs:
+            retrieved_entity_npcs = render_entity_section(
+                "retrieved_npcs", entity_retrieval.retrieved_npcs
+            )
+        if entity_retrieval.retrieved_locations:
+            retrieved_entity_locations = render_entity_section(
+                "retrieved_locations", entity_retrieval.retrieved_locations
+            )
+        if entity_retrieval.retrieved_factions:
+            retrieved_entity_factions = render_entity_section(
+                "retrieved_factions", entity_retrieval.retrieved_factions
+            )
+        # Story 84-3 (WI-4, ADR-118 §A2, Reviewer blocker): render the §A2
+        # floor-companion relationship cards into a typed Valley block, mirroring
+        # the npc/location/faction sections. Without this the relationship card the
+        # retrieval surfaced dies at the render seam and never reaches the narrator.
+        if entity_retrieval.retrieved_relationships:
+            retrieved_entity_relationships = render_entity_section(
+                "retrieved_relationships", entity_retrieval.retrieved_relationships
+            )
+        # Story 84-5 (WI-2, ADR-118 §A2): render the DORMANT quest / trope recall
+        # cards into typed Valley blocks. These are for items surfaced via RETRIEVAL
+        # (a completed quest / resolved trope the player referenced) — distinct from
+        # the ACTIVE quest/trope render paths (state_summary / trope foreground),
+        # which are untouched. No double-render: only dormant items reach here.
+        if entity_retrieval.retrieved_quests:
+            retrieved_entity_quests = render_entity_section(
+                "retrieved_quests", entity_retrieval.retrieved_quests
+            )
+        if entity_retrieval.retrieved_tropes:
+            retrieved_entity_tropes = render_entity_section(
+                "retrieved_tropes", entity_retrieval.retrieved_tropes
+            )
+
+    # Story 81-3 (ADR-025): derive the pacing hint from the per-session
+    # TensionTracker (the 81-2 producer on _SessionData) using the genre's
+    # DramaThresholds, then stamp it onto TurnContext so the orchestrator's
+    # [PACING] injection (the `if context.pacing_hint is not None` guard) finally
+    # fires. ``drama_thresholds`` is None when the pack ships no pacing.yaml
+    # (e.g. caverns_and_claudes) — DramaThresholds()'s own defaults are the
+    # model's documented absent-pacing behavior, not a silent fallback. The span
+    # is the GM-panel lie detector: it records the hint the narrator received so
+    # the dev can confirm it tracks real tension state (OTEL Observability).
+    pacing_thresholds = sd.genre_pack.drama_thresholds or DramaThresholds()
+    pacing_hint = sd.tension_tracker.pacing_hint(pacing_thresholds)
+    # Story 77-7 (ADR-024/025/128): if the lull-escalation engine fired a seed
+    # last turn, its narrative_hint is THIS turn's concrete escalation directive.
+    # Override the generic 'environment shifts' escalation_beat with it and
+    # consume the one-shot directive (sibling of next_turn_directives'
+    # populate-then-consume discipline). PacingHint is frozen → dataclasses.replace.
+    # Applied regardless of the current boring_streak: the directive can outlive
+    # the streak the fire itself reset.
+    _lull_directive = snapshot.pending_escalation_directive
+    if _lull_directive:
+        import dataclasses  # noqa: PLC0415
+
+        pacing_hint = dataclasses.replace(pacing_hint, escalation_beat=_lull_directive)
+        snapshot.pending_escalation_directive = None
+    with pacing_hint_span(
+        drama_weight=pacing_hint.drama_weight,
+        target_sentences=pacing_hint.target_sentences,
+        delivery_mode=str(pacing_hint.delivery_mode),
+        escalation_present=pacing_hint.escalation_beat is not None,
+    ):
+        pass
+
+    # Story 82-2 (ADR-049) — resolve the active narrator verbosity + vocabulary
+    # the player chose (carried on _SessionData, hydrated from the CONNECT
+    # payload / persisted snapshot). When the player made no choice we fall back
+    # to default_for_player_count using the same live player count the
+    # notorious-party gate computed above — NEVER a hardcoded literal (No Silent
+    # Fallbacks). The span is the GM-panel lie detector: it records the active
+    # setting AND whether it came from the player or the default.
+    verbosity_source = "player" if sd.narrator_verbosity is not None else "default_for_player_count"
+    vocabulary_source = (
+        "player" if sd.narrator_vocabulary is not None else "default_for_player_count"
+    )
+    resolved_verbosity = sd.narrator_verbosity or NarratorVerbosity.default_for_player_count(
+        player_count_for_gate
+    )
+    resolved_vocabulary = sd.narrator_vocabulary or NarratorVocabulary.default_for_player_count(
+        player_count_for_gate
+    )
+    with narrator_settings_span(
+        narrator_verbosity=str(resolved_verbosity),
+        narrator_vocabulary=str(resolved_vocabulary),
+        verbosity_source=verbosity_source,
+        vocabulary_source=vocabulary_source,
+    ):
+        pass
+
+    # Light & Darkness survival clock (Task 7.1). Surface the ``light``
+    # ResourcePool (current/max + threshold narrator_hints) and the acting PC's
+    # active darkness statuses so the narrator's guttering/dark prose is
+    # state-driven, not improvised. Both default to None/empty on packs without
+    # a light clock (zero-byte-leak). The darkness status is matched by its
+    # structured ``source`` marker (never by wording), so a combat wound that
+    # happens to share text can never leak into the light block.
+    light_pool = snapshot.resources.get("light")
+    darkness_statuses: list[Status] = []
+    if light_pool is not None:
+        # Lazy import: ``environment_clock`` pulls ``game.session`` which
+        # transitively reaches ``narration_apply`` → ``session_helpers``, so a
+        # module-top import here is circular. Local import breaks the cycle.
+        from sidequest.agents.subsystems.environment_clock import (  # noqa: PLC0415
+            DARKNESS_STATUS_SOURCE,
+        )
+
+        acting_core = snapshot.find_creature_core(char_name)
+        if acting_core is not None:
+            darkness_statuses = [
+                st for st in acting_core.statuses if st.source == DARKNESS_STATUS_SOURCE
+            ]
+
     return TurnContext(
+        pacing_hint=pacing_hint,
         in_combat=in_combat,
         in_chase=in_chase,
         in_encounter=in_encounter,
@@ -1133,8 +1150,8 @@ def _build_turn_context(
         available_confrontations=available_confrontations,
         encounter_summary=encounter_summary,
         state_summary=state_summary_json,
-        narrator_verbosity="standard",
-        narrator_vocabulary="literary",
+        narrator_verbosity=resolved_verbosity,
+        narrator_vocabulary=resolved_vocabulary,
         genre=sd.genre_slug,
         genre_prompts=sd.genre_pack.prompts,
         # Phase E wiring (completes the deferral the ToolContext docstring
@@ -1150,7 +1167,7 @@ def _build_turn_context(
         # tools read through ToolContext.
         world_id=sd.world_slug,
         session_id=sd.game_slug,
-        store=sd.store,
+        repository=sd.repository,
         # Story 59-1: the SDK ToolContext stamps this so begin_confrontation
         # can validate the requested confrontation type against the genre. The
         # tool signals; narration_apply creates the encounter on the canonical
@@ -1179,10 +1196,40 @@ def _build_turn_context(
         available_sfx=_sfx_ids_from_genre(sd.genre_pack),
         npc_pool=list(snapshot.npc_pool),
         npcs=list(snapshot.npcs),
+        # Story 75-2: budgeted working-set selection (the floor of ADR-118's
+        # universal retrieval). Scene-present NPCs render full, off-stage
+        # collapse to compact — bounding prompt cost without eviction.
+        #
+        # Story 75-10: consume the floor already computed by the retrieval
+        # delegate (``retrieve_turn_context``), which built it with the real
+        # per-turn ``player_referenced_npcs`` signal derived from the player's
+        # action — so off-stage NPCs the player named render BRIEF, not compact.
+        # This also removes a double-computation (the floor was built once
+        # upstream and again here). The recompute path survives only for
+        # legacy/fixture callers that pass no ``entity_retrieval`` (dice-replay /
+        # error turns, unit tests) — those carry no fresh player reference, so
+        # ``None`` (compact off-stage) is correct; the present-scene floor holds
+        # in both paths.
+        npc_working_set=(
+            entity_retrieval.floor
+            if entity_retrieval is not None
+            else build_npc_working_set(
+                snapshot,
+                current_turn=snapshot.turn_manager.interaction,
+                player_referenced_npcs=None,
+            )
+        ),
         party_peers=party_peers,
         opening_directive=opening_directive,
+        opening_seed_shown=opening_seed_shown,
         world_context=sd.world_context,
         lore_context=lore_context,
+        retrieved_entity_npcs=retrieved_entity_npcs,
+        retrieved_entity_locations=retrieved_entity_locations,
+        retrieved_entity_factions=retrieved_entity_factions,
+        retrieved_entity_relationships=retrieved_entity_relationships,
+        retrieved_entity_quests=retrieved_entity_quests,
+        retrieved_entity_tropes=retrieved_entity_tropes,
         lethality_policy=sd.genre_pack.lethality_policy,
         pc_cores_by_player=pc_cores_by_player,
         npc_cores_by_name=npc_cores_by_name,
@@ -1193,18 +1240,35 @@ def _build_turn_context(
         quest_anchors=quest_anchors,
         pending_trope_context=pending_trope_context,
         active_trope_summary=active_trope_summary,
-        # Source the recency window from the durable narrative_log (SQLite)
-        # rather than the in-memory snapshot mirror. sd.store.append_narrative
-        # only writes to SQLite — the in-memory snapshot.narrative_log is
-        # populated *only* by world_materialization (one-shot at startup) and
-        # lore_seeding (chargen), never by the per-turn narrator append site
-        # at websocket_session_handler.py:2832/2840. Reading from snapshot
+        # Source the recency window from the durable narrative_log (Postgres,
+        # ADR-115) rather than the in-memory snapshot mirror.
+        # sd.repository.append_narrative only writes to Postgres — the in-memory
+        # snapshot.narrative_log is populated *only* by world_materialization
+        # (one-shot at startup) and lore_seeding (chargen), never by the
+        # per-turn narrator append site at
+        # websocket_session_handler.py:2832/2840. Reading from snapshot
         # made the recency injection emit turn_count=0/total_tokens=0 forever
         # (sq-playtest 2026-05-15 — story 49-1's safety-net was dormant).
-        # SQLite is the same ground-truth source Story 45-11's round
+        # Postgres is the same ground-truth source Story 45-11's round
         # invariant lie-detector relies on; aligning here closes the same
-        # snapshot/SQLite divergence class.
-        recent_narrative_log=sd.store.recent_narrative(RECENT_NARRATIVE_WINDOW_K),
+        # snapshot/store divergence class.
+        recent_narrative_log=sd.repository.recent_narrative(RECENT_NARRATIVE_WINDOW_K),
+        # Story 102-7 (Plan 2 §5.4) — the AWN mutation surface for the
+        # narrator context block. Both None on packs without mutations.yaml
+        # or sessions with no seeded mutants; the orchestrator chokepoint
+        # registers nothing in that case (zero token cost).
+        mutation_state=snapshot.mutation_state,
+        mutation_catalog=(sd.genre_pack.mutations if sd.genre_pack is not None else None),
+        # ADR-144 F2b (Story 116-2): the Fate state projection for the narrator's
+        # ``fate_state`` section. Built from the live snapshot via the SAME projector the
+        # intent router uses (one source of truth — build_fate_projection), gated on the
+        # bound ruleset so non-Fate packs carry None and pay zero tokens. The session
+        # handler owns the snapshot; TurnContext carries the already-built projection.
+        fate_state=(
+            build_fate_projection(snapshot)
+            if getattr(getattr(sd.genre_pack, "rules", None), "ruleset", None) == "fate"
+            else None
+        ),
         # Story 50-4: thread the live snapshot so build_narrator_prompt can
         # render + clear pending_time_skip_summary (one-shot lifecycle).
         snapshot=snapshot,
@@ -1215,6 +1279,9 @@ def _build_turn_context(
         # the narrator improvising geography and gives it the real
         # adjacent region ids as the constrained move vocabulary.
         region_projection=_project_current_region(sd, snapshot),
+        # Light & Darkness survival clock (Task 7.1) — see the block above.
+        light_pool=light_pool,
+        darkness_statuses=darkness_statuses,
     )
 
 
@@ -1262,6 +1329,40 @@ def _error_msg(
     )
 
 
+def _emit_unbound_rejection_event(message_type: str, state_name: str) -> None:
+    """Surface a genuine session-unbound rejection to the GM panel (story 67-7).
+
+    The transport guard correctly rejects action frames that arrive before the
+    ``AwaitingConnect``→``Playing`` handshake binds the session — but a bare
+    ``logger.info`` is invisible to the GM panel, so it cannot tell a genuine
+    guard from the reconnect churn of a duplicate-socket loop. Emit a structured
+    watcher event carrying the rejected frame type, the session state, and the
+    ``session_unbound`` recovery classification. That classification is the
+    discriminator (AC5): reconnect churn does not carry it, so the panel can
+    separate a real unbound rejection from ordinary transport noise.
+
+    Per the OTEL Observability Principle, every subsystem decision must emit a
+    watcher event — the panel is the lie-detector. Call this only on the genuine
+    ``session_unbound`` branch (the one tagged ``code="session_unbound"``), never
+    on the Creating-state / data-missing rejection class, so the signal stays
+    trustworthy.
+    """
+    from sidequest.telemetry.watcher_hub import publish_event
+
+    publish_event(
+        "state_transition",
+        {
+            "field": "session_binding",
+            "op": "message_rejected_unbound",
+            "message_type": message_type,
+            "state": state_name,
+            "recovery": "session_unbound",
+        },
+        component="session",
+        severity="warning",
+    )
+
+
 def _presence_msg(player_id: str, state: str) -> PlayerPresenceMessage:
     """PLAYER_PRESENCE message for connect/disconnect (MP-02 Task 4)."""
     return PlayerPresenceMessage(
@@ -1300,10 +1401,25 @@ def _build_cartography_map_message(
     world_slug: str | None,
     current_location: str | None,
     player_id: str = "",
+    discovered_regions: list[str] | None = None,
 ) -> CartographyMapMessage | None:
     """Build a MAP_UPDATE message from cartography region data.
 
     Returns None when the pack has no region-mode cartography.
+
+    ``discovered_regions`` is the PC's visited-region list (from
+    ``snapshot.discovered_regions``). Each entry that is a REAL region
+    slug in this world's cartography becomes an ``{id, name}`` entry in
+    ``payload.explored`` so the client (``MapOverlay.tsx``) can highlight
+    visited-but-not-current regions. Entries that are NOT valid region
+    slugs are dropped — ``discovered_regions`` is known to be polluted
+    with scene titles (ping-pong #329, e.g. ``"A Field of Blue Flowers,
+    Munchkin Country"``), so filtering to ``regions`` doubles as a
+    cleanup. This is a legitimate filter (we emit exactly the valid
+    visited regions; the dropped count is recorded in the
+    ``cartography.map_emitted`` OTEL span), NOT a silent fallback. The
+    default ``None`` preserves an empty ``explored`` for existing
+    callers/tests.
     """
     if pack is None or not world_slug or not current_location:
         return None
@@ -1320,38 +1436,128 @@ def _build_cartography_map_message(
     if nav_mode is not None and str(nav_mode) == "room_graph":
         return None
 
+    # Player-map disclosure (sq-playtest 2026-06-07 spoiler leak): under
+    # ``discovery_mode: fog`` only discovered regions ship with full lore;
+    # their undiscovered neighbors ship name-only (the explorable frontier,
+    # flagged ``undiscovered``); everything else never reaches the wire.
+    # ``public`` (default) preserves the full-catalog behavior for worlds
+    # whose map is common knowledge (a town, a neighborhood).
+    discovery_mode = str(getattr(cart, "discovery_mode", "public") or "public")
+    incoming = discovered_regions or []
+    if discovery_mode == "fog":
+        known: set[str] = {rid for rid in incoming if rid in regions}
+        if current_location in regions:
+            # The party is standing there — discovered by definition, even
+            # when the visited-region ledger lags.
+            known.add(current_location)
+        frontier: set[str] = set()
+        for rid in known:
+            for adj in getattr(regions[rid], "adjacent", []):
+                if adj in regions and adj not in known:
+                    frontier.add(adj)
+    else:
+        known = set(regions)
+        frontier = set()
+
     region_dict: dict[str, dict] = {}
     for slug, region in regions.items():
-        region_dict[slug] = {
-            "name": region.name,
-            "description": getattr(region, "description", None) or getattr(region, "summary", None),
-            "adjacent": list(getattr(region, "adjacent", [])),
-        }
+        if slug in known:
+            region_dict[slug] = {
+                "name": region.name,
+                "description": getattr(region, "description", None)
+                or getattr(region, "summary", None),
+                "adjacent": [
+                    a
+                    for a in getattr(region, "adjacent", [])
+                    if discovery_mode != "fog" or a in known or a in frontier
+                ],
+            }
+        elif slug in frontier:
+            # Name-only frontier entry: no description, no lore, no onward
+            # adjacency (edges past the frontier would leak the graph).
+            region_dict[slug] = {
+                "name": region.name,
+                "description": None,
+                "adjacent": [],
+                "undiscovered": True,
+            }
 
     routes_list: list[dict] = []
     for route in getattr(cart, "routes", []):
+        from_id = getattr(route, "from_id", None)
+        to_id = getattr(route, "to_id", None)
+        if discovery_mode == "fog":
+            # A route reaches the wire only when both endpoints are visible
+            # AND at least one is genuinely discovered (two frontier nodes
+            # joined by a route would leak undiscovered topology).
+            endpoints_visible = (from_id in known or from_id in frontier) and (
+                to_id in known or to_id in frontier
+            )
+            if not endpoints_visible or (from_id not in known and to_id not in known):
+                continue
         routes_list.append(
             {
                 "name": route.name,
                 "description": getattr(route, "description", None),
-                "from_id": getattr(route, "from_id", None),
-                "to_id": getattr(route, "to_id", None),
+                "from_id": from_id,
+                "to_id": to_id,
             }
         )
 
-    return CartographyMapMessage(
-        payload=CartographyMapPayload(
-            current_location=current_location,
-            region=world_slug,
-            cartography={
-                "navigation_mode": str(nav_mode) if nav_mode else "region",
-                "starting_region": getattr(cart, "starting_region", ""),
-                "regions": region_dict,
-                "routes": routes_list,
-            },
-        ),
-        player_id=player_id,
-    )
+    # Visited-region overlay: keep only valid region slugs (drops the
+    # scene-title pollution), de-duplicate while preserving first-seen
+    # order. The client reads ``id`` (falls back to ``name``) for the
+    # visited set; emit both.
+    explored: list[dict] = []
+    _seen: set[str] = set()
+    for rid in incoming:
+        if rid in regions and rid not in _seen:
+            _seen.add(rid)
+            explored.append(
+                {
+                    "id": rid,
+                    "name": regions[rid].name,
+                    # Node-graph edges: the region's adjacency list. MapOverlay
+                    # draws one edge per connection; region-mode worlds author
+                    # adjacency as ``adjacent`` in cartography.yaml, so without
+                    # this the explored payload arrived with no ``connections``
+                    # field — isolated nodes at best, a GameBoard crash at worst
+                    # (ui #330 unguarded ``for…of``). (server #632)
+                    "connections": list(getattr(regions[rid], "adjacent", [])),
+                }
+            )
+
+    with cartography_map_emitted_span(
+        current_location=current_location,
+        world_slug=world_slug,
+        visited_count=len(explored),
+        discovered_total=len(incoming),
+        dropped_count=len(incoming) - len(explored),
+        # Disclosure accounting (fog mode): the GM panel must be able to see
+        # how much of the catalog reached the wire vs stayed hidden.
+        discovery_mode=discovery_mode,
+        regions_shipped=len(region_dict),
+        regions_total=len(regions),
+    ):
+        return CartographyMapMessage(
+            payload=CartographyMapPayload(
+                current_location=current_location,
+                region=world_slug,
+                explored=explored,
+                cartography={
+                    "navigation_mode": str(nav_mode) if nav_mode else "region",
+                    "starting_region": getattr(cart, "starting_region", ""),
+                    "regions": region_dict,
+                    "routes": routes_list,
+                    # Story 104-1 / M-A: the loader-cached multi-system flag,
+                    # supersedes the UI's regionCount>1 heuristic (M-B). Always a
+                    # concrete bool on the wire (never absent/None — the UI reads
+                    # it unconditionally).
+                    "is_cluster": bool(getattr(world, "is_cluster", False)),
+                },
+            ),
+            player_id=player_id,
+        )
 
 
 def _sfx_ids_from_genre(genre_pack: GenrePack) -> list[str]:
@@ -1598,6 +1804,36 @@ _SKIP_REASON_PRONOUNS_HONORIFIC = "ambiguous_pronouns_honorific"
 _SKIP_REASON_PRONOUNS_ROLE = "ambiguous_pronouns_role"
 _SKIP_REASON_GENDER_PAIRED = "gender_paired_conflict"
 
+# Gendered-token pronoun fallback (sq-playtest 2026-06-07 purge/mint
+# deadlock): when the forward-window pronoun scan is ambiguous but the
+# honorific or bare-role token ITSELF declares gender, use the token's
+# pronouns instead of skipping. "Mother Demus" was named in narration four
+# consecutive turns (five_points-4 t28-31) while the minter skipped her
+# every turn on ``ambiguous_pronouns_honorific`` — composing with the
+# observation gate's purge into a deadlock where the NPC existed in prose
+# and nowhere in state. Reading "Mother"/"Mrs."/"Sir" as a pronoun source
+# is not guessing (the AC2 prohibition); it is reading what the narrator
+# wrote. Neutral titles (Dr, Reverend, Captain, Sergeant) and article
+# roles (the doctor, ...) stay window-only and still skip on ambiguity.
+_HONORIFIC_PRONOUN_FALLBACK: dict[str, str] = {
+    "Mrs": "she/her",
+    "Lady": "she/her",
+    "Dame": "she/her",
+    "Mother": "she/her",
+    "Mr": "he/him",
+    "Sir": "he/him",
+    "Lord": "he/him",
+    "Father": "he/him",
+}
+_ROLE_PRONOUN_FALLBACK: dict[str, str] = {
+    "mother": "she/her",
+    "sister": "she/her",
+    "daughter": "she/her",
+    "father": "he/him",
+    "brother": "he/him",
+    "son": "he/him",
+}
+
 
 def _emit_auto_mint_skip(
     *,
@@ -1762,6 +1998,7 @@ def _auto_mint_prose_only_npcs(
         public_name: str,
         role_token: str,
         pronouns: str,
+        pronoun_source: str = "window_inference",
     ) -> None:
         snapshot.npc_pool.append(
             NpcPoolMember(
@@ -1781,13 +2018,15 @@ def _auto_mint_prose_only_npcs(
             pronouns=pronouns,
             source="dialogue_extraction",
             turn_number=turn_num,
+            pronoun_source=pronoun_source,
         ):
             logger.info(
                 "npc.auto_minted_from_prose name=%r role=%r pronouns=%r "
-                "source=dialogue_extraction turn=%d",
+                "source=dialogue_extraction pronoun_source=%s turn=%d",
                 public_name,
                 role_token,
                 pronouns,
+                pronoun_source,
                 turn_num,
             )
 
@@ -1808,6 +2047,13 @@ def _auto_mint_prose_only_npcs(
         if cf_name in pc_names or cf_name in known_names:
             continue
         pronouns = _infer_pronouns_from_role_context(narration_text, end)
+        pronoun_source = "window_inference"
+        if pronouns is None:
+            # Gendered honorific fallback — the title itself declares the
+            # pronouns ("Mother Demus" → she/her). See
+            # ``_HONORIFIC_PRONOUN_FALLBACK`` for the deadlock this breaks.
+            pronouns = _HONORIFIC_PRONOUN_FALLBACK.get(title)
+            pronoun_source = "honorific_fallback"
         if pronouns is None:
             _emit_auto_mint_skip(
                 public_name=public_name,
@@ -1819,7 +2065,12 @@ def _auto_mint_prose_only_npcs(
         # Honorifics carry no canonical role tag (Mrs./Mr./Dr. are titles,
         # not roles). Role is None — narrator may refine via a later
         # structured patch.
-        _mint(public_name=public_name, role_token="", pronouns=pronouns)
+        _mint(
+            public_name=public_name,
+            role_token="",
+            pronouns=pronouns,
+            pronoun_source=pronoun_source,
+        )
 
     # Phase 2 — bare role tokens (Father, mother, the doctor, ...). Process
     # each role at most once per turn; first matching occurrence wins.
@@ -1864,6 +2115,14 @@ def _auto_mint_prose_only_npcs(
             continue
 
         pronouns = _infer_pronouns_from_role_context(narration_text, match.end())
+        pronoun_source = "window_inference"
+        if pronouns is None:
+            # Gendered bare-role fallback — "Father"/"Son" declare their own
+            # pronouns (barsoom-4 t6-9: "Father" skipped 4 consecutive turns
+            # on window ambiguity). Article roles (the doctor, ...) are not
+            # in the map and still skip.
+            pronouns = _ROLE_PRONOUN_FALLBACK.get(cf_role)
+            pronoun_source = "role_fallback"
         if pronouns is None:
             _emit_auto_mint_skip(
                 public_name=public_name,
@@ -1873,7 +2132,12 @@ def _auto_mint_prose_only_npcs(
             )
             continue
 
-        _mint(public_name=public_name, role_token=role_token, pronouns=pronouns)
+        _mint(
+            public_name=public_name,
+            role_token=role_token,
+            pronouns=pronouns,
+            pronoun_source=pronoun_source,
+        )
 
 
 def _apply_npc_observation_gate(
@@ -1881,6 +2145,7 @@ def _apply_npc_observation_gate(
     snapshot: GameSnapshot,
     emitted_mentions: list[NpcMention],
     turn_num: int,
+    narration_text: str = "",
 ) -> None:
     """Story 49-6: ratification gate for prose-mint NPCs.
 
@@ -1906,6 +2171,17 @@ def _apply_npc_observation_gate(
       Emit ``npc.observation_gate_purged`` at severity=warning so the
       GM panel renders the drop as a soft alert.
 
+    A re-citation in THIS turn's **prose** also ratifies (sq-playtest
+    2026-06-07 purge/mint deadlock, five_points-4 t28-31): the narrator
+    kept naming "Mother Demus"/"Son" in narration while omitting them
+    from ``npcs_present``, so the gate purged them every turn while the
+    minter re-skipped them — the NPC existed in prose and nowhere in
+    state for four consecutive turns. Prose recurrence is exactly the
+    observation this gate exists to detect (it is the same signal
+    ``_detect_missed_recurring_npcs`` warns about); a word-boundary
+    name match in ``narration_text`` promotes with
+    ``ratified_by="prose"`` instead of purging.
+
     Pipeline ordering is load-bearing: the gate examines pending
     members from PRIOR turns against THIS turn's mentions. Running
     after the auto-minter would self-cancel — this turn's mints
@@ -1928,6 +2204,8 @@ def _apply_npc_observation_gate(
         if m.role:
             mention_roles.add(m.role.casefold())
 
+    folded_text = narration_text.casefold() if narration_text else ""
+
     survivors: list[NpcPoolMember] = []
     for member in snapshot.npc_pool:
         if not member.observation_pending:
@@ -1937,6 +2215,18 @@ def _apply_npc_observation_gate(
         cf_name = member.name.casefold() if member.name else ""
         cf_role = (member.role or "").casefold()
         matched = (cf_name and cf_name in mention_names) or (cf_role and cf_role in mention_roles)
+        ratified_by = "structured_mention"
+        # Prose re-citation ratifies too — see docstring (2026-06-07
+        # purge/mint deadlock). Word-boundary match, same idiom as
+        # ``_detect_missed_recurring_npcs``.
+        if (
+            not matched
+            and cf_name
+            and folded_text
+            and re.search(rf"\b{re.escape(cf_name)}\b", folded_text)
+        ):
+            matched = True
+            ratified_by = "prose"
 
         if matched:
             member.observation_pending = False
@@ -1945,12 +2235,14 @@ def _apply_npc_observation_gate(
                 npc_name=member.name,
                 role=member.role or "",
                 turn_number=turn_num,
+                ratified_by=ratified_by,
             ):
                 logger.info(
-                    "npc.observation_gate_promoted name=%r role=%r turn=%d",
+                    "npc.observation_gate_promoted name=%r role=%r turn=%d ratified_by=%s",
                     member.name,
                     member.role,
                     turn_num,
+                    ratified_by,
                 )
         else:
             with npc_observation_gate_purged_span(
@@ -1975,8 +2267,9 @@ def _detect_npc_identity_drift(
     existing_pronouns: str | None,
     mention: NpcMention,
     turn_num: int,
+    applied: bool = False,
 ) -> None:
-    """Warn when narrator NPC mention disagrees with the canonical entry.
+    """Emit a drift span when a narrator NPC mention disagrees with canonical.
 
     Story 37-44. Empty fields on the mention = "no opinion"; only explicit
     disagreement triggers. Side-effect only (logger.warning + watcher).
@@ -1984,6 +2277,13 @@ def _detect_npc_identity_drift(
     Wave 2A (story 45-47): refactored to take primitive fields rather than
     a typed registry entry, since callers may now hold either an ``Npc``
     or an ``NpcPoolMember``.
+
+    Story 72-7: drift is now authoritative at the pool-hit upsert site. The
+    ``applied`` flag records whether the disagreeing value is being written
+    onto the canonical entry (True) or merely observed (False — e.g. a
+    human-authored ``world_authored`` member the narrator must not overwrite,
+    or the warn-only ``npcs_hit`` path). The marker rides the span so the GM
+    panel can tell "the record moved" from "a mismatch was noticed".
     """
     for field, m_val, e_val in (
         ("pronouns", mention.pronouns, existing_pronouns),
@@ -2000,12 +2300,14 @@ def _detect_npc_identity_drift(
                 expected=e_val,
                 narrator=m_val,
                 turn_number=turn_num,
+                applied=applied,
             ):
                 logger.warning(
-                    "npc.reinvented name=%r field=%s expected=%r narrator=%r turn=%d",
+                    "npc.reinvented name=%r field=%s expected=%r narrator=%r applied=%s turn=%d",
                     existing_name,
                     field,
                     e_val,
                     m_val,
+                    applied,
                     turn_num,
                 )

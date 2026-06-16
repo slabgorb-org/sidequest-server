@@ -1,0 +1,311 @@
+# Space Opera — SWN-flavored Roles
+#
+# First authored mechanical-surface pass for Keith's (SWN authority) review.
+#
+# Design contract (per spec 2026-05-25-swn-crunch-ablative-hp-design.md):
+#   "Steal the nouns and the flavor. Leave SWN's resolution math."
+# These roles borrow SWN's role NAMES and station-of-labor flavor but resolve
+# through SideQuest's OWN engine: the ADR-033 confrontation dial/beat system
+# (beats: strike / brace / angle / push) over an ablative-HP lethality
+# substrate. There is deliberately NO d20-to-hit, Armor Class, 2d6
+# roll-under, saving throws, or Strength encumbrance here — those are SWN
+# resolution and are explicit non-goals.
+#
+# prime_requisite uses the space_opera ability scores from rules.yaml
+# (Physique, Reflex, Intellect, Cunning, Resolve, Influence) — NOT SWN's
+# Str/Dex/Con/Int/Wis/Cha.
+#
+# magic_level is `none` for this pack (rules.yaml), so magic_access is null
+# on every role.
+#
+# encounter_beat_choices reference real beat IDs declared in rules.yaml
+# confrontations:
+#   - Firefight (combat): shoot, take_cover, overload, retreat
+#   - Ship Combat:        broadside, evasive_maneuver, close_range, target_systems, disengage
+#   - Negotiation:        persuade, threaten, concede_point, walk_away
+#   - Spaceflight Pursuit (chase): burn, asteroid_thread, ecm, microjump
+#   - Dogfight:           straight, bank, loop, kill_rotation
+# Combat-capable roles lean strike/brace; social roles (Officer, Diplomat)
+# lean angle/push, mirroring the caverns_and_claudes per-class beat pattern.
+#
+# Per ADR-095: exactly ONE signature ability per non-magical role.
+# Each role's signature ability + beat selection reflects its battle-station
+# division of labor, which is canon in rules.yaml custom_rules.ship_combat:
+#   "Pilot maneuvers, Engineer manages power and repairs, Officer calls
+#    targets and coordinates, Soldier operates weapons, Operative runs
+#    electronic warfare."
+#
+# Three fields below are required by the ClassDef pydantic model
+# (sidequest-server .../genre/models/character.py, extra="forbid") but are
+# INERT for this pack's runtime, documented per-field:
+#   - minimum_score: this pack uses point_buy (rules.yaml, budget 27), so
+#     there is no roll-under-minimum gate. The 9 baseline mirrors
+#     caverns_and_claudes convention; it is not enforced under point_buy.
+#   - kit_table: only dereferenced when a chargen result requests
+#     equipment_generation: class_kit (builder.py ~L1923). space_opera uses
+#     rules/inventory.yaml `starting_equipment` keyed by role name instead,
+#     so kit_table is never resolved at runtime here. There is no
+#     equipment_tables.yaml in this pack — these strings are descriptive
+#     placeholders that satisfy the model, NOT live table references.
+#     FLAGGED FOR KEITH: if a class_kit equipment path is ever wired for
+#     space_opera, these need a real equipment_tables.yaml to resolve to.
+#   - jungian_default: archetype tag mapped per role's narrative posture.
+
+- id: officer
+  display_name: Officer
+  rpg_role: leader
+  jungian_default: ruler
+  minimum_score: 9
+  kit_table: officer_kit
+  prime_requisite: Influence
+  flavor: >-
+    The chain of command made flesh — the one who calls targets, coordinates
+    the bridge, and keeps a frightened crew acting like a crew.
+  encounter_beat_choices:
+    - persuade
+    - threaten
+    - concede_point
+    - walk_away
+    - take_cover
+    - target_systems
+    - broadside
+    - disengage
+  magic_access: null
+  abilities:
+    - name: "Call the Shot"
+      genre_description: >-
+        You see the fight as a board, not a brawl. One clear order cuts
+        through the alarms — the gunner knows where to fire, the pilot knows
+        where to be, and for one breath the crew moves like a single hand.
+        Authority is not a uniform. It is the moment everyone decides to
+        listen to you.
+      mechanical_effect: >-
+        Once per confrontation, coordinate the crew: one allied beat this
+        round resolves at advantage, and a successful Officer angle beat
+        (target_systems) plants a leverage tag the whole crew can spend.
+      involuntary: false
+
+- id: operative
+  display_name: Operative
+  rpg_role: control
+  jungian_default: outlaw
+  minimum_score: 9
+  kit_table: operative_kit
+  prime_requisite: Cunning
+  flavor: >-
+    A forgettable face and a thinner cover story. Runs the electronic
+    warfare station and the back-channel deal with the same flat calm.
+  encounter_beat_choices:
+    - shoot
+    - take_cover
+    - target_systems
+    - ecm
+    - concede_point
+    - disengage
+  magic_access: null
+  abilities:
+    - name: "Ghost Protocol"
+      genre_description: >-
+        You were never there. Sensors lose the lock, the camera catches
+        only static, the witness remembers someone taller. You spoof the
+        feed, salt the logs, and walk out of a room you were never recorded
+        entering.
+      mechanical_effect: >-
+        On a successful angle beat (ecm or target_systems), the misdirection
+        tag persists an extra round and any single follow-on strike that
+        spends it gains advantage. Once per confrontation, convert one
+        incoming strike into a clean miss by spoofing the lock.
+      involuntary: false
+
+- id: pilot
+  display_name: Pilot
+  rpg_role: skirmisher
+  jungian_default: explorer
+  minimum_score: 9
+  kit_table: pilot_kit
+  prime_requisite: Reflex
+  flavor: >-
+    Only calm when the ship is moving. The hands that fly the freighter
+    through a gap no instrument says is there.
+  encounter_beat_choices:
+    - burn
+    - asteroid_thread
+    - microjump
+    - evasive_maneuver
+    - straight
+    - bank
+    - loop
+    - kill_rotation
+  magic_access: null
+  abilities:
+    - name: "Threading the Needle"
+      genre_description: >-
+        Everyone else sees a wall of rock and a closing gun solution. You
+        see a line. You always see the line. The ship goes where you point
+        it because you have stopped asking it permission — the two of you
+        decided this together a long time ago.
+      mechanical_effect: >-
+        Once per chase or dogfight, re-fly a failed push or evasive beat at
+        advantage (asteroid_thread, burn, evasive_maneuver, bank). On the
+        re-fly, the usual crit-fail hull penalty is suppressed — the line
+        was always there.
+      involuntary: false
+
+- id: engineer
+  display_name: Engineer
+  rpg_role: support
+  jungian_default: creator
+  minimum_score: 9
+  kit_table: engineer_kit
+  prime_requisite: Intellect
+  flavor: >-
+    Manages power and repairs from the engine room, cursing fondly at a
+    drive core they have rebuilt under fire more than once.
+  encounter_beat_choices:
+    - evasive_maneuver
+    - target_systems
+    - broadside
+    - take_cover
+    - shoot
+    - close_range
+  magic_access: null
+  abilities:
+    - name: "Reroute Power"
+      genre_description: >-
+        You know exactly which system can bleed and which one can't. A
+        breaker thrown, a coupling crossed, three seconds of swearing — and
+        the shields hold, or the guns spike, or the engines find a burn
+        nobody thought they had left. Spec sheets are suggestions. You
+        wrote better ones.
+      mechanical_effect: >-
+        Once per ship combat, restore one degraded condition track (shields,
+        hull, engines, or weapons) by a step, OR feed that power to the guns
+        so the next broadside resolves at advantage. The choice is the
+        Engineer's, declared before the roll.
+      involuntary: false
+
+- id: medic
+  display_name: Medic
+  rpg_role: healer
+  jungian_default: caregiver
+  minimum_score: 9
+  kit_table: medic_kit
+  prime_requisite: Intellect
+  flavor: >-
+    A medkit that's always open and hands that don't shake even when the
+    ship does. Sees every injury as a problem and every person as a patient.
+  encounter_beat_choices:
+    - take_cover
+    - shoot
+    - retreat
+    - concede_point
+  magic_access: null
+  abilities:
+    - name: "Field Stabilize"
+      genre_description: >-
+        Pressure here, sealant there, a stim where it'll do the most good.
+        You don't fix anyone in a firefight — you keep them in the fight.
+        The body wants to quit; you negotiate a delay, and you are very good
+        at negotiating delays.
+      mechanical_effect: >-
+        Spend your beat to restore ablative HP to a crewmate within reach
+        (no strike that round). Stabilizes one downed ally back to acting at
+        the cost of the Medic taking a brace posture — the patient lives,
+        the doctor takes the exposure.
+      involuntary: false
+
+- id: smuggler
+  display_name: Smuggler
+  rpg_role: skirmisher
+  jungian_default: outlaw
+  minimum_score: 9
+  kit_table: smuggler_kit
+  prime_requisite: Cunning
+  flavor: >-
+    More hidden compartments than cabin space, a fast mouth, and a faster
+    exit plan. Always one scan away from a very bad day, and ready for it.
+  encounter_beat_choices:
+    - shoot
+    - take_cover
+    - retreat
+    - burn
+    - asteroid_thread
+    - ecm
+    - microjump
+  magic_access: null
+  abilities:
+    - name: "Exit Plan"
+      genre_description: >-
+        You walked in already knowing the three ways out. The vent, the
+        cargo hatch, the bribe you palmed the dockmaster on the way past.
+        When it goes bad — and it always goes bad — you are already moving
+        toward the door you marked an hour ago.
+      mechanical_effect: >-
+        Once per confrontation, a push beat to break contact (retreat or
+        microjump) resolves at advantage and lets one ally disengage
+        alongside you. If the escape lands, the crew leaves with no pursuit
+        tag advanced this round.
+      involuntary: false
+
+- id: diplomat
+  display_name: Diplomat
+  rpg_role: control
+  jungian_default: sage
+  minimum_score: 9
+  kit_table: diplomat_kit
+  prime_requisite: Influence
+  flavor: >-
+    Finds common ground where none appears to exist. A fluency in languages
+    and cultural registers that turns a standoff into a conversation.
+  encounter_beat_choices:
+    - persuade
+    - concede_point
+    - walk_away
+    - threaten
+    - take_cover
+  magic_access: null
+  abilities:
+    - name: "Find Common Ground"
+      genre_description: >-
+        Two parties who came to shout leave having agreed on one small thing,
+        and one small thing is a crack you can drive a treaty through. You
+        don't win the argument. You change what the argument is about.
+      mechanical_effect: >-
+        On a successful concede_point angle in a negotiation, the revealed
+        real-goal tag is doubled in value, and your next persuade strike that
+        spends it advances your leverage dial by an extra step toward
+        threshold. De-escalation is the Diplomat's strike.
+      involuntary: false
+
+- id: soldier
+  display_name: Soldier
+  rpg_role: tank
+  jungian_default: warrior
+  minimum_score: 9
+  kit_table: soldier_kit
+  prime_requisite: Physique
+  flavor: >-
+    Operates the weapons station and the breaching charge with the same
+    economy of movement. Knows exactly how dangerous everything is.
+  encounter_beat_choices:
+    - shoot
+    - take_cover
+    - overload
+    - retreat
+    - broadside
+    - close_range
+  magic_access: null
+  abilities:
+    - name: "Hold the Line"
+      genre_description: >-
+        You plant yourself in the chokepoint — the airlock, the corridor
+        mouth, the breach — and you make crossing it expensive. The crew
+        moves behind you because you have made the geometry of the fight
+        your problem and nobody else's.
+      mechanical_effect: >-
+        Take a brace posture (take_cover) to anchor a position: incoming
+        strikes against the crew route through the Soldier first, and the
+        Soldier's ablative HP absorbs the hit. While held, the Soldier's own
+        next strike (shoot or overload) gains advantage off the braced
+        footing.
+      involuntary: false

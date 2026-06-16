@@ -1,0 +1,60 @@
+name: Red Martian
+summary: Copper-skinned oviparous people of the scarlet tower-cities — honor-bound,
+  thousand-year-lived, masters of the flier and the long-sword
+description: >-
+  The dominant humanlike people of the dying world: smooth copper-red
+  skin, black hair, an oviparous people who hatch from the egg and
+  live near a thousand years if a blade does not find them first. They
+  hold the great tower-cities — Helium, Zodanga, Ptarth, Kaol, Dusar —
+  and the canal-belts that feed them, and they keep the old science
+  enough to fly and to cut radium. But a red Martian's first law is
+  honor: a guest is sacred, a given word is a debt, and a quarrel is
+  settled with the long-sword, navy or no navy. They are brilliant,
+  proud, jealous, and quick to love and to war.
+slots:
+  given_name:
+    corpora:
+      - corpus: barsoom_red.txt
+        weight: 1.0
+    lookback: 3
+  family_name:
+    corpora:
+      - corpus: barsoom_red.txt
+        weight: 1.0
+    lookback: 3
+  rank:
+    word_list:
+      - Jed
+      - Jeddak
+      - Dwar
+      - Padwar
+      - Odwar
+      - Panthan
+      - Princess
+      - Prince
+  place_noun:
+    word_list:
+      - tower
+      - canal
+      - landing-stage
+      - dock
+      - court
+      - garden
+      - way
+      - gate
+  adjective:
+    word_list:
+      - scarlet
+      - crimson
+      - high
+      - jeweled
+      - far
+      - bright
+      - ancient
+person_patterns:
+  - '{given_name} {family_name}'
+  - '{given_name} {family_name}, {rank}'
+  - '{rank} {given_name}'
+place_patterns:
+  - '{adjective} {place_noun}'
+  - 'the {place_noun} of {given_name}'

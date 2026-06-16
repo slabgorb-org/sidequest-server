@@ -14,26 +14,26 @@ import uuid
 from typing import TYPE_CHECKING
 
 from sidequest.agents.orchestrator import Orchestrator
+from sidequest.foundation.asset_urls import rewrite_theme_css_asset_urls
 from sidequest.game.builder import CharacterBuilder
 from sidequest.game.event_log import EventLog
 from sidequest.game.lore_seeding import seed_world_lore
 from sidequest.game.persistence import (
+    GameMode,
     SaveSchemaIncompatibleError,
-    SqliteStore,
 )
 from sidequest.game.projection.cache import ProjectionCache
 from sidequest.game.projection.composed import ComposedFilter
 from sidequest.game.projection.envelope import MessageEnvelope
 from sidequest.game.scrapbook_coverage import detect_scrapbook_coverage_gaps
 from sidequest.game.session import GameSnapshot
-from sidequest.game.sqlite_repository import SqliteSaveRepository
 from sidequest.game.world_grounding_bootstrap import load_world_grounding
 from sidequest.genre.loader import GenreLoader
+from sidequest.orbital.scope_bind import RegionScopeBindError
 from sidequest.protocol.messages import (
     ChapterMarkerMessage,
     ChapterMarkerPayload,
     ConfrontationMessage,
-    ConfrontationPayload,
     Footnote,
     GameResumedMessage,
     NarrationMessage,
@@ -41,10 +41,16 @@ from sidequest.protocol.messages import (
     SeatConfirmedPayload,
     SessionEventMessage,
     SessionEventPayload,
+    TurnStatusMessage,
+    TurnStatusPayload,
 )
+from sidequest.protocol.types import NonBlankString
 from sidequest.server import views
 from sidequest.server.dispatch.char_creation_resolve import resolve_char_creation_scenes
+from sidequest.server.dispatch.chargen_defs_resolve import resolve_backgrounds, resolve_foci
+from sidequest.server.dispatch.class_resolve import resolve_classes
 from sidequest.server.dispatch.culture_context import resolve_culture_reference
+from sidequest.server.dispatch.equipment_tables_resolve import resolve_equipment_tables
 from sidequest.server.image_pacing import ImagePacingThrottle
 from sidequest.server.magic_init import init_magic_state_for_session
 from sidequest.server.session_handler import (
@@ -59,6 +65,7 @@ from sidequest.server.session_helpers import (
     _presence_msg,
     _resolve_location_display,
 )
+from sidequest.server.turn_status_roster import build_seal_reconcile_roster
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
 
 if TYPE_CHECKING:
@@ -67,6 +74,7 @@ if TYPE_CHECKING:
     from sidequest.game.lore_store import LoreStore
     from sidequest.genre.models.pack import GenrePack
     from sidequest.protocol.messages import SessionEventPayload
+    from sidequest.server.session_room import SessionRoom
     from sidequest.server.websocket_session_handler import WebSocketSessionHandler
 
 from opentelemetry import trace
@@ -238,6 +246,92 @@ def _seed_world_lore_on_resume(
     return seed_world_lore(lore_store, genre_pack, world_slug, emit=emit)
 
 
+def bind_player_identity(
+    room: SessionRoom,
+    *,
+    player_id: str,
+    identity: str | None,
+    source: str | None,
+) -> None:
+    """Bind the per-socket resolved identity to player_id in the room (Story 67-6).
+
+    Room-only and ephemeral. Emits a watcher event carrying the SOURCE only —
+    never the identity value (no PII in telemetry).
+    """
+    if not identity:
+        return
+    room.set_player_identity(player_id, identity)
+    _watcher_publish(
+        "player_identity_resolved",
+        {"player_id": player_id, "source": source or "unknown"},
+        component="session",
+        severity="info",
+    )
+
+
+def _starting_region_for(genre_pack: GenrePack | None, world_slug: str) -> str | None:
+    """The world's ``cartography.starting_region``, or ``None``.
+
+    Used to seed per-region orbital file resolution (Story 98-2) at FRESH bind
+    time, when ``snapshot.current_region`` is not yet populated (region_init
+    runs later, at chargen confirmation). Mirrors the cartography lookup in
+    ``_bind_initial_orbital_scope``.
+    """
+    world_obj = genre_pack.worlds.get(world_slug) if genre_pack is not None else None
+    cartography = getattr(world_obj, "cartography", None) if world_obj is not None else None
+    starting = getattr(cartography, "starting_region", None) if cartography is not None else None
+    return starting or None
+
+
+def _bind_initial_orbital_scope(
+    room: SessionRoom,
+    *,
+    genre_pack: GenrePack | None,
+    world_slug: str,
+    is_resume: bool,
+) -> None:
+    """Center the per-location orrery on the party's system at connect (Story 95-1).
+
+    ``orbital_scope`` is transient session state (reset to system-root on every
+    connect), so without this the chart would open at the sector root rather than
+    the party's current system. The identity join (cartography region id == star
+    body id) lets us re-center from the region the party is in.
+
+    - Fresh session: bind from ``cartography.starting_region`` with
+      ``trigger="init"`` — a starting_region with no matching star body fails
+      loud (No Silent Fallbacks), surfacing a broken content join rather than a
+      silently un-centered chart.
+    - Resume: bind from the party's persisted ``current_region`` (falling back to
+      ``starting_region``) with ``trigger="relocation"`` — a star-less region is a
+      legitimate place the party traveled to, a loud-skip, not a fail-loud.
+
+    A no-op for non-orbital worlds (``orbital_content is None``) and for worlds
+    without cartography.
+    """
+    session = room.session
+    if session is None or session.orbital_content is None:
+        return
+    world_obj = genre_pack.worlds.get(world_slug) if genre_pack is not None else None
+    cartography = getattr(world_obj, "cartography", None) if world_obj is not None else None
+    if cartography is None:
+        return
+    starting_region = getattr(cartography, "starting_region", None)
+    if is_resume:
+        snapshot = room.snapshot
+        region = (snapshot.current_region if snapshot is not None else None) or starting_region
+        if region:
+            session.bind_region_scope(region, trigger="relocation")
+    else:
+        # Fresh connect to an orbital world: a blank/missing starting_region is
+        # a content misconfiguration, not a legitimate state — fail loud (No
+        # Silent Fallbacks) instead of silently leaving the chart at system
+        # root. ``bind_region_scope(..., trigger="init")`` raises
+        # RegionScopeBindError on a no-match, and the empty string is never a
+        # body id, so passing ``starting_region or ""`` surfaces a blank
+        # starting_region as the same loud failure as a foreign one.
+        session.bind_region_scope(starting_region or "", trigger="init")
+
+
 class ConnectHandler:
     """Handle the ``connect`` sub-event of SESSION_EVENT.
 
@@ -255,24 +349,46 @@ class ConnectHandler:
         # Slug-keyed connect is the only supported path (Story 45-26).
         # Falsy game_slug returns a typed error below.
         if getattr(payload, "game_slug", None):
-            from sidequest.game.persistence import (
-                GameMode,
-                db_path_for_slug,
-                get_game,
-            )
-
             slug = payload.game_slug
-            db = db_path_for_slug(session._save_dir, slug)
-            if not db.exists():
-                return [_error_msg(f"unknown game slug: {slug}")]
-            store = SqliteStore(db)
-            store.initialize()
+
+            # ADR-115 F1: Postgres is the sole save backend. The bootstrap row
+            # (genre/world/mode) is read from PG ``sessions``; the legacy
+            # SQLite save.db read was retired here. A pre-existing SQLite-only
+            # save that has not been imported to PG (ADR-115 TG-F F3) will not
+            # resume — connect returns "unknown game slug" until it is imported.
+            # New games are PG-only already.
+            from sidequest.game import db_pool as _db_pool
+            from sidequest.game.pg import sessions as _pg_sessions
+            from sidequest.server.session_state import _build_pg_repos_for_slug
             from sidequest.telemetry.watcher_hub import bind_event_store as _bind_event_store
 
-            _bind_event_store(store)
-            row = get_game(store, slug)
-            if row is None:
+            _pg_pool = _db_pool.get_pool()
+            _bootstrap_row = _pg_sessions.get_game(_pg_pool, slug=slug)
+            if _bootstrap_row is None:
                 return [_error_msg(f"unknown game slug: {slug}")]
+
+            # Construct the Postgres repositories for the live session. The
+            # ``ensure_session`` inside ``for_slug`` is idempotent on the
+            # already-resolved ``session_slug`` — no new row is created here.
+            _pg_repository, _pg_dungeon_repository, _pg_telemetry_sink = _build_pg_repos_for_slug(
+                _pg_pool,
+                slug=slug,
+                mode=_bootstrap_row.mode,  # GameRow.mode is the StrEnum value as str
+                genre_slug=_bootstrap_row.genre_slug,
+                world_slug=_bootstrap_row.world_slug,
+            )
+            # Authoritative row for all downstream consumers.
+            row = _pg_repository.get_game(slug=slug)
+            if row is None:
+                raise RuntimeError(
+                    f"PG get_game returned None after ensure_session for slug={slug!r} — "
+                    "this should be impossible; check PG connectivity and sessions table."
+                )
+            # D5: bind the Postgres TelemetrySink to the watcher hub so
+            # out-of-frame watcher publishes (and encounter rows) persist via
+            # the sink's own session_tx. The in-frame census path threads the
+            # turn tx explicitly through emit_event → emit_mechanical_census.
+            _bind_event_store(_pg_telemetry_sink)
             if not player_id:
                 player_id = str(uuid.uuid4())
 
@@ -321,7 +437,7 @@ class ConnectHandler:
             with mp_slug_connect_span(
                 slug=slug,
                 player_id=player_id,
-                mode=str(row.mode.value) if hasattr(row.mode, "value") else str(row.mode),
+                mode=str(row.mode),  # GameMode(StrEnum) is its value; no silent fallback
             ) as _mp_span:
                 room = session._room_registry.get_or_create(slug, mode=GameMode(row.mode))
                 # Snapshot pause state BEFORE connecting so we can detect
@@ -410,6 +526,64 @@ class ConnectHandler:
                 )
                 return [_error_msg(f"Failed to load genre pack '{row.genre_slug}': {exc}")]
 
+            # No Silent Fallbacks (playtest 2026-06-11, seaboard_of_saints): a
+            # session bound to a world whose ``world.yaml`` carries
+            # ``draft: true`` must refuse loudly. The loader excludes draft
+            # worlds (``_load_single_world`` returns None at the same
+            # ``config.draft`` check), so connecting to one runs with empty
+            # overrides that silently serve genre/sibling-world defaults under
+            # the draft world's name (chargen/openings/lore all wrong), costing
+            # hours of "why isn't this quite right." Scope: ONLY a present
+            # world.yaml whose ``draft`` is truthy. A missing world dir is NOT
+            # handled here — the connect path deliberately tolerates a
+            # nonexistent world via genre-tier fallback (load-bearing for fixture
+            # world slugs), and ``genre_pack.worlds`` membership is unreliable
+            # (only partially populated in some load contexts).
+            _world_yaml = world_dir / "world.yaml"
+            if row.world_slug and _world_yaml.is_file():
+                import yaml  # noqa: PLC0415
+
+                try:
+                    _wraw = yaml.safe_load(_world_yaml.read_text(encoding="utf-8")) or {}
+                except Exception as exc:  # noqa: BLE001
+                    logger.error(
+                        "session.world_yaml_unreadable genre=%s world=%s slug=%s error=%s",
+                        row.genre_slug,
+                        row.world_slug,
+                        slug,
+                        exc,
+                    )
+                    return [
+                        _error_msg(
+                            f"World '{row.world_slug}' in genre '{row.genre_slug}' "
+                            f"has an unreadable world.yaml: {exc}"
+                        )
+                    ]
+                if _wraw.get("draft"):
+                    logger.error(
+                        "session.world_is_draft genre=%s world=%s slug=%s",
+                        row.genre_slug,
+                        row.world_slug,
+                        slug,
+                    )
+                    _watcher_publish(
+                        "world_is_draft",
+                        {
+                            "genre_slug": row.genre_slug,
+                            "world_slug": row.world_slug,
+                            "slug": slug,
+                        },
+                        component="genre_loader",
+                        severity="error",
+                    )
+                    return [
+                        _error_msg(
+                            f"World '{row.world_slug}' is draft (draft: true) and not "
+                            f"playable in genre '{row.genre_slug}'. It cannot load its "
+                            "own content and must not fall back to genre defaults."
+                        )
+                    ]
+
             # Story 24-10: world-grounding bootstrap (Epic 24 wiring). Read
             # the pack-level weather.yaml + world-level demographics/calendar
             # once at connect time, construct a WeatherGenerator and sample a
@@ -421,9 +595,7 @@ class ConnectHandler:
             # rather than a silent None and a downstream "weather grounding
             # mysteriously absent" symptom three turns in.
             try:
-                pack_dir = loader.find(row.genre_slug)
                 world_grounding = load_world_grounding(
-                    pack_dir=pack_dir,
                     world_dir=world_dir,
                     genre_slug=row.genre_slug,
                     seed_source=slug,
@@ -455,8 +627,9 @@ class ConnectHandler:
                 ]
 
             # Restore saved snapshot, or start fresh (Bug 2 fix: resume semantics).
+            # ADR-115 D2: load from PG repository (replaces store.load()).
             try:
-                saved = store.load()
+                saved = _pg_repository.load()
             except SaveSchemaIncompatibleError as exc:
                 # Schema-incompatible save (e.g. legacy single-metric encounter
                 # under dual-dial migration). Don't let pydantic's
@@ -613,11 +786,24 @@ class ConnectHandler:
                 # room BEFORE the rename-save below. Idempotent — if a peer
                 # got here first, our load is discarded and we observe the
                 # already-bound snapshot.
-                room.bind_world(snapshot=snapshot, store=store, world_dir=world_dir)
+                room.bind_world(
+                    snapshot=snapshot,
+                    store=_pg_repository,
+                    world_dir=world_dir,
+                    ruleset=(genre_pack.rules.ruleset if genre_pack.rules else None),
+                )
                 # All subsequent reads must come from the canonical room
                 # binding (which may differ from our local ``snapshot`` if
                 # we lost the bind race).
                 snapshot = room.snapshot  # type: ignore[assignment]
+                # ADR-033 resource pools on resume: idempotent upsert that
+                # preserves each pool's ``current`` (see init_resource_pools).
+                # A mid-delve `light` value survives the reload; a save that
+                # predates a newly-declared pool gains it. No-op for packs
+                # without declared resources.
+                from sidequest.game.resource_wiring import wire_genre_resources
+
+                wire_genre_resources(snapshot, genre_pack)
                 if renamed:
                     room.save()
                     logger.info(
@@ -638,9 +824,18 @@ class ConnectHandler:
                 # only when the scrapbook coverage diverges from the
                 # narrative log. See sidequest/game/scrapbook_coverage.py.
                 detect_scrapbook_coverage_gaps(
-                    store=store,
+                    repository=_pg_repository,
                     snapshot=snapshot,
                     slug=slug,
+                )
+                # Story 95-1: restore the per-location orrery to the party's
+                # persisted system (orbital_scope is transient and resets each
+                # connect). No-op for non-orbital worlds.
+                _bind_initial_orbital_scope(
+                    room,
+                    genre_pack=genre_pack,
+                    world_slug=row.world_slug,
+                    is_resume=True,
                 )
             else:
                 snapshot = GameSnapshot(
@@ -648,11 +843,68 @@ class ConnectHandler:
                     world_slug=row.world_slug,
                     location="Unknown",
                 )
-                store.init_session(row.genre_slug, row.world_slug)
+                _pg_repository.init_session()
                 # ADR-037 Python port: bind the fresh snapshot to the room
                 # so the second-connect handler observes the same object.
-                room.bind_world(snapshot=snapshot, store=store, world_dir=world_dir)
+                # Story 98-2: a fresh snapshot has a blank ``current_region``
+                # (region_init runs later at chargen), so pass the world's
+                # ``starting_region`` explicitly to resolve the per-system
+                # orbital file (``systems/<region_id>.yaml``) at bind time.
+                room.bind_world(
+                    snapshot=snapshot,
+                    store=_pg_repository,
+                    world_dir=world_dir,
+                    ruleset=(genre_pack.rules.ruleset if genre_pack.rules else None),
+                    region_id=_starting_region_for(genre_pack, row.world_slug),
+                )
                 snapshot = room.snapshot  # type: ignore[assignment]
+                # ADR-033 resource pools (e.g. caverns_and_claudes' `light`):
+                # init_resource_pools had no production caller, so declared
+                # pools were dead. Wire them onto the canonical fresh snapshot.
+                from sidequest.game.resource_wiring import wire_genre_resources
+
+                wire_genre_resources(snapshot, genre_pack)
+                # Story 95-1: center the per-location orrery on the world's
+                # starting system. Fails loud if starting_region has no matching
+                # body (No Silent Fallbacks). No-op for non-orbital worlds. The
+                # fail-loud is a CONTENT misconfiguration (a region-mode orbital
+                # world with a blank/foreign starting_region), so surface it as a
+                # typed connect error + watcher event — the same graceful-loud
+                # pattern as the genre-pack / world-grounding load failures above
+                # — rather than letting it close the socket with a raw traceback.
+                try:
+                    _bind_initial_orbital_scope(
+                        room,
+                        genre_pack=genre_pack,
+                        world_slug=row.world_slug,
+                        is_resume=False,
+                    )
+                except RegionScopeBindError as exc:
+                    logger.error(
+                        "session.orbital_scope_bind_failed genre=%s world=%s slug=%s error=%s",
+                        row.genre_slug,
+                        row.world_slug,
+                        slug,
+                        exc,
+                    )
+                    _watcher_publish(
+                        "orbital_scope_bind_failed",
+                        {
+                            "genre_slug": row.genre_slug,
+                            "world_slug": row.world_slug,
+                            "slug": slug,
+                            "error": str(exc),
+                        },
+                        component="orbital",
+                        severity="error",
+                    )
+                    return [
+                        _error_msg(
+                            f"World '{row.world_slug}' has an orbital chart but its "
+                            f"starting_region does not match any catalogued body: {exc}",
+                            code="orbital_scope_bind_failed",
+                        )
+                    ]
                 has_character = False
                 logger.info(
                     "session.slug_new_session genre=%s world=%s slug=%s",
@@ -676,10 +928,32 @@ class ConnectHandler:
                     backstory_tables=genre_pack.backstory_tables,
                 ).with_lobby_name(display_name)
                 builder = builder.with_pack_id(row.genre_slug)
-                if genre_pack.equipment_tables is not None:
-                    builder = builder.with_equipment_tables(genre_pack.equipment_tables)
-                if genre_pack.classes:
-                    builder = builder.with_classes(genre_pack.classes)
+                # Story 120-4: resolve chargen kits world-first (parallel to
+                # resolve_classes below) so a world's equipment_tables.yaml merges its
+                # dungeon/flavor gear over the genre SRD kits. None when neither tier
+                # ships kits — a no-op for unmigrated packs.
+                resolved_equipment_tables = resolve_equipment_tables(genre_pack, row.world_slug)
+                if resolved_equipment_tables is not None:
+                    builder = builder.with_equipment_tables(resolved_equipment_tables)
+                # Epic 94 (genre/world boundary): classes/callings are a
+                # world-tier CAST surface. Resolve the roster world-first so a
+                # migrated pack (tea_and_murder → blackthorn_moor/glenross
+                # callings) feeds the chargen builder the world's cast, with the
+                # genre roster as the shared default for unmigrated packs.
+                chargen_classes = resolve_classes(genre_pack, row.world_slug)
+                if chargen_classes:
+                    builder = builder.with_classes(chargen_classes)
+                # ADR-143 Task 9: attach resolved background + focus catalogs
+                # (world-first, same merge semantics as classes). Empty dicts
+                # when neither tier authors anything — no silent fallback, just
+                # a no-op for packs that have not yet migrated to the new
+                # chargen seam.
+                chargen_backgrounds = resolve_backgrounds(genre_pack, row.world_slug)
+                chargen_foci = resolve_foci(genre_pack, row.world_slug)
+                builder = builder.with_chargen_defs(
+                    backgrounds=chargen_backgrounds,
+                    foci=chargen_foci,
+                )
 
             # Opening-hook + world-context resolution (matches legacy branch).
             # Resolved once at connect time so chargen confirmation and the
@@ -753,6 +1027,16 @@ class ConnectHandler:
             world_context: str | None = culture_ref if culture_ref else None
             audio_backend = session._build_audio_backend(row.genre_slug, genre_pack)
 
+            # Story 67-6: bind the WS-boundary resolved identity (set by
+            # WebSocketSessionHandler before the connect message arrives) to
+            # this player_id in the room store. No-op when identity is absent.
+            bind_player_identity(
+                room,
+                player_id=player_id,
+                identity=getattr(session, "_player_identity", None),
+                source=getattr(session, "_player_identity_source", None),
+            )
+
             # ADR-067 single-narrator-per-slug: get the canonical
             # orchestrator from the room (constructing it lazily on
             # first connect). A per-session Orchestrator would create a
@@ -767,12 +1051,15 @@ class ConnectHandler:
                 world_slug=row.world_slug,
                 player_name=display_name,
                 player_id=player_id,
-                # ADR-037 Python port: take snapshot/store directly from the
-                # canonical room binding so future readers see the contract
-                # explicitly. Equivalent to the local ``snapshot``/``store``
-                # references after the idempotent ``bind_world`` above.
+                # ADR-037 Python port: snapshot still comes from the canonical
+                # room binding so all sessions share the same in-memory object.
                 snapshot=room.snapshot,
-                store=room.store,
+                # ADR-115 D1: carry the three Postgres repositories on the session.
+                # room.store is the PgSaveRepository (ADR-115 F1 retired the
+                # legacy SQLite save layer); _SessionData carries the same triple.
+                repository=_pg_repository,
+                dungeon_repository=_pg_dungeon_repository,
+                telemetry_sink=_pg_telemetry_sink,
                 genre_pack=genre_pack,
                 orchestrator=shared_orchestrator,
                 _room=room,  # back-reference for downstream Session access (Task D)
@@ -792,6 +1079,22 @@ class ConnectHandler:
                     else ImagePacingThrottle.for_solo()
                 ),
             )
+
+            # Story 82-2 (ADR-049): hydrate the live narrator tuning onto the
+            # session and persist it. Precedence: an explicit choice on THIS
+            # CONNECT payload (the player just set a slider) wins; otherwise
+            # carry whatever the persisted snapshot holds from a prior session
+            # (slug-resume); None means "never chosen" and the turn builder
+            # falls back to default_for_player_count (No Silent Fallbacks).
+            # Mirror the resolved choice back onto the snapshot so it round-trips
+            # the save and the resume ``ready`` event below reports it.
+            _live_snapshot = session._session_data.snapshot
+            _chosen_verbosity = payload.narrator_verbosity or _live_snapshot.narrator_verbosity
+            _chosen_vocabulary = payload.narrator_vocabulary or _live_snapshot.narrator_vocabulary
+            session._session_data.narrator_verbosity = _chosen_verbosity
+            session._session_data.narrator_vocabulary = _chosen_vocabulary
+            _live_snapshot.narrator_verbosity = _chosen_verbosity
+            _live_snapshot.narrator_vocabulary = _chosen_vocabulary
 
             # Story 24-10: stamp the world-grounding state assembled above
             # onto the session. _build_turn_context reads these every turn
@@ -848,7 +1151,8 @@ class ConnectHandler:
             )
 
             session._session_data.lookahead_handle = await attach_dungeon_to_session(
-                store=room.store,
+                dungeon_repository=_pg_dungeon_repository,
+                game_slug=slug,
                 snapshot=room.snapshot,
                 genre_pack=genre_pack,
                 genre_slug=row.genre_slug,
@@ -874,6 +1178,43 @@ class ConnectHandler:
             # loaded on resume (CLAUDE.md OTEL lie-detector mandate).
             if has_character:
                 _resume_sd = session._session_data
+                # Story 75-15: re-hydrate the persisted lore fragments FIRST so
+                # creation-seed + runtime-accreted fragments survive resume — the
+                # gulliver 2026-06-02 starve was the world-only re-seed below
+                # restoring ~3 fragments while the 17 creation-seed fragments
+                # (lost with the never-persisted in-memory store) stayed gone.
+                # Re-hydrated fragments carry embedding_pending=True so the
+                # per-turn embed worker re-embeds them. Runs before the world
+                # re-seed so the lore_store_loaded emit's total reflects both.
+                # Guarded (Story 75-15 rework): a lore-load failure must DEGRADE
+                # to the world-only re-seed below, never drop the reconnecting
+                # player (ADR-006 graceful degradation). Loud log + watcher event.
+                _rehydrated_count = 0
+                try:
+                    _rehydrated = _pg_repository.load_lore_fragments()
+                    for _frag in _rehydrated:
+                        if _frag.id not in _resume_sd.lore_store.fragments:
+                            _resume_sd.lore_store.add(_frag)
+                            _rehydrated_count += 1
+                    logger.info(
+                        "lore.rehydrated_on_resume slug=%s persisted_fragments=%d added=%d",
+                        slug,
+                        len(_rehydrated),
+                        _rehydrated_count,
+                    )
+                except Exception as exc:  # noqa: BLE001 — lore load must not drop the resume
+                    logger.error(
+                        "lore.rehydrate_failed slug=%s error=%s — degrading to world-only reseed",
+                        slug,
+                        exc,
+                    )
+                    _watcher_publish(
+                        "lore_rehydrate_failed",
+                        {"slug": slug, "player_id": player_id, "error": str(exc)},
+                        component="rag",
+                        severity="error",
+                    )
+                _resume_rehydrated_count = _rehydrated_count
                 genre_lore_added, world_lore_added = _seed_world_lore_on_resume(
                     lore_store=_resume_sd.lore_store,
                     genre_pack=genre_pack,
@@ -886,6 +1227,10 @@ class ConnectHandler:
                             "player_id": player_id,
                             "slug": slug,
                             "reason": "slug_resume_reseed",
+                            # Story 75-15 (AC5): surface how many fragments were
+                            # re-hydrated from Postgres vs world-reseeded so the GM
+                            # panel can read persisted-vs-reseeded directly.
+                            "rehydrated_fragments": _resume_rehydrated_count,
                             **kw,
                         },
                         component="rag",
@@ -903,9 +1248,9 @@ class ConnectHandler:
                 )
 
             # MP-03 Task 3 + Task-17 + Task-22 ProjectionFilter Rules integration.
-            repo = SqliteSaveRepository(store)
-            session._event_log = EventLog(repo)
-            session._projection_cache = ProjectionCache(repo)
+            # ADR-115 D2: use PgSaveRepository directly (satisfies Slice-1a surface).
+            session._event_log = EventLog(_pg_repository)
+            session._projection_cache = ProjectionCache(_pg_repository)
             projection_rules = genre_pack.projection_rules
             if projection_rules is not None:
                 session._projection_filter = ComposedFilter(
@@ -1030,7 +1375,13 @@ class ConnectHandler:
             world_obj = genre_pack.worlds.get(row.world_slug) if genre_pack else None
             world_css = world_obj.client_theme_css if world_obj is not None else None
             genre_css = genre_pack.client_theme_css if genre_pack else None
-            theme_css_payload = world_css if world_css else genre_css
+            raw_theme_css = world_css if world_css else genre_css
+            # Route font (and other asset) url()s through the asset_urls seam so
+            # the browser pulls them from R2 (CDN) instead of the raw /genre/
+            # mount — absolute CDN in prod, /genre/... in offline-local mode.
+            theme_css_payload = (
+                rewrite_theme_css_asset_urls(raw_theme_css) if raw_theme_css else raw_theme_css
+            )
             theme_source = "world" if world_css else ("genre" if genre_css else "none")
             if theme_css_payload:
                 theme_msg = SessionEventMessage(
@@ -1102,18 +1453,12 @@ class ConnectHandler:
             # Build a turn_id -> image_url map here so the replay loop
             # can JOIN it into rebuilt SCRAPBOOK_ENTRY payloads — one
             # query per reconnect, not one per row.
-            _scrapbook_image_urls: dict[int, str] = {}
-            if session._event_log is not None:
-                try:
-                    rows = session._event_log.store._conn.execute(
-                        "SELECT turn_id, image_url FROM scrapbook_entries "
-                        "WHERE image_url IS NOT NULL"
-                    ).fetchall()
-                    for _turn_id, _url in rows:
-                        if isinstance(_turn_id, int) and isinstance(_url, str) and _url:
-                            _scrapbook_image_urls[_turn_id] = _url
-                except Exception as exc:  # noqa: BLE001 — replay must not crash on a metadata read
-                    logger.warning("scrapbook.image_url_replay_lookup_failed error=%s", exc)
+            # ADR-115 D3: lifted from raw store._conn.execute onto the typed
+            # scrapbook_image_url_map() method (PgSaveRepository delegates to
+            # PgScrapbookStore). No swallow: a failed metadata read must fail
+            # loud — silently emptying the map re-introduces the very
+            # "scrapbook images lost on reload" bug this map exists to fix.
+            _scrapbook_image_urls: dict[int, str] = _pg_repository.scrapbook_image_url_map()
             if session._projection_cache is not None:
                 cached_rows = session._projection_cache.read_since(
                     player_id=session._current_player_id,
@@ -1327,8 +1672,13 @@ class ConnectHandler:
                         has_character=True,
                         initial_state=None,
                         css=None,
-                        narrator_verbosity=None,
-                        narrator_vocabulary=None,
+                        # Story 82-2 (ADR-049): slug-resume reports the player's
+                        # persisted narrator tuning so the UI sliders rehydrate
+                        # to the saved choice instead of snapping to defaults.
+                        # Read from the session (hydrated from the snapshot at
+                        # construction above) — never a bare None.
+                        narrator_verbosity=session._session_data.narrator_verbosity,
+                        narrator_vocabulary=session._session_data.narrator_vocabulary,
                         image_cooldown_seconds=None,
                     ),
                     player_id=player_id,
@@ -1430,9 +1780,102 @@ class ConnectHandler:
                     row.world_slug,
                     resume_loc,
                     player_id=player_id,
+                    # Visited-region overlay on resume: thread the saved
+                    # discovered_regions so the Map tab paints the visited
+                    # set correctly on reload (ui #330 / ping-pong #329).
+                    discovered_regions=snapshot.discovered_regions,
                 )
                 if cart_map_msg is not None:
                     bootstrap_msgs.append(cart_map_msg)
+                    # sq-playtest 2026-06-02 (wry_whimsy/oz): region-mode worlds
+                    # froze the Location panel on a tab reload. The per-turn
+                    # region-change branch re-fires LOCATION_DESCRIPTION
+                    # (websocket_session_handler region-mode emit), but the
+                    # connect/resume path emitted none → reloading mid-region
+                    # showed "Gathering your bearings…" until the next move.
+                    # Mirror the per-turn region-mode emit on resume
+                    # (actor=None, room_id_override=current_region) so the
+                    # resuming client paints the panel from the saved region.
+                    # Reuses the single emit helper — room YAML → cartography
+                    # fallback + the location_description.emitted lie-detector
+                    # span (CLAUDE.md OTEL principle). Gated on cart_map_msg
+                    # (region-mode cartography present) + a saved current_region.
+                    if snapshot is not None and snapshot.current_region:
+                        from sidequest.server.websocket_handlers.map_emit import (
+                            _maybe_emit_location_description,
+                        )
+
+                        _maybe_emit_location_description(
+                            session,
+                            sd=session._session_data,
+                            snapshot=snapshot,
+                            actor=None,
+                            emit_fn=lambda msg, _label: bootstrap_msgs.append(msg),
+                            room_id_override=snapshot.current_region,
+                        )
+                # Story 67-2: seal-presence reconcile. A dropped
+                # ACTION_REVEAL{submitted}/TURN_STATUS{submitted} frame can
+                # strand a reconnecting peer at "Adam Composing…" forever (the
+                # 2026-05-27 beneath_sunden ping-pong). Those frames ride the
+                # best-effort SessionRoom.broadcast path and are NOT event-
+                # sourced, so the replay loop above never backfills them. Re-
+                # derive the canonical seal roster from the shared snapshot and
+                # send it to THIS connecting socket only — idempotent recovery
+                # the UI already treats as authoritative (App.tsx batch-entries
+                # path + mergePeerRevealsWithSubmittedStatus). MP-only: solo has
+                # no peers to reconcile. Phase-aware: build_seal_reconcile_roster
+                # projects the terminal all-submitted state once the barrier has
+                # fired so a resolving round never regresses a sealed peer.
+                if GameMode(row.mode) == GameMode.MULTIPLAYER and room is not None:
+                    reconcile_roster = build_seal_reconcile_roster(
+                        snapshot, room.playing_player_ids()
+                    )
+                    if reconcile_roster:
+                        bootstrap_msgs.append(
+                            TurnStatusMessage(
+                                payload=TurnStatusPayload(
+                                    player_name=NonBlankString(display_name),
+                                    # Inert top-level status: the UI's batch-
+                                    # entries handler consumes ``entries`` and
+                                    # never branches on "pending", so this frame
+                                    # reconciles the roster without faking an
+                                    # active/resolving/resolved transition.
+                                    status="pending",
+                                    entries=reconcile_roster,
+                                ),
+                                player_id=player_id,
+                            )
+                        )
+                        _sealed_count = sum(1 for e in reconcile_roster if e.status == "submitted")
+                        _watcher_publish(
+                            "state_transition",
+                            {
+                                "field": "turn_status.reconciled_on_connect",
+                                "player_id": player_id,
+                                "slug": slug,
+                                "roster_size": len(reconcile_roster),
+                                "sealed_count": _sealed_count,
+                                "phase": str(snapshot.turn_manager.phase),
+                                # Story 97-2: name which roster source produced
+                                # the count so desync forensics can tell the
+                                # durable-seat denominator from the old
+                                # live-socket one that under-counted the first
+                                # reconnector (solo 0/1). build_seal_reconcile_
+                                # roster derives membership from the durable
+                                # snapshot.player_seats.
+                                "roster_source": "durable_seats",
+                            },
+                            component="multiplayer",
+                        )
+                        logger.info(
+                            "turn_status.reconciled_on_connect player_id=%s slug=%s "
+                            "sealed=%d/%d phase=%s source=durable_seats",
+                            player_id,
+                            slug,
+                            _sealed_count,
+                            len(reconcile_roster),
+                            snapshot.turn_manager.phase,
+                        )
                 # Confrontation re-emit on slug-resume (playtest 2026-05-02).
                 # Without this, reloading a tab mid-confrontation drops the
                 # right-pane "Confrontation" tab — the steady-state encounter
@@ -1451,9 +1894,8 @@ class ConnectHandler:
                     and session._session_data.genre_pack.rules is not None
                 ):
                     from sidequest.server.dispatch.confrontation import (
-                        build_confrontation_payload,
                         find_confrontation_def,
-                        resolve_recipient_pc,
+                        make_confrontation_frame_supplier,
                     )
 
                     cdef = find_confrontation_def(
@@ -1462,46 +1904,44 @@ class ConnectHandler:
                     )
                     if cdef is not None:
                         try:
-                            # Story 49-7: filter the bootstrap CONFRONTATION
-                            # to the resuming player's class so the
-                            # Confrontation tab paints with class-legal
-                            # beats only, matching the live-encounter path.
-                            recipient_pc, recipient_actor = resolve_recipient_pc(
+                            # Story 59-20: filter the bootstrap CONFRONTATION to the
+                            # resuming player's class via the SAME single-delivery
+                            # supplier the dice mid-turn + post-narration paths use.
+                            # A resolvable seat → its class-legal frame; an
+                            # unseated/unresolvable seat → None (the supplier fires
+                            # the fail-loud span for the latter), so the resumer
+                            # never bootstraps the 16-button union.
+                            resume_supplier = make_confrontation_frame_supplier(
                                 snapshot=snapshot,
                                 genre_pack=session._session_data.genre_pack,
-                                player_id=player_id,
-                            )
-                            conf_payload_dict = build_confrontation_payload(
                                 encounter=encounter,
                                 cdef=cdef,
                                 genre_slug=row.genre_slug,
-                                recipient_pc=recipient_pc,
-                                recipient_actor_name=recipient_actor,
                             )
-                            bootstrap_msgs.append(
-                                ConfrontationMessage(
-                                    payload=ConfrontationPayload(
-                                        **conf_payload_dict,
-                                    ),
-                                    player_id=player_id,
+                            resume_frame = resume_supplier(player_id)
+                            if resume_frame is not None:
+                                bootstrap_msgs.append(
+                                    ConfrontationMessage(
+                                        payload=resume_frame,
+                                        player_id=player_id,
+                                    )
                                 )
-                            )
-                            logger.info(
-                                "session.slug_resume_confrontation_emitted "
-                                "slug=%s encounter_type=%s player=%s",
-                                slug,
-                                encounter.encounter_type,
-                                player_id,
-                            )
-                            _watcher_publish(
-                                "confrontation_resume_emitted",
-                                {
-                                    "slug": slug,
-                                    "encounter_type": encounter.encounter_type,
-                                    "player_id": player_id,
-                                },
-                                component="confrontation",
-                            )
+                                logger.info(
+                                    "session.slug_resume_confrontation_emitted "
+                                    "slug=%s encounter_type=%s player=%s",
+                                    slug,
+                                    encounter.encounter_type,
+                                    player_id,
+                                )
+                                _watcher_publish(
+                                    "confrontation_resume_emitted",
+                                    {
+                                        "slug": slug,
+                                        "encounter_type": encounter.encounter_type,
+                                        "player_id": player_id,
+                                    },
+                                    component="confrontation",
+                                )
                         except Exception as exc:  # noqa: BLE001
                             logger.warning(
                                 "session.slug_resume_confrontation_failed "

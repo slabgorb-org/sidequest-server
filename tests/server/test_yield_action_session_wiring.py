@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
 from sidequest.game.encounter import (
     EncounterActor,
     EncounterMetric,
     StructuredEncounter,
 )
-from sidequest.game.persistence import GameMode, SqliteStore
+from sidequest.game.persistence import GameMode
+from sidequest.game.repository import SaveRepository
 from sidequest.game.session import GameSnapshot
 from sidequest.server.dispatch.yield_action import handle_yield
 from sidequest.server.session_room import SessionRoom
@@ -35,7 +37,7 @@ def _make_room_with_yield_ready_encounter(tmp_path: Path) -> tuple[SessionRoom, 
         resolved=False,
     )
     snap.encounter = enc
-    room.bind_world(snapshot=snap, store=SqliteStore(tmp_path / "t.db"))
+    room.bind_world(snapshot=snap, store=MagicMock(spec=SaveRepository))
     return room, snap
 
 

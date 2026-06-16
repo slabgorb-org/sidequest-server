@@ -1,0 +1,9 @@
+name: map_perm_fixture
+description: >-
+  Story 65-11 AC4 (deterministic layout). The SAME region graph as map_fixture
+  but with the region keys authored in a DIFFERENT order (and no entities). A
+  deterministic layout seeded at starting_region with ties broken by sorted
+  region id must place the nodes in the SAME order as map_fixture — i.e. the
+  emitted data-region-id sequence is identical, independent of YAML insertion
+  order. If the node ordering differs from map_fixture, the layout is leaking
+  dict/author order into output and is not deterministic.

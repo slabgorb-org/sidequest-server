@@ -23,6 +23,7 @@ from sidequest.agents.orchestrator import (
     _strip_json_fence,
     extract_structured_from_response,
 )
+from sidequest.agents.subsystems import run_dispatch_bank
 from sidequest.protocol.dispatch import (
     DispatchPackage,
     NarratorDirective,
@@ -422,6 +423,26 @@ async def test_build_narrator_prompt_merged_actions_render_per_pc_block():
     assert "Laverne says: Shirley:" not in prompt
     # The inline strict reminder is present adjacent to the action block.
     assert "Do NOT generate dialogue" in prompt
+
+
+async def test_build_narrator_prompt_seeded_opening_marks_invitation_already_shown():
+    """Pingpong 2026-06-05 [BAR-1]: a seeded opening turn passes the authored
+    ``first_turn_invitation`` (already cold-opened to the player) as the
+    action. The recency block must mark it already-displayed and forbid
+    restating — the prior ``"<PC> says: <invitation>"`` framing cued the
+    narrator's action-rewrite contract to novelize the invitation back,
+    doubling every seeded opening's prose.
+    """
+    client = make_canned_client("narration")
+    orch = Orchestrator(client=client)
+    context = TurnContext(character_name="Groucho", opening_seed_shown=True)
+    invitation = "The wind off the desert is thin and hard at this height."
+    prompt, _ = await orch.build_narrator_prompt(invitation, context)
+    assert "ALREADY been shown to the player" in prompt
+    assert "do NOT repeat" in prompt
+    assert f"<already-shown-invitation>\n{invitation}\n</already-shown-invitation>" in prompt
+    # The invitation is NOT framed as the player speaking.
+    assert f"Groucho says: {invitation}" not in prompt
 
 
 async def test_build_narrator_prompt_solo_action_unchanged():
@@ -844,7 +865,9 @@ async def test_build_narrator_prompt_registers_narrator_directives_when_present(
         cross_player=[],
         confidence_global=1.0,
     )
-    ctx = TurnContext(dispatch_package=pkg)
+    # The dispatch bank runs ONCE in the pre-narrator pass; the orchestrator
+    # consumes its BankResult. Mirror that here.
+    ctx = TurnContext(dispatch_package=pkg, bank_result=await run_dispatch_bank(pkg))
 
     prompt_text, registry = await orch.build_narrator_prompt("Let's go!", ctx)
 
@@ -917,7 +940,7 @@ async def test_build_narrator_prompt_strips_redacted_directive_payload():
         ],
         confidence_global=1.0,
     )
-    ctx = TurnContext(dispatch_package=pkg)
+    ctx = TurnContext(dispatch_package=pkg, bank_result=await run_dispatch_bank(pkg))
 
     prompt_text, registry = await orch.build_narrator_prompt("poison wine", ctx)
 
@@ -980,6 +1003,7 @@ async def test_run_narration_turn_emits_leak_audit_span_with_zero_leaks(
                         subsystem="lethal_strike",
                         params={"target": "Rickard"},
                         idempotency_key="k1",
+                        confidence=1.0,
                         visibility=_tag_redacted("player:Alice"),
                     ),
                 ],
@@ -989,6 +1013,14 @@ async def test_run_narration_turn_emits_leak_audit_span_with_zero_leaks(
     )
     ctx = TurnContext(
         dispatch_package=pkg,
+        bank_result=await run_dispatch_bank(
+            pkg,
+            context={
+                "npc_pool": [
+                    NpcPoolMember(name="Rickard", role="guard", drawn_from="world_authored")
+                ]
+            },
+        ),
         npc_pool=[NpcPoolMember(name="Rickard", role="guard", drawn_from="world_authored")],
     )
 

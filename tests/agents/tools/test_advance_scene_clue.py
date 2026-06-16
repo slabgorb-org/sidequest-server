@@ -34,7 +34,6 @@ from sidequest.agents.tool_registry import (
 )
 from sidequest.agents.tooling_protocol import ToolUseBlock
 from sidequest.agents.tools import advance_scene_clue as _advance_scene_clue_module  # noqa: F401
-from sidequest.game.persistence import SqliteStore
 from sidequest.game.scenario_state import ScenarioState
 from sidequest.game.session import GameSnapshot
 from sidequest.game.turn import TurnManager
@@ -90,16 +89,14 @@ def _build_snapshot(scenario_state: ScenarioState | None) -> GameSnapshot:
     )
 
 
-def _store_with(snapshot: GameSnapshot) -> SqliteStore:
-    store = SqliteStore.open_in_memory()
-    store.initialize()
-    store.init_session(genre_slug=snapshot.genre_slug, world_slug=snapshot.world_slug)
-    store.save(snapshot)
-    return store
+def _store_with(snapshot: GameSnapshot):
+    from tests.agents.tools.conftest import pg_store_with
+
+    return pg_store_with(snapshot)
 
 
 def _make_ctx(
-    store: SqliteStore | MagicMock,
+    store: object,
     *,
     perspective_pc: str | None = "Alice",
     session_id: str = "s",
@@ -109,7 +106,7 @@ def _make_ctx(
         session_id=session_id,
         perspective_pc=perspective_pc,
         turn_number=1,
-        store=store,
+        repository=store,
         otel_span=MagicMock(),
         perception_filter=NarratorPerceptionFilter(),
     )

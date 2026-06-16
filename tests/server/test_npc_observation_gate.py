@@ -87,6 +87,7 @@ if TYPE_CHECKING:
 
 PROMOTED_SPAN_NAME = "npc.observation_gate_promoted"
 PURGED_SPAN_NAME = "npc.observation_gate_purged"
+ORDER_VIOLATION_SPAN_NAME = "npc.observation_gate_order_violation"  # Story 72-10
 
 
 # ---------------------------------------------------------------------------
@@ -1053,3 +1054,381 @@ def test_gate_ignores_non_dialogue_extraction_when_non_pending(otel_capture, dra
     assert not _spans_named(otel_capture, PURGED_SPAN_NAME), (
         f"No purge span must fire for non-pending {drawn_from!r} member."
     )
+
+
+# ===========================================================================
+# Group H — Story 72-10: gate-ordering invariant (gate must precede mint)
+# ===========================================================================
+#
+# The pipeline order (gate → mint) is load-bearing: running the auto-minter
+# first would let the gate evaluate this turn's own freshly-minted entries
+# against this turn's (omitting) mentions and self-purge them — silently
+# turning the ratification gate into a no-op and reopening the phantom-NPC
+# failure mode. Story 49-6 enforced the order only with a comment plus the
+# behavioral-outcome test ``test_apply_narration_result_runs_gate_before_auto_mint``.
+# 72-10 adds a hard runtime invariant + OTEL violation span so a reordering
+# regression fails LOUD at the call site instead of degrading into baseless
+# NPC identity drift. Per CLAUDE.md "No Source-Text Wiring Tests", every test
+# below is behavioral/OTEL — none greps narration_apply source.
+
+
+def test_span_observation_gate_order_violation_is_defined_in_catalog():
+    """The ordering-violation span must register in the telemetry catalog so
+    the GM panel (Keith's dev lie-detector) can surface a reordering regression.
+    Without it, a broken pipeline order would be invisible until a playtest
+    produced phantom NPCs — exactly the failure mode the OTEL Observability
+    Principle exists to catch.
+    """
+    from sidequest.telemetry import spans as spans_module
+
+    assert hasattr(spans_module, "SPAN_NPC_OBSERVATION_GATE_ORDER_VIOLATION"), (
+        "SPAN_NPC_OBSERVATION_GATE_ORDER_VIOLATION missing from telemetry "
+        "catalog — a gate/mint reordering would be unobservable, breaking the "
+        "OTEL Observability Principle."
+    )
+    assert spans_module.SPAN_NPC_OBSERVATION_GATE_ORDER_VIOLATION == ORDER_VIOLATION_SPAN_NAME, (
+        f"Span name must be exactly {ORDER_VIOLATION_SPAN_NAME!r} for the GM panel filter to match."
+    )
+
+
+def test_observation_gate_order_violation_span_is_routed():
+    """The violation span must register a ``SpanRoute`` or the watcher drops
+    it. Routes as ``state_transition`` under ``component="npc_registry"`` —
+    same column as its sibling gate spans (promote/purge)."""
+    from sidequest.telemetry.spans import SPAN_ROUTES
+
+    assert ORDER_VIOLATION_SPAN_NAME in SPAN_ROUTES, (
+        f"{ORDER_VIOLATION_SPAN_NAME!r} not in SPAN_ROUTES — GameWatcher would "
+        "drop the event and the GM panel would never see the ordering break."
+    )
+    route = SPAN_ROUTES[ORDER_VIOLATION_SPAN_NAME]
+    assert route.event_type == "state_transition", (
+        "Violation event must route as state_transition for GM-panel rendering."
+    )
+    assert route.component == "npc_registry", (
+        "Component must be 'npc_registry' to share the NPC-state column with "
+        "the promote/purge gate spans."
+    )
+
+
+def test_observation_gate_order_violation_helper_is_exported():
+    """The context-manager helper must be exported from
+    ``sidequest.telemetry.spans`` so production code can import it flat
+    (parallel to ``npc_observation_gate_purged_span``)."""
+    from sidequest.telemetry import spans as spans_module
+
+    assert hasattr(spans_module, "npc_observation_gate_order_violation_span"), (
+        "npc_observation_gate_order_violation_span helper must be exported for "
+        "the apply-path guard to emit the violation span."
+    )
+
+
+def test_observation_gate_order_violation_route_extracts_required_attrs():
+    """The route's extract lambda must surface the attributes the GM panel
+    needs to render the regression: ``op``, ``pending_count``,
+    ``pending_names``, ``turn_number``."""
+    from sidequest.telemetry.spans import SPAN_ROUTES
+
+    route = SPAN_ROUTES[ORDER_VIOLATION_SPAN_NAME]
+
+    class _Stub:
+        attributes = {
+            "pending_count": 2,
+            "pending_names": "Mother, Father",
+            "turn_number": 7,
+        }
+
+    extracted = route.extract(_Stub())
+    assert extracted.get("op") == "observation_gate_order_violation", (
+        "Route must surface op='observation_gate_order_violation' so the GM "
+        "panel can filter the regression distinct from promote/purge."
+    )
+    assert extracted.get("pending_count") == 2
+    assert extracted.get("pending_names") == "Mother, Father"
+    assert extracted.get("turn_number") == 7
+
+
+def test_mint_reached_without_gate_raises_and_emits_violation_span(otel_capture, monkeypatch):
+    """AC1 + AC3 — wrong order fails loud, observable in OTEL.
+
+    Simulate the reordering regression by neutralizing the gate on the real
+    apply path (``_apply_npc_observation_gate`` monkeypatched to a no-op, as if
+    it ran AFTER the mint or was removed). A prior-turn pending Mother — omitted
+    from this turn's mentions — therefore survives unresolved when the apply
+    pipeline reaches the minter. The call-site invariant must raise
+    ``ObservationGateOrderError`` AND emit the violation span before raising, so
+    the GM panel records the break even though the turn then fails loud.
+
+    Driven through real production code (``_apply_narration_result_to_snapshot``
+    → ``_assert_observation_gate_preceded_mint``), not a source-text grep.
+    """
+    from sidequest.server import narration_apply
+    from sidequest.server.narration_apply import (
+        ObservationGateOrderError,
+        _apply_narration_result_to_snapshot,
+    )
+
+    # Neutralize the gate: stand in for a refactor that drops/reorders it.
+    monkeypatch.setattr(
+        narration_apply,
+        "_apply_npc_observation_gate",
+        lambda **_kwargs: None,
+    )
+
+    snapshot = GameSnapshot()
+    snapshot.npc_pool.append(_pending_member(name="Mother", role="mother", pronouns="she/her"))
+
+    result = NarrationTurnResult(
+        narration="Reverend Murchison waits in the parlour.",
+        npcs_present=[_mention(name="Reverend Murchison", role="reverend")],
+        is_degraded=False,
+    )
+    room = room_for(snapshot)
+
+    with pytest.raises(ObservationGateOrderError) as excinfo:
+        _apply_narration_result_to_snapshot(
+            snapshot,
+            result,
+            "Ziggy",
+            room=room,
+            pack=None,
+            acting_character_name="Ziggy",
+        )
+
+    assert "Mother" in str(excinfo.value), (
+        "The raised error must name the surviving pending member so the crash "
+        f"is debuggable; got: {excinfo.value}"
+    )
+
+    violations = _spans_named(otel_capture, ORDER_VIOLATION_SPAN_NAME)
+    assert len(violations) == 1, (
+        "Exactly one violation span must fire before the raise so the GM panel "
+        f"sees the ordering break; got {len(violations)}."
+    )
+    span = violations[0]
+    assert _attr(span, "pending_count") == 1, (
+        "Violation span must report how many pending members survived; "
+        f"got pending_count={_attr(span, 'pending_count')!r}."
+    )
+    assert _attr(span, "severity") == "warning", (
+        "Violation span severity must be 'warning' (mirrors observation_gate_purged) "
+        f"so the GM panel renders a soft alert; got {_attr(span, 'severity')!r}."
+    )
+    assert "Mother" in (_attr(span, "pending_names") or ""), (
+        "Violation span must sample the surviving names for the GM panel; got "
+        f"pending_names={_attr(span, 'pending_names')!r}."
+    )
+
+
+def test_normal_apply_emits_no_order_violation_span(otel_capture):
+    """AC2 — correct order passes cleanly with no false positive.
+
+    The normal gate→mint sequence through the real
+    ``_apply_narration_result_to_snapshot`` must NOT raise and must NOT emit a
+    violation span: the prior-turn pending Father is resolved (purged — not
+    mentioned this turn) by the gate, so zero pending members survive to the
+    mint call site. This guards against the new invariant false-firing on
+    healthy turns. Mirrors the fixture of
+    ``test_apply_narration_result_runs_gate_before_auto_mint``.
+    """
+    from sidequest.server.narration_apply import (
+        _apply_narration_result_to_snapshot,
+    )
+
+    snapshot = GameSnapshot()
+    snapshot.npc_pool.append(_pending_member(name="Father", role="father", pronouns="he/him"))
+
+    result = NarrationTurnResult(
+        narration=(
+            "Reverend Murchison waits in the parlour. The wee one's mother "
+            "is weeping in the kitchen; she has not spoken since the bee swarm."
+        ),
+        npcs_present=[_mention(name="Reverend Murchison", role="reverend")],
+        is_degraded=False,
+    )
+    room = room_for(snapshot)
+
+    # Must not raise.
+    _apply_narration_result_to_snapshot(
+        snapshot,
+        result,
+        "Ziggy",
+        room=room,
+        pack=None,
+        acting_character_name="Ziggy",
+    )
+
+    assert not _spans_named(otel_capture, ORDER_VIOLATION_SPAN_NAME), (
+        "A healthy gate→mint turn must emit zero violation spans — the gate "
+        "resolved every prior-turn pending member before the minter ran. A "
+        "violation here means the invariant is false-firing."
+    )
+    # Sanity: this-turn auto-mint (Mother) entered fresh and stays pending,
+    # exactly as the 49-6 order test asserts — confirms the guard did not
+    # disturb the real pipeline outcome.
+    mother = next((m for m in snapshot.npc_pool if m.name == "Mother"), None)
+    assert mother is not None and mother.observation_pending is True, (
+        "Guard must not alter the normal pipeline: Mother auto-mints fresh and "
+        f"stays observation_pending=True; got {mother!r}."
+    )
+
+
+def test_assert_guard_raises_and_spans_on_direct_invocation(otel_capture):
+    """AC1 (direct-invocation arm) — the guard helper itself fails loud.
+
+    Isolates ``_assert_observation_gate_preceded_mint`` from the apply wiring:
+    given a snapshot where a prior-turn pending member survives (the
+    gate-didn't-run state), the guard must emit the violation span and raise
+    ``ObservationGateOrderError``. This is the unit-level invariant behind the
+    end-to-end AC1 test, and confirms the guard is reusable/behavioral.
+    """
+    from sidequest.server.narration_apply import (
+        ObservationGateOrderError,
+        _assert_observation_gate_preceded_mint,
+    )
+
+    snapshot = GameSnapshot()
+    snapshot.npc_pool.append(_pending_member(name="Father", role="father", pronouns="he/him"))
+    snapshot.npc_pool.append(_pending_member(name="Mother", role="mother", pronouns="she/her"))
+
+    with pytest.raises(ObservationGateOrderError):
+        _assert_observation_gate_preceded_mint(snapshot=snapshot, turn_num=9)
+
+    violations = _spans_named(otel_capture, ORDER_VIOLATION_SPAN_NAME)
+    assert len(violations) == 1, (
+        f"Guard must emit exactly one violation span; got {len(violations)}."
+    )
+    assert _attr(violations[0], "pending_count") == 2, (
+        "pending_count must reflect both unresolved members; got "
+        f"{_attr(violations[0], 'pending_count')!r}."
+    )
+
+
+def test_assert_guard_passes_silently_when_no_pending_survives(otel_capture):
+    """AC2 (direct-invocation arm) — the guard is a no-op on a clean pool.
+
+    When no ``observation_pending=True`` member remains (the post-gate state),
+    ``_assert_observation_gate_preceded_mint`` must return without raising and
+    without emitting any span. A ratified (observation_pending=False) member
+    present in the pool must NOT trip the guard.
+    """
+    from sidequest.server.narration_apply import (
+        _assert_observation_gate_preceded_mint,
+    )
+
+    snapshot = GameSnapshot()
+    snapshot.npc_pool.append(
+        NpcPoolMember(
+            name="Hilde",
+            role="innkeeper",
+            pronouns="she/her",
+            drawn_from="world_authored",
+            observation_pending=False,
+        )
+    )
+
+    # Must not raise.
+    _assert_observation_gate_preceded_mint(snapshot=snapshot, turn_num=3)
+
+    assert not _spans_named(otel_capture, ORDER_VIOLATION_SPAN_NAME), (
+        "No violation span may fire when the pool holds zero pending members — "
+        "a ratified pool member is not an ordering violation."
+    )
+
+
+# ===========================================================================
+# Group F — Prose re-citation ratifies (sq-playtest 2026-06-07 purge/mint
+# deadlock, five_points-4 turns 28-31 "Mother Demus"/"Son")
+# ===========================================================================
+
+
+def test_gate_promotes_pending_member_named_in_prose(otel_capture):
+    """A pending member whose name appears in THIS turn's narration prose
+    is ratified even when ``npcs_present`` omits them. Pre-fix the gate
+    purged her while the narration named her — composing with the
+    auto-minter's ambiguity skip into a four-turn deadlock where the NPC
+    existed in prose and nowhere in state.
+    """
+    from sidequest.server.session_helpers import _apply_npc_observation_gate
+
+    snapshot = GameSnapshot()
+    snapshot.npc_pool.append(_pending_member(name="Mother Demus", role=None, pronouns="she/her"))
+
+    _apply_npc_observation_gate(
+        snapshot=snapshot,
+        emitted_mentions=[],  # narrator omitted her from npcs_present
+        turn_num=29,
+        narration_text="Mother Demus bars the door while her son watches the street.",
+    )
+
+    survivor = next((m for m in snapshot.npc_pool if m.name == "Mother Demus"), None)
+    assert survivor is not None, (
+        "prose re-citation must ratify, not purge; pool after gate: "
+        f"{[m.name for m in snapshot.npc_pool]}"
+    )
+    assert survivor.observation_pending is False
+
+    promoted = _spans_named(otel_capture, PROMOTED_SPAN_NAME)
+    assert promoted, "promotion span must fire on the prose-ratification path"
+    assert _attr(promoted[0], "ratified_by") == "prose"
+
+
+def test_gate_still_purges_when_name_absent_from_prose_and_mentions(otel_capture):
+    """Prose ratification must not weaken the phantom cleanup: a pending
+    member named nowhere this turn (neither structured nor prose) is
+    still purged."""
+    from sidequest.server.session_helpers import _apply_npc_observation_gate
+
+    snapshot = GameSnapshot()
+    snapshot.npc_pool.append(_pending_member(name="Mother Demus", role=None, pronouns="she/her"))
+
+    _apply_npc_observation_gate(
+        snapshot=snapshot,
+        emitted_mentions=[],
+        turn_num=30,
+        narration_text="The street is empty. Rain pools in the wheel ruts.",
+    )
+
+    assert all(m.name != "Mother Demus" for m in snapshot.npc_pool), (
+        "a member named nowhere this turn must still purge"
+    )
+    assert _spans_named(otel_capture, PURGED_SPAN_NAME)
+
+
+def test_gate_prose_match_is_word_boundary(otel_capture):
+    """Substring hits must not ratify — 'Son' must not match 'Sonia'."""
+    from sidequest.server.session_helpers import _apply_npc_observation_gate
+
+    snapshot = GameSnapshot()
+    snapshot.npc_pool.append(_pending_member(name="Son", role="son", pronouns="he/him"))
+
+    _apply_npc_observation_gate(
+        snapshot=snapshot,
+        emitted_mentions=[],
+        turn_num=31,
+        narration_text="Sonia counts the take behind the bar.",
+    )
+
+    assert all(m.name != "Son" for m in snapshot.npc_pool), (
+        "substring 'Son' inside 'Sonia' must not ratify"
+    )
+
+
+def test_gate_structured_mention_reports_ratified_by_structured(otel_capture):
+    """The pre-existing structured path stamps ratified_by=structured_mention
+    so the GM panel can distinguish the two ratification sources."""
+    from sidequest.server.session_helpers import _apply_npc_observation_gate
+
+    snapshot = GameSnapshot()
+    snapshot.npc_pool.append(_pending_member(name="Father", role="father", pronouns="he/him"))
+
+    _apply_npc_observation_gate(
+        snapshot=snapshot,
+        emitted_mentions=[_mention(name="Father")],
+        turn_num=6,
+        narration_text="",
+    )
+
+    promoted = _spans_named(otel_capture, PROMOTED_SPAN_NAME)
+    assert promoted
+    assert _attr(promoted[0], "ratified_by") == "structured_mention"

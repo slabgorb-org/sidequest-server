@@ -214,6 +214,42 @@ def test_session_view_does_not_warn_when_no_characters(session_fixture, caplog) 
 
 
 # ---------------------------------------------------------------------------
+# Story 71-35: the dead is_gm / GM-seat axis is deleted, not logged about.
+# A multiplayer view build must NOT emit the gm_identity_unwired warning —
+# the narrator is the GM; no human occupies a GM seat, so there is nothing
+# "unwired" to warn about.
+# ---------------------------------------------------------------------------
+
+
+def test_session_view_does_not_warn_gm_identity_unwired_in_multiplayer(
+    session_fixture, caplog
+) -> None:
+    """No gm_identity_unwired warning fires for a multiplayer build.
+
+    The warning, the ``_gm_wiring_warned`` flag, and the entire is_gm axis
+    are removed by 71-35. This fails while the warning still exists (RED)
+    and passes once the GM-seat axis is deleted (GREEN).
+    """
+    import logging
+
+    from sidequest.game.persistence import GameMode
+
+    sd, handler = session_fixture
+    sd.mode = GameMode.MULTIPLAYER  # the branch that used to warn
+    sd.snapshot.characters.append(_make_character("Alice"))
+    sd.snapshot.character_locations["Alice"] = "Main Hall"
+
+    with caplog.at_level(logging.WARNING, logger="sidequest.server.views"):
+        views.build_game_state_view(handler)
+
+    matching = [r for r in caplog.records if "gm_identity_unwired" in r.getMessage()]
+    assert matching == [], (
+        "build_game_state_view still emits the gm_identity_unwired warning; "
+        "the GM-seat axis (71-35) must be deleted, not merely logged about."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Finding 3: is_hidden_status_list must use whole-token membership, not
 # substring match. "unhidden", "hidden_buff_removed", etc. must NOT match.
 # ---------------------------------------------------------------------------

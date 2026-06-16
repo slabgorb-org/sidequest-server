@@ -36,8 +36,12 @@ from typing import TYPE_CHECKING, Any
 
 from sidequest.game.monster_manual import EntryState, MonsterManual
 from sidequest.game.session import NpcPatch, WorldStatePatch
+from sidequest.genre.names.generator import sanitize_display_name
 from sidequest.telemetry.spans import Span
-from sidequest.telemetry.spans.monster_manual import SPAN_MONSTER_MANUAL_INJECTED
+from sidequest.telemetry.spans.monster_manual import (
+    SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL,
+    SPAN_MONSTER_MANUAL_INJECTED,
+)
 
 if TYPE_CHECKING:
     from sidequest.game.session import GameSnapshot
@@ -50,11 +54,55 @@ logger = logging.getLogger(__name__)
 # active at the current location. Mirrors the Rust
 # ``format_nearby_npcs`` "Other known NPCs" slice (top 3).
 _AVAILABLE_NPC_INJECT_LIMIT = 3
+# Cap on ACTIVE-at-location humans re-surfaced into the snapshot each turn.
+# sq-playtest 2026-06-13 (oz): the Active-at-location loop was UNCAPPED, so a
+# scene where the narrator had named several NPCs re-injected all of them every
+# turn (observed 7-10 "nearby" humans on a quiet road) — over-feeding the
+# narrator's bench and amplifying the entourage feel. A genuinely-present active
+# NPC also persists as a stateful ``snapshot.npcs`` entry (the cite path), so
+# bounding this re-injection bench does NOT make a present NPC vanish; it only
+# stops dangling the whole roster as "nearby" candidates. Generous enough for a
+# legitimately populated scene, bounded enough that a lull does not accrete a
+# crowd.
+_ACTIVE_NPC_INJECT_LIMIT = 5
 # Cap on encounter blocks materialized outside of combat. In combat the
 # narrator gets every Available encounter so the creature stat blocks land
 # in ``snapshot.npcs``; out of combat we surface only the leading 2 so a
 # marketplace doesn't spawn eight monsters into the world state.
 _OUT_OF_COMBAT_ENCOUNTER_LIMIT = 2
+
+
+def _sanitize_patch_names(patches: list[NpcPatch]) -> tuple[list[NpcPatch], int]:
+    """Strip junk from Manual NPC names before they enter game state.
+
+    The Monster Manual is a long-lived on-disk cache: a name minted by older
+    generator code (playtest 2026-06-10: ``Vesper (version)`` in a stale
+    coyote_star manual) survives every reload and would otherwise reach the
+    player-facing snapshot verbatim. We clean at the injection boundary so the
+    surface is correct regardless of cache vintage.
+
+    Returns the kept patches (mutated in place with clean names) and the count
+    that were altered. A name that sanitizes to nothing is unsalvageable —
+    drop the patch loudly rather than inject a nameless NPC.
+    """
+    kept: list[NpcPatch] = []
+    sanitized = 0
+    for patch in patches:
+        clean = sanitize_display_name(patch.name)
+        if clean == patch.name:
+            kept.append(patch)
+            continue
+        if not clean:
+            logger.warning(
+                "monster_manual.name_unsalvageable — dropping NPC patch (raw=%r)",
+                patch.name,
+            )
+            continue
+        logger.warning("monster_manual.name_sanitized — raw=%r clean=%r", patch.name, clean)
+        patch.name = clean
+        sanitized += 1
+        kept.append(patch)
+    return kept, sanitized
 
 
 def ensure_loaded(sd: _SessionData) -> MonsterManual | None:
@@ -83,7 +131,7 @@ def ensure_loaded(sd: _SessionData) -> MonsterManual | None:
     if manual.needs_seeding() and source_dir is not None:
         # Late import — pregen pulls the encountergen CLI, which is
         # heavy enough to keep out of session-handler import paths.
-        from sidequest.server.dispatch.pregen import seed_manual
+        from sidequest.server.dispatch.pregen import EncounterSeedError, seed_manual
 
         try:
             seed_manual(
@@ -92,36 +140,90 @@ def ensure_loaded(sd: _SessionData) -> MonsterManual | None:
                 world=sd.world_slug or "",
                 manual=manual,
             )
+        except EncounterSeedError:
+            # Story 90-5 (item 6, Keith policy 2026-06-10): a ruleset-module
+            # pack with no bestiary is a fatal authoring/config error, not a
+            # transient outage — fail LOUD. Swallowing it here would bind a
+            # silently-empty Monster Manual pool, behaviorally the 87-4 bug.
+            # Re-raise so the session bind crashes instead of running blind.
+            raise
         except Exception as exc:  # noqa: BLE001
-            # Don't crash the turn on a pregen failure — the narrator
-            # can still run with whatever the Manual already had on disk.
-            # OTEL fires below regardless so the GM panel sees the seed
-            # attempt and its outcome.
+            # Don't crash the turn on a *transient* pregen failure (e.g. the
+            # encountergen CLI is briefly unavailable) — the narrator can still
+            # run with whatever the Manual already had on disk (ADR-006).
             logger.warning(
                 "monster_manual.seed_failed genre=%s world=%s error=%s",
                 sd.genre_slug,
                 sd.world_slug,
                 exc,
             )
+
+    # H1 (wry_whimsy/oz, 2026-06-14): backfill the world's authored cast
+    # UNCONDITIONALLY — independent of needs_seeding(). seed_manual only runs
+    # when the Manual needs more Available entries, so an existing on-disk Manual
+    # (>=4 NPCs + an encounter) never re-seeds and the authored companions never
+    # enter the pool — the bug recurs on every prior save. _seed_authored_npcs
+    # dedups by EXACT name (insert) and upserts stale placement tags (order-
+    # insensitive), so this is safe to run every load; it only mutates when the
+    # authored roster has something new or changed. Saves + emits a span when it
+    # does (OTEL: the backfill is a subsystem decision the GM panel must see).
+    if pack is not None:
+        from sidequest.server.dispatch.pregen import _seed_authored_npcs
+
+        backfilled = _seed_authored_npcs(pack, sd.world_slug or "", manual)
+        if backfilled:
+            manual.save()
+            logger.info(
+                "monster_manual.authored_backfilled genre=%s world=%s count=%d",
+                sd.genre_slug,
+                sd.world_slug,
+                backfilled,
+            )
+            with Span.open(
+                SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL,
+                {
+                    "genre": sd.genre_slug,
+                    "world": sd.world_slug or "",
+                    "authored_backfilled": backfilled,
+                    "total_npcs": len(manual.npcs),
+                },
+            ):
+                pass
+
     sd.monster_manual = manual
     return manual
 
 
 def _npc_patches_for_available_humans(
     manual: MonsterManual, current_location: str
-) -> list[NpcPatch]:
+) -> tuple[list[NpcPatch], int, int, int]:
     """Build patches for Active-at-location + top-N Available humans.
 
     Mirrors :meth:`MonsterManual.format_nearby_npcs` selection logic:
 
     - Active NPCs whose ``activated_location`` overlaps ``current_location``
       (substring either direction) — full-profile patch, stamped with
-      the explicit anchor location.
-    - First :data:`_AVAILABLE_NPC_INJECT_LIMIT` Available NPCs — name-only
-      patch stamped with the party's ``current_location`` so the
-      projection layer's ``in_same_zone()`` matches them.
+      the explicit anchor location. Capped at
+      :data:`_ACTIVE_NPC_INJECT_LIMIT` (sq-playtest 2026-06-13): the loop was
+      previously uncapped and re-surfaced every named NPC every turn.
+    - First :data:`_AVAILABLE_NPC_INJECT_LIMIT` Available NPCs, selected via
+      :meth:`MonsterManual.available_at_location` (wry_whimsy/oz fix): a
+      *placed* Available NPC (non-empty ``location_tags``) only surfaces where
+      its tags match ``current_location``; an *unplaced* one stays eligible
+      everywhere. Each is a name-only patch stamped with the party's
+      ``current_location`` so the projection layer's ``in_same_zone()`` matches.
 
     Dormant NPCs are skipped — same exclusion as the Rust formatter.
+
+    Returns ``(patches, active_capped, available_placed_matched,
+    available_placed_eligible)`` — ``active_capped`` is the number of
+    Active-at-location humans dropped by the cap; ``available_placed_matched`` is
+    how many of the surfaced Available humans were matched by ``location_tags``
+    (vs unplaced fallback); ``available_placed_eligible`` is the UNCAPPED count of
+    placed NPCs matching this location (so ``eligible - matched`` is the cap-loss,
+    reported as ``available_placed_dropped``). All are surfaced in the injection
+    span so the GM panel sees placement-aware selection working and the bench
+    bounded (No Silent Fallbacks).
 
     Playtest 2026-05-11 regression: prior versions left ``location=None``
     on every patch, which silently masked every co-located target from
@@ -132,26 +234,48 @@ def _npc_patches_for_available_humans(
     loc_lower = (current_location or "").lower()
     fallback_location = current_location or None
 
-    patches: list[NpcPatch] = []
-
+    # Collect all Active-at-location matches first, then cap — so the cap drops
+    # the tail deterministically (manual.npcs order) and we can report how many
+    # were elided rather than silently swallowing them (No Silent Fallbacks).
+    active_patches: list[NpcPatch] = []
     for npc in manual.npcs:
         if npc.state != EntryState.ACTIVE:
             continue
         anchor = npc.activated_location
         if anchor is None:
-            patches.append(_human_patch(npc, location=fallback_location))
+            active_patches.append(_human_patch(npc, location=fallback_location))
             continue
         anchor_lower = anchor.lower()
         if loc_lower and (anchor_lower in loc_lower or loc_lower in anchor_lower):
-            patches.append(_human_patch(npc, location=anchor))
+            active_patches.append(_human_patch(npc, location=anchor))
 
-    available = [n for n in manual.npcs if n.state == EntryState.AVAILABLE][
-        :_AVAILABLE_NPC_INJECT_LIMIT
-    ]
+    active_capped = max(0, len(active_patches) - _ACTIVE_NPC_INJECT_LIMIT)
+    if active_capped:
+        logger.info(
+            "monster_manual.active_inject_capped kept=%d dropped=%d location=%r",
+            _ACTIVE_NPC_INJECT_LIMIT,
+            active_capped,
+            current_location,
+        )
+    patches: list[NpcPatch] = active_patches[:_ACTIVE_NPC_INJECT_LIMIT]
+
+    # Placement-aware Available selection (wry_whimsy/oz fix): a placed NPC
+    # (non-empty ``location_tags``) only surfaces where its tags match
+    # ``current_location``; an unplaced NPC stays eligible everywhere. Placed
+    # matches are ordered ahead of unplaced ones so authored roster NPCs win the
+    # surfacing race against generic generated walk-ons. Mirrors
+    # ``MonsterManual.available_at_location`` exactly.
+    eligible_all = manual.available_at_location(current_location)
+    # Uncapped count of placed-and-matching NPCs — computed from the SAME list as
+    # the surfaced slice so the span's eligible/matched/dropped are a consistent
+    # snapshot (no second available_at_location traversal in inject()).
+    available_placed_eligible = sum(1 for n in eligible_all if n.location_tags)
+    available = eligible_all[:_AVAILABLE_NPC_INJECT_LIMIT]
+    available_placed_matched = sum(1 for n in available if n.location_tags)
     for npc in available:
         patches.append(_human_patch(npc, location=fallback_location))
 
-    return patches
+    return patches, active_capped, available_placed_matched, available_placed_eligible
 
 
 def _human_patch(npc: Any, *, location: str | None) -> NpcPatch:
@@ -188,6 +312,8 @@ def _human_patch(npc: Any, *, location: str | None) -> NpcPatch:
         personality=personality,
         role=npc.role or None,
         location=location,
+        # Story 72-3: Monster Manual authorship marker (ADR-059).
+        manual_origin=True,
     )
 
 
@@ -273,7 +399,69 @@ def _creature_patch_from_enemy(enemy: Any, *, tier: int, location: str | None) -
         abilities=abilities or None,
         morale=morale,
         location=location,
+        # Story 72-3: Monster Manual authorship marker (ADR-059).
+        manual_origin=True,
     )
+
+
+def _creature_patch_from_bestiary_entry(entry: Any, *, location: str | None) -> NpcPatch:
+    """Translate one :class:`BestiaryEntry` into a creature patch.
+
+    Story 107-2: the per-room binding sources the opponent directly from the
+    world bestiary by id, so the materialized NPC carries the bestiary's
+    AUTHORED name ("Gnaw-Swarm") instead of an improvised label. Mirrors the
+    encountergen creature-patch shape (:func:`_creature_patch_from_enemy`) but
+    reads typed bestiary fields rather than a raw ``enemies[i]`` dict.
+    """
+    abilities = list(entry.abilities) if entry.abilities else None
+    description = entry.description or entry.role or None
+    return NpcPatch(
+        name=entry.name,
+        description=description,
+        role=entry.role or None,
+        creature_id=entry.id,
+        threat_level=entry.level,
+        hp=entry.hp,
+        abilities=abilities,
+        location=location,
+        # Story 72-3: Monster Manual authorship marker (ADR-059).
+        manual_origin=True,
+    )
+
+
+def _npc_patches_for_room_binding(
+    sd: _SessionData, room_id: str, current_location: str
+) -> list[NpcPatch]:
+    """Build creature patches for the room's authored ``encounter_creatures``.
+
+    Resolves the room's structured binding (Story 107-2) and materializes each
+    bound bestiary creature under its authored name. The resolve step emits the
+    ``monster_manual.room_bound`` span and fails loud on a dangling ref (No
+    Silent Fallbacks). Returns ``[]`` when the room declares no binding.
+    """
+    pack = getattr(sd, "genre_pack", None)
+    if pack is None:
+        return []
+    world_slug = sd.world_slug or ""
+    # Late import — keeps the resolver (yaml read + bestiary lookup) out of the
+    # session-handler import path, matching the pregen late-import pattern above.
+    from sidequest.server.dispatch.room_creature_binding import resolve_room_creatures
+
+    bound_ids = resolve_room_creatures(pack, world_slug, room_id)
+    if not bound_ids:
+        return []
+    bestiary, _ = pack.effective_bestiary(world_slug)
+    by_id = {entry.id: entry for entry in bestiary.entries}
+    creature_location = current_location or None
+    patches: list[NpcPatch] = []
+    for cid in bound_ids:
+        entry = by_id.get(cid)
+        if entry is None:
+            # resolve_room_creatures already validated referential integrity;
+            # a miss here would be a TOCTOU between resolve and materialize.
+            continue
+        patches.append(_creature_patch_from_bestiary_entry(entry, location=creature_location))
+    return patches
 
 
 def inject(
@@ -282,6 +470,7 @@ def inject(
     *,
     current_location: str,
     in_combat: bool,
+    room_id: str | None = None,
 ) -> int:
     """Materialize Manual entries into ``snapshot.npcs``.
 
@@ -292,40 +481,105 @@ def inject(
     Emits :data:`SPAN_MONSTER_MANUAL_INJECTED` with the same attribute
     shape as the Rust span so the existing GM-panel dashboard reads it
     without changes.
+
+    Story 107-2: when ``room_id`` is supplied (sourced from
+    ``snapshot.region_for()`` / ``pc_regions`` — 107-1's per-room key), the
+    room's structured ``encounter_creatures`` binding is resolved and its
+    authored bestiary creature is materialized under its real name, emitting
+    ``monster_manual.room_bound``. ``room_id=None`` (the default every existing
+    caller uses) preserves today's behavior exactly — the binding path is
+    strictly additive and gated on a room id being supplied.
     """
     manual = sd.monster_manual
-    if manual is None:
-        return 0
 
-    human_patches = _npc_patches_for_available_humans(manual, current_location)
-    creature_patches = _npc_patches_for_encounters(manual, in_combat, current_location)
-    all_patches = human_patches + creature_patches
+    # Social, Composure-only packs (combat_encounters=False) have no combat —
+    # never inject combat-encounter enemies (hostile -20 NPCs carrying B/X HP
+    # and Strike abilities) into a drawing-room mystery. This gate is
+    # defense-in-depth alongside the seed-side skip (pregen): a Manual cached to
+    # disk before the flag landed still holds combat encounters, so the
+    # injection seam must suppress them too (playtest 2026-06-01, blackthorn_moor).
+    # Absent pack/rules (test stubs) default to combat-enabled = the model
+    # default, preserving legacy behavior.
+    rules = getattr(getattr(sd, "genre_pack", None), "rules", None)
+    combat_encounters = getattr(rules, "combat_encounters", True)
 
-    available_npcs = len(manual.available_npcs())
-    available_encounters = len(manual.available_encounters())
+    all_patches: list[NpcPatch] = []
+    active_capped = 0
+    available_placed_matched = 0
+    available_placed_eligible = 0
+    if manual is not None:
+        (
+            human_patches,
+            active_capped,
+            available_placed_matched,
+            available_placed_eligible,
+        ) = _npc_patches_for_available_humans(manual, current_location)
+        creature_patches = (
+            _npc_patches_for_encounters(manual, in_combat, current_location)
+            if combat_encounters
+            else []
+        )
+        # Cleanse junk names (stale-cache annotations, corpus leakage) before they
+        # reach the snapshot. Loud per-name warnings + a span count below so the GM
+        # panel sees the registry decision (playtest 2026-06-10, "Vesper (version)").
+        human_patches, human_sanitized = _sanitize_patch_names(human_patches)
+        creature_patches, creature_sanitized = _sanitize_patch_names(creature_patches)
+        names_sanitized = human_sanitized + creature_sanitized
+        all_patches = human_patches + creature_patches
 
-    # Playtest 2026-05-11 lie-detector: count how many patches actually
-    # land with a bound location. Pre-fix this was always 0 (every patch
-    # had location=None) which silently masked every NPC from
-    # ``in_same_zone()``. Post-fix this matches ``len(all_patches)`` whenever
-    # ``current_location`` is meaningful.
-    patches_with_location = sum(1 for p in all_patches if p.location)
+        # Playtest 2026-05-11 lie-detector: count how many patches actually
+        # land with a bound location. Pre-fix this was always 0 (every patch
+        # had location=None) which silently masked every NPC from
+        # ``in_same_zone()``. Post-fix this matches ``len(all_patches)`` whenever
+        # ``current_location`` is meaningful.
+        patches_with_location = sum(1 for p in all_patches if p.location)
 
-    with Span.open(
-        SPAN_MONSTER_MANUAL_INJECTED,
-        {
-            "available_npcs": available_npcs,
-            "available_encounters": available_encounters,
-            "total_npcs": len(manual.npcs),
-            "total_encounters": len(manual.encounters),
-            "npcs_injected": len(human_patches),
-            "creatures_injected": len(creature_patches),
-            "patches_with_location": patches_with_location,
-            "in_combat": bool(in_combat),
-            "location": current_location or "",
-        },
-    ):
-        pass
+        # Placement-aware selection visibility (M5): ``eligible`` (the uncapped
+        # count of placed NPCs whose tags match here) and ``matched`` (how many
+        # surfaced through the _AVAILABLE_NPC_INJECT_LIMIT slice) come from the
+        # SAME _npc_patches_for_available_humans pass — one available_at_location
+        # traversal, consistent snapshot. ``dropped`` (eligible − matched) makes
+        # the cap-loss visible — without it eligible-vs-matched looked like a
+        # placement miss, not a bounded bench (No Silent Fallbacks). oz road: 4
+        # eligible, 3 matched, 1 dropped.
+        available_placed_dropped = max(0, available_placed_eligible - available_placed_matched)
+
+        with Span.open(
+            SPAN_MONSTER_MANUAL_INJECTED,
+            {
+                "available_npcs": len(manual.available_npcs()),
+                "available_encounters": len(manual.available_encounters()),
+                "total_npcs": len(manual.npcs),
+                "total_encounters": len(manual.encounters),
+                "npcs_injected": len(human_patches),
+                "creatures_injected": len(creature_patches),
+                "active_npcs_capped": active_capped,
+                # Placement-aware selection visibility (wry_whimsy/oz fix): how
+                # many surfaced Available humans were matched by ``location_tags``
+                # vs. fell through as unplaced walk-ons, and how many placed NPCs
+                # in the whole pool are eligible at this location. The GM-panel
+                # lie-detector that authored roster placement is actually firing
+                # (not silently ignored, the original bug).
+                "available_placed_matched": available_placed_matched,
+                "available_placed_eligible": available_placed_eligible,
+                # M5: placed-eligible NPCs the inject slice dropped (cap-loss made
+                # visible so eligible>matched isn't read as a placement failure).
+                "available_placed_dropped": available_placed_dropped,
+                "names_sanitized": names_sanitized,
+                "patches_with_location": patches_with_location,
+                "in_combat": bool(in_combat),
+                "combat_encounters": bool(combat_encounters),
+                "location": current_location or "",
+            },
+        ):
+            pass
+
+    # Story 107-2 per-room binding: when the party's room id is supplied, surface
+    # the room's AUTHORED bestiary opponent (emits monster_manual.room_bound,
+    # fails loud on a dangling ref). Strictly additive to the Manual pool above
+    # and gated on combat — a non-combat pack never fields creatures.
+    if room_id and combat_encounters:
+        all_patches = all_patches + _npc_patches_for_room_binding(sd, room_id, current_location)
 
     if not all_patches:
         return 0

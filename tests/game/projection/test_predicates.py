@@ -14,7 +14,6 @@ def _ctx(
 ) -> PredicateContext:
     if view is None:
         view = SessionGameStateView(
-            gm_player_id="gm",
             player_id_to_character={"alice": "alice_char", "bob": "bob_char"},
             party_id="party_1",
         )
@@ -24,12 +23,6 @@ def _ctx(
         viewer_player_id=viewer_player_id,
         viewer_character_id=view.character_of(viewer_player_id),
     )
-
-
-def test_is_gm_no_args() -> None:
-    pred = PREDICATES["is_gm"]
-    assert pred(_ctx(payload={}, viewer_player_id="gm"), field_ref=None) is True
-    assert pred(_ctx(payload={}, viewer_player_id="alice"), field_ref=None) is False
 
 
 def test_is_self_matches_viewer_character() -> None:
@@ -52,7 +45,7 @@ def test_is_owner_of_checks_item_ownership() -> None:
         def owner_of_item(self, item_id: str) -> str | None:
             return "alice" if item_id == "sword" else None
 
-    view = _View(gm_player_id="gm", player_id_to_character={"alice": "alice_char"})
+    view = _View(player_id_to_character={"alice": "alice_char"})
     pred = PREDICATES["is_owner_of"]
 
     ctx = _ctx(payload={"item_id": "sword"}, viewer_player_id="alice", view=view)
@@ -70,7 +63,6 @@ def test_in_same_zone_requires_both_zones_known() -> None:
             )
 
     view = _View(
-        gm_player_id="gm",
         player_id_to_character={"alice": "alice_char", "bob": "bob_char", "carol": "carol_char"},
     )
     pred = PREDICATES["in_same_zone"]
@@ -91,7 +83,6 @@ def test_visible_to_delegates_to_view() -> None:
             return (viewer, target) == ("alice_char", "bob_char")
 
     view = _View(
-        gm_player_id="gm",
         player_id_to_character={"alice": "alice_char", "bob": "bob_char"},
     )
     pred = PREDICATES["visible_to"]

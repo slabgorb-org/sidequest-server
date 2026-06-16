@@ -23,9 +23,6 @@ def test_envelope_allows_none_origin_seq_for_non_event_log_messages() -> None:
 
 def test_game_state_view_is_protocol() -> None:
     class _Stub:
-        def is_gm(self, player_id: str) -> bool:
-            return player_id == "gm"
-
         def seat_of(self, player_id: str) -> str | None:
             return None
 
@@ -45,6 +42,6 @@ def test_game_state_view_is_protocol() -> None:
             return None
 
     def _takes_view(v: GameStateView) -> bool:
-        return v.is_gm("gm")
+        return v.character_of("alice") == "alice_char"
 
     assert _takes_view(_Stub()) is True

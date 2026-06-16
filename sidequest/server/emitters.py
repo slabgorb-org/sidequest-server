@@ -12,19 +12,167 @@ original methods on WebSocketSessionHandler.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from sidequest.agents.perception_rewriter import rewrite_for_recipient
 from sidequest.agents.pov_swap import swap_to_second_person
-from sidequest.game.persistence import SAVE_WRITE_LOCK
 
 if TYPE_CHECKING:
     from sidequest.game.projection.view import SessionGameStateView
+    from sidequest.game.projection_filter import FilterDecision
     from sidequest.game.session import GameSnapshot
     from sidequest.protocol.messages import ScrapbookEntryPayload
     from sidequest.server.session_handler import WebSocketSessionHandler, _SessionData
 
 logger = logging.getLogger(__name__)
+
+
+def _emit_recipient_dropped(kind: str, player_id: str, reason: str) -> None:
+    """Surface — loudly — a recipient that was INCLUDED in the fan-out set
+    but lost its outbound transport before the frame could be enqueued.
+
+    This is almost always a client that dropped mid-broadcast: the socket
+    was unregistered (``socket_for_player`` → ``None``) or its outbound queue
+    was detached (``queue_for_socket`` → ``None``, exactly what
+    ``room.detach_outbound`` leaves behind). The turn itself is NOT lost —
+    fan-out runs only after the committed C2 transaction, so the event +
+    projection cache are already durable and the recipient replays on
+    reconnect. But a SILENT ``continue`` here was the exact blind spot behind
+    the 2026-05-27 orphaned-turn playtest loop: the GM panel saw a clean turn
+    while a player received nothing. Emit a WARNING log + a watcher event so
+    the dashboard shows the delivery gap (No Silent Fallbacks + the OTEL
+    lie-detector mandate). Telemetry must never crash the rest of the fan-out.
+    """
+    logger.warning(
+        "emit_event.recipient_dropped kind=%s player_id=%s reason=%s",
+        kind,
+        player_id,
+        reason,
+    )
+    try:
+        from sidequest.server.session_handler import _watcher_publish
+
+        _watcher_publish(
+            "state_transition",
+            {
+                "field": "broadcast.recipient_dropped",
+                "kind": kind,
+                "recipient_player_id": player_id,
+                "reason": reason,
+            },
+            component="broadcast",
+            severity="warning",
+        )
+    except Exception:  # noqa: BLE001 — telemetry must never crash a turn
+        logger.warning("emit_event.recipient_dropped watcher publish failed kind=%s", kind)
+
+
+def _deliver_to_connected_recipients(
+    room: Any,
+    recipients: Any,
+    *,
+    message_builder: Callable[[str], Any],
+    kind: str,
+) -> dict[str, Any]:
+    """Shared recipient-delivery dispatch (Story 59-22).
+
+    Walk ``recipients`` in order; for each, ask ``message_builder(pid)`` for the
+    frame to send. A ``None`` return means "send nothing to this socket" — the
+    single skip rule each caller folds its own gate into (``decision.include``
+    for the projection fan-out; the supplier returning ``None`` for the
+    CONFRONTATION path). A recipient whose socket/queue has gone mid-broadcast
+    is surfaced via :func:`_emit_recipient_dropped` rather than skipped
+    silently (the orphaned-turn blind spot — No Silent Fallbacks + the OTEL
+    lie-detector mandate).
+
+    Returns ``{pid: built_msg}`` for every recipient the builder produced a
+    non-``None`` frame for — INCLUDING recipients whose delivery was then
+    dropped — so a caller that needs a specific recipient's own frame (the
+    emitter, for ``emit_event``'s return value) can recover it without invoking
+    the builder a second time (a double call would double-fire the supplier's
+    per-recipient OTEL spans).
+    """
+    built: dict[str, Any] = {}
+    for pid in recipients:
+        msg = message_builder(pid)
+        if msg is None:
+            continue
+        built[pid] = msg
+        socket_id = room.socket_for_player(pid)
+        if socket_id is None:
+            _emit_recipient_dropped(kind, pid, "socket_gone")
+            continue
+        queue = room.queue_for_socket(socket_id)
+        if queue is None:
+            _emit_recipient_dropped(kind, pid, "queue_detached")
+            continue
+        queue.put_nowait(msg)
+    return built
+
+
+def _deliver_fanout(
+    room: Any,
+    fanout: list[tuple[str, FilterDecision, dict]],
+    *,
+    message_cls: Any,
+    payload_cls: Any,
+    kind: str,
+    seq: int,
+) -> None:
+    """Enqueue each included recipient's projected frame onto their outbound
+    queue. A recipient whose socket/queue has gone (mid-broadcast drop) is
+    surfaced via :func:`_emit_recipient_dropped` rather than skipped silently.
+
+    Extracted from :func:`emit_event` so the mid-broadcast drop window is
+    testable against a real ``SessionRoom`` with synthetic fan-out tuples — no
+    genre pack, no projection, no DB. ``emit_event`` is the sole production
+    caller.
+
+    Story 59-22: the socket/queue/drop/``put_nowait`` dispatch is shared with
+    the CONFRONTATION supplier path via :func:`_deliver_to_connected_recipients`.
+    The per-recipient frame construction (the ``decision.include`` gate, the C3
+    ``model_validate`` rebuild, the ``_visibility`` egress-strip, and the
+    fail-loud ``fanout_failed`` log) is this path's own concern, so it lives in
+    the builder handed to the shared helper.
+    """
+    by_pid = {other_pid: (decision, filtered_data) for other_pid, decision, filtered_data in fanout}
+
+    def _build(other_pid: str) -> Any:
+        decision, filtered_data = by_pid[other_pid]
+        if not decision.include:
+            return None
+        try:
+            if payload_cls is not None:
+                # C3: rebuild the recipient payload from the filtered dict
+                # alone (plus seq). Do NOT use model_copy(update=...) —
+                # merging leaves fields absent from the filtered dict at their
+                # canonical values, which would leak any field a future rule
+                # drops entirely.
+                # ADR-105 / Story 71-13: strip _visibility from the wire.
+                # _visibility is a server-side sidecar consumed by the
+                # projection pipeline; it must never appear in the serialised
+                # frame sent to any client.  Universal egress-strip here
+                # closes the pre-existing leak for ALL narration recipients.
+                filtered_data.pop("_visibility", None)
+                recipient_payload = payload_cls.model_validate({**filtered_data, "seq": seq})
+                return message_cls(payload=recipient_payload)
+            return message_cls(payload={**filtered_data, "seq": seq})
+        except Exception:
+            # Never silently fail fan-out; log and skip this recipient.
+            logger.error(
+                "emit_event.fanout_failed kind=%s other_pid=%s",
+                kind,
+                other_pid,
+            )
+            return None
+
+    _deliver_to_connected_recipients(
+        room,
+        [other_pid for other_pid, _decision, _filtered_data in fanout],
+        message_builder=_build,
+        kind=kind,
+    )
 
 
 def persist_scrapbook_entry(
@@ -35,36 +183,30 @@ def persist_scrapbook_entry(
     ``game/persistence.py``). The table allows multiple rows per turn —
     no UNIQUE on turn_id.
     """
-    import json as _json
-
     if handler._event_log is None:
         return  # Legacy non-slug path — no DB to write to
-    store = handler._event_log.store
-    npcs_json = _json.dumps(
-        [
-            {"name": ref.name, "role": ref.role, "disposition": ref.disposition}
+    handler._event_log.repository.append_scrapbook_entry(
+        turn_id=payload.turn_id,
+        scene_title=payload.scene_title,
+        scene_type=payload.scene_type,
+        location=payload.location,
+        image_url=payload.image_url,
+        narrative_excerpt=payload.narrative_excerpt,
+        world_facts=list(payload.world_facts),
+        npcs_present=[
+            {
+                "name": ref.name,
+                "role": ref.role,
+                "disposition": ref.disposition,
+                # Story 65-6: persist the world-scoped portrait URL so the
+                # post-game gallery + forensic export carry it losslessly
+                # (None when the NPC has no authored portrait).
+                "portrait_url": ref.portrait_url,
+            }
             for ref in payload.npcs_present
-        ]
+        ],
+        render_status=payload.render_status,
     )
-    facts_json = _json.dumps(list(payload.world_facts))
-    with SAVE_WRITE_LOCK, store._conn:
-        store._conn.execute(
-            "INSERT INTO scrapbook_entries "
-            "(turn_id, scene_title, scene_type, location, image_url, "
-            " narrative_excerpt, world_facts, npcs_present, render_status) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                payload.turn_id,
-                payload.scene_title,
-                payload.scene_type,
-                payload.location,
-                payload.image_url,
-                payload.narrative_excerpt,
-                facts_json,
-                npcs_json,
-                payload.render_status,
-            ),
-        )
 
 
 def update_scrapbook_image_url(
@@ -96,26 +238,10 @@ def update_scrapbook_image_url(
         return False
     if not image_url:
         return False
-    store = handler._event_log.store
-    try:
-        with SAVE_WRITE_LOCK, store._conn:
-            cur = store._conn.execute(
-                "UPDATE scrapbook_entries SET image_url = ? "
-                "WHERE rowid = ("
-                "  SELECT rowid FROM scrapbook_entries "
-                "  WHERE turn_id = ? AND image_url IS NULL "
-                "  ORDER BY rowid DESC LIMIT 1"
-                ")",
-                (image_url, turn_id),
-            )
-            return cur.rowcount > 0
-    except Exception as exc:  # noqa: BLE001 — render path must not crash on a backfill miss
-        logger.warning(
-            "scrapbook.image_url_update_failed turn_id=%d error=%s",
-            turn_id,
-            exc,
-        )
-        return False
+    return handler._event_log.repository.update_scrapbook_image_url(
+        turn_id=turn_id,
+        image_url=image_url,
+    )
 
 
 def _pronouns_for_pc(snapshot: GameSnapshot, pc_name: str) -> str:
@@ -169,12 +295,32 @@ def _apply_pov_swap(
     return {**payload_dict, "text": swapped}
 
 
+def _clear_confrontation_like(payload_model: object) -> object:
+    """A cleared CONFRONTATION frame derived from a union payload.
+
+    Story 59-20: when a ``per_recipient_payload`` supplier yields ``None`` for
+    the emitter, ``emit_event`` must still hand the caller a frame — but never
+    the canonical union. ``per_recipient_payload`` is a CONFRONTATION-only
+    contract, so build the overlay-unmount payload (``active=False``, empty
+    beats) from the union's encounter type + genre slug.
+    """
+    from sidequest.protocol.messages import ConfrontationPayload
+    from sidequest.server.dispatch.confrontation import build_clear_confrontation_payload
+
+    encounter_type = getattr(payload_model, "type", "") or ""
+    genre_slug = getattr(payload_model, "genre_slug", "") or ""
+    return ConfrontationPayload(
+        **build_clear_confrontation_payload(encounter_type=encounter_type, genre_slug=genre_slug)
+    )
+
+
 def emit_event(
     handler: WebSocketSessionHandler,
     kind: str,
     payload_model: object,
     *,
     author_player_id: str | None = None,
+    per_recipient_payload: Callable[[str], object] | None = None,
 ) -> object:
     """Persist an event to the EventLog and fan-out to all connected players.
 
@@ -182,6 +328,18 @@ def emit_event(
     1. EventLog.append fires BEFORE any socket send.
     2. Fan-out consults ProjectionFilter per recipient.
     3. (solo only) The emitter receives the raw, unfiltered event.
+
+    ``per_recipient_payload`` (Story 59-16 — single filtered CONFRONTATION
+    delivery): when supplied, the projection/perception/POV machinery is
+    bypassed and the canonical ``payload_model`` is persisted to the
+    EventLog ONLY. A per-recipient frame — ``per_recipient_payload(pid)`` —
+    is delivered to EVERY connected socket INCLUDING the emitter (overrides
+    Invariant 3 for this emit: the emitter is no longer raw-bypassed). The
+    supplier returns ``None`` for a socket that must receive nothing — an
+    unseated/lobby socket, or a seated PC the supplier has already surfaced
+    as unresolved (it owns the fail-loud ERROR span). The canonical union is
+    therefore never sent to a client socket. This replaces the Story 49-7
+    union-broadcast + per-PC overlay race. Returns the emitter's own frame.
 
     ``author_player_id`` (ADR-105 Track A): in merged-MP dispatch the
     driving handler is whichever player submitted *last* — NOT the sole
@@ -206,7 +364,6 @@ def emit_event(
     from pydantic import BaseModel
 
     from sidequest.game.projection.envelope import MessageEnvelope
-    from sidequest.game.projection_filter import FilterDecision
     from sidequest.server.session_handler import (
         _KIND_TO_MESSAGE_CLS,
         _project_frames,
@@ -265,6 +422,84 @@ def emit_event(
         except Exception:  # noqa: BLE001 — telemetry must never crash a turn
             logger.warning("emit.author_resolved watcher publish failed kind=%s", kind)
 
+        # Story 59-16: single filtered delivery path. Persist the canonical
+        # (union) payload to the EventLog only, then deliver a per-recipient
+        # frame to every connected socket including the emitter. The union is
+        # never enqueued onto a client socket. A supplier returning None means
+        # "send nothing to this socket" (unseated, or a seated PC the supplier
+        # already surfaced as unresolved). Bypasses projection/perception/POV:
+        # CONFRONTATION is structured data whose per-PC class filtering is
+        # computed by the supplier in the encounter layer (ADR-105: the
+        # projection firewall has no class context).
+        if (
+            per_recipient_payload is not None
+            and room is not None
+            and callable(getattr(room, "connected_player_ids", None))
+        ):
+            repo = event_log.repository
+            with repo.transaction() as tx:
+                row = tx.append_event(kind=kind, payload_json=payload_json)
+                seq = row.seq
+
+            def _frame_for(pid: str) -> object | None:
+                recipient_payload = per_recipient_payload(pid)
+                if recipient_payload is None:
+                    return None
+                if isinstance(recipient_payload, BaseModel):
+                    recipient_payload = recipient_payload.model_copy(update={"seq": seq})
+                return message_cls(payload=recipient_payload)
+
+            # Story 59-22: delivery dispatch is the shared helper; this path's
+            # per-recipient frame construction is `_frame_for`. The helper
+            # returns every built (non-None) frame keyed by pid, so the
+            # emitter's own frame is recovered without calling `_frame_for`
+            # (hence the supplier) a second time. A spy/no-op helper returns a
+            # falsy value → emitter_msg falls through to the back-compat block.
+            _recipients = room.connected_player_ids()
+            built = _deliver_to_connected_recipients(
+                room,
+                _recipients,
+                message_builder=_frame_for,
+                kind=kind,
+            )
+            # Ping-pong 2026-06-07 ("MP confrontation DESYNC"): per-recipient
+            # DELIVERY evidence. ``confrontation.peer_projection_broadcast``
+            # logs room PRESENCE — it cannot distinguish "frame enqueued to
+            # this seat" from "supplier silently returned None" (unseated /
+            # unresolved-class skip). The desync was undiagnosable from the
+            # text log for exactly this reason. ``skipped`` = connected pids
+            # the supplier produced no frame for; gone-socket drops are
+            # surfaced separately via emit_event.recipient_dropped.
+            # ``built`` is falsy when a test spy/no-op helper replaced the
+            # delivery dispatch (see emitter_msg fallback below) — guard so
+            # the evidence line never crashes a turn.
+            _delivered = sorted(built.keys()) if built else []
+            logger.info(
+                "confrontation.delivery kind=%s delivered=%s skipped=%s",
+                kind,
+                _delivered,
+                sorted(set(_recipients) - set(_delivered)),
+            )
+            emitter_msg: object | None = built.get(emitter_player_id) if built else None
+
+            # Return the emitter's own frame for caller back-compat. If the
+            # emitter was not connected (or the supplier returned None for
+            # them), build a frame from their supplied payload, falling back
+            # to the canonical only as the function's return value (never a
+            # socket delivery).
+            if emitter_msg is None:
+                fallback = per_recipient_payload(emitter_player_id) if emitter_player_id else None
+                if fallback is None:
+                    # Story 59-20: the supplier said "nothing for the emitter"
+                    # (unseated, or a seated PC it surfaced as unresolved). NEVER
+                    # return the canonical union — hand back a cleared frame so
+                    # the emitter's tab unmounts instead of painting the union.
+                    fallback = _clear_confrontation_like(payload_model)
+                if isinstance(fallback, BaseModel):
+                    fallback = fallback.model_copy(update={"seq": seq})
+                emitter_msg = message_cls(payload=fallback)
+            return emitter_msg
+
         # C2: event append + all cache writes share a single transaction.
         # Projections are computed inside the block so the cache row's
         # event_seq is the freshly-assigned one. If the server crashes
@@ -289,6 +524,8 @@ def emit_event(
                 emit_mechanical_census(
                     room,
                     handler._session_data.snapshot if handler._session_data else None,
+                    tx=tx,
+                    event_seq=seq,
                 )
 
             if room is not None and projection_filter is not None:
@@ -326,6 +563,8 @@ def emit_event(
                     connected_players=recipients,
                     view=view,
                     on_decision=_cache_decision,
+                    tx=tx,
+                    event_seq=seq,
                 )
                 # Story 49-8: per-recipient POV swap snapshot for the
                 # emitter path below. Captured here so the emitter and
@@ -375,7 +614,11 @@ def emit_event(
                 # shared blob is ADR-105 Track B, not this change.
                 if project_emitter and emitter_player_id is not None:
                     _e_decision = projection_filter.project(
-                        envelope=envelope, view=view, player_id=emitter_player_id
+                        envelope=envelope,
+                        view=view,
+                        player_id=emitter_player_id,
+                        tx=tx,
+                        event_seq=seq,
                     )
                     _cache_decision(emitter_player_id, _e_decision)
                     if _e_decision.include:
@@ -423,8 +666,12 @@ def emit_event(
             # solo Invariant-3 raw bypass. C3 rule applies: rebuild from
             # the filtered dict alone (+ seq) so no canonical field a
             # future (Track B) rule drops can leak back via model merge.
+            # ADR-105 / Story 71-13: strip _visibility from the driver
+            # frame too — consistent with the universal egress-strip in
+            # _deliver_fanout for peers.
             if isinstance(payload_model, BaseModel):
                 payload_cls_emitter = type(payload_model)
+                emitter_projected_dict.pop("_visibility", None)
                 emitter_payload = payload_cls_emitter.model_validate(
                     {**emitter_projected_dict, "seq": seq}
                 )
@@ -469,43 +716,117 @@ def emit_event(
         # an event that never hit disk.
         if room is not None:
             payload_cls = type(payload_model) if isinstance(payload_model, BaseModel) else None
-            for other_pid, decision, filtered_data in fanout:
-                if not decision.include:
-                    continue
-                socket_id = room.socket_for_player(other_pid)
-                if socket_id is None:
-                    continue
-                queue = room.queue_for_socket(socket_id)
-                if queue is None:
-                    continue
-                try:
-                    if payload_cls is not None:
-                        # C3: rebuild the recipient payload from the
-                        # filtered dict alone (plus seq). Do NOT use
-                        # model_copy(update=...) — merging leaves fields
-                        # absent from the filtered dict at their canonical
-                        # values, which would leak any field a future rule
-                        # drops entirely.
-                        recipient_payload = payload_cls.model_validate(
-                            {**filtered_data, "seq": seq}
-                        )
-                        recipient_msg = message_cls(payload=recipient_payload)
-                    else:
-                        recipient_msg = message_cls(payload={**filtered_data, "seq": seq})
-                except Exception:
-                    # Never silently fail fan-out; log and skip this recipient.
-                    logger.error(
-                        "emit_event.fanout_failed kind=%s other_pid=%s",
-                        kind,
-                        other_pid,
-                    )
-                    continue
-                queue.put_nowait(recipient_msg)
+            _deliver_fanout(
+                room,
+                fanout,
+                message_cls=message_cls,
+                payload_cls=payload_cls,
+                kind=kind,
+                seq=seq,
+            )
     else:
-        # Legacy path (non-slug connect): no EventLog, no seq
-        out_to_self = message_cls(payload=payload_model)
+        # Legacy path (non-slug connect): no EventLog, no seq. Story 59-16:
+        # honor a per-recipient supplier for the emitter so stub-room / legacy
+        # callers still return a class-filtered frame (never the union) for
+        # their outbound list.
+        if per_recipient_payload is not None:
+            _legacy_emitter = handler._session_data.player_id if handler._session_data else None
+            _legacy_payload = per_recipient_payload(_legacy_emitter) if _legacy_emitter else None
+            # Solo / non-slug-connect path: a SINGLE socket, so there is no
+            # cross-player leak — when the emitter doesn't resolve to a seated PC
+            # (supplier → None) the player still sees their full confrontation via
+            # the canonical payload. The clear-frame fallback is reserved for the
+            # multiplayer per-recipient branch above, where the union must never
+            # reach a peer socket. (Story 59-20: the firewall is per-socket, not
+            # here.)
+            out_to_self = message_cls(
+                payload=_legacy_payload if _legacy_payload is not None else payload_model
+            )
+        else:
+            out_to_self = message_cls(payload=payload_model)
 
     return out_to_self
+
+
+def _world_portrait_slugs(pack: Any, world_slug: str | None) -> frozenset[str]:
+    """The set of portrait-manifest slugs for ``world_slug`` in ``pack``.
+
+    Slugs are derived with ``slugify_player_name`` — the exact mirror of the
+    daemon's ``CharacterCatalog._slugify_name`` that the render script
+    (``scripts/generate_portrait_images._slugify_name``) uses to name the
+    on-disk ``<slug>.png``. Output equality on the same input is the
+    load-bearing contract: a mismatched slug means the resolved URL 404s.
+
+    Returns an empty set when the pack/world is unbound or has no manifest —
+    the caller treats that as "no portrait" (an observable not-found), never
+    a crash.
+    """
+    from sidequest.server.utils import slugify_player_name
+
+    if pack is None or not world_slug:
+        return frozenset()
+    world = pack.worlds.get(world_slug)
+    if world is None:
+        return frozenset()
+    manifest = getattr(world, "portrait_manifest", None) or []
+    slugs: set[str] = set()
+    for entry in manifest:
+        name = getattr(entry, "name", "") or ""
+        if name:
+            slugs.add(slugify_player_name(name))
+    return frozenset(slugs)
+
+
+def _resolve_npc_portrait_url(
+    *,
+    pack: Any,
+    genre_slug: str,
+    world_slug: str | None,
+    npc_name: str,
+    manifest_slugs: frozenset[str] | None = None,
+) -> str | None:
+    """World-scoped portrait URL for an invoked NPC, or ``None`` (Story 65-6).
+
+    Attaches a portrait IFF ``npc_name`` slugifies to a slug present in the
+    current world's ``portrait_manifest``. The URL points at the world-scoped
+    asset path that the render script writes
+    (``genre_packs/<g>/worlds/<w>/assets/portraits/<slug>.png``), so URL ==
+    filename by construction. Both outcomes emit an OTEL span so the GM/dev
+    panel can confirm the lookup ran — a should-resolve-but-didn't is the
+    classic slug skew, and the not-found span proves the lookup happened
+    rather than being silently skipped (CLAUDE.md OTEL principle).
+
+    ``manifest_slugs`` may be precomputed by the caller to avoid rebuilding
+    the set per NPC in a multi-NPC turn; when omitted it is derived here.
+    """
+    from sidequest.foundation.asset_urls import resolve_asset_url
+    from sidequest.server.utils import slugify_player_name
+    from sidequest.telemetry.spans.scrapbook import (
+        scrapbook_npc_portrait_not_found_span,
+        scrapbook_npc_portrait_resolved_span,
+    )
+
+    slug = slugify_player_name(npc_name)
+    slugs = (
+        manifest_slugs if manifest_slugs is not None else _world_portrait_slugs(pack, world_slug)
+    )
+    world_for_span = world_slug or ""
+
+    if slug and slug in slugs:
+        url = resolve_asset_url(
+            f"genre_packs/{genre_slug}/worlds/{world_slug}/assets/portraits/{slug}.png"
+        )
+        with scrapbook_npc_portrait_resolved_span(
+            npc_name=npc_name, genre=genre_slug, world=world_for_span, slug=slug
+        ):
+            pass
+        return url
+
+    with scrapbook_npc_portrait_not_found_span(
+        npc_name=npc_name, genre=genre_slug, world=world_for_span, slug=slug
+    ):
+        pass
+    return None
 
 
 def emit_scrapbook_entry(
@@ -574,6 +895,12 @@ def emit_scrapbook_entry(
     # inference. ``role`` is the side flag (player/opponent/neutral);
     # ``disposition`` falls back to role when no behavioral string was
     # extracted.
+    # Story 65-6: precompute the world's portrait-manifest slug set once per
+    # turn so a multi-NPC turn doesn't rebuild it per ref. The loaded pack +
+    # world are reachable from the session data (sd.genre_pack / sd.world_slug)
+    # — same accessors the location resolver above uses.
+    portrait_slugs = _world_portrait_slugs(sd.genre_pack, sd.world_slug)
+
     npc_refs: list[ScrapbookEntryNpcRef] = []
     for mention in result.npcs_present or []:
         name = (getattr(mention, "name", "") or "").strip()
@@ -581,11 +908,21 @@ def emit_scrapbook_entry(
             continue
         role = getattr(mention, "side", "") or "neutral"
         disposition = getattr(mention, "role", "") or role
+        # Attach a world-scoped portrait IFF the invoked NPC is in the
+        # manifest. Resolves to None (an observable not-found span) otherwise.
+        portrait_url = _resolve_npc_portrait_url(
+            pack=sd.genre_pack,
+            genre_slug=sd.genre_slug,
+            world_slug=sd.world_slug,
+            npc_name=name,
+            manifest_slugs=portrait_slugs,
+        )
         npc_refs.append(
             ScrapbookEntryNpcRef(
                 name=name,
                 role=role,
                 disposition=disposition,
+                portrait_url=portrait_url,
             )
         )
 
@@ -650,71 +987,3 @@ def emit_scrapbook_entry(
         },
         component="scrapbook",
     )
-
-
-async def broadcast_delta(
-    *,
-    turn_id: str,
-    chunk: str,
-    seq: int,
-    room: object,
-) -> None:
-    """Broadcast an ephemeral narration delta to all sockets in the room.
-
-    Does NOT call emit_event(). Does NOT touch the projection cache.
-    Does NOT run perception_rewriter. Pure presentation channel.
-
-    Room API used (matching SessionRoom):
-      room.connected_player_ids() -> list[str]
-      room.socket_for_player(pid) -> str | None
-      room.queue_for_socket(socket_id) -> asyncio.Queue | None
-      queue.put_nowait(msg)
-
-    Per-socket errors (missing socket_id or queue) are logged and skipped so
-    one dead/absent player cannot block fan-out to the rest.
-
-    Implementation note: each player gets the same payload — deltas are not
-    per-recipient filtered. This is correct today because the perception
-    rewriter is a no-op for narration (no kind-tagged spans yet, see
-    perception_rewriter.py docstring re: G10 deferral). When G10 ships,
-    this fan-out needs revisiting.
-    """
-    from sidequest.protocol.messages import NarrationDelta, NarrationDeltaPayload
-
-    msg = NarrationDelta(
-        payload=NarrationDeltaPayload(
-            turn_id=turn_id,
-            chunk=chunk,
-            seq=seq,
-        )
-    )
-    for pid in room.connected_player_ids():
-        socket_id = room.socket_for_player(pid)
-        if socket_id is None:
-            logger.warning(
-                "broadcast_delta.no_socket turn_id=%s seq=%d player_id=%s",
-                turn_id,
-                seq,
-                pid,
-            )
-            continue
-        queue = room.queue_for_socket(socket_id)
-        if queue is None:
-            logger.warning(
-                "broadcast_delta.no_queue turn_id=%s seq=%d player_id=%s socket_id=%s",
-                turn_id,
-                seq,
-                pid,
-                socket_id,
-            )
-            continue
-        try:
-            queue.put_nowait(msg)
-        except Exception:
-            # Per-socket errors must not break fan-out to other recipients.
-            logger.warning(
-                "broadcast_delta.enqueue_failed turn_id=%s seq=%d player_id=%s",
-                turn_id,
-                seq,
-                pid,
-            )

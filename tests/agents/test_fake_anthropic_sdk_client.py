@@ -143,29 +143,3 @@ async def test_fake_raises_when_script_exhausted() -> None:
             tools=[],
             model="claude-sonnet-4-6",
         )
-
-
-async def test_fake_streams_text_deltas() -> None:
-    deltas: list[str] = []
-    fake = FakeAnthropicSdkClient(
-        responses=[
-            ScriptedResponse(
-                text="The lantern gutters.",
-                stop_reason="end_turn",
-                input_tokens=10,
-                output_tokens=4,
-                cached_input_read_tokens=0,
-                cached_input_write_tokens=0,
-                model="claude-sonnet-4-6",
-                stream_deltas=["The lantern", " gutters."],
-            )
-        ]
-    )
-    await fake.complete_with_tools(
-        system_blocks=_system(),
-        messages=_msgs(),
-        tools=[],
-        model="claude-sonnet-4-6",
-        on_text_delta=deltas.append,
-    )
-    assert deltas == ["The lantern", " gutters."]

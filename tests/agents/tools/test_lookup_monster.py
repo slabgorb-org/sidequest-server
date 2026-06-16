@@ -52,7 +52,7 @@ def _make_ctx(
         session_id="s",
         perspective_pc=perspective_pc,
         turn_number=1,
-        store=MagicMock(),
+        repository=MagicMock(),
         otel_span=MagicMock(),
         perception_filter=NarratorPerceptionFilter(),
         monster_manual=monster_manual,
@@ -250,7 +250,7 @@ async def test_does_not_touch_ctx_store() -> None:
     """Wiring discipline: this tool reaches into ctx.monster_manual only."""
     mm = _seeded_manual()
     ctx = _make_ctx(monster_manual=mm)
-    store_mock = cast(MagicMock, ctx.store)
+    store_mock = cast(MagicMock, ctx.repository)
     store_mock.load.reset_mock()
     store_mock.reset_mock()
 

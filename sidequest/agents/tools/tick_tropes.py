@@ -105,7 +105,7 @@ class TickTropesArgs(BaseModel):
     category=ToolCategory.WRITE,
 )
 async def tick_tropes(args: TickTropesArgs, ctx: ToolContext) -> ToolResult:
-    session = ctx.store.load()
+    session = ctx.repository.load()
     if session is None:
         return ToolResult.error("no active session", recoverable=False)
     snapshot = session.snapshot
@@ -145,7 +145,7 @@ async def tick_tropes(args: TickTropesArgs, ctx: ToolContext) -> ToolResult:
     # TropeState has no separate display name; reuse ids for "names".
     engaged_names = newly_engaged_ids
 
-    ctx.store.save(snapshot)
+    ctx.repository.save(snapshot)
 
     ctx.otel_span.set_attribute("tool.tropes.engaged_count", len(newly_engaged_ids))
     ctx.otel_span.set_attribute("tool.tropes.engaged_names", engaged_names)

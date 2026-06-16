@@ -7,7 +7,6 @@ from pathlib import Path
 from sidequest.audio.library_backend import LibraryBackend
 from sidequest.audio.models import AudioCue, AudioLane
 from sidequest.protocol.messages import AudioCuePayload
-from sidequest.server.asset_urls import resolve_asset_url
 
 
 def build_audio_cue_payload(
@@ -26,9 +25,12 @@ def build_audio_cue_payload(
             ``audio_backend.base_path``). When absent, music_track stays
             ``None`` and sfx_triggers carry the raw sfx_id.
         genre_slug: Optional genre pack slug. When provided, each resolved
-            pack-relative path is routed through ``resolve_asset_url`` so
-            the URL targets either the CDN (default) or the local
+            relative path is routed through ``resolve_audio_relpath`` (the
+            shared audio-path seam) which resolves it via the asset_urls
+            base, so the URL targets either the CDN (default) or the local
             ``/genre/{slug}/`` mount when ``SIDEQUEST_ASSET_BASE_URL=local``.
+            ``assets/``-prefixed paths resolve to the shared
+            ``genre_packs/assets/`` bucket without a pack slug.
             Without this, a turn would emit ``audio/music/foo.ogg`` and the
             client would fetch it from the Vite dev-server root, 404ing as
             "Unable to decode audio data" (playtest 2026-04-24). Routing
@@ -60,7 +62,9 @@ def build_audio_cue_payload(
             return relative
         if genre_slug is None:
             return relative
-        return resolve_asset_url(f"genre_packs/{genre_slug}/{relative}")
+        from sidequest.genre.audio_paths import resolve_audio_relpath
+
+        return resolve_audio_relpath(relative, genre_slug=genre_slug)
 
     for cue in cues:
         if cue.lane == AudioLane.MUSIC and cue.mood is not None:

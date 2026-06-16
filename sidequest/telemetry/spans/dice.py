@@ -70,7 +70,14 @@ def emit_dice_result_broadcast(
     total: int,
     outcome: str,
     seed: int,
+    deferred_opposed: bool = False,
 ) -> None:
+    """``deferred_opposed`` (RW-2, playtest 2026-06-05): True when the roll's
+    beat application was DEFERRED to the opposed_check resolver — the stamped
+    ``outcome`` on that path is the provisional flat-DC tier, NOT the final
+    exchange result. The real tier arrives on ``encounter.opposed_roll_resolved``.
+    Without this flag the GM panel read CritSuccess on beats that lost.
+    """
     Emitter.fire(
         SPAN_DICE_RESULT_BROADCAST,
         {
@@ -79,5 +86,6 @@ def emit_dice_result_broadcast(
             "total": int(total),
             "outcome": outcome,
             "seed": int(seed),
+            "deferred_opposed": bool(deferred_opposed),
         },
     )

@@ -93,12 +93,8 @@ def _make_encounter_with_actors(player_name: str, opponent_name: str):
 
     return StructuredEncounter(
         encounter_type="combat",
-        player_metric=EncounterMetric(
-            name="momentum", current=0, starting=0, threshold=10
-        ),
-        opponent_metric=EncounterMetric(
-            name="momentum", current=0, starting=0, threshold=10
-        ),
+        player_metric=EncounterMetric(name="momentum", current=0, starting=0, threshold=10),
+        opponent_metric=EncounterMetric(name="momentum", current=0, starting=0, threshold=10),
         beat=0,
         structured_phase=EncounterPhase.Setup,
         secondary_stats=None,
@@ -236,8 +232,7 @@ def test_strike_beat_reduces_opponent_hp(otel_capture):
     # (a) Opponent HP decreased — damage_override is 1d6 so at least 1 HP off.
     hp_after = opponent_core.hp.current
     assert hp_after < hp_before, (
-        f"opponent HP should have decreased after strike beat; "
-        f"before={hp_before} after={hp_after}"
+        f"opponent HP should have decreased after strike beat; before={hp_before} after={hp_after}"
     )
 
     # (b) state_patch.hp span fired
@@ -245,8 +240,7 @@ def test_strike_beat_reduces_opponent_hp(otel_capture):
 
     span_names = [s.name for s in otel_capture.get_finished_spans()]
     assert SPAN_STATE_PATCH_HP in span_names, (
-        f"state_patch.hp span must fire on strike beat; "
-        f"got spans: {span_names}"
+        f"state_patch.hp span must fire on strike beat; got spans: {span_names}"
     )
 
     # (c) A DICE_RESULT for the damage roll was broadcast.
@@ -259,10 +253,37 @@ def test_strike_beat_reduces_opponent_hp(otel_capture):
         f"got {len(damage_dice_results)}: {[type(m).__name__ for m in broadcasts]}"
     )
     # The damage DICE_RESULT must have a different request_id than the check.
-    damage_req_ids = {m.payload.request_id for m in damage_dice_results
-                     if m.payload.request_id != "check-req-1"}
+    damage_req_ids = {
+        m.payload.request_id for m in damage_dice_results if m.payload.request_id != "check-req-1"
+    }
     assert damage_req_ids, (
         "damage DICE_RESULT must have a new request_id distinct from the check roll"
+    )
+
+    # (d) Roll-role tagging (playtest 2026-06-10 dice-overlay regression): a hit
+    # broadcasts BOTH a primary check roll and a follow-on damage roll for the
+    # SAME actor. The UI overlay can only render the right one if the wire says
+    # which is which — the check result must be roll_role="check" and the damage
+    # result roll_role="damage". Without this the dice-guard renders the damage
+    # roll's value/tier as the authoritative beat outcome.
+    check_results = [m for m in damage_dice_results if m.payload.request_id == "check-req-1"]
+    damage_results = [m for m in damage_dice_results if m.payload.request_id != "check-req-1"]
+    assert check_results and all(m.payload.roll_role == "check" for m in check_results), (
+        "primary beat/check DICE_RESULT must be roll_role='check'; "
+        f"got {[m.payload.roll_role for m in check_results]}"
+    )
+    assert damage_results and all(m.payload.roll_role == "damage" for m in damage_results), (
+        "follow-on weapon DICE_RESULT must be roll_role='damage'; "
+        f"got {[m.payload.roll_role for m in damage_results]}"
+    )
+    # Same on the DICE_REQUEST side.
+    from sidequest.protocol.messages import DiceRequestMessage
+
+    dice_requests = [m for m in broadcasts if isinstance(m, DiceRequestMessage)]
+    damage_requests = [m for m in dice_requests if m.payload.request_id != "check-req-1"]
+    assert damage_requests and all(m.payload.roll_role == "damage" for m in damage_requests), (
+        "follow-on weapon DICE_REQUEST must be roll_role='damage'; "
+        f"got {[m.payload.roll_role for m in damage_requests]}"
     )
 
 
@@ -361,6 +382,334 @@ def test_strike_beat_with_no_damage_spec_skips_damage(otel_capture):
     # HP must NOT have changed — no damage spec to roll
     hp_after = opponent_core.hp.current
     assert hp_after == hp_before, (
-        f"HP must not change when no DamageSpec is resolvable; "
-        f"before={hp_before} after={hp_after}"
+        f"HP must not change when no DamageSpec is resolvable; before={hp_before} after={hp_after}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for resolve_damage_spec_from_beat_and_actor priority-4 unarmed
+# fallback (ping-pong: "Unarmed strike resolves to zero damage")
+# ---------------------------------------------------------------------------
+
+
+def _make_strike_beat_no_override():
+    """BeatDef: kind=strike, damage_channel=strike, NO damage_override."""
+    from sidequest.genre.models.rules import BeatDef
+
+    return BeatDef.model_validate(
+        {
+            "id": "punch",
+            "label": "Punch",
+            "kind": "strike",
+            "base": 2,
+            "stat_check": "STRENGTH",
+            "damage_channel": "strike",
+        }
+    )
+
+
+def _make_pack_with_unarmed(unarmed: DamageSpec | None):
+    """GenrePack-shaped object whose rules carry ``unarmed_damage`` (or None)."""
+    from unittest.mock import MagicMock
+
+    from sidequest.genre.models.rules import RulesConfig
+
+    rules = RulesConfig(unarmed_damage=unarmed)
+    pack = MagicMock()
+    pack.rules = rules
+    pack.inventory = None  # no catalog
+    return pack
+
+
+def test_unarmed_fallback_used_when_no_weapon():
+    """Priority 4: an empty-handed actor's strike resolves to pack.rules.unarmed_damage."""
+    from sidequest.server.dispatch.damage_roll import (
+        resolve_damage_spec_from_beat_and_actor,
+    )
+
+    beat = _make_strike_beat_no_override()
+    actor = _make_creature_core("Ruximus", hp=12)  # default Inventory() = empty
+    pack = _make_pack_with_unarmed(DamageSpec(dice="1d4", bonus=0))
+
+    spec = resolve_damage_spec_from_beat_and_actor(beat=beat, actor_core=actor, pack=pack)
+
+    assert spec is not None, "unarmed fallback must resolve a DamageSpec"
+    assert spec.dice == "1d4"
+
+
+def test_unarmed_fallback_not_used_when_weapon_present():
+    """A weapon in inventory (priority 2) wins over the unarmed default."""
+    from sidequest.game.creature_core import CreatureCore, Inventory
+    from sidequest.server.dispatch.damage_roll import (
+        resolve_damage_spec_from_beat_and_actor,
+    )
+
+    beat = _make_strike_beat_no_override()
+    actor = CreatureCore(
+        name="Ruximus",
+        description="armed",
+        personality="aggressive",
+        inventory=Inventory(items=[{"id": "longsword", "damage": "1d8"}]),
+        hp={"current": 12, "max": 12, "base_max": 12},
+    )
+    pack = _make_pack_with_unarmed(DamageSpec(dice="1d4", bonus=0))
+
+    spec = resolve_damage_spec_from_beat_and_actor(beat=beat, actor_core=actor, pack=pack)
+
+    assert spec is not None
+    assert spec.dice == "1d8", "equipped weapon must win over the unarmed default"
+
+
+def test_unarmed_fallback_absent_returns_none():
+    """No weapon and no unarmed_damage configured ⇒ still None (existing behavior)."""
+    from sidequest.server.dispatch.damage_roll import (
+        resolve_damage_spec_from_beat_and_actor,
+    )
+
+    beat = _make_strike_beat_no_override()
+    actor = _make_creature_core("Ruximus", hp=12)
+    pack = _make_pack_with_unarmed(None)
+
+    spec = resolve_damage_spec_from_beat_and_actor(beat=beat, actor_core=actor, pack=pack)
+
+    assert spec is None
+
+
+def test_unarmed_fallback_used_when_actor_core_none():
+    """Even with no actor_core, an unarmed default still floors strike damage."""
+    from sidequest.server.dispatch.damage_roll import (
+        resolve_damage_spec_from_beat_and_actor,
+    )
+
+    beat = _make_strike_beat_no_override()
+    pack = _make_pack_with_unarmed(DamageSpec(dice="1d4", bonus=0))
+
+    spec = resolve_damage_spec_from_beat_and_actor(beat=beat, actor_core=None, pack=pack)
+
+    assert spec is not None
+    assert spec.dice == "1d4"
+
+
+def test_unarmed_floor_reduces_hp_and_emits_span_via_dispatch(otel_capture, monkeypatch):
+    """Wiring test: an empty-handed strike through dispatch_dice_throw deals HP
+    from the genre unarmed floor AND emits the unarmed_strike_floor lie-detector
+    span. Proves priority-4 is reachable from the production dispatch path."""
+    monkeypatch.setenv("SIDEQUEST_WATCHER_AS_SPANS", "1")
+
+    from unittest.mock import MagicMock
+
+    from sidequest.genre.models.rules import (
+        BeatDef,
+        ConfrontationDef,
+        MetricDef,
+        RulesConfig,
+    )
+    from sidequest.protocol.dice import DiceThrowPayload, ThrowParams
+    from sidequest.server.dispatch.dice import dispatch_dice_throw
+
+    beat = BeatDef.model_validate(
+        {
+            "id": "punch",
+            "label": "Punch",
+            "kind": "strike",
+            "base": 1,
+            "stat_check": "STRENGTH",
+            "damage_channel": "strike",
+        }
+    )
+    cdef = ConfrontationDef(
+        type="combat",
+        label="Combat",
+        category="combat",
+        player_metric=MetricDef(name="momentum", starting=0, threshold=10),
+        opponent_metric=MetricDef(name="momentum", starting=0, threshold=10),
+        beats=[beat],
+    )
+    # Unarmed floor configured, no weapon catalog, actor has no inventory.
+    rules = RulesConfig(confrontations=[cdef], unarmed_damage=DamageSpec(dice="1d6"))
+    pack = MagicMock()
+    pack.rules = rules
+    pack.inventory = None
+
+    enc = _make_encounter_with_actors("Puncher", "Victim")
+    snap = _make_snapshot_with_actors("Puncher", "Victim")
+    opponent_core = snap.find_creature_core("Victim")
+    hp_before = opponent_core.hp.current
+
+    # face=17 → Success (DC = 10 + 1*2 = 12)
+    dispatch_dice_throw(
+        payload=DiceThrowPayload(
+            request_id="unarmed-floor-req",
+            throw_params=ThrowParams(
+                velocity=(0.0, 5.0, -2.0),
+                angular=(1.0, 1.0, 1.0),
+                position=(0.5, 0.5),
+            ),
+            face=[17],
+            beat_id="punch",
+        ),
+        rolling_player_id="player-1",
+        character_name="Puncher",
+        character_stats={"STRENGTH": 10},
+        encounter=enc,
+        pack=pack,
+        genre_slug="test",
+        session_id="session-unarmed-floor",
+        round_number=1,
+        room_broadcast=None,
+        snapshot=snap,
+    )
+
+    # (a) HP dropped — the unarmed floor dealt damage instead of skipping.
+    assert opponent_core.hp.current < hp_before, (
+        f"unarmed floor must deal HP; before={hp_before} after={opponent_core.hp.current}"
+    )
+
+    # (b) The lie-detector span fired with op=unarmed_strike_floor.
+    floor_spans = [
+        s
+        for s in otel_capture.get_finished_spans()
+        if s.name == "watcher.state_transition"
+        and s.attributes is not None
+        and s.attributes.get("field.op") == "unarmed_strike_floor"
+    ]
+    assert floor_spans, (
+        "unarmed_strike_floor span must fire when the floor engages; "
+        f"got: {[s.name for s in otel_capture.get_finished_spans()]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# d2 parity die (the tabletop "no d2 in the bag" move: roll a real die,
+# read parity even=1/odd=2). Backed by a renderable d6 in the overlay.
+# ---------------------------------------------------------------------------
+
+
+def test_damagespec_accepts_1d2_as_parity_die():
+    spec = DamageSpec(dice="1d2")
+    assert spec.is_parity_die is True
+
+
+def test_damagespec_non_parity_dice_report_false():
+    assert DamageSpec(dice="1d6").is_parity_die is False
+    assert DamageSpec(dice="2d8").is_parity_die is False
+
+
+def test_damagespec_rejects_other_unsupported_faces():
+    # d3 is still illegal — only d2 is whitelisted as a parity die.
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        DamageSpec(dice="1d3")
+
+
+def test_damagespec_roll_d2_stays_in_range():
+    import random as _random
+
+    rng = _random.Random(12345)
+    spec = DamageSpec(dice="1d2", bonus=0)
+    rolls = {spec.roll(rng) for _ in range(200)}
+    assert rolls == {1, 2}, f"1d2 must roll only 1 or 2; got {sorted(rolls)}"
+
+
+def test_damagespec_roll_2d2_with_bonus_range():
+    import random as _random
+
+    rng = _random.Random(999)
+    spec = DamageSpec(dice="2d2", bonus=1)
+    rolls = {spec.roll(rng) for _ in range(400)}
+    # 2 dice each 1..2, +1 ⇒ 3..5
+    assert rolls == {3, 4, 5}, f"2d2+1 range should be 3..5; got {sorted(rolls)}"
+
+
+def test_damage_request_from_spec_d2_backs_with_d6():
+    from sidequest.server.dispatch.damage_roll import damage_request_from_spec
+
+    req = damage_request_from_spec(DamageSpec(dice="1d2"), request_id="parity-1")
+    assert len(req.dice) == 1
+    assert req.dice[0].sides == DieSides.D6, "d2 must throw a renderable backing d6"
+    assert "d2" in req.context and "even" in req.context, (
+        f"context must explain the parity mapping; got {req.context!r}"
+    )
+
+
+def test_parity_damage_total_maps_even_to_1_odd_to_2():
+    from sidequest.server.dispatch.damage_roll import parity_damage_total
+
+    # even→1, odd→2
+    assert parity_damage_total([2, 4, 6], 0) == 3  # 1+1+1
+    assert parity_damage_total([1, 3, 5], 0) == 6  # 2+2+2
+    assert parity_damage_total([4], 0) == 1
+    assert parity_damage_total([3], 0) == 2
+    assert parity_damage_total([4, 3], 2) == (1 + 2) + 2  # mixed + bonus
+
+
+def test_unarmed_d2_floor_deals_1_or_2_hp_via_dispatch(monkeypatch):
+    """Wiring: a 1d2 unarmed floor through dispatch_dice_throw drops HP by
+    exactly 1 or 2 (never the raw backing-d6 face)."""
+    from unittest.mock import MagicMock
+
+    from sidequest.genre.models.rules import (
+        BeatDef,
+        ConfrontationDef,
+        MetricDef,
+        RulesConfig,
+    )
+    from sidequest.protocol.dice import DiceThrowPayload, ThrowParams
+    from sidequest.server.dispatch.dice import dispatch_dice_throw
+
+    beat = BeatDef.model_validate(
+        {
+            "id": "punch",
+            "label": "Punch",
+            "kind": "strike",
+            "base": 1,
+            "stat_check": "STRENGTH",
+            "damage_channel": "strike",
+        }
+    )
+    cdef = ConfrontationDef(
+        type="combat",
+        label="Combat",
+        category="combat",
+        player_metric=MetricDef(name="momentum", starting=0, threshold=10),
+        opponent_metric=MetricDef(name="momentum", starting=0, threshold=10),
+        beats=[beat],
+    )
+    rules = RulesConfig(confrontations=[cdef], unarmed_damage=DamageSpec(dice="1d2"))
+    pack = MagicMock()
+    pack.rules = rules
+    pack.inventory = None
+
+    for _ in range(15):  # exercise both parity outcomes across server RNG
+        enc = _make_encounter_with_actors("Puncher", "Victim")
+        snap = _make_snapshot_with_actors("Puncher", "Victim")
+        opponent_core = snap.find_creature_core("Victim")
+        hp_before = opponent_core.hp.current
+
+        dispatch_dice_throw(
+            payload=DiceThrowPayload(
+                request_id="d2-floor-req",
+                throw_params=ThrowParams(
+                    velocity=(0.0, 5.0, -2.0),
+                    angular=(1.0, 1.0, 1.0),
+                    position=(0.5, 0.5),
+                ),
+                face=[17],
+                beat_id="punch",
+            ),
+            rolling_player_id="player-1",
+            character_name="Puncher",
+            character_stats={"STRENGTH": 10},
+            encounter=enc,
+            pack=pack,
+            genre_slug="test",
+            session_id="session-d2-floor",
+            round_number=1,
+            room_broadcast=None,
+            snapshot=snap,
+        )
+
+        dealt = hp_before - opponent_core.hp.current
+        assert dealt in (1, 2), f"1d2 unarmed must deal 1 or 2 HP, got {dealt}"

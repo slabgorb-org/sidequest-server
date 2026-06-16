@@ -24,8 +24,6 @@ from sidequest.agents.claude_client import LlmClient
 from sidequest.agents.llm_factory import build_llm_client
 from sidequest.agents.tooling_protocol import ToolingLlmClient
 from sidequest.genre.loader import DEFAULT_GENRE_PACK_SEARCH_PATHS
-from sidequest.server.dashboard import dashboard_router
-from sidequest.server.forensics import forensics_router
 from sidequest.server.reference_routes import create_reference_router
 from sidequest.server.rest import create_rest_router
 from sidequest.server.session_handler import WebSocketSessionHandler
@@ -236,6 +234,32 @@ def create_app(
                 await task
             logger.info("daemon.heartbeat_listener_stopped")
 
+    # --- Postgres pool lifecycle (ADR-115 F2) ---
+    # Open and verify the process-global pool at boot so a dead/unreachable
+    # Postgres fails LOUD at startup rather than lazily on the first save
+    # mid-session (No Silent Fallbacks). Close + discard it on shutdown so the
+    # connections drain cleanly and a uvicorn --reload starts from a fresh pool.
+    @app.on_event("startup")
+    async def _open_db_pool() -> None:
+        from sidequest.game import db_pool
+        from sidequest.game.db_schema_check import assert_schema_at_head
+
+        pool = db_pool.get_pool()
+        pool.wait(timeout=10.0)  # fail loud if Postgres is unreachable at boot
+        # Reachable is not enough: a schema stamped behind alembic head boots
+        # fine and only explodes mid-turn on the first write to an unmigrated
+        # table (playtest #G4). Extend the ADR-115 fail-loud contract to assert
+        # the schema is at head before declaring the pool wired.
+        assert_schema_at_head()
+        logger.info("db_pool.startup_wired name=%s", pool.name)
+
+    @app.on_event("shutdown")
+    async def _close_db_pool() -> None:
+        from sidequest.game import db_pool
+
+        db_pool.close_pool()
+        logger.info("db_pool.shutdown_wired")
+
     # --- /health ---
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -289,15 +313,9 @@ def create_app(
     )
 
     # --- Chassis interior map (Ship tab) ---
-    from sidequest.interior.dispatch import interior_router
-
-    app.include_router(interior_router)
-
-    # --- /dashboard — OTEL dashboard HTML (browser opens its own WS). ---
-    app.include_router(dashboard_router)
-
-    # --- /forensics — Save Forensics read-only post-mortem page. ---
-    app.include_router(forensics_router)
+    # The GET /api/chassis/{id}/interior endpoint lives on the REST router
+    # (sidequest.server.rest, registered above) per ADR-147 / story 122-3 —
+    # interior/ stays pure, the server tier owns the HTTP surface.
 
     # --- Static /genre/* mount — serve genre pack assets (POI images, portraits, etc.) ---
     # URL /genre/<genre>/worlds/<world>/assets/poi/<file> → first-matching genre_packs dir.

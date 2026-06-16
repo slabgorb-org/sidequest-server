@@ -1,0 +1,186 @@
+# Character creation scenes — Barsoom world (story 89-5)
+#
+# WORLD-TIER SURFACE: this list REPLACES the heavy_metal genre crucible
+# wholesale (char_creation_resolve.py contract — no per-scene merge). The
+# scribe-and-ledger framing of the doom worlds has no place under the two
+# moons; Barsoom enters its players through the eyes of a dying world.
+#
+# ── DOCUMENTED TIER EXCEPTION (design D5 / §9 — Keith's mechanics call,
+#    2026-06-05) ─────────────────────────────────────────────────────────
+# The Earthman origin below carries REAL CRUNCH at the world tier — the
+# single sanctioned exception to "crunch in the genre, flavor in the
+# world." Both halves resolve to verified engine consumers:
+#   * stat_bonuses {STR: 2} → CharacterBuilder.generate_stats applies
+#     accumulated bonuses additively under every stat-generation strategy
+#     (the pre-wired consumer; reads at every STR stat_check and save);
+#   * origin_trait → the builder seeds a Race-source ability and emits the
+#     chargen.origin_trait.applied OTEL event (the GM-panel proof).
+# The trait is defined HERE, on the choice — never keyed off the race
+# string in engine code — so no other world can conjure it.
+#
+# Native physiology (green-Martian four arms, First Born stature) is
+# FICTION-ONLY per the same call: no native origin carries stat_bonuses,
+# mutation_hint, or origin_trait. The narrator frames four arms; the
+# engine does not.
+#
+# Class surface: heroic-pulp Callings only (Warrior, Expert, Mentalist,
+# Super-scientist). The doom Callings (Necromancer/Elementalist/Pact-born)
+# are deliberately NOT offered — faithful Barsoom has no necromancers.
+
+- id: origins
+  title: Under the Hurtling Moons
+  narration: |
+    Night on Barsoom. The ochre moss of the dead sea bottom holds the day's
+    heat under your feet, and overhead the two moons run their mismatched
+    races — Thuria low and fast, hurling shadows; Cluros high, patient,
+    cold. Ten thousand ages of empire have dried into this silence. Marble
+    cities stand empty on the old shorelines. The canals run thin and
+    precious toward the surviving towers.
+
+    Every soul under these moons knows its own line. The world is dying,
+    and a dying world keeps exact account of its blood. Before your story
+    begins, say what you are.
+  loading_text: "The moons cross. The moss holds its breath."
+  choices:
+    - label: A Stranger from Another World
+      description: >-
+        You did not begin under these moons. You woke on the moss with the
+        green star burning overhead — Earth, impossibly far, impossibly
+        lost — and a body that answers this lesser gravity like a drawn
+        bow. Sword-smiths will envy the arm. Jeddaks will want it sworn.
+        You owe this world nothing, and it will make you fight for every
+        breath of it anyway.
+      mechanical_effects:
+        race_hint: Earthman
+        # D5 crunch (documented tier exception — see file header): the
+        # transplanted Earthman's musculature against Barsoom's gravity.
+        stat_bonuses:
+          STR: 2
+        origin_trait:
+          name: Gravity-Born Leap
+          genre_description: >-
+            Born to the heavy pull of Earth, your body is a coiled spring
+            under Barsoom's lesser gravity. You clear walls a red man must
+            climb, cross a melee in a single bound, and strike with the
+            weight of a world that bred stronger bones.
+          mechanical_effect: >-
+            Once per scene, make a mighty leap — up to thirty feet upward
+            or a hundred feet across — as movement that ignores intervening
+            ground hazards and grants surprise when arriving from above.
+            The +2 STR edge on the sheet is the same boon's standing half;
+            the narrator adjudicates landings beyond the stated bounds.
+          involuntary: false
+        jungian_hint: hero
+    - label: A Red Martian of the Tower Cities
+      description: >-
+        Copper-skinned, thousand-year-lived, raised under the scarlet
+        towers where honor is older than the canals. You were taught the
+        long-sword before your letters and the radium pistol after — and
+        taught, above both, the code: courtesy to the guest, death to the
+        insult, loyalty to the jeddak of your blood.
+      mechanical_effects:
+        race_hint: Red Martian
+        jungian_hint: ruler
+    - label: A Green Martian of the Hordes
+      description: >-
+        Fifteen feet of olive-green sinew, four arms, tusks — and the
+        horde's hard law in your marrow. You were raised in common, owned
+        by no parent, tested by every rite the dead sea bottoms could
+        devise. Your people laugh only at pain. Whatever softness you
+        carry, you learned to hide it young, and it is yours alone.
+      mechanical_effects:
+        race_hint: Green Martian
+        jungian_hint: hero
+    - label: A First Born of Omean
+      description: >-
+        Black-skinned and beautiful, pirate-proud, raised on the buried
+        sea where the Tree of Life is gospel and every other race exists
+        to be raided. You have lately had cause to doubt the goddess at
+        the bottom of it all — and doubt, among the First Born, is a
+        capital art.
+      mechanical_effects:
+        race_hint: First Born
+        jungian_hint: outlaw
+    - label: A Yellow Martian of the Ice Domes
+      description: >-
+        Sallow-skinned, black-bearded, born under the hothouse glass of
+        the polar cities beyond the Carrion Caves. Your people guard the
+        world's roof with the magnetic Guardian of the North and ask no
+        leave of the warm latitudes. You are far from the domes now, and
+        the warm world is full of liars.
+      mechanical_effects:
+        race_hint: Yellow Martian
+        jungian_hint: explorer
+  allows_freeform: true
+
+- id: address
+  title: How Shall the Heralds Cry You?
+  narration: >-
+    Names travel far on Barsoom — by herald, by wireless, by the boast of
+    enemies who survived you. When yours is cried across an arena or
+    scratched into a jeddak's roll of honor, how is it said of you?
+  allows_freeform: true
+  choices:
+    - label: "she/her"
+      description: "Cried as a daughter of the dying world."
+      mechanical_effects:
+        pronoun_hint: "she/her"
+    - label: "he/him"
+      description: "Cried as a son of the dying world."
+      mechanical_effects:
+        pronoun_hint: "he/him"
+    - label: "they/them"
+      description: "Cried as the heralds are commanded, and corrected once."
+      mechanical_effects:
+        pronoun_hint: "they/them"
+
+- id: calling
+  title: What the Dying World Made of You
+  narration: |
+    Barsoom does not keep idle hands. The moss is too thin, the air too
+    dearly bought, the wars too near. Long before tonight, the world
+    pressed a trade into you — steel, craft, will, or the old vanished
+    science. Which did it press?
+  loading_text: "Somewhere a flier crosses the face of Thuria."
+  choices:
+    - label: A Blade of the Arena and the Line
+      description: >-
+        Panthan, guardsman, horde-warrior — the sword is your answer to
+        most of the world's questions, and Barsoom asks them often. You
+        have fought for pay, for honor, and at least once for nothing but
+        the principle of the thing.
+      mechanical_effects:
+        class_hint: Warrior
+        jungian_hint: hero
+        rpg_role_hint: tank
+    - label: A Hand for Every Trade of the Canals
+      description: >-
+        Scout, canal-tender, flier-rigger, thief of necessities — you
+        survive by knowing the dead cities' doors and the living cities'
+        prices. Heroes win the songs; you arrange the parts of the song
+        where everyone is still alive.
+      mechanical_effects:
+        class_hint: Expert
+        jungian_hint: explorer
+        rpg_role_hint: jack_of_all_trades
+    - label: A Will Trained in Dead Lothar's Art
+      description: >-
+        You have studied the discipline of the phantom bowmen — the
+        trained will that makes the mind's image briefly real enough to
+        kill. Every working is paid for out of your own body, and you
+        have learned exactly how much of yourself an image is worth.
+      mechanical_effects:
+        class_hint: Mentalist
+        jungian_hint: magician
+        rpg_role_hint: control
+    - label: A Mind Bent to the Vanished Science
+      description: >-
+        Ninth-ray buoyancy, the moved brain, light bent around a hull —
+        you work the science the rest of Barsoom has forgotten how to
+        fear. Your instruments are real, your results are real, and the
+        cost of running them is exactingly, personally real.
+      mechanical_effects:
+        class_hint: Super-scientist
+        jungian_hint: sage
+        rpg_role_hint: dps
+  allows_freeform: true

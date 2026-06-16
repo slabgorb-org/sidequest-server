@@ -7,7 +7,7 @@ objects from scratch and drives the **real**
 ``PlayerActionHandler.handle()``:
 
 * real ``SessionRoom`` (MULTIPLAYER) + real ``GameSnapshot`` + real
-  ``TurnManager`` + real ``SqliteStore`` + real loaded genre pack;
+  ``TurnManager`` + a real PgSaveRepository + real loaded genre pack;
 * the **aside** path runs 100% real (combat-strip, ``AsideResolver``,
   ``aside.resolve`` span, ``room.broadcast``) — it is the feature under
   test and nothing about it is mocked;
@@ -31,12 +31,13 @@ import asyncio
 import contextlib
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock
 
 import sidequest.agents.llm_factory as _llm_factory
 import sidequest.telemetry.setup as _telemetry_setup
 from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
-from sidequest.game.persistence import GameMode, SqliteStore
+from sidequest.game.persistence import GameMode
 from sidequest.game.session import GameSnapshot
 from sidequest.game.turn import TurnManager
 from sidequest.genre.loader import load_genre_pack
@@ -96,11 +97,27 @@ class _RecordingSpan:
 class _RecordingTracer:
     def __init__(self) -> None:
         self.span_names: list[str] = []
+        self.spans: list[tuple[str, _RecordingSpan]] = []
 
     @contextlib.contextmanager
     def start_as_current_span(self, name: str):
         self.span_names.append(name)
-        yield _RecordingSpan()
+        span = _RecordingSpan()
+        self.spans.append((name, span))
+        yield span
+
+
+class StubOrchestrator:
+    """Minimal orchestrator surface the aside branch reads.
+
+    Default ``None``/``None`` routes the handler down the legacy thin
+    read-view path (no SDK turn has run). A test exercising the
+    narrator-cache path passes a stash + tooling client.
+    """
+
+    def __init__(self, *, aside_prompt_stash: Any = None, aside_cache_client: Any = None):
+        self.aside_prompt_stash = aside_prompt_stash
+        self.aside_cache_client = aside_cache_client
 
 
 class _StubSession:
@@ -121,6 +138,13 @@ class _StubSession:
 
     async def _retrieve_lore_for_turn(self, sd: _SessionData, action: str) -> str:
         return ""
+
+    async def _retrieve_entities_for_turn(self, sd: _SessionData, action: str) -> None:
+        # Sibling of the lore stub: ``PlayerActionHandler.handle`` calls this
+        # (player_action.py:496) and passes the result to ``_build_turn_context``,
+        # which no-ops on ``None``. Pre-existing harness gap — the stub mirrored
+        # ``_retrieve_lore_for_turn`` but not the entity sibling 75-5 added.
+        return None
 
     async def _execute_narration_turn(
         self, sd: _SessionData, action: str, turn_context: Any
@@ -155,7 +179,12 @@ def _character(name: str) -> Character:
 
 
 class MpRoomHarness:
-    def __init__(self, players: list[str], llm_aside: _FakeAsideLlm) -> None:
+    def __init__(
+        self,
+        players: list[str],
+        llm_aside: _FakeAsideLlm,
+        orchestrator: Any = None,
+    ) -> None:
         self._names = list(players)
         self._pid = {n: f"player:{n}" for n in players}
         self._name_by_pid = {v: k for k, v in self._pid.items()}
@@ -183,7 +212,22 @@ class MpRoomHarness:
 
         GameSnapshot.apply_world_patch = _counting_patch  # type: ignore[method-assign]
 
-        self._store = SqliteStore.open_in_memory()
+        # ADR-115 F1: real PgSaveRepository so the introspection helpers
+        # (``scrapbook_count`` etc.) read persisted state back. The owning
+        # test module supplies a ``_pg_isolation`` fixture binding the pool to
+        # a throwaway PG db.
+        from sidequest.game import db_pool
+        from sidequest.server.session_state import _build_pg_repos_for_slug
+
+        self._store, _dungeon, _sink = _build_pg_repos_for_slug(
+            db_pool.get_pool(),
+            slug=f"{_WORLD}-mp",
+            mode=str(GameMode.MULTIPLAYER),
+            genre_slug=_GENRE,
+            world_slug=_WORLD,
+        )
+        self._store.init_session()
+        self._store.save(self._snap)
         self._room = SessionRoom(slug=f"{_WORLD}-mp", mode=GameMode.MULTIPLAYER)
         self._room.bind_world(snapshot=self._snap, store=self._store)
 
@@ -203,9 +247,13 @@ class MpRoomHarness:
                 player_name=name,
                 player_id=pid,
                 snapshot=self._snap,
-                store=self._store,
+                repository=self._store,
+                dungeon_repository=MagicMock(),
+                telemetry_sink=MagicMock(),
                 genre_pack=genre_pack,
-                orchestrator=object(),  # never called on aside/barrier paths
+                # The aside branch reads aside_prompt_stash/aside_cache_client
+                # off this; default stub routes the legacy read-view path.
+                orchestrator=orchestrator if orchestrator is not None else StubOrchestrator(),
                 _room=self._room,
             )
             self._sessions[name] = _StubSession(sd, self._room, sid)
@@ -226,10 +274,12 @@ class MpRoomHarness:
         self._room.broadcast = _spy_broadcast  # type: ignore[method-assign]
 
         # Real factory seams: build_aside_llm (imported at call time inside
-        # the handler branch) and the OTEL tracer.
+        # the handler branch) and the OTEL tracer. The fake factory accepts
+        # the production signature's kwargs (story 91-4: the handler passes
+        # session_id=<room slug>).
         self._orig_build = _llm_factory.build_aside_llm
         self._orig_tracer = _telemetry_setup.tracer
-        _llm_factory.build_aside_llm = lambda: self._llm_aside
+        _llm_factory.build_aside_llm = lambda **_kwargs: self._llm_aside
         _telemetry_setup.tracer = lambda: self._tracer
 
     # --- introspection (all read REAL state) --------------------------- #
@@ -238,8 +288,10 @@ class MpRoomHarness:
         return len(self._snap.narrative_log)
 
     def scrapbook_count(self) -> int:
-        cur = self._store._conn.execute("SELECT count(*) FROM scrapbook_entries")
-        return int(cur.fetchone()[0])
+        # Count persisted scrapbook entries through the typed repository
+        # surface (ADR-115 F1). turn_ids are unique per entry, so the set
+        # size is the row count.
+        return len(self._store.scrapbook_turn_ids(max_turn=10_000_000))
 
     def turn_round(self) -> int:
         return self._snap.turn_manager.round
@@ -262,21 +314,33 @@ class MpRoomHarness:
     def spans_named(self, name: str) -> bool:
         return name in self._tracer.span_names
 
+    def span_attributes(self, name: str) -> dict[str, Any]:
+        """Attributes of the most recent recorded span with ``name``."""
+        for span_name, span in reversed(self._tracer.spans):
+            if span_name == name:
+                return dict(span.attributes)
+        raise AssertionError(f"no span named {name!r} recorded")
+
     def teardown(self) -> None:
         _llm_factory.build_aside_llm = self._orig_build
         _telemetry_setup.tracer = self._orig_tracer
         GameSnapshot.apply_world_patch = self._orig_apply_world_patch  # type: ignore[method-assign]
 
 
-def make_mp_room(*, players: list[str], llm_aside: _FakeAsideLlm) -> MpRoomHarness:
-    return MpRoomHarness(players, llm_aside)
+def make_mp_room(
+    *,
+    players: list[str],
+    llm_aside: _FakeAsideLlm,
+    orchestrator: Any = None,
+) -> MpRoomHarness:
+    return MpRoomHarness(players, llm_aside, orchestrator=orchestrator)
 
 
 async def submit(harness: MpRoomHarness, player: str, text: str, *, aside: bool) -> list[Any]:
     """Drive the REAL handler for ``player``; return what the table saw."""
     session = harness._sessions[player]
     msg = PlayerActionMessage(
-        payload=PlayerActionPayload(action=text, aside=aside),
+        payload=PlayerActionPayload(action=text, aside=aside, round=harness.turn_round()),
         player_id=harness._pid[player],
     )
     before = len(harness._captured)

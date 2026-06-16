@@ -85,7 +85,6 @@ def _select_zone_season(rules: ClimateRulesFile, genre_slug: str) -> tuple[str, 
 
 def load_world_grounding(
     *,
-    pack_dir: Path | str,
     world_dir: Path | str,
     genre_slug: str,
     seed_source: str,
@@ -102,18 +101,24 @@ def load_world_grounding(
     error. A pack/world that authored no grounding yields all-``None`` (the
     loaders return None for absent files) — clean, not an error.
 
-    Note: ``load_pack_weather`` parses + validates the climate YAML to give
-    us the present/absent/malformed trichotomy and an early loud failure;
-    ``WeatherGenerator`` then re-reads the same small file (its constructor
-    only accepts a path — weather.py is out of scope for this story). One
-    extra parse of one file, once per session — acceptable.
+    Note: weather is read from ``world_dir/weather.yaml`` (epic 74 — weather is
+    world-tier flavor; the pack root is no longer consulted). ``load_pack_weather``
+    parses + validates the climate YAML to give us the present/absent/malformed
+    trichotomy and an early loud failure; ``WeatherGenerator`` then re-reads the
+    same small file (its constructor only accepts a path — weather.py rework is
+    out of scope for epic 74). One extra parse of one file, once per session —
+    acceptable.
     """
-    weather_rules = load_pack_weather(pack_dir)
+    # Epic 74 — weather is WORLD-tier flavor (climate belongs to the world, not
+    # the shared genre). Read world_dir/weather.yaml; the pack-root file is no
+    # longer consulted. ``load_pack_weather`` takes any dir and reads its
+    # ``weather.yaml``, so repointing it to world_dir is the whole change.
+    weather_rules = load_pack_weather(world_dir)
     weather_state: WeatherState | None = None
     if weather_rules is not None:
         zone, season = _select_zone_season(weather_rules, genre_slug)
         seed = zlib.crc32(seed_source.encode("utf-8"))
-        generator = WeatherGenerator(Path(pack_dir) / "weather.yaml")
+        generator = WeatherGenerator(Path(world_dir) / "weather.yaml")
         # generate() fires the world_grounding.weather_proposed OTEL span
         # (24-7 hook) — the GM panel's proposed-vs-used lie detector.
         weather_state = generator.generate(zone, season, seed)

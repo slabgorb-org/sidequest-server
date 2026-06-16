@@ -1,0 +1,42 @@
+positive_suffix: >-
+  heroic sword-and-planet oil painting in the tradition of Frank
+  Frazetta, Roy Krenkel, and Michael Whelan, lush painterly brushwork
+  and rich tonal modeling, romantic dramatic composition, sun-baked
+  palette of ochre and rust-red, pale sea-moss green, bone marble,
+  crimson and gold, brass and worn leather, a wan small sun in a clear
+  sky shading from rose to violet, hard low-angle light through thin
+  air with long shadows and high contrast, vast melancholy-beautiful
+  dying-world atmosphere. No text, no caption, no title, no writing,
+  no labels, no signature, no watermark, no frame, no border.
+
+preferred_model: dev
+base_seed: 233
+
+visual_tag_overrides:
+  dead_sea_bottom: >-
+    a cracked ochre plain of dried sea-floor furred with pale yellow
+    moss, scattered bone-white stones, low red hills on the horizon,
+    a vast clear sky shading rose to violet, a wan small sun low and
+    hard, long shadows, thin dry air
+
+  red_city_plaza: >-
+    a plaza of a red-Martian tower-city — soaring scarlet and crimson
+    towers, jeweled domes, ruled canal-water catching the light,
+    fliers moored at high landing-stages, ornate but airy stonework,
+    hard sun and long shadows
+
+  dead_city_ruin: >-
+    the ruins of an ancient marble city on the sea-bottom — toppled
+    colonnades and a broken dome half-drowned in ochre moss, dust in
+    the hard low light, the bones of a vanished green-skied age
+
+  flier_deck: >-
+    the deck of a Martian flier — a long ornate airship hull with a
+    carved serpent prow, brass fittings and worn leather rigging,
+    moored above a drop, the ochre desert and a rose-violet sky beyond
+
+  thark_camp: >-
+    a green-horde camp among marble ruins — eight-legged war-mounts
+    picketed in the broken colonnades, harness and weapons of giants,
+    cookfires low in the dead city, the cracked ochre bottom stretching
+    away under a hard thin sky

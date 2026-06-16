@@ -30,6 +30,7 @@ guard intentionally and must handle their own content-not-found skips.
 
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
@@ -53,7 +54,7 @@ def seed_slug_for_test(
     *,
     genre: str,
     world: str,
-    slug: str = "test-slug",
+    slug: str | None = None,
     mode: GameMode | None = None,
 ) -> str:
     """Story 45-26: pre-populate a slug-keyed games-table row for tests.
@@ -61,32 +62,42 @@ def seed_slug_for_test(
     The legacy ``(genre, world, player_name)``-tuple connect path was
     deleted; tests that previously sent ``payload.genre`` /
     ``payload.world`` must now send ``payload.game_slug``. This helper
-    creates the on-disk save directory and ``games`` row so the slug
-    resolves on connect.
+    registers the Postgres ``sessions`` row so the slug resolves on connect.
+
+    ADR-115 F1: connect reads the bootstrap row from Postgres (the legacy
+    SQLite ``games`` table was retired). Callers must have a ``_pg_isolation``
+    fixture active so the process pool points at an isolated PG database.
 
     Returns the slug to thread into the connect envelope.
-    """
-    from sidequest.game.persistence import (
-        GameMode,
-        SqliteStore,
-        db_path_for_slug,
-        upsert_game,
-    )
 
+    Story 97-6: ``slug`` defaults to a UNIQUE uuid-namespaced value per call.
+    The migrated_db is session-scoped and the pool COMMITS (no per-test
+    rollback), so a FIXED default slug collided across the ~18 server-test
+    call sites within an xdist worker: ``ensure_session`` upserts
+    ``ON CONFLICT (session_slug) DO UPDATE SET last_played`` and never updates
+    ``genre_slug``/``world_slug``, so the first seeder of a shared slug won the
+    genre and later same-slug seeds silently kept the stale one — an
+    order-dependent flake (e.g. ``test_chargen_name_rig_extraction`` reading a
+    sibling's ``test_genre`` against the real content tree). Unique slugs give
+    each call its own row. Mirrors ``tests/dungeon/conftest.py``, which
+    documents the identical rule. Callers thread the *returned* slug into the
+    connect envelope, so a unique default is transparent.
+    """
+    from sidequest.game import db_pool
+    from sidequest.game.persistence import GameMode
+    from sidequest.server.session_state import _build_pg_repos_for_slug
+
+    if slug is None:
+        slug = f"test-{uuid.uuid4().hex[:8]}"
     resolved_mode = mode if mode is not None else GameMode.SOLO
 
-    db = db_path_for_slug(save_dir, slug)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore(db)
-    store.initialize()
-    upsert_game(
-        store,
+    _build_pg_repos_for_slug(
+        db_pool.get_pool(),
         slug=slug,
-        mode=resolved_mode,
+        mode=str(resolved_mode),
         genre_slug=genre,
         world_slug=world,
     )
-    store.close()
     return slug
 
 
@@ -169,6 +180,16 @@ def _mock_daemon_client(monkeypatch):
         "sidequest.game.lore_embedding.DaemonClient",
         lambda *a, **kw: _UnavailableDaemonClient(),
     )
+    # Universal retrieval (ADR-118 §D4) constructs its own DaemonClient inline in
+    # retrieve_turn_context when none is injected. Cover that construction site too
+    # so the "no test talks to the real daemon" guarantee holds for the entity-
+    # retrieval path — a turn that runs retrieval degrades deterministically to the
+    # query_failed outcome rather than attempting socket I/O. Success-path tests
+    # that want a working fake patch this same symbol in the test body (LIFO shadow).
+    monkeypatch.setattr(
+        "sidequest.game.retrieval_orchestration.DaemonClient",
+        lambda *a, **kw: _UnavailableDaemonClient(),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -225,27 +246,26 @@ _install_genre_loader_cache_patch()
 
 @pytest.fixture(autouse=True)
 def _watcher_hub_event_store_isolation():
-    """Autouse guard: clear the watcher_hub ``_event_store`` binding
-    between tests.
+    """Autouse guard: clear the watcher_hub ``_telemetry_sink`` binding
+    between tests (ADR-115 D5 renamed ``_event_store`` → ``_telemetry_sink``).
 
     Several tests reach the slug-connect handler path, which calls
-    ``bind_event_store(store)`` on a SqliteStore that lives only for the
+    ``bind_event_store(sink)`` on a TelemetrySink that lives only for the
     duration of that test. Without this fixture, the binding survives —
-    the store gets closed by session teardown (or by the test going out
-    of scope), but the global pointer in ``sidequest.telemetry.watcher_hub``
-    still references the dead handle. The next test that publishes a
-    persistable encounter event hits ``sqlite3.ProgrammingError: Cannot
-    operate on a closed database`` (full-suite flake — passes in
-    isolation, fails when ``test_stale_slot_reinit_wire.py`` runs first).
+    the sink's pool gets closed by session teardown (or by the test going
+    out of scope), but the global pointer in
+    ``sidequest.telemetry.watcher_hub`` still references the dead handle.
+    The next test that publishes a persistable event would then hit a
+    closed-pool error (full-suite flake — passes in isolation).
 
     This fixture restores the pre-test binding state on teardown so each
     test starts with whatever binding it sets up itself (typically None).
     """
     from sidequest.telemetry import watcher_hub
 
-    prior = watcher_hub._event_store
+    prior = watcher_hub._telemetry_sink
     yield
-    watcher_hub._event_store = prior
+    watcher_hub._telemetry_sink = prior
 
 
 @pytest.fixture(autouse=True)
@@ -490,7 +510,77 @@ def _stub_intent_router_factory(monkeypatch):
 
     monkeypatch.setattr(
         "sidequest.server.intent_router_pass.build_intent_router_for_session",
-        lambda: stub_router,
+        lambda **_kwargs: stub_router,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _no_real_anthropic_sdk(monkeypatch):
+    """Autouse guard: forbid the REAL ``claude-agent-sdk`` query transport.
+
+    Third leg of the hermeticity tripod alongside ``_mock_claude_client``
+    (narrator) and ``_stub_intent_router_factory`` (router). Story 119-3 ported
+    the narrator + Haiku transport off the raw ``anthropic`` SDK onto
+    ``claude-agent-sdk``'s module-level ``query`` seam (replacing the
+    ``build_async_anthropic`` construction site). A server test that reaches the
+    real ``query`` without installing a fake would drive a live subscription
+    call; on a developer machine with credentials present that silently spends.
+    Server tests must be hermetic: any test that reaches the transport without a
+    fake fails loudly here.
+
+    Tests that need the SDK install their own ``FakeQuery`` AFTER this guard
+    (monkeypatch LIFO shadowing, same doctrine as the two guards above) — see
+    ``test_93_1_archetype_inference.py``.
+    """
+    from sidequest.agents.claude_client import LlmClientError
+
+    def _refuse(*_args: object, **_kwargs: object) -> object:
+        raise LlmClientError(
+            "Test reached the REAL claude-agent-sdk query() transport without "
+            "installing a fake — server tests must be hermetic (with developer "
+            "subscription credentials present this drives a live call). Install "
+            "a fake: monkeypatch.setattr(<module>, 'query', FakeQuery(...))."
+        )
+
+    monkeypatch.setattr("sidequest.agents.llm_factory.query", _refuse)
+    monkeypatch.setattr("sidequest.agents.anthropic_sdk_client.query", _refuse)
+
+
+@pytest.fixture(autouse=True)
+def _stub_unseeded_objective_classifier(monkeypatch):
+    """Autouse guard (Story 123-1): stub the un-seeded objective classifier LLM.
+
+    Fourth leg of the hermeticity tripod alongside ``_mock_claude_client``
+    (narrator), ``_stub_intent_router_factory`` (router), and
+    ``_no_real_anthropic_sdk`` (the catch-all SDK refusal). Story 117-6
+    wired ``build_unseeded_objective_classifier_llm`` into
+    ``_execute_narration_turn`` — the adapter is constructed *eagerly* every
+    narration turn (before the watcher's cost-gate), and its ``__init__``
+    calls ``build_async_anthropic()``. That made the real SDK reachable from
+    every WS-driven test that reaches narration: ~169 server tests fell to
+    the ``_no_real_anthropic_sdk`` guard with no leg installing a fake — the
+    exact 93-1 failure shape, one construction site later (story 123-1
+    triage, see ``docs/test-baseline-manifest.json``).
+
+    The stub returns an ``ObjectiveClassifierLLM`` whose ``emit_tool`` yields
+    ``is_objective_given=False`` — a no-op verdict, so the post-narration
+    watcher never beeps a phantom objective. Mirrors the empty-``DispatchPackage``
+    contract of ``_stub_intent_router_factory``. Tests that need a real verdict
+    install their own fake AFTER this guard (LIFO shadowing).
+
+    Patched at the handler's import site (``websocket_session_handler``
+    binds the name at import time), not the factory module.
+    """
+
+    async def _no_objective(**_kwargs) -> dict:
+        return {"is_objective_given": False, "confidence": 0.0, "reasoning": None}
+
+    stub_llm = MagicMock()
+    stub_llm.emit_tool = _no_objective
+
+    monkeypatch.setattr(
+        "sidequest.server.websocket_session_handler.build_unseeded_objective_classifier_llm",
+        lambda **_kwargs: stub_llm,
     )
 
 
@@ -553,186 +643,6 @@ def mock_claude_client_factory(
     return lambda: client
 
 
-@pytest.fixture
-def session_handler_factory(tmp_path):
-    """Return a factory callable with two calling conventions.
-
-    **Single-player (legacy):** ``factory(genre="caverns_and_claudes")``
-    Returns ``(sd, handler)`` — a minimal ``_SessionData`` +
-    ``WebSocketSessionHandler`` suitable for unit-testing
-    ``_execute_narration_turn`` without a real WebSocket or LLM call. The
-    test is responsible for overriding
-    ``sd.orchestrator.run_narration_turn`` with an ``AsyncMock``.
-
-    **Multiplayer (ADR-036):**
-    ``factory(slug=..., mode=GameMode.MULTIPLAYER, seat_players=[...], active_player=(...))``
-    Returns ``(handler, sd, room)`` — a fully wired multi-player setup where
-    ``handler._room`` is a ``SessionRoom`` with the given players seated.
-
-    Task 11 (story 3.4): used by test_confrontation_dispatch_wiring.py.
-    Task 16 (story 3.4): snapshot now includes a Character named "Rux" so
-    XP-award tests can inspect ``sd.snapshot.characters[0].core.xp``.
-    Task 3 (ADR-036): extended with multiplayer calling convention.
-    """
-
-    import sidequest.genre.loader as _genre_loader_mod
-    from sidequest.agents.orchestrator import Orchestrator
-    from sidequest.game.character import Character
-    from sidequest.game.creature_core import CreatureCore, Inventory
-    from sidequest.game.persistence import SqliteStore
-    from sidequest.game.session import GameSnapshot
-    from sidequest.genre.loader import GenreLoader
-    from sidequest.server.session_handler import (
-        WebSocketSessionHandler,
-        _SessionData,
-        _State,
-    )
-    from sidequest.server.session_room import SessionRoom
-
-    def _make(
-        genre: str = "caverns_and_claudes",
-        *,
-        slug: str | None = None,
-        mode: GameMode | None = None,
-        seat_players: list[tuple[str, str]] | None = None,
-        active_player: tuple[str, str] | None = None,
-        existing_room: SessionRoom | None = None,
-    ):
-        # Read DEFAULT_GENRE_PACK_SEARCH_PATHS from the module at call-time so
-        # that the _fixture_pack_search_paths monkeypatch is visible here.
-        pack = GenreLoader(_genre_loader_mod.DEFAULT_GENRE_PACK_SEARCH_PATHS).load(genre)
-        snap = GameSnapshot(genre_slug=genre)
-        core = CreatureCore(
-            name="Rux",
-            description="A stoic fighter",
-            personality="stoic",
-            inventory=Inventory(),
-        )
-        char = Character(
-            core=core,
-            char_class="Fighter",
-            race="Human",
-            backstory="A wandering fighter",
-        )
-        snap.characters.append(char)
-        store = SqliteStore.open_in_memory()
-        orch = MagicMock(spec=Orchestrator)
-
-        # Determine player identity — defaults to legacy single-player "Rux".
-        if active_player is not None:
-            active_pid, active_name = active_player
-        else:
-            active_pid, active_name = "player-1", "Rux"
-
-        sd = _SessionData(
-            genre_slug=genre,
-            world_slug="",
-            player_name=active_name,
-            player_id=active_pid,
-            snapshot=snap,
-            store=store,
-            genre_pack=pack,
-            orchestrator=orch,
-        )
-        handler = WebSocketSessionHandler(save_dir=tmp_path)
-        handler._session_data = sd
-        # Task E.2 wiring: every turn flowing through this handler will hit
-        # ``_apply_narration_result_to_snapshot`` which requires
-        # ``sd._room``. The MP path below replaces this with the seated
-        # SessionRoom; the legacy single-player path falls through with
-        # this binding intact.
-        sd._room = room_for(snap, slug=genre)
-
-        # ---- Multiplayer room wiring (ADR-036 Task 3) ----
-        if slug is not None and mode is not None and seat_players is not None:
-            # Force handler into Playing state so _handle_player_action reaches
-            # the barrier logic (MP tests start post-chargen). Only done here —
-            # not for the legacy single-player path — so tests that probe
-            # pre-connect guard behaviour (e.g. test_dice_throw_returns_error_when_not_playing)
-            # still see AwaitingConnect.
-            handler._state = _State.Playing
-
-            if existing_room is not None:
-                # Share the existing room — reuse its snapshot + store so the
-                # TurnManager barrier state is shared across handlers.
-                room = existing_room
-                snap = room.snapshot
-                store = room.store
-                # Rebuild _SessionData against the shared snapshot/store.
-                if active_player is not None:
-                    active_pid, active_name = active_player
-                else:
-                    active_pid, active_name = "player-1", "Rux"
-                sd = _SessionData(
-                    genre_slug=genre,
-                    world_slug="",
-                    player_name=active_name,
-                    player_id=active_pid,
-                    snapshot=snap,
-                    store=store,
-                    genre_pack=sd.genre_pack,
-                    orchestrator=sd.orchestrator,
-                )
-                sd.store.save = MagicMock()
-                sd.store.append_narrative = MagicMock()
-                sd._room = room
-                handler._session_data = sd
-                handler._room = room
-                return handler, sd, room
-
-            # In MP mode, add a Character to the snapshot for each seat so
-            # that _resolve_acting_character_name can match by slot name.
-            # The legacy "Rux" character added above stays for compatibility
-            # but we also add one per seated player.
-            existing_names = {c.core.name for c in snap.characters}
-            for _pid, character_slot in seat_players:
-                if character_slot not in existing_names:
-                    mp_core = CreatureCore(
-                        name=character_slot,
-                        description=f"{character_slot} the adventurer",
-                        personality="bold",
-                        inventory=Inventory(),
-                    )
-                    mp_char = Character(
-                        core=mp_core,
-                        char_class="Fighter",
-                        race="Human",
-                        backstory="A wandering adventurer",
-                    )
-                    snap.characters.append(mp_char)
-                    existing_names.add(character_slot)
-
-            room = SessionRoom(slug=slug, mode=mode)
-            # Bind a snapshot + store so the room is fully initialised.
-            room.bind_world(snapshot=snap, store=store)
-            # Connect and seat every player. The fixture's intent is a
-            # post-chargen "in-game" room, so each peer is promoted to
-            # PLAYING — this is what existing barrier tests assume and
-            # what Story 45-2 made explicit. Tests that need a CHARGEN /
-            # ABANDONED scenario override `_seated[pid].state` directly.
-            for i, (pid, character_slot) in enumerate(seat_players):
-                room.connect(pid, socket_id=f"sock-{i}")
-                room.seat(pid, character_slot=character_slot)
-                room.transition_to_playing(pid)
-                # Wave 2B (story 45-48): party_location() reads
-                # snapshot.player_seats; mirror the room's seat map so
-                # the per-character location accessors work in tests.
-                snap.player_seats[pid] = character_slot
-            handler._room = room
-            sd._room = room
-            # Silence broadcast so tests don't need a real WebSocket.
-            room.broadcast = MagicMock()  # type: ignore[method-assign]
-            # Silence store side-effects.
-            sd.store.save = MagicMock()
-            sd.store.append_narrative = MagicMock()
-            return handler, sd, room
-
-        # Legacy return: (sd, handler).
-        return sd, handler
-
-    return _make
-
-
 # ---------------------------------------------------------------------------
 # Group B Task 10 — session_fixture helpers
 # ---------------------------------------------------------------------------
@@ -764,20 +674,48 @@ def session_fixture():
     )
     snap.character_locations["TestHero"] = "Main Hall"
     snap.player_seats["player:TestHero"] = "TestHero"
+    _mock_repo = MagicMock()
+    _mock_repo.save = MagicMock()
+    _mock_repo.append_narrative = MagicMock()
+    # #646 wired per-turn ``apply_level_ups(snapshot, sd.genre_pack.progression)``
+    # into the narration pipeline. Any test that seats a PC and drives a turn
+    # through this fixture now reads ``genre_pack.progression`` and compares its
+    # int fields, so a bare ``MagicMock()`` raises ``TypeError`` at the ``<=``.
+    # Hand it a real default ProgressionConfig (milestones_per_level/max_level=0
+    # → resolve_level floors at 1, a clean no-op) so the unrelated level-up step
+    # doesn't crash unrelated wiring tests.
+    #
+    # 77-7 wired ``apply_lull_escalation`` into the same turn path; it reads
+    # ``genre_pack.drama_thresholds or DramaThresholds()``. A bare MagicMock
+    # returns a truthy auto-mock there, so ``pacing_hint(mock)`` raises at the
+    # ``boring_streak >= mock`` comparison. Pin ``drama_thresholds=None`` (the
+    # realistic "pack ships no pacing.yaml" value, e.g. caverns_and_claudes) so
+    # the ``or`` falls through to real defaults — same pattern as progression.
+    #
+    # sq-playtest 2026-06-13 wired the native per-turn XP gate into the same turn
+    # path: it reads ``get_ruleset_module(genre_pack.rules.ruleset)``. A bare
+    # MagicMock's ``rules.ruleset`` is an auto-mock, not a registered slug, so
+    # the resolver fails loud (UnknownRulesetError — correct in production, where
+    # the slug is always real). Hand it a real default ``RulesConfig`` so
+    # ``rules.ruleset`` is ``"native"`` (the native tick applies — fixture
+    # behavior unchanged) — same real-defaults pattern as progression above.
+    from sidequest.genre.models.progression import ProgressionConfig
+    from sidequest.genre.models.rules import RulesConfig
+
     sd = _SessionData(
         genre_slug="caverns_and_claudes",
         world_slug="sunken_keep",
         player_name="TestHero",
         player_id="player:TestHero",
         snapshot=snap,
-        store=MagicMock(),
-        genre_pack=MagicMock(),
+        repository=_mock_repo,
+        dungeon_repository=MagicMock(),
+        telemetry_sink=MagicMock(),
+        genre_pack=MagicMock(
+            progression=ProgressionConfig(), drama_thresholds=None, rules=RulesConfig()
+        ),
         orchestrator=MagicMock(),
     )
-    # Silence the persist side-effect so _execute_narration_turn doesn't fail
-    # on sd.store.save / sd.store.append_narrative.
-    sd.store.save = MagicMock()
-    sd.store.append_narrative = MagicMock()
     # Task E.2 wiring: ``_apply_narration_result_to_snapshot`` (called by
     # ``_execute_narration_turn``) now requires ``room=sd._room``. The
     # production slug-connect path always populates ``sd._room``; tests
@@ -886,6 +824,19 @@ def synthetic_two_dial_pack():
 
     pack = MagicMock(spec=GenrePack)
     pack.rules = RulesConfig(confrontations=[cdef])
+    # Story 72-4: _apply_narration_result_to_snapshot now resolves a culture for
+    # narrator-invented NPCs via pack.effective_cultures(world). This synthetic
+    # pack binds no cultures, so the route correctly fails loud and degrades to
+    # the raw narrator name — stub the call so the unpack doesn't blow up on the
+    # bare MagicMock (a real GenrePack always returns this 2-tuple).
+    pack.effective_cultures.return_value = ([], "genre")
+    pack.source_dir = None
+    # Story 85-3: the yield/confrontation portrait resolver reads
+    # pack.worlds.get(world_slug) to surface an opponent portrait. A real
+    # GenrePack.worlds is a dict[str, World]; an empty dict is the correct
+    # "no world bound → no portrait manifest" path (resolver returns no
+    # portrait) rather than an AttributeError on the spec'd MagicMock.
+    pack.worlds = {}
     return pack
 
 
@@ -984,11 +935,16 @@ def character_named_sam():
 
 
 @pytest.fixture
-def store_bound_to_hub(synthetic_two_dial_pack):
-    """Open an in-memory SqliteStore, bind it to the watcher hub, yield
-    (store, snapshot, pack).  Unbinds on teardown so other tests see no
-    leftover binding.
+def store_bound_to_hub(synthetic_two_dial_pack, migrated_db, monkeypatch):
+    """Bind a Postgres TelemetrySink to the watcher hub, yield
+    (event_store, snapshot, pack). ADR-115 F1: encounter rows persist to PG
+    via the bound sink's ``append_encounter_event``; the yielded
+    ``PgSaveRepository`` reads the timeline back. Unbinds + closes the pool on
+    teardown so other tests see no leftover binding.
     """
+    import psycopg
+
+    from sidequest.game import db_pool
     from sidequest.game.character import Character
     from sidequest.game.creature_core import CreatureCore, Inventory
     from sidequest.game.encounter import (
@@ -996,13 +952,31 @@ def store_bound_to_hub(synthetic_two_dial_pack):
         EncounterMetric,
         StructuredEncounter,
     )
-    from sidequest.game.persistence import SqliteStore
     from sidequest.game.session import GameSnapshot
     from sidequest.game.turn import TurnManager
+    from sidequest.server.session_state import _build_pg_repos_for_slug
     from sidequest.telemetry.watcher_hub import bind_event_store
 
-    store = SqliteStore.open_in_memory()
-    bind_event_store(store)
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    with psycopg.connect(plain, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+            "AND tablename <> 'alembic_version'"
+        ).fetchall()
+        if rows:
+            names = ", ".join(f'"{r[0]}"' for r in rows)
+            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+
+    repo, _dungeon, sink = _build_pg_repos_for_slug(
+        db_pool.get_pool(),
+        slug="store-bound-to-hub",
+        mode="solo",
+        genre_slug="test_pack",
+        world_slug="test_world",
+    )
+    bind_event_store(sink)
 
     snap = GameSnapshot(
         genre_slug="test_pack",
@@ -1034,9 +1008,10 @@ def store_bound_to_hub(synthetic_two_dial_pack):
     )
 
     try:
-        yield store, snap, synthetic_two_dial_pack
+        yield repo, snap, synthetic_two_dial_pack
     finally:
         bind_event_store(None)
+        db_pool.close_pool()
 
 
 @pytest.fixture

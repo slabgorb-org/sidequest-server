@@ -1,0 +1,63 @@
+name: Green Martian
+summary: Fifteen-foot, four-armed, tusked nomad hordes of the dead sea bottoms —
+  communal, loveless by custom, masters of the war-mount
+description: >-
+  The green hordes are giants of the cracked sea-floor: fifteen feet
+  tall, olive-skinned, with a second pair of arms below the first and
+  upthrust tusks framing a lipless mouth. They own no cities of their
+  own — they camp in the marble ruins the dead ocean left — and they
+  hold all property in common, raise their hatchlings communally with
+  no knowledge of a mother, and have bred laughter and love out of
+  themselves in favor of cruelty and martial discipline. A horde is
+  ruled by its largest and most savage; rank is taken by killing the
+  holder. They war ceaselessly — Thark against Warhoon, green against
+  every red city — and they ride eight-legged war-mounts across the
+  bottom. A few, across a long life, learn something their people
+  forgot: that a captive can be a friend.
+slots:
+  given_name:
+    corpora:
+      - corpus: barsoom_green.txt
+        weight: 1.0
+    lookback: 3
+  family_name:
+    corpora:
+      - corpus: barsoom_green.txt
+        weight: 1.0
+    lookback: 3
+  rank:
+    word_list:
+      - Jed
+      - Jeddak
+      - Chieftain
+      - Warrior
+      - Lesser Chieftain
+  horde:
+    word_list:
+      - Thark
+      - Warhoon
+      - Torquas
+      - Thurd
+  place_noun:
+    word_list:
+      - ruin
+      - incubator
+      - bottom
+      - camp
+      - dead city
+      - hall
+  adjective:
+    word_list:
+      - cracked
+      - dead
+      - ochre
+      - silent
+      - broken
+      - far
+person_patterns:
+  - '{given_name} {family_name}'
+  - '{given_name} {family_name} of the {horde}'
+  - '{rank} {given_name}'
+place_patterns:
+  - '{adjective} {place_noun}'
+  - 'the {place_noun} of the {horde}'

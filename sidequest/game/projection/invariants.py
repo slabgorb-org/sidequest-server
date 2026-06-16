@@ -4,15 +4,20 @@ Runs before GenreRuleStage in the ComposedFilter. Can short-circuit with
 a terminal decision (include=True with canonical payload, or include=False).
 
 Invariants shipped in this stage:
-    - GM sees canonical (Task 5).
     - Targeted-by-field — DICE_REQUEST / etc.'s `to` field restricts
       recipients (Task 6).
     - Visibility-gated — SECRET_NOTE / NARRATION_SEGMENT carry their
       recipient set in ``_visibility.visible_to`` and the exclusion
       decision is structural here, not a genre rule (ADR-105 B1).
-    - Self-authored — PLAYER_ACTION / DICE_THROW echo to author + GM
+    - Self-authored — PLAYER_ACTION / DICE_THROW echo to author only
       (Task 7).
-    - GM-only kind — THINKING is never routed to players (Task 8).
+    - Player-excluded kind — THINKING is never routed to players; the
+      narrator receives it server-side, not via projection (Task 8).
+
+There is no GM seat. SideQuest's thesis is *the narrator is the GM; every
+human is a player* — the narrator reads canonical state server-side and is
+not a projection recipient at all. The former ``gm_sees_all`` short-circuit
+(an always-false dead axis ported from VTT convention) was deleted in 71-35.
 
 ADR-105 B1 — why secret-routing is a CoreInvariant, not a genre rule:
 a security boundary must not depend on a pack remembering to add
@@ -31,16 +36,19 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from sidequest.game.projection.envelope import MessageEnvelope
 from sidequest.game.projection.view import GameStateView
 from sidequest.game.projection_filter import FilterDecision
 
+if TYPE_CHECKING:
+    from sidequest.game.repository import SaveTransaction
+
 logger = logging.getLogger(__name__)
 
 # Kinds whose canonical payload carries a `to` field naming the recipient(s).
 # The `to` value may be a single player_id string OR a list[str] of player_ids.
-# GM is always an implicit recipient (added by the GM invariant above).
 #
 # NOTE (ADR-105 B1): SECRET_NOTE was removed from this map — it has no
 # ``to`` field by design (``SecretNotePayload`` carries
@@ -49,7 +57,6 @@ logger = logging.getLogger(__name__)
 TARGETED_KINDS: dict[str, str] = {
     "DICE_REQUEST": "to",
     "JOURNAL_RESPONSE": "to",
-    "VOICE_TEXT": "to",
 }
 
 # ADR-105 B1: kinds whose recipient set lives in ``_visibility.visible_to``
@@ -65,8 +72,7 @@ VISIBILITY_GATED_KINDS: frozenset[str] = frozenset(
 )
 
 # Kinds that echo back to the player who authored them (via
-# payload.author_player_id). GM is implicit recipient. Non-author,
-# non-GM players do not see these.
+# payload.author_player_id). Non-author players do not see these.
 SELF_AUTHORED_KINDS: frozenset[str] = frozenset(
     {
         "PLAYER_ACTION",
@@ -76,8 +82,9 @@ SELF_AUTHORED_KINDS: frozenset[str] = frozenset(
     }
 )
 
-# Kinds never routed to non-GM players. GM gets them via the GM invariant.
-GM_ONLY_KINDS: frozenset[str] = frozenset({"THINKING"})
+# Kinds never routed to players. The narrator receives them server-side
+# (not via projection) — there is no GM seat in the recipient set.
+PLAYER_EXCLUDED_KINDS: frozenset[str] = frozenset({"THINKING"})
 
 
 @dataclass(frozen=True)
@@ -112,16 +119,10 @@ class CoreInvariantStage:
         envelope: MessageEnvelope,
         view: GameStateView,
         player_id: str,
+        tx: SaveTransaction | None = None,
+        event_seq: int | None = None,
     ) -> InvariantOutcome:
-        # 1. GM sees canonical — always.
-        if view.is_gm(player_id):
-            return InvariantOutcome(
-                terminal=True,
-                decision=FilterDecision(include=True, payload_json=envelope.payload_json),
-                source="invariant:gm_sees_all",
-            )
-
-        # 2. Targeted-by-field: kinds that declare a recipient in their payload.
+        # 1. Targeted-by-field: kinds that declare a recipient in their payload.
         if envelope.kind in TARGETED_KINDS:
             field_name = TARGETED_KINDS[envelope.kind]
             payload = json.loads(envelope.payload_json)
@@ -136,12 +137,11 @@ class CoreInvariantStage:
                 source="invariant:targeted",
             )
 
-        # 2b. Visibility-gated (ADR-105 B1): SECRET_NOTE / NARRATION_SEGMENT
+        # 1b. Visibility-gated (ADR-105 B1): SECRET_NOTE / NARRATION_SEGMENT
         #     carry their recipient set in ``_visibility.visible_to``. The
         #     *exclusion* decision is structural here so a pack cannot
         #     silently weaken the firewall by omitting a projection.yaml
-        #     rule. GM already short-circuited at branch 1 (canonical).
-        #     A secret kind with no/malformed visibility info FAILS CLOSED
+        #     rule. A secret kind with no/malformed visibility info FAILS CLOSED
         #     (include=False) — leaking is catastrophic, dropping a note is
         #     recoverable — and the watcher event flags it loudly so the
         #     GM panel sees a malformed secret rather than a silent leak.
@@ -158,6 +158,8 @@ class CoreInvariantStage:
                 player_id=player_id,
                 included=included,
                 malformed=malformed,
+                tx=tx,
+                event_seq=event_seq,
             )
             return InvariantOutcome(
                 terminal=True,
@@ -168,7 +170,38 @@ class CoreInvariantStage:
                 source="invariant:visibility_gated",
             )
 
-        # 3. Self-authored: echo to author + GM only.
+        # 1c. NARRATION with an explicit list-valued ``_visibility.visible_to``
+        #     (pingpong 2026-06-05 [BAR-1] — solo cold-open seed leaked to an
+        #     MP joiner). The visibility classifier always writes the sentinel
+        #     ``"all"``; an explicit player_id LIST is an opt-in, deliberate
+        #     recipient restriction (today: the solo-fired cold-open
+        #     ``first_turn_invitation``, second-person prose anchored to one
+        #     player). Four packs ship no projection.yaml, so the pack-level
+        #     VisibilityTagRule cannot be the firewall for it (ADR-105 B1:
+        #     exclusion is structural, a pack cannot weaken it by omission).
+        #     ASYMMETRIC on purpose: only the EXCLUSION is terminal — members,
+        #     ``"all"``, absent, or malformed sidecars all fall through so the
+        #     GenreRuleStage's redact/fidelity rules still run for included
+        #     recipients. NOT fail-closed: NARRATION without a usable list is
+        #     ordinary broadcast prose, unlike SECRET_NOTE.
+        if envelope.kind == "NARRATION":
+            payload = json.loads(envelope.payload_json)
+            viz = payload.get("_visibility")
+            visible_to = viz.get("visible_to") if isinstance(viz, dict) else None
+            if isinstance(visible_to, list) and player_id not in visible_to:
+                _publish_narration_visibility_excluded(
+                    player_id=player_id,
+                    visible_to_count=len(visible_to),
+                    tx=tx,
+                    event_seq=event_seq,
+                )
+                return InvariantOutcome(
+                    terminal=True,
+                    decision=FilterDecision(include=False, payload_json=""),
+                    source="invariant:narration_visibility_list",
+                )
+
+        # 2. Self-authored: echo to author only.
         if envelope.kind in SELF_AUTHORED_KINDS:
             payload = json.loads(envelope.payload_json)
             author = payload.get("author_player_id")
@@ -182,12 +215,12 @@ class CoreInvariantStage:
                 source="invariant:self_echo",
             )
 
-        # 4. GM-only kinds: never route to players.
-        if envelope.kind in GM_ONLY_KINDS:
+        # 3. Player-excluded kinds: never route to players.
+        if envelope.kind in PLAYER_EXCLUDED_KINDS:
             return InvariantOutcome(
                 terminal=True,
                 decision=FilterDecision(include=False, payload_json=""),
-                source="invariant:gm_only_kind",
+                source="invariant:player_excluded_kind",
             )
 
         return InvariantOutcome(terminal=False, decision=None, source=None)
@@ -202,12 +235,51 @@ def _match_to_field(to_value: object, player_id: str) -> bool:
     return False
 
 
+def _publish_narration_visibility_excluded(
+    *,
+    player_id: str,
+    visible_to_count: int,
+    tx: SaveTransaction | None = None,
+    event_seq: int | None = None,
+) -> None:
+    """Emit the ``invariant.narration_visibility_excluded`` watcher event.
+
+    Lie-detector for the 1c NARRATION list-gate (pingpong 2026-06-05
+    [BAR-1]): without a per-recipient decision event the GM panel cannot
+    prove a joiner was excluded from a player-anchored cold-open. Same
+    tx-threading rules as :func:`_publish_secret_routed`. Telemetry must
+    never crash a projection fan-out.
+    """
+    try:
+        from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
+
+        _watcher_publish(
+            "state_transition",
+            {
+                "field": "invariant.narration_visibility_excluded",
+                "kind": "NARRATION",
+                "player_id": player_id,
+                "visible_to_count": visible_to_count,
+            },
+            component="projection",
+            tx=tx,
+            event_seq=event_seq,
+        )
+    except Exception:  # noqa: BLE001 — telemetry must never crash projection
+        logger.warning(
+            "invariant.narration_visibility_excluded watcher publish failed player=%s",
+            player_id,
+        )
+
+
 def _publish_secret_routed(
     *,
     kind: str,
     player_id: str,
     included: bool,
     malformed: bool,
+    tx: SaveTransaction | None = None,
+    event_seq: int | None = None,
 ) -> None:
     """Emit the ``invariant.secret_routed`` watcher event (ADR-105 B1).
 
@@ -218,6 +290,14 @@ def _publish_secret_routed(
     ``_visibility.visible_to`` and was failed closed — a loud signal of
     an upstream B2/B3 bug, never a silent passthrough. Telemetry must
     never crash a projection fan-out.
+
+    ``tx`` / ``event_seq`` are threaded down from emit_event's open turn
+    transaction (ADR-115). When set, the watcher publish rides THAT
+    transaction on the SAME connection — never opening a competing pooled
+    connection that would self-deadlock on the per-session ``FOR UPDATE``
+    row lock the turn already holds. When ``None`` (lazy-fill / out-of-frame
+    projection) the publish takes the bound sink's own short session_tx, which
+    is safe because no row lock is held.
     """
     try:
         from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
@@ -234,6 +314,8 @@ def _publish_secret_routed(
             },
             component="projection",
             severity="warning" if malformed else "info",
+            tx=tx,
+            event_seq=event_seq,
         )
     except Exception:  # noqa: BLE001 — telemetry must never crash a turn
         logger.warning(

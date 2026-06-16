@@ -45,13 +45,51 @@ from pydantic import BaseModel, GetCoreSchemaHandler, model_validator
 from pydantic_core import CoreSchema, core_schema
 
 __all__ = [
+    "DISPOSITION_LOG_CAP",
+    "CHAPTER_BEAT_REASON",
+    "PATCH_BEAT_REASON",
     "Attitude",
     "AttitudeThresholds",
     "DEFAULT_ATTITUDE_THRESHOLDS",
     "Disposition",
+    "DispositionBeat",
     "configure_attitude_thresholds",
     "reset_attitude_thresholds",
 ]
+
+
+# Disposition beat-log (ADR-136). Persists the delta + reason the engine
+# already computes at each disposition-shift site — rescuing data that today
+# lives only in transient SPAN_DISPOSITION_SHIFT spans — so the relationship
+# panel can show the *why* behind each shift (ADR-014 diamonds/coal: a
+# relationship story, not a reputation bar).
+DISPOSITION_LOG_CAP = 10
+
+# Neutral label for the apply_patch npc_attitudes path (ADR-136). A narrative
+# patch carries a delta but no narrator reason — show the shift without
+# inventing a specific cause (No Silent Fallbacks: an honest generic label).
+PATCH_BEAT_REASON = "shifted by unfolding events"
+
+# Display label for the chapter-upsert path (ADR-136): an existing NPC's
+# standing moved as the authored chronicle advanced. Player-facing prose, not
+# a machine key — it renders in the relationship panel.
+CHAPTER_BEAT_REASON = "shifted as your history together deepened"
+
+
+class DispositionBeat(BaseModel):
+    """One persisted disposition shift: the delta the engine applied and why.
+
+    ``reason`` is narrator-supplied (``update_npc_disposition``), the engagement
+    tick label, or a neutral label for opaque patch/world paths. ``location`` is
+    the party location at the time, or ``None`` when not in scope.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    turn: int
+    delta: int
+    reason: str
+    location: str | None = None
 
 
 class Attitude(StrEnum):
@@ -155,6 +193,18 @@ class Disposition:
 
     def __int__(self) -> int:
         return self.value
+
+    def __eq__(self, other: object) -> bool:
+        # Value type (docstring): two Dispositions are equal when their
+        # clamped scores match. Required so models carrying a Disposition
+        # field (``Npc``, ``NpcPoolMember``) compare by value on JSON
+        # round-trip rather than by instance identity (story 72-2).
+        if isinstance(other, Disposition):
+            return self.value == other.value
+        return NotImplemented
+
+    def __hash__(self) -> int:
+        return hash(self.value)
 
     def __repr__(self) -> str:
         return f"Disposition({self.value})"

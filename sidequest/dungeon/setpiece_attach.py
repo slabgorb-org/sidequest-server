@@ -220,6 +220,7 @@ from typing import Any
 
 from sidequest.dungeon.persistence import ComplicationThread, DungeonStore
 from sidequest.dungeon.setpieces import QuestComponent, SetPiece, TropeComponent
+from sidequest.game.repository import DungeonTransaction
 from sidequest.game.session import GameSnapshot, TropeState
 
 
@@ -749,7 +750,7 @@ def attach_set_piece(
     pack_tropes: Any,
     snapshot: GameSnapshot,
     manifest: Any,
-    store: DungeonStore,
+    store: DungeonTransaction,
     threads_lit_per_expansion: int,
     threads_already_lit: int,
     started_at_depth_score: float,
@@ -784,11 +785,14 @@ def attach_set_piece(
         manifest:                  RegionContentManifest (Plan 7 supplies the real
                                    one; reduced Task 3 does NOT resolve refs against
                                    it — the creature/loot join is Plan 7's).
-        store:                     Real DungeonStore bound to the caller's connection
-                                   (Plan 7 owns the connection; spec §7.5). NOT
-                                   duck-typed as Any — concrete Plan 5 dependency
-                                   (Decision J). attach_set_piece does NOT commit
-                                   and does NOT roll back; caller owns the txn.
+        store:                     The open ``DungeonTransaction`` the materialize
+                                   commit rides (ADR-115 D6). ``open_thread`` writes
+                                   on the txn's OWN locked connection, so a later
+                                   ``commit_expansion`` PersistError rolls these
+                                   threads back together with the expansion (Plan-5
+                                   atomicity: NO orphan ledger). attach_set_piece
+                                   does NOT commit and does NOT roll back; the
+                                   caller owns the txn boundary (spec §7.5).
         threads_lit_per_expansion: Required expansion-level thread budget. No
                                    silent default (No Silent Fallbacks, Decision B).
         threads_already_lit:       Count already consumed this expansion before

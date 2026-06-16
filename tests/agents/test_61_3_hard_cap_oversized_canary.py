@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
 
 import pytest
 
@@ -40,6 +39,7 @@ import sidequest.agents.tools  # noqa: F401
 from sidequest.agents import orchestrator as orch_mod
 from sidequest.agents.orchestrator import Orchestrator
 from sidequest.telemetry.watcher_hub import WatcherHub, watcher_hub
+from tests._helpers.doubles import FakeSocket
 from tests.agents.fakes.fake_anthropic_sdk_client import (
     FakeAnthropicSdkClient,
     ScriptedResponse,
@@ -57,18 +57,6 @@ def _end_turn(text: str = "ok") -> ScriptedResponse:
         cached_input_write_tokens=0,
         model="claude-sonnet-4-6",
     )
-
-
-class _FakeSocket:
-    """Minimal `_Sendable` for watcher_hub subscription — collects
-    every published event so tests can assert delivery to the GM-panel
-    transport (not just `logger.error`)."""
-
-    def __init__(self) -> None:
-        self.events: list[dict[str, Any]] = []
-
-    async def send_json(self, data: dict[str, Any]) -> None:
-        self.events.append(data)
 
 
 @pytest.fixture
@@ -167,7 +155,7 @@ async def test_oversized_canary_emits_loud_event_to_gm_panel(
     socket to the live watcher_hub, prove the event reaches the
     transport — not just `logger.error`.
     """
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     monkeypatch.setattr(orch_mod, "PROMPT_BUDGET_BYTES_HARD", 10)
@@ -265,7 +253,7 @@ async def test_canary_emits_exactly_once_per_oversized_call(
     minutes; one event per refuse is actionable, hundreds per turn
     drowns the GM panel.
     """
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     monkeypatch.setattr(orch_mod, "PROMPT_BUDGET_BYTES_HARD", 10)
@@ -336,7 +324,7 @@ async def test_sdk_and_synchronous_paths_refuse_with_identical_shape(
     monkeypatch.setattr(orch_mod, "PROMPT_BUDGET_BYTES_HARD", 10)
 
     # --- SDK path ---------------------------------------------------------
-    sdk_sock = _FakeSocket()
+    sdk_sock = FakeSocket()
     await bound_hub.subscribe(sdk_sock)  # type: ignore[arg-type]
 
     sdk_fake = FakeAnthropicSdkClient(responses=[_end_turn()])
@@ -352,7 +340,7 @@ async def test_sdk_and_synchronous_paths_refuse_with_identical_shape(
         bound_hub._subscribers.clear()  # noqa: SLF001
 
     # --- Synchronous path -------------------------------------------------
-    sync_sock = _FakeSocket()
+    sync_sock = FakeSocket()
     await bound_hub.subscribe(sync_sock)  # type: ignore[arg-type]
 
     sync_client = AsyncMock()

@@ -11,7 +11,17 @@ docs/superpowers/specs/2026-05-04-snapshot-split-brain-cleanup-design.md).
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from typing import TYPE_CHECKING
+
+from pydantic import BaseModel, Field
+
+from sidequest.game.disposition import Disposition
+
+if TYPE_CHECKING:
+    # ``Npc`` lives in ``sidequest.game.session``, which already imports THIS
+    # module (``from sidequest.game.npc_pool import NpcPoolMember``). Importing
+    # it at runtime here would be a circular import, so it is annotation-only.
+    from sidequest.game.session import Npc
 
 
 class NpcPoolMember(BaseModel):
@@ -35,6 +45,15 @@ class NpcPoolMember(BaseModel):
     role: str | None = None
     pronouns: str | None = None
     appearance: str | None = None
+    disposition: Disposition = Field(default_factory=Disposition)
+    """Story 72-2 (epic 72 — NPC Identity Hardening): the relationship score
+    the scaffold carries so a known disposition survives the pool→``Npc``
+    promotion (``_promote_pool_member_to_npc``) instead of silently
+    flattening to neutral. Defaults neutral-0 — a narrator-invented or
+    legacy member enters the pool with no recorded relationship, so promotion
+    still spawns it neutral (preserving the Story 72-5 born-neutral default).
+    The NPC *development* pipeline (disposition drift) is 72-1's deliverable;
+    this field only preserves and round-trips an existing value."""
     archetype_id: str | None = None
     """OTEL attribution back to the genre-pack archetype source. ``None``
     for narrator-invented members or legacy-migrated members where
@@ -56,3 +75,70 @@ class NpcPoolMember(BaseModel):
     name-generator-sourced members exempt: they enter the pool already
     ratified. Only ``_auto_mint_prose_only_npcs`` flags new entries as
     pending."""
+    is_creature: bool = False
+    """ping-pong #74: this member is a wild animal / beast / monster, not a
+    person. Set from ``NpcMention.is_creature`` at the invented-name seam.
+    A creature belongs to no culture or faction, so it keeps the narrator's
+    descriptive name verbatim — it is NEVER routed through the culture-bound
+    person namer (which would mint a person-name + a random culture). Defaults
+    ``False`` so every existing / authored / person member stays a person.
+    The full Monster Manual identity (creature_id / threat_level / hp / stat
+    block, ADR-059) is wired at promotion time via ``_promote_creature_to_npc``
+    in narration_apply.py (story 83-1)."""
+    creature_data: dict | None = None
+    """Story 83-1: pre-fetched encountergen enemy dict (Monster Manual shape)
+    embedded at pool-mint time so the promotion seam is self-contained.
+    ``None`` for pool members minted without MM context (narrator-invented
+    creatures receive synthetic bestiary identity at promotion time via
+    ``_synthetic_creature_dict``)."""
+    invented_from: str | None = None
+    """sq-playtest 2026-06-07 (perseus double-mint): the narrator's ORIGINAL
+    invented name when the ADR-091 culture namer rerouted it (narrator says
+    "Varra", the mint stamps "Rifenna Muse" — ``invented_from="Varra"``).
+    This is the original→mint binding cache: Step-1/2 reconciliation in
+    ``narration_apply`` matches mentions against this alias too, so a later
+    re-narration of the SAME original re-cites the existing member instead
+    of minting a second identity ("Magel Girilla"). ``None`` when the name
+    was never rerouted (no divergence to bind)."""
+    last_seen_turn: int = 0
+    """Story 97-1 (pool relationship projection): scene-presence stamp,
+    parallel to ``Npc.last_seen_turn``. Set by the ``pool_hit`` branch of
+    ``narration_apply._apply_npc_mentions`` on every cite. ``0`` = never
+    scene-present this session (the projection seen-gate's first leg) —
+    a member minted from a dialogue mention of an off-screen figure stays
+    at 0 and never cards."""
+    last_seen_location: str | None = None
+    """Story 97-1: location of the most recent cite, parallel to
+    ``Npc.last_seen_location``. Carried onto the relationship card."""
+    non_transactional_interactions: int = 0
+    """Story 97-1: the ADR-014/ADR-128 interest counter at the pool tier,
+    parallel to ``Npc.non_transactional_interactions``. Deduped per turn
+    (one engagement event per member per turn); suppressed entirely under
+    the #742 hostile-context gate. Crossing ``ACQUAINTANCE_AT`` promotes
+    the member to a full ``Npc`` (the tier trigger), carrying this count."""
+    last_development_turn: int = 0
+    """Story 97-1: per-turn engagement dedupe ACROSS apply calls, parallel
+    to ``Npc.last_development_turn`` (the 97-5 double-apply shape — two
+    ``_apply_npc_mentions`` passes in one turn must tick once)."""
+
+
+def is_projectable(entity: NpcPoolMember | Npc) -> bool:
+    """Whether ``entity`` is eligible to be projected to any downstream surface.
+
+    ADR-138 §D1/D3: ratification is the single projection-eligibility gate, shared
+    by every projection surface (the ADR-118 retrieval index and the ADR-135 public
+    reference page) so none re-implements the rule.
+
+    - A ``NpcPoolMember`` is projectable iff it is **ratified**
+      (``observation_pending is False``). An unratified, auto-minted member is a
+      phantom the Story 49-6 gate may purge next turn; the world has not committed
+      to it, so it must not be embedded or rendered as if it had.
+    - A promoted ``Npc`` (``sidequest.game.session.Npc``) is **always** projectable —
+      promotion to the mechanical entity is itself the world's commitment.
+
+    This is the §D3 predicate only; wiring it into the projection surfaces is
+    deferred to stories 75-12 (ADR-118) and 75-13 (ADR-135).
+    """
+    if isinstance(entity, NpcPoolMember):
+        return not entity.observation_pending
+    return True

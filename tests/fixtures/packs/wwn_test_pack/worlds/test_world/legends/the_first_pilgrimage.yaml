@@ -1,0 +1,56 @@
+name: The First Pilgrimage
+era: uncounted generations ago — and every generation since
+summary: >-
+  No one preached the faith of the Iss to Barsoom; it arrived already
+  old, carried upriver by white-wigged holy men who taught that a life's
+  reward waits at the river's end — the Valley Dor, the Lost Sea of Korus,
+  paradise on a green shore. The holy men were therns, the paradise was a
+  larder, and the faith was the longest confidence game ever run: the river
+  delivers the devout of every race to the plant men and the white apes of
+  the valley, and the therns harvest what remains. Above the therns, the
+  First Born of Omean raid the Golden Cliffs and harvest the harvesters —
+  and above them all, in the Temple of Issus, sits the ancient creature the
+  therns themselves die worshipping. The lie is tiered like the world it
+  feeds on. One article of the faith does all the work: any pilgrim who
+  returns from the river is a blasphemer, to be killed on sight.
+affected_cultures:
+- Red Martian
+- Green Martian
+- Thern
+- First Born
+cultural_impact: >-
+  At the end of a thousand years of life, or at the bottom of
+  a grief too heavy to carry, a Barsoomian of any race puts their affairs in
+  order, gives away their sword, and goes down to the river — voluntarily,
+  serenely, and celebrated. Refusing the pilgrimage past one's time is mildly
+  scandalous; speaking against it is blasphemy; returning from it is death.
+  The therns sell river-blessings at every temple on the Iss and have grown
+  ancient and fat on the toll.
+faction_grudges:
+- from: First Born
+  to: Thern
+  reason: The First Born hold the therns to be cattle bred for the service of
+    Issus — their goddess entitles the black fleets to raid the Golden Cliffs
+    for slaves and plunder at will, and ten thousand years of raids have made
+    the entitlement mutual hatred.
+- from: Thern
+  to: First Born
+  reason: The therns, holy thieves themselves, are the only race on Barsoom
+    that knows exactly what the First Born are — and must swallow every raid
+    in silence, because crying out would mean explaining to the pilgrim races
+    what the raiders came to steal.
+lost_arts: []
+monuments:
+- The waystones of the Iss — river-markers from the headwaters to the first
+  cataract, each carved with the same promise of Korus in a script so old
+  that only the therns can still read it, which is convenient for the therns.
+terrain_scars:
+- name: The Flower-Meadows of Dor
+  region: valley_dor
+  type: sacred_trap
+  description: The loveliest ground on Barsoom — scarlet sward, golden fruit
+    trees, the bright water of Korus beyond. The trees hold plant men. The
+    cliffs hold white apes. The beauty is the mechanism; nothing in the
+    valley is ornamental.
+related_tropes:
+- the_pilgrimage_must_be_answered

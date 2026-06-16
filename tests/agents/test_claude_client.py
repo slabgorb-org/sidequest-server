@@ -77,81 +77,6 @@ def make_spawn_fn(
     return _spawn
 
 
-class _FakeStderrStream:
-    """Stream-like for FakeStreamingProcess.stderr — async ``.read()`` mirrors
-    asyncio.subprocess.Process.stderr so claude_client.send_stream can capture
-    stderr on subprocess_failed paths."""
-
-    def __init__(self, data: bytes) -> None:
-        self._data = data
-
-    async def read(self) -> bytes:
-        return self._data
-
-
-class FakeStreamingProcess:
-    """FakeProcess variant that emits stdout line-by-line for streaming tests.
-
-    returncode starts as None (like a live subprocess) and is set to the
-    configured exit code by wait(), matching asyncio.subprocess.Process semantics.
-    """
-
-    def __init__(
-        self,
-        lines: list[bytes],
-        returncode: int = 0,
-        per_line_delay: float = 0.0,
-        stderr: bytes = b"",
-    ) -> None:
-        self._lines = lines
-        self._final_returncode = returncode
-        self.returncode: int | None = None  # None until wait() is called
-        self._per_line_delay = per_line_delay
-        self._stderr = stderr
-        self._killed = False
-        self.stdout = self  # asyncio uses `proc.stdout` as an async iterator
-        self.stderr = _FakeStderrStream(stderr)
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self) -> bytes:
-        if self._killed or not self._lines:
-            raise StopAsyncIteration
-        line = self._lines.pop(0)
-        if self._per_line_delay:
-            await asyncio.sleep(self._per_line_delay)
-        return line
-
-    async def communicate(self) -> tuple[bytes, bytes]:
-        all_remaining = b"".join(self._lines)
-        self._lines = []
-        return all_remaining, self._stderr
-
-    def kill(self) -> None:
-        self._killed = True
-
-    async def wait(self) -> int:
-        self.returncode = self._final_returncode
-        return self._final_returncode
-
-
-def make_streaming_spawn_fn(
-    lines: list[bytes],
-    returncode: int = 0,
-    per_line_delay: float = 0.0,
-    raise_exc: Exception | None = None,
-) -> Callable[..., Awaitable[FakeStreamingProcess]]:
-    async def _spawn(*args: object, **kwargs: object) -> FakeStreamingProcess:
-        if raise_exc is not None:
-            raise raise_exc
-        return FakeStreamingProcess(
-            lines=list(lines), returncode=returncode, per_line_delay=per_line_delay
-        )
-
-    return _spawn
-
-
 def json_envelope(
     result: str,
     input_tokens: int = 0,
@@ -534,7 +459,6 @@ def test_claude_client_reports_capabilities():
     caps = client.capabilities()
     assert caps.supports_sessions is True
     assert caps.supports_tools is True
-    assert caps.supports_streaming is True
     assert caps.max_context_tokens >= 200_000
     assert caps.backend_id == "claude-cli"
 
@@ -549,7 +473,6 @@ def test_llm_capabilities_is_frozen():
         supports_sessions=True,
         supports_tools=False,
         max_context_tokens=1,
-        supports_streaming=False,
     )
     with pytest.raises(FrozenInstanceError):
         caps.backend_id = "y"  # type: ignore[misc]

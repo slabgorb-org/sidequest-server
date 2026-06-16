@@ -1,0 +1,13 @@
+name: assembled_fixture
+description: >-
+  Combined test world for story 65-10 — the lore-page TOC/section-mapping
+  repair. This world authors ALL THREE dynamic sections at once: a Cast (from
+  portrait_manifest.yaml, copied from cast_gated_fixture), a Map (from
+  cartography.yaml, copied from map_fixture), and a Timeline (from legends.yaml +
+  lore.yaml, copied from timeline_fixture). It is the regression/observability
+  anchor for 65-10: the three dynamic sections (today appended ad-hoc to the
+  composed TOC by three near-identical blocks in assemble_lore_page) must all
+  register, and a single reference_lore_assembled span must record the composed
+  section ids, which dynamic sections registered, and that every TOC entry has a
+  matching body anchor (parity_ok). The base reckoning section also renders
+  (lore.yaml present), so the composed TOC is reckoning/cast/map/timeline.

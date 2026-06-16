@@ -1,0 +1,8 @@
+genre_key: swn_test_pack
+default_reversibility: reversible_with_cost
+verdicts_on_zero_hp:
+  pc: dying
+  npc: defeated
+soul_md_constraint: "genre_truth:stakes_are_real_rescue_is_possible"
+must_narrate: "The character is dying — unconscious, bleeding, minutes to live. The cost of rescue (fuel, a favor, a secret traded) is real and named on the table."
+must_not_narrate: "invent a medbay nobody has paid for; narrate instant survival; erase the cost of the rescue; let the villain pause out of authorial mercy"

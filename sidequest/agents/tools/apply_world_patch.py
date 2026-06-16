@@ -38,15 +38,17 @@ Supported paths (v1):
 - ``/time_of_day`` → ``WorldStatePatch.time_of_day`` (str)
 - ``/atmosphere`` → ``WorldStatePatch.atmosphere`` (str)
 - ``/current_region`` → ``WorldStatePatch.current_region`` (str)
-- ``/active_stakes`` → ``WorldStatePatch.active_stakes`` (str)
 
-These are the five string-valued top-level world fields that have no
-dedicated typed tool yet. Other ``WorldStatePatch`` fields — ``hp_changes``
+These are the four string-valued top-level world fields that have no
+dedicated typed tool. Other ``WorldStatePatch`` fields — ``hp_changes``
 (use ``apply_damage``), ``npc_attitudes`` (use ``update_npc_disposition``),
-``quest_log``/``quest_updates``, ``discovered_regions``, ``npcs_present``,
-``lore_established``, ``discovered_facts`` — are intentionally **not**
-exposed through the escape hatch because they have, or will have, typed
-homes; routing them here would defeat the deprecation telemetry.
+``active_stakes`` (use ``set_stakes``), ``quest_log`` (use ``record_quest``),
+``discovered_regions``, ``npcs_present``, ``lore_established``,
+``discovered_facts`` — are intentionally **not** exposed through the escape
+hatch because they have typed homes; routing them here would defeat the
+deprecation telemetry. (Story 77-4 dropped ``/active_stakes`` from the
+allowlist now that ``set_stakes`` is its typed home, and retired the
+``quest_updates`` lane onto ``record_quest``.)
 
 Path support widens only when a real narrator playtest demonstrates a
 mutation that has no typed home and no path-allowlist entry. Until
@@ -84,8 +86,9 @@ class ApplyWorldPatchArgs(BaseModel):
         description=(
             "JSON-pointer-style path to the world field being mutated. "
             "v1 supports: '/location', '/time_of_day', '/atmosphere', "
-            "'/current_region', '/active_stakes'. Unsupported paths return "
-            "a recoverable error — pick a typed tool instead."
+            "'/current_region'. Unsupported paths return "
+            "a recoverable error — pick a typed tool instead "
+            "(e.g. set_stakes for stakes, record_quest for the quest log)."
         ),
     )
     value: Any = Field(
@@ -113,7 +116,9 @@ _SUPPORTED_PATHS: dict[str, str] = {
     "/time_of_day": "time_of_day",
     "/atmosphere": "atmosphere",
     "/current_region": "current_region",
-    "/active_stakes": "active_stakes",
+    # Story 77-4 (ADR-137 AC-3): ``/active_stakes`` removed — ``set_stakes`` is
+    # its typed home now. ``/quest_log`` / ``/quest_updates`` were never on the
+    # allowlist (record_quest is the typed home).
 }
 
 
@@ -149,7 +154,7 @@ def _path_kind(path: str) -> str:
     category=ToolCategory.WRITE,
 )
 async def apply_world_patch(args: ApplyWorldPatchArgs, ctx: ToolContext) -> ToolResult:
-    session = ctx.store.load()
+    session = ctx.repository.load()
     if session is None:
         return ToolResult.error("no active session", recoverable=False)
 
@@ -192,8 +197,6 @@ async def apply_world_patch(args: ApplyWorldPatchArgs, ctx: ToolContext) -> Tool
         patch = WorldStatePatch(atmosphere=args.value)
     elif field_name == "current_region":
         patch = WorldStatePatch(current_region=args.value)
-    elif field_name == "active_stakes":
-        patch = WorldStatePatch(active_stakes=args.value)
     else:
         # Unreachable: _SUPPORTED_PATHS is the only source of field_name.
         # Fail loudly if the allowlist and dispatch drift.
@@ -202,7 +205,7 @@ async def apply_world_patch(args: ApplyWorldPatchArgs, ctx: ToolContext) -> Tool
             recoverable=False,
         )
     snapshot.apply_world_patch(patch)
-    ctx.store.save(snapshot)
+    ctx.repository.save(snapshot)
 
     return ToolResult.ok(
         {

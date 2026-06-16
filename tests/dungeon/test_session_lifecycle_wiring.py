@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +62,7 @@ def _beneath_sunden_world_dir() -> Path:
 
 async def test_session_lifecycle_registers_worker_and_dungeon_grows(
     monkeypatch: pytest.MonkeyPatch,
+    migrated_db: str,
 ) -> None:
     """End-to-end: attach (fresh save) bootstraps expansion 0+1 and
     registers the worker; a REAL production region transition
@@ -70,17 +72,17 @@ async def test_session_lifecycle_registers_worker_and_dungeon_grows(
     lie-detector signal flips off zero); detach unregisters cleanly."""
     import sidequest.telemetry.spans as _spans_module
     from sidequest.dungeon import session_integration
-    from sidequest.dungeon.persistence import DungeonStore
-    from sidequest.game.persistence import SqliteStore
     from sidequest.game.session import GameSnapshot, WorldStatePatch
     from sidequest.telemetry.spans.dungeon_materialize import (
         SPAN_FRONTIER_REGION_TRANSITION,
     )
+    from tests.dungeon.conftest import build_pg_dungeon_repo
     from tests.dungeon.test_materializer import _reflecting_sdk_client
 
     monkeypatch.setattr(session_integration, "build_llm_client", _reflecting_sdk_client)
 
-    store = SqliteStore.open_in_memory()
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    game_slug = f"lifecycle_{uuid.uuid4().hex[:12]}"
     snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug="beneath_sunden")
     snap.current_region = "entrance"
 
@@ -91,7 +93,8 @@ async def test_session_lifecycle_registers_worker_and_dungeon_grows(
     handle = None
     try:
         handle = await session_integration.attach_dungeon_to_session(
-            store=store,
+            dungeon_repository=repo,
+            game_slug=game_slug,
             snapshot=snap,
             genre_pack=_real_pack(),
             genre_slug="caverns_and_claudes",
@@ -104,11 +107,10 @@ async def test_session_lifecycle_registers_worker_and_dungeon_grows(
             "(observers=0 — the dungeon would not grow in a real game)"
         )
 
-        ds = DungeonStore(store.connection())
-        before = {n.expansion_id for n in ds.load_map(entrance_id="entrance").nodes.values()}
+        before = {n.expansion_id for n in repo.load_map(entrance_id="entrance").nodes.values()}
         assert before == {0, 1}, f"bootstrap did not seed expansion 0+1; got {before}"
 
-        target = ds.load_frontier()[0].from_region_id
+        target = repo.load_frontier()[0].from_region_id
         assert target != "entrance", (
             "frontier edge must leave entrance for the apply_world_patch != _prev_region guard to fire"
         )
@@ -116,7 +118,7 @@ async def test_session_lifecycle_registers_worker_and_dungeon_grows(
         snap.apply_world_patch(WorldStatePatch(current_region=target))
         await handle.drain()
 
-        after = {n.expansion_id for n in ds.load_map(entrance_id="entrance").nodes.values()}
+        after = {n.expansion_id for n in repo.load_map(entrance_id="entrance").nodes.values()}
         assert max(after) >= 2, (
             f"region crossing toward an unexpanded frontier edge did NOT "
             f"materialize the next expansion; expansions={sorted(after)}"
@@ -139,7 +141,8 @@ async def test_session_lifecycle_registers_worker_and_dungeon_grows(
         # §14.D save-keyed dedup still holds — no double-register, no
         # double-materialize; it just no longer crashes the join).
         second = await session_integration.attach_dungeon_to_session(
-            store=store,
+            dungeon_repository=repo,
+            game_slug=game_slug,
             snapshot=GameSnapshot(
                 genre_slug="caverns_and_claudes",
                 world_slug="beneath_sunden",

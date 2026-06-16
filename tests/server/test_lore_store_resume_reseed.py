@@ -38,21 +38,18 @@ from sidequest.genre.loader import load_genre_pack
 from sidequest.genre.models.pack import GenrePack
 from sidequest.handlers.connect import _seed_world_lore_on_resume
 
-CONTENT_ROOT = Path(__file__).resolve().parents[2].parent / "sidequest-content" / "genre_packs"
+# Story 74-5: drive the resume-reseed paths off the in-repo synthetic fixture
+# pack (``test_genre`` + its ``flickering_reach`` world) instead of a shipping
+# content pack. ``flickering_reach`` authors real world lore, so the
+# ``world_added >= 1`` / ``lore_world_<slug>_*`` assertions are deterministic —
+# no "did the real pack happen to populate this?" skip-guards.
+_FIXTURE_PACKS_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "packs"
+FIXTURE_WORLD_SLUG = "flickering_reach"
 
 
 @pytest.fixture(scope="module")
-def caverns_pack() -> GenrePack:
-    path = CONTENT_ROOT / "caverns_and_claudes"
-    if not path.is_dir():
-        pytest.skip(f"content pack not found at {path}")
-    return load_genre_pack(path)
-
-
-def _first_world_slug(pack: GenrePack) -> str:
-    if not pack.worlds:
-        pytest.skip("caverns pack has no worlds — cannot exercise world seed")
-    return next(iter(pack.worlds.keys()))
+def fixture_pack() -> GenrePack:
+    return load_genre_pack(_FIXTURE_PACKS_DIR / "test_genre")
 
 
 # ---------------------------------------------------------------------------
@@ -61,19 +58,20 @@ def _first_world_slug(pack: GenrePack) -> str:
 # ---------------------------------------------------------------------------
 
 
-def test_resume_helper_populates_empty_lore_store(caverns_pack: GenrePack) -> None:
+def test_resume_helper_populates_empty_lore_store(fixture_pack: GenrePack) -> None:
     """A pure resume starts with a fresh default (empty) LoreStore. After
-    the resume seeding helper runs it must hold the genre + world
-    fragments — the exact gap that made ``query_lore`` return
-    ``hit_count=0`` on every resumed save.
+    the resume seeding helper runs it must hold the WORLD fragments — the
+    exact gap that made ``query_lore`` return ``hit_count=0`` on every
+    resumed save. Epic 74: lore is world-only — genre lore is no longer
+    seeded, so the non-empty guarantee now rides on world lore.
     """
     store = LoreStore()
     assert len(store) == 0
 
-    world_slug = _first_world_slug(caverns_pack)
+    world_slug = FIXTURE_WORLD_SLUG
     genre_added, world_added = _seed_world_lore_on_resume(
         lore_store=store,
-        genre_pack=caverns_pack,
+        genre_pack=fixture_pack,
         world_slug=world_slug,
         emit=lambda **_: None,
     )
@@ -82,15 +80,15 @@ def test_resume_helper_populates_empty_lore_store(caverns_pack: GenrePack) -> No
         "resume seeding must leave the in-memory lore_store non-empty so "
         "query_lore returns grounded hits instead of hit_count=0"
     )
-    assert genre_added >= 1
-    # Genre-scoped fragments must be present.
-    assert "lore_genre_history" in store.fragments
-    # World fragments are world-scoped (skip-tolerant: a world with no
-    # populated lore fields legitimately adds zero).
-    if world_added:
-        assert any(fid.startswith(f"lore_world_{world_slug}_") for fid in store.fragments), list(
-            store.fragments
-        )
+    # Epic 74 — genre lore is no longer seeded; world lore is authoritative.
+    assert genre_added == 0, "epic 74: genre lore must not be seeded (world-only)"
+    assert world_added >= 1, "world lore must seed so the resumed store is non-empty"
+    assert any(fid.startswith(f"lore_world_{world_slug}_") for fid in store.fragments), list(
+        store.fragments
+    )
+    assert not any(fid.startswith("lore_genre_") for fid in store.fragments), (
+        "epic 74: no genre lore fragments may be seeded"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -100,14 +98,14 @@ def test_resume_helper_populates_empty_lore_store(caverns_pack: GenrePack) -> No
 # ---------------------------------------------------------------------------
 
 
-def test_resume_helper_emits_lore_store_loaded(caverns_pack: GenrePack) -> None:
+def test_resume_helper_emits_lore_store_loaded(fixture_pack: GenrePack) -> None:
     """The GM panel / Jaeger can only prove lore loaded on resume if the
     resume path emits the same ``lore_store_loaded`` event the fresh
     path emits. Spy the emit callback and assert it fired with the
     fragment/token counts.
     """
     store = LoreStore()
-    world_slug = _first_world_slug(caverns_pack)
+    world_slug = FIXTURE_WORLD_SLUG
     captured: list[dict[str, object]] = []
 
     def _spy(**kwargs: object) -> None:
@@ -115,7 +113,7 @@ def test_resume_helper_emits_lore_store_loaded(caverns_pack: GenrePack) -> None:
 
     _seed_world_lore_on_resume(
         lore_store=store,
-        genre_pack=caverns_pack,
+        genre_pack=fixture_pack,
         world_slug=world_slug,
         emit=_spy,
     )
@@ -180,25 +178,27 @@ def test_resume_seeder_is_called_from_production_connect_handler() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_resume_reseed_is_idempotent(caverns_pack: GenrePack) -> None:
+def test_resume_reseed_is_idempotent(fixture_pack: GenrePack) -> None:
     store = LoreStore()
-    world_slug = _first_world_slug(caverns_pack)
+    world_slug = FIXTURE_WORLD_SLUG
 
     g1, w1 = _seed_world_lore_on_resume(
         lore_store=store,
-        genre_pack=caverns_pack,
+        genre_pack=fixture_pack,
         world_slug=world_slug,
         emit=lambda **_: None,
     )
     size_after_first = len(store)
     assert size_after_first > 0
-    assert g1 >= 1
+    # Epic 74 — world-only lore: the first seed adds world fragments, no genre.
+    assert g1 == 0
+    assert w1 >= 1
 
     # Simulate a reconnect that re-runs the resume seeding against the
     # SAME store (e.g. the resume path running twice for one room).
     g2, w2 = _seed_world_lore_on_resume(
         lore_store=store,
-        genre_pack=caverns_pack,
+        genre_pack=fixture_pack,
         world_slug=world_slug,
         emit=lambda **_: None,
     )
@@ -216,45 +216,50 @@ def test_resume_reseed_is_idempotent(caverns_pack: GenrePack) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_shared_helper_matches_inline_genre_plus_world_pair(caverns_pack: GenrePack) -> None:
-    """``seed_world_lore`` must be behaviour-identical to the old inline
-    ``seed_lore_from_genre_pack`` + ``seed_lore_from_world`` pair the
-    fresh path used. Seed two stores — one via the extracted helper, one
-    via the original primitives — and assert identical fragment ids.
+def test_shared_helper_matches_inline_genre_plus_world_pair(fixture_pack: GenrePack) -> None:
+    """Epic 74 — ``seed_world_lore`` is world-only: it seeds exactly what
+    ``seed_lore_from_world`` seeds and NO genre lore. Seed two stores — one
+    via the helper, one via the world primitive — and assert identical
+    fragment ids (and zero genre fragments from the helper).
     """
-    from sidequest.game.lore_seeding import (
-        seed_lore_from_genre_pack,
-        seed_lore_from_world,
-    )
+    from sidequest.game.lore_seeding import seed_lore_from_world
 
-    world_slug = _first_world_slug(caverns_pack)
+    world_slug = FIXTURE_WORLD_SLUG
 
     via_helper = LoreStore()
     helper_genre, helper_world = seed_world_lore(
-        via_helper, caverns_pack, world_slug, emit=lambda **_: None
+        via_helper, fixture_pack, world_slug, emit=lambda **_: None
     )
 
     via_inline = LoreStore()
-    inline_genre = seed_lore_from_genre_pack(via_inline, caverns_pack)
-    world_obj = caverns_pack.worlds.get(world_slug)
-    inline_world = (
-        seed_lore_from_world(via_inline, world_obj.lore, world_slug) if world_obj is not None else 0
+    world_obj = fixture_pack.worlds.get(world_slug)
+    # Fail loud if the fixture world stops resolving (e.g. a rename in the
+    # fixture pack). Without this guard, world_obj=None drives inline_world=0
+    # AND seed_world_lore also yields an empty via_helper, so the equality
+    # assertions below would pass vacuously on two empty stores — proving
+    # nothing about helper/primitive parity.
+    assert world_obj is not None, (
+        f"fixture world {world_slug!r} must resolve in the test_genre pack; "
+        f"worlds={list(fixture_pack.worlds)}"
     )
+    inline_world = seed_lore_from_world(via_inline, world_obj.lore, world_slug)
 
-    assert helper_genre == inline_genre
+    assert helper_genre == 0, "epic 74: the helper seeds no genre lore (world-only)"
     assert helper_world == inline_world
     assert set(via_helper.fragments) == set(via_inline.fragments)
 
 
-def test_shared_helper_no_world_obj_seeds_genre_only(caverns_pack: GenrePack) -> None:
-    """When the world slug doesn't resolve to a world object, the helper
-    must still seed genre lore and report zero world fragments — never
-    silently no-op the whole seed (No Silent Fallbacks).
+def test_shared_helper_no_world_obj_seeds_nothing(fixture_pack: GenrePack) -> None:
+    """Epic 74 — lore is world-only. When the world slug doesn't resolve to a
+    world object there is no world lore to seed, and genre lore is never seeded,
+    so the helper adds zero fragments. (A world that genuinely needs lore must
+    author it at the world tier; an unresolved slug yielding an empty store is
+    the world-only contract, not a silent genre fallback.)
     """
     store = LoreStore()
     genre_added, world_added = seed_world_lore(
-        store, caverns_pack, "nonexistent_world_slug", emit=lambda **_: None
+        store, fixture_pack, "nonexistent_world_slug", emit=lambda **_: None
     )
-    assert genre_added >= 1
+    assert genre_added == 0, "epic 74: genre lore is never seeded (world-only)"
     assert world_added == 0
-    assert "lore_genre_history" in store.fragments
+    assert not any(fid.startswith("lore_genre_") for fid in store.fragments)

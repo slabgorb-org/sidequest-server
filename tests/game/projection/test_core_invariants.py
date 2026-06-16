@@ -1,4 +1,4 @@
-"""CoreInvariantStage — GM sees truth."""
+"""CoreInvariantStage — player-identity structural filtering (no GM seat)."""
 
 from __future__ import annotations
 
@@ -11,22 +11,16 @@ from sidequest.game.projection.view import SessionGameStateView
 
 def _view() -> SessionGameStateView:
     return SessionGameStateView(
-        gm_player_id="gm",
-        player_id_to_character={"alice": "alice_char", "gm": None},  # type: ignore[dict-item]
+        player_id_to_character={"alice": "alice_char"},
     )
 
 
-def test_gm_sees_canonical_short_circuits() -> None:
-    stage = CoreInvariantStage()
-    env = MessageEnvelope(kind="STATE_UPDATE", payload_json='{"hp":10}', origin_seq=1)
-    outcome = stage.evaluate(envelope=env, view=_view(), player_id="gm")
-    assert outcome.terminal is True
-    assert outcome.decision is not None
-    assert outcome.decision.include is True
-    assert outcome.decision.payload_json == '{"hp":10}'
-
-
-def test_non_gm_passes_through_gm_invariant() -> None:
+def test_plain_narration_is_non_terminal() -> None:
+    """A non-targeted NARRATION matches no core invariant — the stage
+    yields to GenreRuleStage. (Previously this also confirmed a player
+    fell through the now-deleted GM short-circuit; that gm_sees_all
+    branch is gone, so every viewer falls through here.)
+    """
     stage = CoreInvariantStage()
     env = MessageEnvelope(kind="NARRATION", payload_json='{"text":"hi"}', origin_seq=2)
     outcome = stage.evaluate(envelope=env, view=_view(), player_id="alice")
@@ -67,20 +61,6 @@ def test_secret_note_visibility_gated_routes_only_to_recipient() -> None:
     assert out_bob.source == "invariant:visibility_gated"
 
 
-def test_secret_note_gm_short_circuits_before_visibility_gate() -> None:
-    """Branch ordering: GM sees canonical even for a SECRET_NOTE it is
-    not listed in (GM is the lie-detector — must see everything).
-    """
-    stage = CoreInvariantStage()
-    payload = json.dumps({"subsystem": "x", "_visibility": {"visible_to": ["alice"]}})
-    env = MessageEnvelope(kind="SECRET_NOTE", payload_json=payload, origin_seq=3)
-    out_gm = stage.evaluate(envelope=env, view=_view(), player_id="gm")
-    assert out_gm.terminal is True
-    assert out_gm.decision.include is True
-    assert out_gm.decision.payload_json == payload
-    assert out_gm.source == "invariant:gm_sees_all"
-
-
 def test_visibility_gated_all_sentinel_includes_everyone() -> None:
     stage = CoreInvariantStage()
     payload = json.dumps({"subsystem": "x", "_visibility": {"visible_to": "all"}})
@@ -93,7 +73,7 @@ def test_visibility_gated_all_sentinel_includes_everyone() -> None:
 
 def test_visibility_gated_malformed_fails_closed() -> None:
     """A secret kind with no usable ``_visibility.visible_to`` FAILS
-    CLOSED for non-GM (leaking is catastrophic; dropping recoverable).
+    CLOSED (leaking is catastrophic; dropping recoverable).
     """
     stage = CoreInvariantStage()
     # No _visibility at all.
@@ -156,7 +136,7 @@ def test_self_authored_kind_echoes_to_author_only() -> None:
     assert out_bob.decision.include is False
 
 
-def test_self_authored_missing_author_field_omits_for_all_non_gm() -> None:
+def test_self_authored_missing_author_field_omits_for_all_viewers() -> None:
     stage = CoreInvariantStage()
     env = MessageEnvelope(kind="DICE_THROW", payload_json='{"dice": "d20"}', origin_seq=7)
     outcome = stage.evaluate(envelope=env, view=_view(), player_id="alice")
@@ -164,9 +144,77 @@ def test_self_authored_missing_author_field_omits_for_all_non_gm() -> None:
     assert outcome.decision.include is False
 
 
-def test_thinking_is_gm_only_never_routed_to_players() -> None:
+def test_thinking_is_player_excluded_never_routed_to_players() -> None:
     stage = CoreInvariantStage()
     env = MessageEnvelope(kind="THINKING", payload_json='{"thought":"hmm"}', origin_seq=8)
     outcome = stage.evaluate(envelope=env, view=_view(), player_id="alice")
     assert outcome.terminal is True
     assert outcome.decision.include is False
+    # Pin the OTEL source label the GM panel reads — a typo here would
+    # silently mislabel the firewall decision (CLAUDE.md OTEL mandate).
+    assert outcome.source == "invariant:player_excluded_kind"
+
+
+# ---------------------------------------------------------------------------
+# 1c — NARRATION explicit visible_to list (pingpong 2026-06-05 [BAR-1]:
+# solo cold-open seed leaked second-person prose to an MP joiner).
+# ---------------------------------------------------------------------------
+
+
+def _narration_with_visible_to(visible_to: object) -> MessageEnvelope:
+    payload = json.dumps(
+        {
+            "text": "The wind is thin and hard at this height.",
+            "_visibility": {
+                "visible_to": visible_to,
+                "fidelity": {},
+                "anchor_pc": "Groucho",
+                "pov_strategy": "private",
+            },
+        }
+    )
+    return MessageEnvelope(kind="NARRATION", payload_json=payload, origin_seq=9)
+
+
+def test_narration_visible_to_list_excludes_non_member_terminally() -> None:
+    """A NARRATION carrying an explicit player_id LIST is structurally
+    withheld from non-members — pack projection.yaml cannot weaken it by
+    omission (four packs ship none)."""
+    stage = CoreInvariantStage()
+    env = _narration_with_visible_to(["alice"])
+    out_bob = stage.evaluate(envelope=env, view=_view(), player_id="bob")
+    assert out_bob.terminal is True
+    assert out_bob.decision is not None
+    assert out_bob.decision.include is False
+    assert out_bob.decision.payload_json == ""
+    assert out_bob.source == "invariant:narration_visibility_list"
+
+
+def test_narration_visible_to_list_member_falls_through_to_genre_rules() -> None:
+    """ASYMMETRY is load-bearing: a member is NOT terminally included —
+    the stage yields so GenreRuleStage redact/fidelity rules still run."""
+    stage = CoreInvariantStage()
+    env = _narration_with_visible_to(["alice"])
+    out_alice = stage.evaluate(envelope=env, view=_view(), player_id="alice")
+    assert out_alice.terminal is False
+    assert out_alice.decision is None
+
+
+def test_narration_visible_to_all_sentinel_falls_through() -> None:
+    """The classifier's standing ``"all"`` sentinel keeps today's
+    behavior — no structural decision, broadcast prose."""
+    stage = CoreInvariantStage()
+    env = _narration_with_visible_to("all")
+    outcome = stage.evaluate(envelope=env, view=_view(), player_id="bob")
+    assert outcome.terminal is False
+    assert outcome.decision is None
+
+
+def test_narration_without_sidecar_falls_through() -> None:
+    """NARRATION is NOT fail-closed (unlike SECRET_NOTE): no sidecar is
+    ordinary broadcast prose."""
+    stage = CoreInvariantStage()
+    env = MessageEnvelope(kind="NARRATION", payload_json='{"text":"hi"}', origin_seq=10)
+    outcome = stage.evaluate(envelope=env, view=_view(), player_id="bob")
+    assert outcome.terminal is False
+    assert outcome.decision is None

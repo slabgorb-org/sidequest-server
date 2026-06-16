@@ -5,7 +5,7 @@ production chain end to end, no mocks of the system under test (only the
 LLM client is canned — exactly as the keystone prompt test does):
 
   attach_dungeon_to_session (real pack, real world dir, real materialize)
-    -> DungeonStore.load_map -> RegionGraph
+    -> DungeonRepository.load_map -> RegionGraph
     -> project_region (seam 1)
     -> Orchestrator.build_narrator_prompt registers the YOU-ARE-HERE
        section with the REAL adjacent region ids (seam 1+2 — the
@@ -21,6 +21,7 @@ from its consumers; this test fails if any of the four wires is cut.
 
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -78,13 +79,13 @@ class _CannedClient:
 
 class _FakeSessionData:
     """Duck-typed _SessionData — _project_current_region /
-    _maybe_emit_dungeon_map read exactly genre_slug, world_slug, store,
-    player_id. A full _SessionData needs a live WS handler; the seam
-    contract is these four attributes, so this exercises the REAL
-    functions against the REAL store."""
+    _maybe_emit_dungeon_map read exactly genre_slug, world_slug,
+    dungeon_repository, player_id. A full _SessionData needs a live WS
+    handler; the seam contract is these attributes, so this exercises
+    the REAL functions against the REAL repository."""
 
-    def __init__(self, store: Any, *, genre: str, world: str) -> None:
-        self.store = store
+    def __init__(self, dungeon_repository: Any, *, genre: str, world: str) -> None:
+        self.dungeon_repository = dungeon_repository
         self.genre_slug = genre
         self.world_slug = world
         self.player_id = "p1"
@@ -102,13 +103,19 @@ class _FakeSessionData:
         return self._genre_pack_cache
 
 
-async def _attach(store: Any, snap: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+async def _attach(
+    repo: Any,
+    game_slug: str,
+    snap: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Any:
     from sidequest.dungeon import session_integration
     from tests.dungeon.test_materializer import _reflecting_sdk_client
 
     monkeypatch.setattr(session_integration, "build_llm_client", _reflecting_sdk_client)
     return await session_integration.attach_dungeon_to_session(
-        store=store,
+        dungeon_repository=repo,
+        game_slug=game_slug,
         snapshot=snap,
         genre_pack=_real_pack(),
         genre_slug="caverns_and_claudes",
@@ -119,30 +126,33 @@ async def _attach(store: Any, snap: Any, monkeypatch: pytest.MonkeyPatch) -> Any
 
 async def test_projection_reaches_narrator_prompt_with_real_move_vocab(
     monkeypatch: pytest.MonkeyPatch,
+    migrated_db: str,
 ) -> None:
     """Seam 1+2: a real materialized region is projected into the
     narrator prompt as a YOU-ARE-HERE section whose exit ids are REAL
     graph nodes — the constrained move vocabulary."""
     from sidequest.agents.orchestrator import Orchestrator, TurnContext
     from sidequest.dungeon import session_integration
-    from sidequest.dungeon.persistence import DungeonStore
     from sidequest.dungeon.region_projection import project_region
     from sidequest.dungeon.themes import load_theme_palette
-    from sidequest.game.persistence import SqliteStore
     from sidequest.game.session import GameSnapshot
+    from tests.dungeon.conftest import build_pg_dungeon_repo
 
-    store = SqliteStore.open_in_memory()
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    game_slug = f"proj_{uuid.uuid4().hex[:12]}"
     snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug="beneath_sunden")
     handle = None
     try:
-        handle = await _attach(store, snap, monkeypatch)
+        handle = await _attach(repo, game_slug, snap, monkeypatch)
         assert handle is not None
         # #314 seam: attach bound the entrance.
         assert snap.current_region == "entrance"
 
-        graph = DungeonStore(store.connection()).load_map(entrance_id="entrance")
+        graph = repo.load_map(entrance_id="entrance")
         world_dir = _beneath_sunden_world_dir()
-        palette = load_theme_palette(world_dir.parent.parent)
+        # ADR-140 (story 113-1): themes/ is world-tier — resolve from the world
+        # dir, not the genre-pack root (world_dir.parent.parent).
+        palette = load_theme_palette(world_dir)
 
         proj = project_region(graph, snap.current_region, palette)
         assert proj.region_id == "entrance"
@@ -172,39 +182,57 @@ async def test_projection_reaches_narrator_prompt_with_real_move_vocab(
         assert any(e.to_region_id in prompt_text for e in proj.exits), (
             "no real adjacent region id reached the narrator prompt"
         )
+        # sq-playtest 2026-06-13 (commit 1d21c71d): directions are now
+        # FIRST-CLASS, not banned. Each exit carries a stable, distinct
+        # bearing (assign_bearings) that the engine resolves and the narrator
+        # names the way out by — the inverse of the earlier (wrong) compass
+        # ban that papered over a graph with no geometry. The section must
+        # endorse bearings AND a real exit's bearing must reach the prompt so
+        # the narrator names a way out the engine can actually match.
+        assert "EXIT VOCABULARY" in prompt_text, (
+            "no exit-vocabulary constraint in the narrator prompt — the "
+            "narrator will not name the ways out by their resolvable bearings"
+        )
+        assert any(e.bearing and e.bearing in prompt_text for e in proj.exits), (
+            "no real exit bearing reached the narrator prompt — the narrator "
+            "cannot name a way out the engine can resolve, so the player's "
+            "natural 'I go north' has no edge to land on"
+        )
     finally:
         await session_integration.detach_dungeon_from_session(handle)
 
 
 async def test_project_current_region_emits_span_and_skips_other_world(
     monkeypatch: pytest.MonkeyPatch,
+    migrated_db: str,
 ) -> None:
     """Seam 4: the per-turn _build_turn_context feed emits exactly one
     dungeon.region_projection span — outcome=projected for beneath_sunden,
     outcome=no_dungeon (observable, not silent) for any other world."""
     import sidequest.telemetry.spans as _spans_module
     from sidequest.dungeon import session_integration
-    from sidequest.game.persistence import SqliteStore
     from sidequest.game.session import GameSnapshot
     from sidequest.server.session_helpers import _project_current_region
     from sidequest.telemetry.spans.dungeon_region_projection import (
         SPAN_DUNGEON_REGION_PROJECTION,
     )
+    from tests.dungeon.conftest import build_pg_dungeon_repo
 
-    store = SqliteStore.open_in_memory()
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    game_slug = f"span_{uuid.uuid4().hex[:12]}"
     snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug="beneath_sunden")
     exporter, _provider, real_tracer = _otel_in_memory()
     original = _spans_module.tracer
     _spans_module.tracer = lambda: real_tracer  # type: ignore[method-assign]
     handle = None
     try:
-        handle = await _attach(store, snap, monkeypatch)
-        sd = _FakeSessionData(store, genre="caverns_and_claudes", world="beneath_sunden")
+        handle = await _attach(repo, game_slug, snap, monkeypatch)
+        sd = _FakeSessionData(repo, genre="caverns_and_claudes", world="beneath_sunden")
         proj = _project_current_region(sd, snap)
         assert proj is not None and proj.region_id == "entrance"
 
         # Other world: clean OBSERVABLE no-op (not a silent skip).
-        sd_other = _FakeSessionData(store, genre="space_opera", world="coyote_star")
+        sd_other = _FakeSessionData(repo, genre="space_opera", world="coyote_star")
         assert _project_current_region(sd_other, snap) is None
 
         spans = [
@@ -223,6 +251,7 @@ async def test_project_current_region_emits_span_and_skips_other_world(
 
 async def test_resumed_save_self_heals_blank_current_region(
     monkeypatch: pytest.MonkeyPatch,
+    migrated_db: str,
 ) -> None:
     """The live-game path: a RESUMED beneath_sunden save has a
     materialized dungeon but a blank current_region (the slug_resume
@@ -232,26 +261,27 @@ async def test_resumed_save_self_heals_blank_current_region(
     this the narrator improvises geography on every resumed session."""
     import sidequest.telemetry.spans as _spans_module
     from sidequest.dungeon import session_integration
-    from sidequest.game.persistence import SqliteStore
     from sidequest.game.session import GameSnapshot
     from sidequest.server.session_helpers import _project_current_region
     from sidequest.telemetry.spans.dungeon_region_projection import (
         SPAN_DUNGEON_REGION_PROJECTION,
     )
+    from tests.dungeon.conftest import build_pg_dungeon_repo
 
-    store = SqliteStore.open_in_memory()
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    game_slug = f"resume_{uuid.uuid4().hex[:12]}"
     snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug="beneath_sunden")
     exporter, _provider, real_tracer = _otel_in_memory()
     original = _spans_module.tracer
     _spans_module.tracer = lambda: real_tracer  # type: ignore[method-assign]
     handle = None
     try:
-        handle = await _attach(store, snap, monkeypatch)
+        handle = await _attach(repo, game_slug, snap, monkeypatch)
         # Simulate the resume: dungeon stays materialized, position lost.
         snap.current_region = ""
         snap.discovered_regions = []
 
-        sd = _FakeSessionData(store, genre="caverns_and_claudes", world="beneath_sunden")
+        sd = _FakeSessionData(repo, genre="caverns_and_claudes", world="beneath_sunden")
         proj = _project_current_region(sd, snap)
 
         assert proj is not None, "self-heal failed — narrator would improvise"
@@ -275,16 +305,17 @@ async def test_resumed_save_self_heals_blank_current_region(
 
 async def test_phantom_current_region_self_heals_every_sequential_turn(
     monkeypatch: pytest.MonkeyPatch,
+    migrated_db: str,
 ) -> None:
     """OQ-1 2026-05-17 live regression (closes the keystone-test gap).
 
     A TRUE phantom — a name the narrator improvised that lives in
     neither ``cartography.regions`` nor the materialized procedural
     dungeon graph — must self-heal on EVERY sequential turn, not just
-    turn 1. The per-turn projection heal is in-memory only (SQLite is
-    the dungeon SSOT — never mirrored onto the persisted snapshot), so
-    every turn reloads the same phantom. A single-turn keystone test
-    passes while the live game fails on turn 2+.
+    turn 1. The per-turn projection heal is in-memory only (the dungeon
+    SSOT — never mirrored onto the persisted snapshot), so every turn
+    reloads the same phantom. A single-turn keystone test passes while
+    the live game fails on turn 2+.
 
     Playtest 2026-05-20 amendment: the original phantom value was
     ``"ropefoot"`` — but ropefoot is the surface waiting-camp listed in
@@ -298,27 +329,28 @@ async def test_phantom_current_region_self_heals_every_sequential_turn(
     import sidequest.telemetry.spans as _spans_module
     from sidequest.agents.orchestrator import Orchestrator, TurnContext
     from sidequest.dungeon import session_integration
-    from sidequest.game.persistence import SqliteStore
     from sidequest.game.session import GameSnapshot
     from sidequest.server.session_helpers import _project_current_region
     from sidequest.telemetry.spans.dungeon_region_projection import (
         SPAN_DUNGEON_REGION_PROJECTION,
     )
+    from tests.dungeon.conftest import build_pg_dungeon_repo
 
     # A name no cartography region claims and no graph node uses — a
     # true narrator-improvised phantom (the kind ADR-106's constrained
     # move vocabulary is meant to suppress).
     phantom = "windswept_overlook_of_lost_names"
 
-    store = SqliteStore.open_in_memory()
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    game_slug = f"phantom_{uuid.uuid4().hex[:12]}"
     snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug="beneath_sunden")
     exporter, _provider, real_tracer = _otel_in_memory()
     original = _spans_module.tracer
     _spans_module.tracer = lambda: real_tracer  # type: ignore[method-assign]
     handle = None
     try:
-        handle = await _attach(store, snap, monkeypatch)
-        sd = _FakeSessionData(store, genre="caverns_and_claudes", world="beneath_sunden")
+        handle = await _attach(repo, game_slug, snap, monkeypatch)
+        sd = _FakeSessionData(repo, genre="caverns_and_claudes", world="beneath_sunden")
         orch = Orchestrator(client=_CannedClient())
 
         # Three sequential turns. Each turn re-stamps the persisted static
@@ -377,6 +409,7 @@ async def test_phantom_current_region_self_heals_every_sequential_turn(
 
 async def test_cartography_region_is_not_self_healed(
     monkeypatch: pytest.MonkeyPatch,
+    migrated_db: str,
 ) -> None:
     """Playtest 2026-05-20 regression — beneath_sunden's surface
     ``ropefoot`` waiting-camp is a deliberately-authored CARTOGRAPHY
@@ -395,22 +428,23 @@ async def test_cartography_region_is_not_self_healed(
     """
     import sidequest.telemetry.spans as _spans_module
     from sidequest.dungeon import session_integration
-    from sidequest.game.persistence import SqliteStore
     from sidequest.game.session import GameSnapshot
     from sidequest.server.session_helpers import _project_current_region
     from sidequest.telemetry.spans.dungeon_region_projection import (
         SPAN_DUNGEON_REGION_PROJECTION,
     )
+    from tests.dungeon.conftest import build_pg_dungeon_repo
 
-    store = SqliteStore.open_in_memory()
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    game_slug = f"carto_{uuid.uuid4().hex[:12]}"
     snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug="beneath_sunden")
     exporter, _provider, real_tracer = _otel_in_memory()
     original = _spans_module.tracer
     _spans_module.tracer = lambda: real_tracer  # type: ignore[method-assign]
     handle = None
     try:
-        handle = await _attach(store, snap, monkeypatch)
-        sd = _FakeSessionData(store, genre="caverns_and_claudes", world="beneath_sunden")
+        handle = await _attach(repo, game_slug, snap, monkeypatch)
+        sd = _FakeSessionData(repo, genre="caverns_and_claudes", world="beneath_sunden")
 
         # The surface waiting camp — a real cartography region, never a
         # graph node. Two turns to prove the per-turn behavior is
@@ -449,28 +483,156 @@ async def test_cartography_region_is_not_self_healed(
         await session_integration.detach_dungeon_from_session(handle)
 
 
+async def test_pc_crossing_into_generated_room_projects_that_room(
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: str,
+) -> None:
+    """sq-playtest 2026-06-12 (session ``2026-06-12-beneath_sunden-5``,
+    player Pip): the per-PC dungeon crossing writes ``pc_regions`` via the
+    ``WorldStatePatch.pc_region`` apply, but nothing synced the singular
+    ``current_region`` anchor — Pip stood in ``exp001.r0`` while
+    ``current_region`` stayed ``the_dropmouth`` (surface) forever. The
+    per-turn projection takes ``current_region`` by contract, so the
+    narrator NEVER received the generated room manifest and improvised the
+    whole crawl.
+
+    This walks the ticket's requested wire: entrance -> a generated room
+    via the REAL ``pc_region`` patch apply, then asserts the REAL
+    ``_project_current_region`` returns THAT room."""
+    from sidequest.dungeon import session_integration
+    from sidequest.game.session import GameSnapshot, WorldStatePatch
+    from sidequest.server.session_helpers import _project_current_region
+    from tests.dungeon.conftest import build_pg_dungeon_repo
+
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    game_slug = f"cross_{uuid.uuid4().hex[:12]}"
+    snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug="beneath_sunden")
+    # Seat the solo PC BEFORE attach so the entrance seed lands per-PC.
+    snap.player_seats = {"p1": "Pip"}
+    handle = None
+    try:
+        handle = await _attach(repo, game_slug, snap, monkeypatch)
+        assert snap.current_region == "entrance"
+        assert snap.pc_regions.get("Pip") == "entrance"
+
+        # A REAL generated room adjacent to the entrance — the move the
+        # constrained vocabulary offers the player.
+        graph = repo.load_map(entrance_id="entrance")
+        adjacent = graph.neighbors("entrance")
+        assert adjacent, "entrance has no in-graph exit — corrupt seed"
+        target = adjacent[0]
+
+        # The production crossing: movement emits a pc_region world patch.
+        snap.apply_world_patch(WorldStatePatch(pc_region={"Pip": target}))
+
+        assert snap.pc_regions["Pip"] == target
+        assert snap.current_region == target, (
+            "pc_region crossing did not advance the current_region anchor — "
+            "the projection below would starve (the split-brain)"
+        )
+
+        sd = _FakeSessionData(repo, genre="caverns_and_claudes", world="beneath_sunden")
+        proj = _project_current_region(sd, snap)
+        assert proj is not None, (
+            "projection returned None for a PC standing in a generated room — "
+            "the narrator would improvise the crawl"
+        )
+        assert proj.region_id == target, (
+            f"projection returned {proj.region_id!r}, not the room the PC crossed into ({target!r})"
+        )
+    finally:
+        await session_integration.detach_dungeon_from_session(handle)
+
+
+async def test_post_dispatch_refresh_gives_narrator_the_moved_to_room(
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: str,
+) -> None:
+    """sq-playtest 2026-06-12 (Keith): "why does the narrator just not get
+    the updated map?" — it should, and ADR-113 is engine-first, but
+    ``region_projection`` was computed in ``_build_turn_context`` BEFORE
+    the dispatch bank ran, and (unlike ``npcs``) never refreshed after.
+    On exactly the turns a move RESOLVES, the narrator's YOU-ARE-HERE
+    named the room the party just left.
+
+    Drives the real chain: attach → entrance projection (pre-dispatch
+    shape) → the movement engine's own patch apply moves the PC → the
+    post-dispatch refresh re-projects → the context now carries the room
+    the party stands in."""
+    from sidequest.agents.orchestrator import TurnContext
+    from sidequest.dungeon import session_integration
+    from sidequest.game.session import GameSnapshot, WorldStatePatch
+    from sidequest.server.session_helpers import (
+        _project_current_region,
+        refresh_turn_context_post_dispatch,
+    )
+    from tests.dungeon.conftest import build_pg_dungeon_repo
+
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    game_slug = f"refresh_{uuid.uuid4().hex[:12]}"
+    snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug="beneath_sunden")
+    snap.player_seats = {"p1": "Pip"}
+    handle = None
+    try:
+        handle = await _attach(repo, game_slug, snap, monkeypatch)
+        sd = _FakeSessionData(repo, genre="caverns_and_claudes", world="beneath_sunden")
+
+        # Pre-dispatch context build (the production order).
+        ctx = TurnContext(
+            character_name="Pip",
+            genre="caverns_and_claudes",
+            turn_number=4,
+            region_projection=_project_current_region(sd, snap),
+        )
+        assert ctx.region_projection is not None
+        assert ctx.region_projection.region_id == "entrance"
+
+        # The movement engine resolves a move mid-turn (its real §Q2 apply).
+        graph = repo.load_map(entrance_id="entrance")
+        target = graph.neighbors("entrance")[0]
+        snap.apply_world_patch(WorldStatePatch(pc_region={"Pip": target}))
+
+        # Without the refresh the narrator would be handed the OLD room.
+        refresh_turn_context_post_dispatch(ctx, sd=sd, snapshot=snap)
+
+        assert ctx.region_projection is not None, (
+            "post-dispatch refresh dropped the projection entirely"
+        )
+        assert ctx.region_projection.region_id == target, (
+            f"narrator context still holds {ctx.region_projection.region_id!r} "
+            f"after the engine moved the PC to {target!r} — the narrator "
+            "narrates the room the party just left"
+        )
+        # The npcs refresh consolidated into the same helper still works.
+        assert ctx.npcs == list(snap.npcs)
+    finally:
+        await session_integration.detach_dungeon_from_session(handle)
+
+
 async def test_dungeon_map_frame_is_emitted_to_ui(
     monkeypatch: pytest.MonkeyPatch,
+    migrated_db: str,
 ) -> None:
     """Seam 3: _maybe_emit_dungeon_map projects the live graph to a
     DUNGEON_MAP frame in MapState shape — curing 'No map data yet'."""
     from sidequest.dungeon import session_integration
-    from sidequest.game.persistence import SqliteStore
     from sidequest.game.session import GameSnapshot
     from sidequest.protocol.messages import DungeonMapMessage
     from sidequest.server.websocket_session_handler import _maybe_emit_dungeon_map
+    from tests.dungeon.conftest import build_pg_dungeon_repo
 
-    store = SqliteStore.open_in_memory()
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    game_slug = f"mapframe_{uuid.uuid4().hex[:12]}"
     snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug="beneath_sunden")
     handle = None
     try:
-        handle = await _attach(store, snap, monkeypatch)
+        handle = await _attach(repo, game_slug, snap, monkeypatch)
         captured: list[tuple[Any, str]] = []
 
         def _emit(msg: Any, kind: str) -> None:
             captured.append((msg, kind))
 
-        sd = _FakeSessionData(store, genre="caverns_and_claudes", world="beneath_sunden")
+        sd = _FakeSessionData(repo, genre="caverns_and_claudes", world="beneath_sunden")
         # Per-PC (Movement subsystem §Q-map / OP1): the YOU-ARE-HERE marker is
         # this connection's PC region, resolved player_id -> seat -> PC ->
         # region_for(perspective=pc), never the singular current_region. Seat
@@ -494,7 +656,7 @@ async def test_dungeon_map_frame_is_emitted_to_ui(
 
         # Other world: clean no-op (no frame emitted).
         captured.clear()
-        sd_other = _FakeSessionData(store, genre="space_opera", world="coyote_star")
+        sd_other = _FakeSessionData(repo, genre="space_opera", world="coyote_star")
         _maybe_emit_dungeon_map(None, sd=sd_other, snapshot=snap, emit_fn=_emit)
         assert not captured
     finally:

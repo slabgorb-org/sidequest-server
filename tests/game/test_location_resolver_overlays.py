@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+import uuid
 
 import pytest
 
+from sidequest.game import db_pool
 from sidequest.game.location_resolver import _build_effective_manifest, resolve
-from sidequest.game.persistence import SqliteStore
+from sidequest.game.pg import sessions
+from sidequest.game.pg.promotions import PgPromotionStore
 from sidequest.protocol.models import (
     EncounterLocationOverlay,
     LocationEntity,
@@ -28,8 +30,15 @@ def _authored() -> list[LocationEntity]:
 
 
 @pytest.fixture
-def store(tmp_path: Path) -> SqliteStore:
-    return SqliteStore(tmp_path / "save.db")
+def store(monkeypatch, migrated_db: str):
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+    pool = db_pool.get_pool()
+    slug = f"locres_ov_{uuid.uuid4().hex[:8]}"
+    sid = sessions.ensure_session(pool, slug=slug, mode="solo", genre_slug="g", world_slug="w")
+    yield PgPromotionStore(pool, session_id=sid)
+    db_pool.close_pool()
 
 
 def test_build_effective_manifest_accepts_empty_overlays_default():
@@ -106,7 +115,6 @@ def test_overlay_entity_matches_via_resolver(store):
     )
     res = resolve(
         store=store,
-        save_id="default",
         region_id="the_glenross_arms",
         authored_entities=_authored(),
         label="the overturned table",
@@ -135,7 +143,6 @@ def test_overlay_entity_does_not_persist_to_promotions_table(store):
     )
     resolve(
         store=store,
-        save_id="default",
         region_id="the_glenross_arms",
         authored_entities=_authored(),
         label="the overturned table",
@@ -144,7 +151,7 @@ def test_overlay_entity_does_not_persist_to_promotions_table(store):
         turn_number=5,
         overlays=[overlay],
     )
-    rows = store.list_location_promotions(save_id="default", region_id="the_glenross_arms")
+    rows = store.list_location_promotions(region_id="the_glenross_arms")
     assert rows == []
 
 
@@ -157,7 +164,6 @@ def test_proactive_miss_when_label_not_in_authored_promotion_or_overlay(store):
     )
     res = resolve(
         store=store,
-        save_id="default",
         region_id="the_glenross_arms",
         authored_entities=_authored(),
         label="the dragon",

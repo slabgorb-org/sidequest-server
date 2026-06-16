@@ -1,0 +1,29 @@
+# Public NPC projection for the Story 75-13 ratification-gate fixture (ADR-138 §D4).
+#
+# Two characters. Marrow Quill is RATIFIED (no observation_pending key — the
+# design-default for authored portrait_manifest content) and must appear in the
+# rendered Cast section. Hollow Bessom carries observation_pending: true — an
+# unratified phantom — and must be WITHHELD from the public reference page (the
+# reference-surface analog of 75-12's ADR-118 index withholding).
+#
+# Neither portrait key is in tests/fixtures/r2_manifest.json, so both would render
+# text-only if projected — this fixture isolates the ratification gate, not the
+# portrait gate (covered by cast_gated_fixture / Story 65-9).
+#
+# Slug derivation (server/utils.slugify_player_name):
+#   "Marrow Quill"  -> marrow_quill   (ratified  — IN the rendered Cast)
+#   "Hollow Bessom" -> hollow_bessom   (phantom   — WITHHELD from the Cast)
+
+characters:
+  - name: Marrow Quill
+    role: Archivist of the Tidewrack
+    appearance: >-
+      A stooped figure in a coat sewn from salvaged book-cloth, fingers stained
+      with the green of preserving-ink, a brass-cased ledger chained to one wrist.
+
+  - name: Hollow Bessom
+    role: a half-remembered name
+    appearance: >-
+      A shape the narrator mentioned once and has not cited since — barely an
+      outline, a coat with no one in it.
+    observation_pending: true

@@ -24,9 +24,21 @@ runtime-type interrogation, and behavioral mocks against the SDK boundary.
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
+
+from tests.agents.fakes.fake_agent_sdk import FakeQuery, structured_output_stream
+
+
+@pytest.fixture(autouse=True)
+def _subscription_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Story 119-3: the agent-SDK transport draws the Max subscription only
+    with both PAYG credentials UNSET — a set key re-routes to PAYG and raises
+    ``AgentSdkAuthUnavailable`` at call time. Pin the subscription world."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+
 
 # ---------------------------------------------------------------------------
 # AC-7: IntentRouter is importable + constructible.
@@ -46,26 +58,23 @@ def test_intent_router_importable_from_agents_module() -> None:
     assert router is not None
 
 
-def test_intent_router_constructible_with_sdk_haiku_adapter(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_intent_router_constructible_with_sdk_haiku_adapter() -> None:
     """AC-7: ``IntentRouter`` is constructible with the SDK-Haiku adapter
     (the ``build_intent_router_llm`` factory in ``llm_factory.py``).
 
-    The adapter construction must NOT make any network calls — only
-    instantiate the AsyncAnthropic client. We patch the SDK boundary so
-    test runs do not require ANTHROPIC_API_KEY in the environment, then
-    assert the adapter constructs and IntentRouter accepts it.
+    Story 119-3: the adapter construction must NOT make any network calls and
+    must NOT require ``ANTHROPIC_API_KEY`` — the agent-SDK transport runs on
+    the Max subscription (credentials UNSET, pinned by ``_subscription_env``).
+    Build is late-bound: the ``query`` seam is only touched at call time, so
+    construction is hermetic. Assert the adapter constructs and IntentRouter
+    accepts it.
     """
     from sidequest.agents.intent_router import IntentRouter
     from sidequest.agents.llm_factory import build_intent_router_llm
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-only")
-    with patch("anthropic.AsyncAnthropic") as sdk_class:
-        sdk_class.return_value = object()
-        llm = build_intent_router_llm()
-        router = IntentRouter(llm=llm)
-        assert router is not None
+    llm = build_intent_router_llm(session_id=None)
+    router = IntentRouter(llm=llm)
+    assert router is not None
 
 
 def test_intent_router_re_exported_from_agents_package_root() -> None:
@@ -130,54 +139,31 @@ def test_intent_router_model_resolves_via_call_type_classification() -> None:
     )
 
 
-def test_build_intent_router_llm_fails_loud_without_api_key(
+@pytest.mark.asyncio
+async def test_build_intent_router_llm_fails_loud_when_payg_key_is_set(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-3 fail-loud: like ``build_aside_llm`` at ``llm_factory.py:85``,
-    the intent-router builder raises if ``ANTHROPIC_API_KEY`` is unset.
+    """AC-3 fail-loud (Story 119-3 INVERSION): the old contract raised when
+    ``ANTHROPIC_API_KEY`` was UNSET. The agent-SDK transport inverts it — the
+    Max subscription needs the PAYG credentials UNSET, and a SET key silently
+    re-routes to the metered PAYG ledger (the 119-1 NO-GO). So a set key must
+    fail loud with ``AgentSdkAuthUnavailable`` (a typed ``LlmClientError``),
+    never a silent PAYG fallback.
 
-    Memory rule ``feedback_no_fallbacks_hard`` + CLAUDE.md "No Silent
-    Fallbacks": missing config raises a typed error, never silently
-    falls back to a no-op adapter.
+    The raise fires at CALL time inside ``build_agent_sdk_options`` (build is
+    late-bound), so drive ``emit_tool`` to provoke it. Memory rule
+    ``feedback_no_fallbacks_hard`` + CLAUDE.md "No Silent Fallbacks".
     """
+    from sidequest.agents.anthropic_sdk_client import AgentSdkAuthUnavailable
     from sidequest.agents.claude_client import LlmClientError
     from sidequest.agents.llm_factory import build_intent_router_llm
 
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    with pytest.raises(LlmClientError):
-        build_intent_router_llm()
-
-
-@pytest.mark.asyncio
-async def test_intent_router_sdk_adapter_calls_haiku_model(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """AC-3 behavioral: when the adapter ``emit_tool()`` method runs, the
-    underlying AsyncAnthropic ``messages.create`` is invoked with
-    ``model=claude-haiku-4-5-20251001`` AND a forced ``tool_choice`` —
-    proving the ADR-102 tool-use wiring is end-to-end, not just a
-    constant assertion.
-    """
-    from sidequest.agents.llm_factory import build_intent_router_llm
+    assert issubclass(AgentSdkAuthUnavailable, LlmClientError)
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-only")
-
-    fake_client_instance = AsyncMock()
-    fake_response = AsyncMock()
-    # Anthropic SDK response has ``.content`` as a list of blocks. Under
-    # forced tool_choice the adapter extracts the ``tool_use`` block's
-    # structured ``.input`` — synthesize that minimal shape.
-    tool_block = type(
-        "Block",
-        (),
-        {"type": "tool_use", "name": "emit_dispatch_package", "input": {"ok": True}},
-    )()
-    fake_response.content = [tool_block]
-    fake_client_instance.messages.create = AsyncMock(return_value=fake_response)
-
-    with patch("anthropic.AsyncAnthropic", return_value=fake_client_instance):
-        llm = build_intent_router_llm()
-        result = await llm.emit_tool(
+    llm = build_intent_router_llm(session_id=None)
+    with pytest.raises(AgentSdkAuthUnavailable):
+        await llm.emit_tool(
             system="sys",
             user="usr",
             tool_name="emit_dispatch_package",
@@ -185,16 +171,48 @@ async def test_intent_router_sdk_adapter_calls_haiku_model(
             tool_schema={"type": "object", "properties": {}},
         )
 
-    assert result == {"ok": True}
-    assert fake_client_instance.messages.create.await_count == 1
-    await_args = fake_client_instance.messages.create.await_args
-    assert await_args is not None
-    call_kwargs = await_args.kwargs
-    assert call_kwargs["model"] == "claude-haiku-4-5-20251001", (
-        f"SDK adapter must call AsyncAnthropic.messages.create with "
-        f"model=claude-haiku-4-5-20251001; got model={call_kwargs.get('model')!r}"
+
+@pytest.mark.asyncio
+async def test_intent_router_sdk_adapter_calls_haiku_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-3 behavioral (Story 119-3 transport): when the adapter ``emit_tool()``
+    runs, it drives the module-level ``query`` seam with
+    ``ClaudeAgentOptions(model=claude-haiku-4-5-20251001, max_turns=2,
+    output_format={json_schema})`` — the VERIFIED Path A surface (no
+    ``tool_choice``; the Agent SDK has none). The adapter returns the dict from
+    ``ResultMessage.structured_output`` where the forced tool's ``.input`` went.
+    Proves the ADR-102/119-3 structured-output wiring is end-to-end, not just a
+    constant assertion.
+    """
+    from sidequest.agents import llm_factory
+
+    payload = {"ok": True}
+    fake = FakeQuery(structured_output_stream(payload))
+    monkeypatch.setattr(llm_factory, "query", fake, raising=False)
+
+    llm = llm_factory.build_intent_router_llm(session_id=None)
+    result = await llm.emit_tool(
+        system="sys",
+        user="usr",
+        tool_name="emit_dispatch_package",
+        tool_description="desc",
+        tool_schema={"type": "object", "properties": {}},
     )
-    assert call_kwargs.get("tool_choice") == {
-        "type": "tool",
-        "name": "emit_dispatch_package",
-    }, f"adapter must force tool_choice; got {call_kwargs.get('tool_choice')!r}"
+
+    assert result == payload
+    assert len(fake.calls) == 1, "the adapter must drive query() exactly once"
+    opts = fake.last_options
+    assert getattr(opts, "model", None) == "claude-haiku-4-5-20251001", (
+        f"adapter must request the Haiku 4.5 model; got model={getattr(opts, 'model', None)!r}"
+    )
+    # The Agent SDK has no tool_choice; the forced-extraction surface is
+    # output_format JSON-schema at max_turns=2 (the +1 finalize turn).
+    assert getattr(opts, "max_turns", None) == 2, (
+        f"forced extraction must run at max_turns=2 (max_turns=1 fails closed); "
+        f"got {getattr(opts, 'max_turns', None)!r}"
+    )
+    output_format = getattr(opts, "output_format", None)
+    assert isinstance(output_format, dict) and output_format.get("type") == "json_schema", (
+        f"adapter must force structured extraction via output_format; got {output_format!r}"
+    )

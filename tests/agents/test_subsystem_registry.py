@@ -35,6 +35,7 @@ def _make_dispatch(name: str, key: str, *, depends_on=(), params=None) -> Subsys
         params=params or {},
         depends_on=list(depends_on),
         idempotency_key=key,
+        confidence=1.0,
         visibility=_tag_all(),
     )
 
@@ -424,3 +425,39 @@ async def test_run_dispatch_bank_span_fires_on_empty_package(otel_capture):
     bank_spans = [s for s in spans if s.name == "intent_router.dispatch_bank"]
     assert len(bank_spans) == 1
     assert dict(bank_spans[0].attributes or {})["dispatch_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Dispatch decision audit record — sq-playtest 2026-06-12 (beneath_sunden -6).
+# The bank's engage/degrade decisions lived ONLY in OTEL spans, which are
+# never persisted to turn_telemetry and fall out of the watcher ring buffer
+# within minutes — so "did the engine engage or did the narrator improvise?"
+# cost an offline turn replay to answer. BankResult.decisions is the durable
+# per-dispatch record the session handler threads into TurnRecord and the
+# validator persists in turn_complete.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_dispatch_bank_records_engage_and_degrade_decisions():
+    engaged = _make_dispatch("reflect_absence", "k_eng")
+    low = _make_dispatch("reflect_absence", "k_low").model_copy(update={"confidence": 0.2})
+    pkg = _make_package([[engaged, low]])
+
+    res = await run_dispatch_bank(pkg)
+
+    by_key = {d["idempotency_key"]: d for d in res.decisions}
+    assert by_key["k_eng"]["decision"] == "engaged"
+    assert by_key["k_eng"]["subsystem"] == "reflect_absence"
+    assert by_key["k_low"]["decision"] == "degraded_to_hint"
+    assert by_key["k_low"]["confidence"] == pytest.approx(0.2)
+    assert by_key["k_low"]["threshold"] == pytest.approx(0.6)
+
+
+@pytest.mark.asyncio
+async def test_run_dispatch_bank_records_unknown_subsystem_decision():
+    pkg = _make_package([[_make_dispatch("not_a_real_subsystem", "k1")]])
+    res = await run_dispatch_bank(pkg)
+    assert res.decisions, "unknown subsystem left no audit record"
+    assert res.decisions[0]["decision"] == "unknown_subsystem"
+    assert res.decisions[0]["subsystem"] == "not_a_real_subsystem"

@@ -130,9 +130,14 @@ class TestConfrontationDef:
         with pytest.raises(ValidationError, match="invalid confrontation category"):
             ConfrontationDef.model_validate(_confrontation(category="invalid"))
 
-    def test_rejects_empty_beats(self) -> None:
-        with pytest.raises(ValidationError, match="at least one beat"):
-            ConfrontationDef.model_validate(_confrontation(beats=[]))
+    def test_accepts_empty_beats(self) -> None:
+        # The "at least one beat" invariant moved OFF this model validator to
+        # genre/loader.py::_validate_confrontation_beats (story 108-7, ADR-143):
+        # the model can't see the pack ruleset, and a WN combat / hp_depletion
+        # def authors ZERO native beats. The model now accepts an empty beat
+        # list; the loader gate enforces it ruleset-aware (native still raises).
+        c = ConfrontationDef.model_validate(_confrontation(beats=[]))
+        assert c.beats == []
 
     def test_rejects_duplicate_beat_ids(self) -> None:
         beats = [_beat(), {**_beat(), "label": "Attack2"}]

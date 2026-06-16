@@ -71,6 +71,7 @@ def haiku_response_pronoun_resolved() -> dict:
                         },
                         "depends_on": [],
                         "idempotency_key": "idem:turn-010:alice:0",
+                        "confidence": 0.9,
                         "visibility": {
                             "visible_to": "all",
                             "perception_fidelity": {},
@@ -238,7 +239,86 @@ async def test_intent_router_prompt_documents_subsystem_params_contract(
     assert 'params={"type"' in system, (
         "router prompt must document that a confrontation dispatch's params "
         "carry the chosen confrontation type as params['type'] — without this "
-        'the handler raises ValueError("missing required params[\'type\']")'
+        "the handler raises ValueError(\"missing required params['type']\")"
+    )
+
+
+@pytest.mark.asyncio
+async def test_intent_router_prompt_documents_confrontation_opponent(
+    haiku_response_quiet_turn: dict,
+) -> None:
+    """Regression (playtest 2026-05-31 burning_peace): a contested grapple
+    against a RESISTING, narratively-present-but-unseated NPC routed to
+    ``confrontation=combat`` but the dispatch named no Other, so the engine's
+    location fallback found no opponent (``encounter.no_opponent_available``)
+    and the contest collapsed to prose (encounter=null / 0 beats / no dice).
+
+    ADR-116: a confrontation REQUIRES an Other. The router must name the
+    adversary in ``params['opponent']`` so ``run_confrontation_dispatch`` can
+    seat (and, for a narrative-only name, materialize) it. Behavioral assertion
+    on the system prompt the router sends — not a source grep.
+    """
+    from sidequest.agents.intent_router import IntentRouter
+
+    llm = _make_mock_router_llm(haiku_response_quiet_turn)
+    router = IntentRouter(llm=llm)
+
+    await router.decompose(
+        action="I lunge and grab the watcher by the wrist, twist to pin",
+        state_summary={},
+    )
+
+    system = llm.emit_tool.await_args.kwargs["system"]
+    assert '"opponent"' in system, (
+        "router prompt must document params['opponent'] so a confrontation "
+        "names its Other (ADR-116) — without it the engine cannot seat the "
+        "adversary and the contest collapses to prose"
+    )
+    assert "ADR-116" in system, (
+        "router prompt must cite ADR-116 (a confrontation requires an Other) "
+        "as the reason the opponent must be named"
+    )
+
+
+@pytest.mark.asyncio
+async def test_intent_router_prompt_forbids_fabricating_other_from_anticipation(
+    haiku_response_quiet_turn: dict,
+) -> None:
+    """Regression (playtest 2026-06-12 beneath_sunden-6): "I draw my dagger and
+    prepare for the attack" — an anticipatory/defensive posture with NO adversary
+    present — engaged ``confrontation=combat`` at confidence 0.7 and seated a
+    fabricated Other ``{name: "Unknown Adversary", description: "the attack
+    Pipster is preparing to defend against or initiate"}``. The description is the
+    player's OWN intent, not a being: the router invented a filler Other, violating
+    its own step-1 "do NOT invent a filler" principle. The engine cannot catch this
+    (the phantom is structurally identical to a legitimate materialized threat —
+    ship_combat's "Raider Frigate", burning_peace's unseated watcher), so the fix
+    lives in the producer: the router must NOT fabricate an Other from the player's
+    anticipation, and a readying posture with no adversary present is prose, not a
+    confrontation (DRIVER call 2026-06-12: defer to prose; wait for a real Other).
+
+    Behavioral assertion on the system prompt the router sends — not a source grep.
+    """
+    from sidequest.agents.intent_router import IntentRouter
+
+    llm = _make_mock_router_llm(haiku_response_quiet_turn)
+    router = IntentRouter(llm=llm)
+
+    await router.decompose(
+        action="I draw my dagger and prepare for the attack",
+        state_summary={},
+    )
+
+    system = llm.emit_tool.await_args.kwargs["system"]
+    assert "anticipatory" in system, (
+        "router prompt must name the anticipatory/preparatory posture (readying, "
+        "drawing a weapon, bracing to defend with no adversary present) as a "
+        "non-trigger — without it the router engages combat against a phantom"
+    )
+    assert "fabricate" in system, (
+        "router prompt must forbid fabricating an Other from the player's OWN "
+        "action — the Other must be a real adversary present or named in the "
+        "fiction, never invented from the player's anticipation"
     )
 
 
@@ -259,6 +339,37 @@ async def test_intent_router_decompose_quiet_turn_empty_dispatch(
 
     assert pkg.per_player == []
     assert pkg.cross_player == []
+
+
+@pytest.mark.asyncio
+async def test_intent_router_decompose_span_marks_degraded_false(
+    haiku_response_quiet_turn: dict, otel_capture
+) -> None:
+    """Story 71-29: the happy-path ``intent_router.decompose`` span carries
+    ``degraded=False``.
+
+    The degrade-path counterpart (in the websocket session handler) emits a
+    decompose span with ``degraded=True``; the GM panel reads this attribute to
+    distinguish a degraded turn from a real engagement. This pins the happy-path
+    value so the degrade marker is meaningful (and so a degrade assertion can
+    never be satisfied by a happy-path span)."""
+    from sidequest.agents.intent_router import IntentRouter
+
+    llm = _make_mock_router_llm(haiku_response_quiet_turn)
+    router = IntentRouter(llm=llm)
+
+    await router.decompose(action="I look around quietly.", state_summary={})
+
+    decompose_spans = [
+        s for s in otel_capture.get_finished_spans() if s.name == "intent_router.decompose"
+    ]
+    assert len(decompose_spans) == 1, (
+        f"expected exactly one intent_router.decompose span; got {len(decompose_spans)}"
+    )
+    attrs = dict(decompose_spans[0].attributes or {})
+    assert attrs.get("degraded") is False, (
+        f"happy-path decompose span must carry degraded=False; attrs={attrs}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -428,6 +539,100 @@ async def test_intent_router_fail_loud_on_schema_invalid_output(otel_capture) ->
         s for s in otel_capture.get_finished_spans() if s.name == "intent_router.failed"
     ]
     assert len(failed_spans) == 2
+
+
+@pytest.mark.asyncio
+async def test_intent_router_schema_informed_retry_recovers_from_stray_key(
+    haiku_response_pronoun_resolved: dict,
+    otel_capture,
+) -> None:
+    """Playtest 2026-05-31 (burning_peace MP turn 1): Haiku leaked a ``target``
+    key onto a narrator_instructions item (``per_player.0.narrator_instructions
+    .N.target`` extra_forbidden), and DispatchPackage's ``extra="forbid"``
+    rejected the WHOLE package — every dispatch for the turn was lost and the
+    mechanical spine went silent (0 beats / 0 tropes).
+
+    The bare retry re-sent the identical prompt, so the deterministic confusion
+    reproduced and the package was lost a second time. The fix feeds the pydantic
+    error back into the retry prompt; the producer drops the stray key on the
+    informed retry and the package validates — dispatch survives instead of the
+    turn free-narrating with zero mechanical backing.
+    """
+    import copy
+
+    from sidequest.agents.intent_router import IntentRouter
+    from sidequest.protocol.dispatch import DispatchPackage
+
+    # First attempt: a valid package PLUS a stray ``target`` on the narrator
+    # directive — exactly the live failure shape.
+    bad = copy.deepcopy(haiku_response_pronoun_resolved)
+    bad["per_player"][0]["narrator_instructions"][0]["target"] = "npc:goblin_2"
+    # Second attempt (informed retry): the corrected, schema-valid package.
+    good = copy.deepcopy(haiku_response_pronoun_resolved)
+
+    llm = _make_sequenced_router_llm(bad, good)
+    router = IntentRouter(llm=llm)
+
+    pkg = await router.decompose(
+        action="Attack him!",
+        state_summary={"scene": "goblins 1-3"},
+    )
+
+    # Recovered — no raise, the real package (with its dispatch) is returned.
+    assert isinstance(pkg, DispatchPackage)
+    assert len(pkg.per_player) == 1
+    assert len(pkg.per_player[0].dispatch) == 1, (
+        "the turn's dispatch must survive — a stray advisory key must not sink it"
+    )
+    assert llm.emit_tool.await_count == 2, "must use the bounded retry"
+
+    # The retry prompt MUST carry the ACTUAL pydantic error (not just a static
+    # hint) so the producer knows precisely what to drop. The error path names
+    # the offending field, proving the real validation message was fed back.
+    first_user = llm.emit_tool.await_args_list[0].kwargs["user"]
+    retry_user = llm.emit_tool.await_args_list[1].kwargs["user"]
+    assert "<schema_correction>" not in first_user, (
+        "the first attempt must NOT carry a correction block"
+    )
+    assert "<schema_correction>" in retry_user, (
+        "the retry prompt must include the schema-correction block"
+    )
+    assert "narrator_instructions" in retry_user, (
+        "retry prompt must echo the concrete pydantic error path "
+        "(per_player.N.narrator_instructions.N.target) — proving the ACTUAL "
+        "validation error was fed back, not a generic canned hint"
+    )
+
+    # The self-heal is observable on the GM panel: the success span flags it.
+    decompose_spans = [
+        s for s in otel_capture.get_finished_spans() if s.name == "intent_router.decompose"
+    ]
+    assert len(decompose_spans) == 1
+    attrs = dict(decompose_spans[0].attributes or {})
+    assert attrs.get("retry_count") == 1
+    assert attrs.get("schema_corrected") is True, (
+        "intent_router.decompose must flag schema_corrected=True when the success "
+        "came from an error-informed retry (GM-panel visibility)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_intent_router_happy_path_marks_schema_not_corrected(
+    haiku_response_quiet_turn: dict,
+) -> None:
+    """A clean first attempt records ``schema_corrected=False`` — the flag only
+    trips when an error-informed retry rescued the turn."""
+    from sidequest.agents.intent_router import IntentRouter
+
+    llm = _make_mock_router_llm(haiku_response_quiet_turn)
+    router = IntentRouter(llm=llm)
+
+    await router.decompose(action="I look around quietly.", state_summary={})
+
+    # Only one call, no correction block ever appended.
+    assert llm.emit_tool.await_count == 1
+    user_prompt = llm.emit_tool.await_args.kwargs["user"]
+    assert "<schema_correction>" not in user_prompt
 
 
 @pytest.mark.asyncio
@@ -625,4 +830,68 @@ def test_intent_router_failure_exception_importable() -> None:
     assert issubclass(IntentRouterFailure, Exception), (
         "IntentRouterFailure must be an Exception subclass so the explicit "
         "fail-loud surface can be caught by the orchestrator (59-4)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_intent_router_accepts_stringified_per_player_without_retry(
+    haiku_response_pronoun_resolved: dict,
+) -> None:
+    """sq-playtest 2026-06-07: Haiku emitted ``per_player`` as a JSON-encoded
+    STRING (``'[{"player_id": ...'``) — 5× ``schema_invalid`` across
+    spaghetti_western + heavy_metal, and one turn (five_points-4 t22) failed
+    both attempts → dispatch_package=None → crunchless turn. The content is
+    well-formed; only the encoding is wrong. DispatchPackage now coerces the
+    stringified list, so the package validates on the FIRST attempt — no
+    retry round-trip burned, no turn at risk of a double miss.
+    """
+    import copy
+    import json
+
+    from sidequest.agents.intent_router import IntentRouter
+    from sidequest.protocol.dispatch import DispatchPackage
+
+    stringified = copy.deepcopy(haiku_response_pronoun_resolved)
+    stringified["per_player"] = json.dumps(stringified["per_player"])
+
+    llm = _make_mock_router_llm(stringified)
+    router = IntentRouter(llm=llm)
+
+    pkg = await router.decompose(
+        action="Attack him!",
+        state_summary={"scene": "goblins 1-3"},
+    )
+
+    assert isinstance(pkg, DispatchPackage)
+    assert len(pkg.per_player) == 1
+    assert len(pkg.per_player[0].dispatch) == 1, (
+        "the dispatch must survive the stringified-list coercion intact"
+    )
+    assert llm.emit_tool.await_count == 1, (
+        "coercion must succeed on the FIRST attempt — no retry burned"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Movement instruction contract — sq-playtest 2026-06-12 (beneath_sunden -6,
+# turn 4): "I go to the south." at the dungeon entrance classified movement
+# at confidence 0.3 — below the 0.6 gate — because the router scored its
+# ability to MAP "south" onto the opaque exit ids instead of the player's
+# obvious intent to RELOCATE. The degraded hint let the narrator freelance
+# the move with no patch (the world forked: the player believed they were in
+# a corridor while the engine held them at the entrance). The system prompt
+# is the shipped contract; these assertions pin the two load-bearing rules.
+# ---------------------------------------------------------------------------
+
+
+def test_movement_instruction_scores_relocation_intent_not_exit_mapping() -> None:
+    from sidequest.agents.intent_router import _SYSTEM_PROMPT
+
+    assert "Confidence scores WHETHER the player intends to relocate" in _SYSTEM_PROMPT, (
+        "movement confidence rule missing — the router will keep degrading "
+        "unmappable-but-unambiguous moves to narrator hints"
+    )
+    assert "compass direction" in _SYSTEM_PROMPT, (
+        "the verbatim-descriptor rule (pass the player's own words, even a "
+        "compass direction, through exit_descriptor) is missing"
     )

@@ -23,7 +23,6 @@ def test_ollama_client_reports_capabilities():
     assert caps.supports_sessions is False
     assert caps.supports_tools is False
     assert caps.max_context_tokens == 16_384
-    assert caps.supports_streaming is False
 
 
 def test_unknown_model_is_ollama_client_error_subclass():

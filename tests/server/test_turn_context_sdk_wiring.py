@@ -29,25 +29,26 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
 # Importing the tools package wires the 26 adapters onto default_registry.
 import sidequest.agents.tools  # noqa: F401
+from sidequest.agents import anthropic_sdk_client
+from sidequest.agents import tool_registry as tool_registry_mod
 from sidequest.agents.anthropic_sdk_client import AnthropicSdkClient
 from sidequest.agents.orchestrator import Orchestrator, TurnContext
-from sidequest.agents.tool_registry import ToolContext, default_registry
-from sidequest.agents.tooling_protocol import ToolResultBlock, ToolUseBlock
+from sidequest.agents.tool_registry import ToolContext
 from sidequest.game.lore_store import LoreFragment, LoreStore
 from sidequest.game.session import GameSnapshot
 from sidequest.game.turn import TurnManager
 from sidequest.genre.loader import load_genre_pack
 from sidequest.server.session_handler import _build_turn_context, _SessionData
+from tests._helpers.doubles import FakeSocket
 from tests._helpers.session_room import room_for
+from tests.agents.fakes.fake_agent_sdk import FakeQuery, converged_text_stream
 
 CONTENT_GENRE_PACKS = Path(__file__).resolve().parents[3] / "sidequest-content" / "genre_packs"
 
@@ -96,11 +97,13 @@ def _build_sd(*, with_monster_manual: bool = True) -> _SessionData:
         player_name="Alice",
         player_id="player:alice",
         snapshot=snap,
-        store=MagicMock(),
+        repository=MagicMock(),
+        dungeon_repository=MagicMock(),
+        telemetry_sink=MagicMock(),
         genre_pack=pack,
         orchestrator=MagicMock(),
     )
-    sd.store.recent_narrative.return_value = []
+    sd.repository.recent_narrative.return_value = []
     sd.game_slug = "2026-05-14-caverns_mawdeep-28"
     sd.lore_store = _seeded_lore_store()
     if with_monster_manual:
@@ -129,7 +132,7 @@ def test_build_turn_context_populates_world_session_store_lore() -> None:
     assert ctx.session_id == "2026-05-14-caverns_mawdeep-28", (
         f"session_id not plumbed from sd.game_slug; got {ctx.session_id!r}"
     )
-    assert ctx.store is sd.store, "store reference not plumbed from sd.store"
+    assert ctx.repository is sd.repository, "repository reference not plumbed from sd.repository"
     assert ctx.lore_store is sd.lore_store, (
         "lore_store reference not plumbed from sd.lore_store — query_lore "
         "would see no world lore (hit_count=0) and the narrator confabulates"
@@ -154,45 +157,24 @@ def test_build_turn_context_monster_manual_none_when_unbound() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Fake SDK — mirrors test_narrator_sdk_hybrid_split.py
+# Fake transport — Story 119-3 claude-agent-sdk ``query`` seam
 # ---------------------------------------------------------------------------
-
-
-@dataclass
-class _Usage:
-    input_tokens: int
-    output_tokens: int
-    cache_read_input_tokens: int = 0
-    cache_creation_input_tokens: int = 0
-
-
-@dataclass
-class _TextBlock:
-    type: str
-    text: str
-
-
-@dataclass
-class _Resp:
-    content: list[Any]
-    stop_reason: str
-    usage: _Usage
-    model: str
-
-
-class _Msgs:
-    def __init__(self, responses: list[_Resp]) -> None:
-        self._responses = responses
-        self.calls: list[dict[str, Any]] = []
-
-    async def create(self, **kwargs: Any) -> _Resp:
-        self.calls.append(kwargs)
-        return self._responses.pop(0)
-
-
-class _Sdk:
-    def __init__(self, responses: list[_Resp]) -> None:
-        self.messages = _Msgs(responses)
+#
+# The narrator now drives ``sidequest.agents.anthropic_sdk_client.query`` (the
+# late-bound module-level seam, spec §6.2/OQ-9). The fake ``query`` replays a
+# scripted message stream but — like the real SDK — the simple converged stream
+# carries no SDK-owned tool round-trip; ``@tool`` handlers (and therefore the
+# orchestrator's ``default_registry.dispatch`` closure) are only invoked by the
+# real SDK loop. So a spy on ``default_registry.dispatch`` would never fire here.
+#
+# Instead we capture the *very* ``ToolContext`` the production path constructs
+# at ``orchestrator.py`` (the Phase-E wiring under test) by wrapping the
+# function-local ``ToolContext`` constructor. That is the load-bearing wiring
+# assertion: ``_run_narration_turn_sdk`` builds a ToolContext with the real
+# ids / lore_store / monster_manual, reachable from ``run_narration_turn`` and
+# driven through the real fake-``query`` transport. The capture is independent
+# of whether a tool actually fires — it proves the construction, which is the
+# thing the spike-era bug got wrong.
 
 
 class _FakeRegistry:
@@ -210,68 +192,41 @@ class _FakeRegistry:
         return []
 
 
-def _single_turn_sdk(prose: str) -> _Sdk:
-    return _Sdk(
-        responses=[
-            _Resp(
-                content=[_TextBlock(type="text", text=prose)],
-                stop_reason="end_turn",
-                usage=_Usage(input_tokens=120, output_tokens=20),
-                model="claude-sonnet-4-6",
-            ),
-        ]
-    )
-
-
 async def _run_sdk_and_capture_ctx(
     monkeypatch: pytest.MonkeyPatch,
     context: TurnContext,
 ) -> ToolContext:
     """Drive ``run_narration_turn`` through the SDK path with a no-tool
-    response and return the ``ToolContext`` the production code built."""
-    monkeypatch.delenv("SIDEQUEST_NARRATOR_STREAMING", raising=False)
+    converged ``query`` stream and return the ``ToolContext`` the production
+    code constructed at the ``_run_narration_turn_sdk`` call site."""
+    # Story 119-3: subscription transport — both PAYG credentials unset (a SET
+    # key now re-routes to PAYG and raises ``AgentSdkAuthUnavailable``).
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+
+    # Replace the late-bound transport with a converged no-tool turn.
+    monkeypatch.setattr(
+        anthropic_sdk_client,
+        "query",
+        FakeQuery(converged_text_stream(text="The water rises.")),
+        raising=False,
+    )
 
     captured: dict[str, ToolContext] = {}
 
-    async def _spy_dispatch(block: ToolUseBlock, ctx: ToolContext) -> ToolResultBlock:
+    real_tool_context = ToolContext
+
+    def _capturing_tool_context(*args: object, **kwargs: object) -> ToolContext:
+        ctx = real_tool_context(*args, **kwargs)
         captured["ctx"] = ctx
-        return ToolResultBlock(tool_use_id=block.id, content="ok", is_error=False)
+        return ctx
 
-    # complete_with_tools always invokes tool_dispatch via the registry
-    # surface; a one-tool round lets us capture the ctx the production code
-    # constructed. Use a tool_use round so dispatch fires.
-    sdk = _Sdk(
-        responses=[
-            _Resp(
-                content=[
-                    type(
-                        "TU",
-                        (),
-                        {
-                            "type": "tool_use",
-                            "id": "toolu_1",
-                            "name": "query_lore",
-                            "input": {"query": "the wardens"},
-                        },
-                    )()
-                ],
-                stop_reason="tool_use",
-                usage=_Usage(input_tokens=120, output_tokens=10),
-                model="claude-sonnet-4-6",
-            ),
-            _Resp(
-                content=[_TextBlock(type="text", text="The water rises.")],
-                stop_reason="end_turn",
-                usage=_Usage(input_tokens=130, output_tokens=14),
-                model="claude-sonnet-4-6",
-            ),
-        ]
-    )
-    client = AnthropicSdkClient(sdk=sdk)
+    # ``_run_narration_turn_sdk`` does ``from sidequest.agents.tool_registry
+    # import ToolContext`` function-locally, so patch the source module symbol.
+    monkeypatch.setattr(tool_registry_mod, "ToolContext", _capturing_tool_context)
+
+    client = AnthropicSdkClient()
     orch = Orchestrator(client=client)
-
-    monkeypatch.setattr(default_registry, "dispatch", _spy_dispatch)
 
     async def _fake_build_prompt(
         self: Orchestrator, action: str, ctx: TurnContext
@@ -281,7 +236,10 @@ async def _run_sdk_and_capture_ctx(
     monkeypatch.setattr(Orchestrator, "build_narrator_prompt", _fake_build_prompt)
 
     await orch.run_narration_turn("look around", context)
-    assert "ctx" in captured, "tool_dispatch never fired — cannot assert ToolContext wiring"
+    assert "ctx" in captured, (
+        "_run_narration_turn_sdk never constructed a ToolContext — cannot "
+        "assert the Phase-E wiring"
+    )
     return captured["ctx"]
 
 
@@ -308,7 +266,7 @@ async def test_sdk_path_builds_toolcontext_with_real_ids_and_lore_store(
         world_id="mawdeep",
         session_id="2026-05-14-caverns_mawdeep-28",
         turn_number=7,
-        store=store,
+        repository=store,
         lore_store=lore,
         monster_manual=manual,
     )
@@ -318,7 +276,7 @@ async def test_sdk_path_builds_toolcontext_with_real_ids_and_lore_store(
     assert tool_ctx.world_id == "mawdeep"
     assert tool_ctx.session_id == "2026-05-14-caverns_mawdeep-28"
     assert tool_ctx.turn_number == 7
-    assert tool_ctx.store is store
+    assert tool_ctx.repository is store
     assert tool_ctx.lore_store is lore, (
         "ToolContext.lore_store is not the wired LoreStore — query_lore "
         "would return hit_count=0 and the narrator confabulates canon"
@@ -340,7 +298,7 @@ async def test_sdk_path_no_context_missing_ids_warning_when_ids_present(
         world_id="mawdeep",
         session_id="2026-05-14-caverns_mawdeep-28",
         turn_number=7,
-        store=MagicMock(),
+        repository=MagicMock(),
         lore_store=_seeded_lore_store(),
     )
     with caplog.at_level(logging.WARNING):
@@ -388,7 +346,7 @@ async def test_sdk_path_context_missing_lore_store_fires_when_ids_present_but_lo
         world_id="mawdeep",
         session_id="2026-05-23-caverns_mawdeep-1",
         turn_number=3,
-        store=MagicMock(),
+        repository=MagicMock(),
         lore_store=None,
     )
     with caplog.at_level(logging.WARNING):
@@ -421,7 +379,7 @@ async def test_sdk_path_context_missing_lore_store_silent_when_fully_wired(
         world_id="mawdeep",
         session_id="2026-05-23-caverns_mawdeep-1",
         turn_number=3,
-        store=MagicMock(),
+        repository=MagicMock(),
         lore_store=_seeded_lore_store(),
     )
     with caplog.at_level(logging.WARNING):
@@ -467,17 +425,6 @@ async def test_sdk_path_unwired_ids_fire_only_umbrella_not_lore_store_warning(
     )
 
 
-class _FakeSocket:
-    """Minimal `_Sendable` for watcher_hub subscription — same shape as
-    `tests/agents/test_61_3_hard_cap_oversized_canary.py::_FakeSocket`."""
-
-    def __init__(self) -> None:
-        self.events: list[dict[str, Any]] = []
-
-    async def send_json(self, data: dict[str, Any]) -> None:
-        self.events.append(data)
-
-
 @pytest.mark.asyncio
 async def test_sdk_path_lore_store_warning_publishes_watcher_event(
     monkeypatch: pytest.MonkeyPatch,
@@ -493,7 +440,7 @@ async def test_sdk_path_lore_store_warning_publishes_watcher_event(
     async with watcher_hub._lock:  # noqa: SLF001
         watcher_hub._subscribers.clear()  # noqa: SLF001
 
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await watcher_hub.subscribe(sock)  # type: ignore[arg-type]
     try:
         ctx = TurnContext(
@@ -501,7 +448,7 @@ async def test_sdk_path_lore_store_warning_publishes_watcher_event(
             world_id="mawdeep",
             session_id="2026-05-23-caverns_mawdeep-1",
             turn_number=3,
-            store=MagicMock(),
+            repository=MagicMock(),
             lore_store=None,
         )
         await _run_sdk_and_capture_ctx(monkeypatch, ctx)

@@ -45,17 +45,15 @@ from sidequest.genre.models.audio import (
     AudioEffect,
     AudioTheme,
     AudioVariation,
-    CreatureVoicePreset,
     FactionThemeDef,
     FactionTriggers,
     MixerConfig,
     MoodTrack,
     TrackVariation,
-    VoiceConfig,
-    VoicePresets,
 )
 from sidequest.genre.models.authored_npc import AuthoredNpc
 from sidequest.genre.models.axes import AxesConfig, AxisDefinition, AxisPreset
+from sidequest.genre.models.bestiary import Bestiary, BestiaryEntry
 from sidequest.genre.models.character import (
     BackstoryTables,
     CharCreationChoice,
@@ -67,6 +65,8 @@ from sidequest.genre.models.character import (
     MechanicalEffects,
     NpcArchetype,
     VisualStyle,
+    WwnClassMagic,
+    WwnEffortSource,
 )
 from sidequest.genre.models.chassis import (
     BondTier,
@@ -104,6 +104,7 @@ from sidequest.genre.models.narrative import (
     PerPcBeat,
     PowerTier,
     Prompts,
+    QuestSeed,
     SoftHook,
 )
 from sidequest.genre.models.npc_traits import NpcTrait, NpcTraitsDatabase
@@ -121,6 +122,17 @@ from sidequest.genre.models.pack import (
     PortraitManifestEntry,
     RecommendedPlayers,
     World,
+)
+from sidequest.genre.models.premises import (
+    BlocAwakening,
+    BlocDef,
+    PremiseClaim,
+    PremiseCollapse,
+    PremiseDef,
+    PremiseDrain,
+    PremisesFile,
+    WitnessedActArchetype,
+    WitnessedActsFile,
 )
 from sidequest.genre.models.progression import (
     Ability,
@@ -160,6 +172,7 @@ from sidequest.genre.models.rules import (
     SaveCategory,
     SavingThrowsTable,
     SecondaryStatDef,
+    WinCondition,
 )
 from sidequest.genre.models.scenario import (
     Act,
@@ -242,18 +255,18 @@ __all__ = [
     "AudioEffect",
     "AudioTheme",
     "AudioVariation",
-    "CreatureVoicePreset",
     "FactionThemeDef",
     "FactionTriggers",
     "MixerConfig",
     "MoodTrack",
     "TrackVariation",
-    "VoiceConfig",
-    "VoicePresets",
     # axes
     "AxesConfig",
     "AxisDefinition",
     "AxisPreset",
+    # bestiary (ruleset-module pack combat-layer stat blocks — story 90-1)
+    "Bestiary",
+    "BestiaryEntry",
     # chassis (rig framework — slice scope)
     "BondTier",
     "ChassisClass",
@@ -277,6 +290,8 @@ __all__ = [
     "MechanicalEffects",
     "NpcArchetype",
     "VisualStyle",
+    "WwnClassMagic",
+    "WwnEffortSource",
     # culture
     "CorpusRef",
     "Culture",
@@ -310,6 +325,7 @@ __all__ = [
     "PerPcBeat",
     "PowerTier",
     "Prompts",
+    "QuestSeed",
     "SoftHook",
     # npc_traits
     "NpcTrait",
@@ -363,6 +379,7 @@ __all__ = [
     "SaveCategory",
     "SavingThrowsTable",
     "SecondaryStatDef",
+    "WinCondition",
     # scenario
     "Act",
     "AssignmentMatrix",
@@ -390,6 +407,16 @@ __all__ = [
     "PassiveProgression",
     "TropeDefinition",
     "TropeEscalation",
+    # premises (wry_whimsy political substrate)
+    "BlocAwakening",
+    "BlocDef",
+    "PremiseClaim",
+    "PremiseCollapse",
+    "PremiseDef",
+    "PremiseDrain",
+    "PremisesFile",
+    "WitnessedActArchetype",
+    "WitnessedActsFile",
     # world
     "CartographyConfig",
     "GraphEdge",

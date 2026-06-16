@@ -29,14 +29,7 @@ from sidequest.agents.orchestrator import (
     TurnContext,  # noqa: F401 — used via fixture type annotation
 )
 from sidequest.telemetry.watcher_hub import WatcherHub, watcher_hub
-
-
-class _FakeSocket:
-    def __init__(self) -> None:
-        self.events: list[dict[str, Any]] = []
-
-    async def send_json(self, data: dict[str, Any]) -> None:
-        self.events.append(data)
+from tests._helpers.doubles import FakeSocket
 
 
 class _CannedClient:
@@ -63,7 +56,7 @@ async def test_build_narrator_prompt_publishes_zones_for_dashboard(
     matching the dashboard's contract: each zone has `{zone, total_tokens,
     sections}`, each section has `{name, token_estimate, category}`,
     zone names are the PascalCase `ZONE_COLORS` keys."""
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     orch = Orchestrator(client=_CannedClient())
@@ -112,7 +105,7 @@ async def test_prompt_assembled_event_has_split_fields(
 ) -> None:
     """ADR-098: prompt_assembled carries system_len, user_len, bounded; no tier."""
 
-    sock = _FakeSocket()
+    sock = FakeSocket()
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     orch = Orchestrator(client=_CannedClient())

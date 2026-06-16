@@ -35,7 +35,6 @@ rules:
 
 def _view(pids: list[str], zones: dict[str, str] | None = None) -> SessionGameStateView:
     return SessionGameStateView(
-        gm_player_id=None,
         player_id_to_character={p: f"char_{p}" for p in pids},
         character_zones={f"char_{p}": z for p, z in (zones or {}).items()},
     )
@@ -61,6 +60,7 @@ def test_a_assassination_hidden_from_non_actor_players():
                         subsystem="lethal_strike",
                         params={"target": "guard_A"},
                         idempotency_key="k1",
+                        confidence=1.0,
                         visibility=VisibilityTag(
                             visible_to=["player:Alice"],
                             perception_fidelity={},
@@ -161,6 +161,7 @@ def test_d_structural_hiding_strips_redacted_entries():
                         subsystem="lethal_strike",
                         params={"target": "guard_A"},
                         idempotency_key="k1",
+                        confidence=1.0,
                         visibility=VisibilityTag(
                             visible_to=["player:Alice"],
                             perception_fidelity={},
@@ -196,6 +197,7 @@ def test_e_leak_audit_zero_on_clean_prose():
                         subsystem="lethal_strike",
                         params={"target": "guard_A"},
                         idempotency_key="k1",
+                        confidence=1.0,
                         visibility=VisibilityTag(
                             visible_to=["player:Alice"],
                             perception_fidelity={},
@@ -230,6 +232,7 @@ def test_e_leak_audit_fires_nonzero_when_leak_present():
                         subsystem="lethal_strike",
                         params={"target": "guard_A"},
                         idempotency_key="k1",
+                        confidence=1.0,
                         visibility=VisibilityTag(
                             visible_to=["player:Alice"],
                             perception_fidelity={},

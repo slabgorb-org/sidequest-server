@@ -25,6 +25,32 @@ from sidequest.protocol.dispatch import DispatchPackage, SubsystemDispatch
 
 _tracer = trace.get_tracer("sidequest.leak_audit")
 
+# Canonical entity-identifier keys across redacting subsystems. Each subsystem
+# keys the entity it is hiding under a different param name (confirmed in source
+# 2026-05-29): distinctive_detail_hint -> "target", npc_agency -> "npc_name",
+# magic_working -> "actor". A redacted dispatch's entity id is read from the
+# first present string key. Extend this tuple if a new subsystem introduces
+# another entity key (Story 59-25).
+_ENTITY_ID_KEYS = ("target", "npc_name", "actor")
+
+
+def _redacted_entity_id(dispatch: SubsystemDispatch) -> str | None:
+    """Entity id a redacted dispatch is hiding, across subsystem key conventions.
+
+    Returns ``None`` for a dispatch with non-dict params or none of the known
+    entity keys — widening the key set (vs. the historical ``target``-only
+    lookup) narrows the silent-drop surface to genuinely keyless dispatches
+    without hard-failing on them (Story 59-25 scope boundary).
+    """
+    params = dispatch.params
+    if not isinstance(params, dict):
+        return None
+    for key in _ENTITY_ID_KEYS:
+        value = params.get(key)
+        if isinstance(value, str):
+            return value
+    return None
+
 
 @dataclass(frozen=True)
 class LeakAuditResult:
@@ -79,9 +105,25 @@ def audit_canonical_prose(
             if not isinstance(d, SubsystemDispatch):
                 continue
             if d.visibility.redact_from_narrator_canonical:
-                target = d.params.get("target") if isinstance(d.params, dict) else None
-                if isinstance(target, str):
-                    redacted_entities.append(target)
+                entity_id = _redacted_entity_id(d)
+                if entity_id is not None:
+                    redacted_entities.append(entity_id)
+    # cross_player carries the same redactable SubsystemDispatch entries; without
+    # this loop a cross_player redacted entity was never collected, so the audit
+    # reported a false leaks_detected=0 for a leaked shared secret. Mirror the
+    # per_player branch into the SAME redacted_entities accumulator (Story
+    # 59-24; sibling of the redact_dispatch_package fix in 59-9). CrossAction has
+    # no narrator_instructions field — dispatch is the only redaction surface.
+    # Both loops use _redacted_entity_id so the multi-key extraction (Story
+    # 59-25) stays mechanically symmetric and cannot drift between branches.
+    for ca in package.cross_player:
+        for d in ca.dispatch:
+            if not isinstance(d, SubsystemDispatch):
+                continue
+            if d.visibility.redact_from_narrator_canonical:
+                entity_id = _redacted_entity_id(d)
+                if entity_id is not None:
+                    redacted_entities.append(entity_id)
 
     leaks: list[str] = []
     fragments: list[str] = []

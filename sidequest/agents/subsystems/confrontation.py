@@ -105,7 +105,37 @@ async def run_confrontation_dispatch(
 
     actor_list = list(npcs_present) if npcs_present else []
 
-    if not actor_list:
+    # ADR-116 (a confrontation requires an Other): the router names the
+    # adversary the contest targets in ``params["opponent"]`` — the person
+    # grabbed, the NPC threatened, the hull pursued. Materialize it as the
+    # Other so the instantiation seam seats THAT rather than falling back to
+    # the location registry (which is empty when the opponent was only minted
+    # in narration — playtest 2026-05-31 burning_peace: a contested grapple
+    # against a narratively-present-but-unseated watcher found no opponent and
+    # collapsed to prose, encounter=null / 0 beats / no DICE_THROW).
+    #
+    # The seating helper (encounter_lifecycle ``_seat_*``) dedupes by name, so
+    # naming an EXISTING NPC simply reuses it; a narrative-only name is created
+    # and appended to ``snapshot.npcs``. The backing CreatureCore (HP / AC) is
+    # seeded downstream from the confrontation's ``opponent_default_stats``.
+    #
+    # ``opponent`` is the general field; ``threat`` is the original
+    # ship_combat alias (story 59-23) — read both for back-compat. Either may
+    # be a ``{"name", "description"}`` object or a bare name string.
+    materialized_threat = None
+    threat = dispatch.params.get("opponent") or dispatch.params.get("threat")
+    if threat and not actor_list:
+        from sidequest.agents.orchestrator import NpcMention
+
+        threat_name = threat.get("name") if isinstance(threat, dict) else str(threat)
+        if threat_name:
+            materialized_threat = NpcMention(
+                name=threat_name,
+                role="hostile",
+                side="opponent",
+            )
+
+    if not actor_list and materialized_threat is None:
         # Pre-existing observability: the legacy consumer logged this
         # before falling back to the location-scoped NPC registry. Keep
         # the span so the GM panel's per-turn audit retains the signal.
@@ -130,6 +160,8 @@ async def run_confrontation_dispatch(
             npcs_present=actor_list,
             genre_slug=snapshot.genre_slug,
             additional_player_names=additional_player_names,
+            security_tier=dispatch.params.get("security_tier"),
+            materialized_threat=materialized_threat,
         )
     except NoOpponentAvailableError as exc:
         logger.warning(

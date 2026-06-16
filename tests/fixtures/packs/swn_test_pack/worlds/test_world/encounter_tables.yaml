@@ -1,0 +1,737 @@
+# Encounter tables for the Flickering Reach.
+#
+# Each table is keyed by region (from cartography.yaml). Entries are weighted
+# situations — not just "what creature" but "what creature doing what, how many,
+# at what difficulty." The encountergen tool rolls on these tables, generates
+# concrete individuals from creatures.yaml, and drops them into the Monster Manual.
+#
+# Difficulty levels:
+#   trivial  — flavor/atmosphere, no real threat (tier 1, low count)
+#   easy     — manageable fight or avoidable hazard (tier 1-2)
+#   moderate — real danger, resource expenditure expected (tier 2-3)
+#   hard     — serious threat, retreat is reasonable (tier 3)
+#   deadly   — potential TPK, avoidance recommended (tier 3-4)
+#
+# Weight is relative within a table. Higher = more likely to be rolled.
+
+tables:
+
+  # ── GLASS FLAT ──────────────────────────────────────────────
+  glass_flat:
+    description: >-
+      The 40-mile-wide plain of fused black glass. Mutagenic resonance,
+      extreme heat by day, the green eye at the center. Nothing should
+      live here. Things do.
+    encounters:
+      - weight: 25
+        difficulty: moderate
+        creature: glass_crawler
+        count: [1, 1]
+        situation: >-
+          Motionless on the glass surface ahead, barely distinguishable
+          from the terrain. Score-marks on the glass suggest it's been
+          here for days, waiting.
+        behavior: ambush
+        time_of_day: any
+
+      - weight: 20
+        difficulty: easy
+        creature: signal_moth
+        count: [15, 40]
+        situation: >-
+          A cloud of signal moths drifting across the glass, their wings
+          pulsing in synchronized patterns. Beautiful from a distance.
+          The synchronization intensifies as you approach.
+        behavior: neutral_swarm
+        time_of_day: night
+
+      - weight: 10
+        difficulty: hard
+        creature: silo_eye
+        count: [1, 1]
+        situation: >-
+          A luminous shape drifts above the glass at the edge of
+          visibility, trailing green tendrils. Your metal equipment
+          begins to hum. A voice on no frequency requests your
+          maintenance credentials.
+        behavior: patrol
+        time_of_day: night
+
+      - weight: 15
+        difficulty: trivial
+        creature: rust_louse
+        count: [1, 1]
+        situation: >-
+          Your blade feels lighter. A thin orange film has appeared on
+          every piece of metal you're carrying. Tiny movement in the
+          powder caked on your gear.
+        behavior: parasitic
+        time_of_day: any
+
+      - weight: 15
+        difficulty: moderate
+        creature: glass_crawler
+        count: [2, 3]
+        situation: >-
+          The score-marks on the glass here are dense — overlapping
+          territorial grooves from multiple crawlers. This is a
+          breeding ground. The glass vibrates faintly beneath your feet.
+        behavior: territorial
+        time_of_day: day
+
+      - weight: 10
+        difficulty: moderate
+        creature: maintenance_drone
+        count: [1, 2]
+        situation: >-
+          A corroded machine lurches across the glass on ruined treads,
+          broadcasting maintenance logs on a dead frequency. Its
+          manipulator arms spark. It has classified you as contamination.
+        behavior: hostile_patrol
+        time_of_day: any
+
+      - weight: 5
+        difficulty: deadly
+        creature: silo_eye
+        count: [2, 3]
+        situation: >-
+          Multiple luminous shapes converge from different directions,
+          their radio transmissions overlapping into a cacophony of
+          maintenance requests, lullabies, and what might be screaming.
+          The green eye beneath the glass is open and watching.
+        behavior: converge
+        time_of_day: night
+
+  # ── PRZYÅ DUST ──────────────────────────────────────────────
+  przyå_dust:
+    description: >-
+      The radioactive dust belt downwind of the Glass Flat. Metal rusts,
+      bone softens, nothing grows. Drifter caravans cross wrapped in
+      wet hide. Don't breathe deep.
+    encounters:
+      - weight: 25
+        difficulty: easy
+        creature: dust_strider
+        count: [3, 8]
+        situation: >-
+          A herd of dust striders moving across the grey powder on their
+          stilt-legs, bodies held above the worst of the alkaline grit.
+          They're heading for water. Following them might be smart.
+          Startling them definitely isn't.
+        behavior: grazing
+        time_of_day: day
+
+      - weight: 20
+        difficulty: moderate
+        creature: alkali_worm
+        count: [1, 1]
+        situation: >-
+          The dust ahead has a faint ridge in it — a fresh subsurface
+          trail. Something large passed beneath the surface recently.
+          The ridge ends directly under where you're standing.
+        behavior: ambush
+        time_of_day: any
+
+      - weight: 20
+        difficulty: trivial
+        creature: rust_louse
+        count: [1, 1]
+        situation: >-
+          A colony of rust lice has found your camp. Your cookware is
+          developing a fine orange patina. This isn't combat — it's
+          pest control. But if you don't handle it now, your gear
+          won't survive the crossing.
+        behavior: parasitic
+        time_of_day: any
+
+      - weight: 15
+        difficulty: hard
+        creature: static_hound
+        count: [4, 7]
+        situation: >-
+          A wall of white noise is rising from the east, interfering
+          with radio reception. Static hounds on the hunt, using the
+          dust for cover. They've already flanked you. The static
+          is coming from three directions.
+        behavior: pack_hunt
+        time_of_day: dusk
+
+      - weight: 10
+        difficulty: hard
+        creature: alkali_worm
+        count: [2, 3]
+        situation: >-
+          Multiple subsurface trails converging on the same point —
+          a dust strider carcass half-buried in the powder. The worms
+          are feeding. You're between them and the food.
+        behavior: feeding_frenzy
+        time_of_day: any
+
+      - weight: 10
+        difficulty: moderate
+        creature: glass_crawler
+        count: [1, 1]
+        situation: >-
+          A glass crawler at the boundary of the Dust and the Glass
+          Flat, motionless on the glass edge. It's disoriented — too
+          far from its hunting ground. Injured, maybe. Still dangerous.
+        behavior: disoriented
+        time_of_day: day
+
+  # ── BLOOMING TANGLE ─────────────────────────────────────────
+  blooming_tangle:
+    description: >-
+      Miles-wide jungle consuming Noce's Hub. Spores cause synesthesia.
+      Greenfolk in the canopy. Scrapborn salvage crews in the root-tunnels.
+      The Understory is always listening.
+    encounters:
+      - weight: 20
+        difficulty: moderate
+        creature: canopy_striker
+        count: [2, 2]
+        situation: >-
+          A mated pair of canopy strikers has claimed this section
+          of girder-bridge. One is visible, bark-scaled and watching.
+          The other is not visible. That's the problem.
+        behavior: territorial
+        time_of_day: any
+
+      - weight: 20
+        difficulty: moderate
+        creature: root_puppet
+        count: [2, 4]
+        situation: >-
+          Shapes moving between the root-pillars in jerky,
+          purposeful patterns. They're dragging something organic
+          toward a feeding node. One of them turns its head toward
+          you and whispers through a throat full of mycelia.
+        behavior: patrol
+        time_of_day: any
+
+      - weight: 15
+        difficulty: easy
+        creature: spore_shambler
+        count: [1, 2]
+        situation: >-
+          The air starts tasting like copper. Then you hear the bark
+          creaking from the wrong direction — it's the shambler's
+          surface, not the trees. A humanoid shape made of decomposing
+          matter is slowly working its way through the undergrowth.
+        behavior: foraging
+        time_of_day: any
+
+      - weight: 15
+        difficulty: hard
+        creature: thorn_singer
+        count: [1, 1]
+        situation: >-
+          A low, thrumming hum that makes your shoulders relax and
+          your feet slow. Something pleasant this way. The sound is
+          coming from a tree that shouldn't be humming. The ground
+          around its base is littered with small bones.
+        behavior: lure
+        time_of_day: any
+
+      - weight: 10
+        difficulty: hard
+        creature: root_puppet
+        count: [5, 8]
+        situation: >-
+          A feeding node — a pulsing root mass the size of a wagon
+          surrounded by a ring of root puppets. They're not moving.
+          They're facing outward. Guarding. Something new is growing
+          at the center of the node, and the Understory is protecting it.
+        behavior: guarding
+        time_of_day: any
+
+      - weight: 10
+        difficulty: deadly
+        creature: canopy_striker
+        count: [4, 6]
+        situation: >-
+          You've wandered into a nesting colony. Strikers on every
+          girder, every root-bridge, every trunk-pillar. Juveniles
+          hissing. Adults silent and watching. The way back is
+          already blocked.
+        behavior: nesting_defense
+        time_of_day: any
+
+      - weight: 10
+        difficulty: moderate
+        creature: spore_shambler
+        count: [3, 5]
+        situation: >-
+          A line of shamblers moving in single file along a root
+          corridor, carrying organic matter toward the deep interior.
+          They're not hostile unless you block the corridor. But the
+          spore cloud from five of them will have you hearing colors
+          within minutes.
+        behavior: transporting
+        time_of_day: any
+
+  # ── BONE WIND / OPEN STEPPE ─────────────────────────────────
+  bone_wind:
+    description: >-
+      Drifter waystation on the open steppe. Bone cairns, wind harps
+      of salvage wire, and rider-poets trading route-songs. The sky
+      is enormous. Everything can see you.
+    encounters:
+      - weight: 25
+        difficulty: moderate
+        creature: static_hound
+        count: [3, 6]
+        situation: >-
+          The radio static is rising. Your mount is nervous. A pack
+          of static hounds on the steppe, low to the ground, moving
+          in a flanking arc. They haven't committed to the chase yet —
+          they're sizing you up.
+        behavior: stalking
+        time_of_day: dusk
+
+      - weight: 20
+        difficulty: easy
+        creature: glass_touched_mount
+        count: [4, 8]
+        situation: >-
+          A herd of feral mounts grazing on the steppe, their
+          bioluminescent hides rippling. The dominant is a seven-limbed
+          bull with a broken tusk. It's watching you and making sounds
+          that are not quite words.
+        behavior: grazing
+        time_of_day: day
+
+      - weight: 15
+        difficulty: hard
+        creature: bone_kite
+        count: [2, 2]
+        situation: >-
+          A mated pair circling high above, barely visible against
+          the pale sky. They've been following you for an hour. When
+          you stop, they stop. When you speed up, they descend. They're
+          patient. They're waiting for you to tire.
+        behavior: stalking
+        time_of_day: day
+
+      - weight: 15
+        difficulty: moderate
+        creature: dust_strider
+        count: [6, 12]
+        situation: >-
+          A large herd of dust striders stampeding across the steppe,
+          kicking up a cloud of grit. Something spooked them. They're
+          heading directly for you. The question is what's behind them.
+        behavior: stampede
+        time_of_day: any
+
+      - weight: 15
+        difficulty: hard
+        creature: static_hound
+        count: [8, 12]
+        situation: >-
+          A large pack — two hunting groups that have merged. The
+          white noise is deafening. Radio is useless. They've been
+          following the same Drifter trade route you're on, and
+          they're not afraid of riders anymore.
+        behavior: pack_hunt
+        time_of_day: night
+
+      - weight: 10
+        difficulty: deadly
+        creature: bone_kite
+        count: [1, 1]
+        situation: >-
+          A single bone kite descending in a terminal dive directly
+          at your mount. No warning. No circling. It's been watching
+          from above the clouds and it's committed. This is one second
+          of reaction time.
+        behavior: hunting_dive
+        time_of_day: day
+
+  # ── VAULT ECHO ──────────────────────────────────────────────
+  vault_echo:
+    description: >-
+      The sealed Vaultborn bunker complex. The ground throbs. Grass
+      grows in perfect circles. Green light pulses from the main shaft.
+      Someone inside is still breathing.
+    encounters:
+      - weight: 25
+        difficulty: moderate
+        creature: gene_reject
+        count: [3, 6]
+        situation: >-
+          Shapes in the access corridor ahead, pale and eyeless.
+          They're not moving. They're listening. One of them opens
+          a mouth that doesn't close properly and says a word that
+          might be "please." Or "food." The acoustics make it hard
+          to tell.
+        behavior: ambush
+        time_of_day: any
+
+      - weight: 20
+        difficulty: easy
+        creature: vault_growth
+        count: [1, 1]
+        situation: >-
+          The walls of this section are covered in crystalline growths
+          that look like frozen green lightning. Your light reflects
+          off them beautifully. Your torch flickers. Your batteries
+          are draining faster than they should.
+        behavior: passive
+        time_of_day: any
+
+      - weight: 20
+        difficulty: moderate
+        creature: maintenance_drone
+        count: [1, 1]
+        situation: >-
+          The grind of corroded treads echoing down the corridor.
+          A maintenance drone on its eternal patrol, broadcasting
+          status updates to nobody. It rounds the corner. Its
+          contamination scanner activates. You are organic. You
+          are contamination.
+        behavior: hostile_patrol
+        time_of_day: any
+
+      - weight: 15
+        difficulty: hard
+        creature: gene_reject
+        count: [8, 12]
+        situation: >-
+          They're in the walls. The vents. The maintenance shafts.
+          You can hear them whispering to each other in a language
+          that's almost Drifter and almost Vaultborn clinical notation
+          and entirely neither. They've surrounded this section.
+          Someone just turned off the lights.
+        behavior: swarming
+        time_of_day: any
+
+      - weight: 10
+        difficulty: hard
+        creature: maintenance_drone
+        count: [3, 4]
+        situation: >-
+          A maintenance bay — four drones docked in charging alcoves.
+          Three of them are inert. The fourth is active and has
+          noticed you. It is broadcasting an alert. The other three
+          are responding to the alert. Their manipulator arms are
+          sparking online.
+        behavior: activated_defense
+        time_of_day: any
+
+      - weight: 10
+        difficulty: deadly
+        creature: gene_reject
+        count: [4, 6]
+        situation: >-
+          A nest. Deep in the abandoned levels, where the green
+          light from the vault growth is the only illumination.
+          They've made a home here from scraps and bones. They
+          have children. They will die to protect this place.
+          One of them is singing a Drifter lullaby.
+        behavior: nest_defense
+        time_of_day: any
+
+  # ── BLIND REACH ─────────────────────────────────────────────
+  blind_reach:
+    description: >-
+      The dry canyon where the Bargain was struck. Palimpsests of rage
+      on the walls. Salt Camp at the mouth. Psychic frogs at the spring.
+    encounters:
+      - weight: 25
+        difficulty: easy
+        creature: canyon_leech
+        count: [3, 8]
+        situation: >-
+          Arm-thick shapes clinging to the canyon overhang above
+          the trail. They're dormant until something warm passes
+          beneath. Check the ceiling.
+        behavior: ambush
+        time_of_day: any
+
+      - weight: 20
+        difficulty: trivial
+        creature: psychic_frog
+        count: [10, 30]
+        situation: >-
+          Dusk at the spring. The frogs begin to croak. The sounds
+          resolve, slowly, into names. Names you don't recognize.
+          Names that were taken three hundred years ago. A Drifter
+          at Salt Camp removes their hat and stands in silence.
+        behavior: passive
+        time_of_day: dusk
+
+      - weight: 20
+        difficulty: moderate
+        creature: bone_kite
+        count: [1, 1]
+        situation: >-
+          A bone kite has nested on the canyon rim above. Its dive
+          angle is perfect here — the narrow canyon funnels prey
+          directly beneath its perch. Drifter scouts have marked
+          this section with warning cairns.
+        behavior: nesting
+        time_of_day: day
+
+      - weight: 15
+        difficulty: hard
+        creature: canyon_leech
+        count: [12, 20]
+        situation: >-
+          This section of canyon is thick with them — a breeding
+          colony, leeches layered three deep on the walls. The
+          trail through is narrow. There is no way around. The
+          Drifters at Salt Camp call this the Tithe — you pay
+          in blood to pass.
+        behavior: colony
+        time_of_day: any
+
+      - weight: 10
+        difficulty: moderate
+        creature: static_hound
+        count: [2, 4]
+        situation: >-
+          Static hounds sheltering in the canyon from a steppe
+          storm. Cornered, unable to use their usual flanking
+          tactics in the narrow space. That makes them more
+          dangerous, not less — cornered predators don't flee.
+        behavior: cornered
+        time_of_day: any
+
+      - weight: 10
+        difficulty: moderate
+        creature: glass_touched_mount
+        count: [1, 2]
+        situation: >-
+          Feral mounts drinking at the spring, ignoring the psychic
+          frogs entirely. They're territorial about the water.
+          They vocalize at you in patterns that sound uncomfortably
+          like "go away."
+        behavior: territorial
+        time_of_day: any
+
+  # ── THE BRIGHT JUNCTION ─────────────────────────────────────
+  the_bright_junction:
+    description: >-
+      Scrapborn outpost around a pre-war electrical substation. Arc-lights
+      burn all night. Contested buffer between Scrapborn salvage territory
+      and the Greenfolk expansion.
+    encounters:
+      - weight: 25
+        difficulty: easy
+        creature: wire_rat
+        count: [20, 50]
+        situation: >-
+          A swarm of wire rats has gotten into the substation's
+          secondary winding. Copper filaments everywhere. The
+          arc-lights are flickering. The Scrapborn guards are
+          offering a bounty per tail.
+        behavior: infestation
+        time_of_day: night
+
+      - weight: 20
+        difficulty: moderate
+        creature: scrap_lurker
+        count: [1, 1]
+        situation: >-
+          A salvage heap on the outskirts that no one has worked
+          in weeks. The last crew came back one short. Something
+          is denning in there. The heap smells like old copper
+          and something biological.
+        behavior: denning
+        time_of_day: any
+
+      - weight: 20
+        difficulty: moderate
+        creature: root_puppet
+        count: [2, 3]
+        situation: >-
+          Root puppets at the perimeter — the Understory's scouts,
+          probing the edge of Scrapborn territory. The burn-crews
+          haven't done a sweep in days. The puppets are dragging
+          something toward the tree line. It might be salvage.
+          It might be a body.
+        behavior: scouting
+        time_of_day: night
+
+      - weight: 15
+        difficulty: hard
+        creature: scrap_lurker
+        count: [2, 2]
+        situation: >-
+          Two scrap lurkers — a mating pair. They've denned in
+          a critical salvage heap near the substation's transformer.
+          The Scrapborn need that transformer cleared. The lurkers
+          have no intention of leaving.
+        behavior: nesting
+        time_of_day: any
+
+      - weight: 10
+        difficulty: trivial
+        creature: wire_rat
+        count: [5, 10]
+        situation: >-
+          Wire rats in the market stalls, chewing through a
+          merchant's wire stock. The merchant is cursing. A
+          Scrapborn child is trying to catch one as a pet.
+          This is daily life at the Junction.
+        behavior: scavenging
+        time_of_day: day
+
+      - weight: 10
+        difficulty: hard
+        creature: spore_shambler
+        count: [1, 2]
+        situation: >-
+          A shambler has crossed the burn line. The Greenfolk
+          expansion is pushing creatures into Scrapborn territory.
+          The air tastes like copper. The burn-crew is assembling
+          but they're short-handed and asking for help.
+        behavior: displaced
+        time_of_day: any
+
+  # ── SPORECAP GARDEN ─────────────────────────────────────────
+  sporecap_garden:
+    description: >-
+      Greenfolk settlement at the Tangle's expanding edge. Trees in
+      geometric patterns. Animals moving like cells in an organism.
+      The Understory is closer to the surface here.
+    encounters:
+      - weight: 25
+        difficulty: easy
+        creature: spore_shambler
+        count: [2, 4]
+        situation: >-
+          Shamblers working the garden — breaking down deadfall,
+          turning mulch, tending the geometric tree rows. The
+          Greenfolk don't look up from their work. The shamblers
+          are part of the community here.
+        behavior: working
+        time_of_day: day
+
+      - weight: 20
+        difficulty: moderate
+        creature: root_puppet
+        count: [3, 5]
+        situation: >-
+          A patrol of root puppets at the garden's perimeter,
+          facing outward toward Scrapborn territory. They're not
+          moving. They're waiting. One of them was human once —
+          the Scrapborn insignia is still visible on its chest.
+        behavior: guarding
+        time_of_day: any
+
+      - weight: 20
+        difficulty: moderate
+        creature: thorn_singer
+        count: [1, 1]
+        situation: >-
+          The Greenfolk have warned you about this section of the
+          garden — an unpruned thorn singer that they haven't gotten
+          to yet. Its hum is audible from fifty meters. The bone
+          pile around its base is extensive.
+        behavior: lure
+        time_of_day: any
+
+      - weight: 15
+        difficulty: hard
+        creature: canopy_striker
+        count: [3, 4]
+        situation: >-
+          Canopy strikers hunting at the garden's edge where the
+          geometric trees give way to wild tangle. The Greenfolk
+          tolerate them — they keep pest populations down. You are
+          not a Greenfolk. You look like a pest.
+        behavior: hunting
+        time_of_day: dusk
+
+      - weight: 10
+        difficulty: trivial
+        creature: psychic_frog
+        count: [3, 6]
+        situation: >-
+          A small population of psychic frogs has colonized a
+          drainage pool in the garden. They croak names that the
+          Greenfolk don't recognize — older names, from before the
+          Rooting. The Greenfolk tend them carefully and don't
+          ask whose names they're saying.
+        behavior: passive
+        time_of_day: dusk
+
+      - weight: 10
+        difficulty: deadly
+        creature: root_puppet
+        count: [10, 15]
+        situation: >-
+          The Understory is angry. Something has damaged the root
+          network — Scrapborn sabotage, a fire, or a careless
+          traveler. Every puppet in the garden has turned toward
+          you. The geometric trees are creaking. The ground is
+          vibrating. The Greenfolk are backing away slowly and
+          telling you not to move.
+        behavior: defensive_surge
+        time_of_day: any
+
+  # ── TOOD'S DOME ─────────────────────────────────────────────
+  toods_dome:
+    description: >-
+      Scrapborn trade-city in a half-collapsed stadium. Rain-catcher
+      arrays on the roof. Strip-mines feeding it salvage. The closest
+      thing to civilization in the Reach.
+    encounters:
+      - weight: 30
+        difficulty: trivial
+        creature: wire_rat
+        count: [10, 30]
+        situation: >-
+          Wire rats in the lower levels again. The dome's electrical
+          grid is intermittent tonight. Odige Fuseborn is offering
+          double salvage credit to anyone who clears Section Nine.
+        behavior: infestation
+        time_of_day: night
+
+      - weight: 25
+        difficulty: easy
+        creature: scrap_lurker
+        count: [1, 1]
+        situation: >-
+          A scrap lurker has been spotted in the outer salvage ring.
+          It's new — the last sweep was clean a week ago. The dome
+          guard wants it dealt with before it establishes a den.
+        behavior: denning
+        time_of_day: any
+
+      - weight: 20
+        difficulty: moderate
+        creature: scrap_lurker
+        count: [1, 2]
+        situation: >-
+          Something has been killing night-shift salvagers in the
+          eastern strip-mine. The bodies have been dragged into
+          a collapsed section. The scrap lurker has been feeding
+          well — it's larger than usual.
+        behavior: hunting
+        time_of_day: night
+
+      - weight: 15
+        difficulty: easy
+        creature: dust_strider
+        count: [2, 4]
+        situation: >-
+          Wild dust striders have wandered into the dome's outer
+          fields, attracted by the moisture from the rain-catchers.
+          The farmers want them gone. The Drifter merchants want
+          to capture the juveniles. Negotiations are heated.
+        behavior: grazing
+        time_of_day: day
+
+      - weight: 10
+        difficulty: hard
+        creature: static_hound
+        count: [3, 5]
+        situation: >-
+          A pack of static hounds denning in an abandoned section
+          of the strip-mine, too close to the dome's perimeter.
+          The electrical interference is affecting the rain-catchers.
+          The dome guard has posted a kill bounty.
+        behavior: denning
+        time_of_day: any

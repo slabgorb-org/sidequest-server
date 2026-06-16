@@ -1,0 +1,497 @@
+# Heavy Metal — WWN High Magic (spells_wwn.yaml)
+#
+# A faithful PORT of WWN High Magic spells: mechanics are the WWN SRD
+# verbatim (level, save category, damage die, per-level scaling), with the
+# names and prose reskinned into heavy_metal's grim idiom of debt, decay,
+# the forge, and the pact. This is where the retired pact/ledger doom-cost
+# feeling re-homes — the cost is carried in the prose and in System Strain,
+# not in a bespoke ledger subsystem.
+#
+# Engine contract (sidequest/genre/models/wwn_spell.py → WwnSpell):
+#   - save: one of physical / evasion / mental / luck (or omitted for none)
+#   - damage_die + damage_per_level: caster_level × die on a failed save
+#   - range / target: flavor only
+#   - mechanical_effect: narrator-adjudicated bespoke effect (Approach C)
+#
+# Loaded into pack.wwn_spell_catalog by the wwn loader. Every class
+# starting_prepared id in classes.yaml MUST resolve here (loader fails loud).
+version: "1.0"
+spells:
+  # ── Level 1 ──────────────────────────────────────────────────────────
+
+  - id: wracking_bolt
+    name: Wracking Bolt
+    level: 1
+    save: physical
+    damage_die: "1d6"
+    damage_per_level: true
+    range: far
+    target: single
+    genre_description: >
+      The caster names a body and a price, and the body pays. There is no
+      bolt to see — only the recipient folding around a pain that arrives
+      from nowhere, as though an old account had finally, suddenly, come due.
+    mechanical_effect: >
+      Ranged attack against a single living target. Physical save halves
+      the damage. Deals caster_level × 1d6 damage on a failed save. Does
+      not affect the unliving, who keep no such accounts.
+
+  - id: foundation_of_flame
+    name: Foundation of Flame
+    level: 1
+    save: evasion
+    damage_die: "1d6"
+    damage_per_level: true
+    range: near
+    target: single
+    genre_description: >
+      The caster lays a working into the ground itself, and the ground
+      answers in fire — the same daylight forge-fire of the guild cities,
+      called up out of season and out of place, scarring whatever stands
+      in it.
+    mechanical_effect: >
+      A gout of conjured flame erupts at a point in near range. A creature
+      in the area takes caster_level × 1d6 fire damage; an evasion save
+      halves it. The flame leaves the working's residue on stone and skin.
+
+  - id: lance_of_darkness
+    name: Lance of Darkness
+    level: 1
+    save: evasion
+    damage_die: "1d8"
+    damage_per_level: true
+    range: near
+    target: single
+    genre_description: >
+      The pact-bearer draws on the dark held in trust on their behalf and
+      spends a measure of it as a lance — a length of borrowed absence that
+      passes through armor as if the armor were a formality, which to the
+      thing on the other end of the pact it is.
+    mechanical_effect: >
+      A spear of conjured darkness strikes a single target in near range.
+      An evasion save halves the damage. Deals caster_level × 1d8 damage on
+      a failed save. The wound runs cold and is slow to close.
+
+  - id: sleepless_tithe
+    name: Sleepless Tithe
+    level: 1
+    save: mental
+    range: near
+    target: single
+    genre_description: >
+      The caster calls in a debt the target did not know they had carried —
+      an hour of consciousness, levied at once. The eyes go heavy; the knees
+      forget their purpose; the body lies down to pay what is owed.
+    mechanical_effect: >
+      One creature in near range that can sleep must make a mental save or
+      collapse into a forced sleep, unable to act, until struck or roused at
+      the start of a later round. The unsleeping and the unliving are exempt.
+
+  - id: inviolable_sphere
+    name: Inviolable Sphere
+    level: 1
+    range: self
+    target: self
+    genre_description: >
+      The caster draws a closed account around themselves — a boundary the
+      world is, for a moment, contractually forbidden to cross. Blades stop
+      a hair from the skin. The terms are brief, but while they hold, they
+      hold absolutely.
+    mechanical_effect: >
+      Until the start of the caster's next turn, the caster is sealed behind
+      an inviolable boundary: incoming attacks and effects from outside the
+      sphere cannot reach them. The caster cannot strike outward through it
+      either — the account is closed in both directions.
+
+  - id: sculpt_earth
+    name: Sculpt Earth
+    level: 1
+    save: physical
+    range: near
+    target: single
+    genre_description: >
+      Stone is reminded that it was once obedient. At the caster's direction
+      a span of ground rises, grips, and locks — the old strata answering a
+      working in a language older than the houses that quarried it.
+    mechanical_effect: >
+      A span of earth or worked stone in near range rises to grip a single
+      target. A physical save resists; on a failure the target is held fast
+      until the start of the caster's next turn. They may still act, but
+      cannot move from the spot.
+
+  # ── Level 2 ──────────────────────────────────────────────────────────
+
+  - id: deaths_door
+    name: Death's Door
+    level: 2
+    save: physical
+    damage_die: "1d8"
+    damage_per_level: true
+    range: near
+    target: single
+    genre_description: >
+      The caster opens, just slightly, the door every living thing is
+      walking toward, and lets the draught of it touch one body in the room.
+      It is not a wound so much as a foretaste — the account read aloud, in
+      full, before its time.
+    mechanical_effect: >
+      A single living target in near range feels the nearness of its own
+      ending. A physical save halves the damage; on a failure it takes
+      caster_level × 1d8 damage as the body briefly settles its books.
+
+  - id: iron_ward
+    name: Iron Ward
+    level: 2
+    range: near
+    target: single
+    genre_description: >
+      The caster draws the patience of cold iron up through a companion's
+      frame, lending them, for a while, the unyielding indifference of metal
+      that has already been through the fire and come out harder.
+    mechanical_effect: >
+      One touched creature gains 4 temporary HP for the rest of the scene.
+      These absorb damage before the target's own HP. Does not stack with
+      itself.
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # BARSOOM WORLD MAGIC (story 89-4)
+  #
+  # Two faithful-Burroughs caster traditions authored on the SAME inherited
+  # WWN Effort / System-Strain engine the doom spells above use. They live in
+  # THIS genre-tier catalog because the WWN spell catalog is loaded ONLY at
+  # the pack root (loader.py:_load_wwn_spell_catalog reads <pack>/spells_wwn.yaml
+  # — there is no world-tier spell-catalog merge). Mirrors how EH and the
+  # heavy_metal doom list are authored: one pack-tier catalog, gated per-world
+  # by which caster Calling actually prepares a spell.
+  #
+  # These entries are INERT in evropi / long_foundry: a spell only becomes
+  # reachable when a caster Calling lists it in starting_prepared / prepared.
+  # The Necromancer / Elementalist / Pact-born of the doom worlds never
+  # prepare a Barsoom spell, so nothing leaks across worlds.
+  #
+  # HOOK FOR 89-5 (chargen surface / class expression): the two Barsoom
+  # caster Callings — "Mentalist" and "Super-scientist" — are NOT authored in
+  # classes.yaml yet (the classes-vs-Foci decision is Keith's, scoped to 89-5
+  # per epic-89 and the design spec §7/§9). When 89-5 adds those Callings:
+  #   1. give each a wwn_magic block with starting_prepared drawn from the
+  #      lists below (suggested seeds noted per-tradition);
+  #   2. add their display_names to the cast_spell beat's class_filter in
+  #      rules.yaml — see the BARSOOM HOOK comment there. (The loader's
+  #      _validate_class_filter_refs fails loud if a class_filter names a
+  #      class that does not exist, which is why the filter is NOT touched in
+  #      89-4 — the names would dangle.)
+  # Until 89-5 wires the Callings, these spells are authored content with no
+  # caster preparing them — the deliberate, documented split, not a stub.
+  # ═══════════════════════════════════════════════════════════════════════
+
+  # ── LOTHARIAN MENTALIST ────────────────────────────────────────────────
+  # The phantom-bowmen tradition of Lothar. Effort / System Strain IS the
+  # canon mechanic: the Lotharian exhausts his own body to force the will's
+  # image into reality — "real until disbelieved." Suggested 89-5 starting
+  # seeds: phantom_bowmen + mind_veil.
+  # ── Level 1 ──
+
+  - id: phantom_bowmen
+    name: Phantom Bowmen
+    level: 1
+    save: evasion
+    damage_die: "1d6"
+    damage_per_level: true
+    range: far
+    target: single
+    genre_description: >
+      The Lotharian wills a rank of archers out of the empty air — bearded,
+      grim, indistinguishable from living men — and they loose. The arrows
+      are as real as the conviction behind them; a foe who does not KNOW
+      they are imaginary bleeds from them exactly as from any shaft.
+    mechanical_effect: >
+      Conjured archers loose on a single target. An evasion save halves the
+      damage; on a failure the target takes caster_level x 1d6. The bowmen
+      strike as real arrows against any creature that does not actively
+      disbelieve them this round (narrator-adjudicated; a warned, willful
+      mind may attempt to disbelieve instead of dodging).
+
+  - id: hypnotic_command
+    name: Hypnotic Command
+    level: 1
+    save: mental
+    range: near
+    target: single
+    genre_description: >
+      The lightest of the mind-crafts: a suggestion, not a seizure. The
+      mentalist slips one thought into a surface mind and lets it seem the
+      mind's own — drop the blade, open the door, look away — spent the
+      moment it is obeyed. On Barsoom every mind lies open unless it is
+      shielded, and the practised will needs only to knock once.
+    mechanical_effect: >
+      One creature in near range must make a mental save or obey a single
+      short, non-suicidal command for one round (drop an item, halt, turn,
+      speak a fact it knows). A shielded mind (see mind_veil) or a creature
+      already at war with the caster gains advantage on the save.
+
+  - id: mind_veil
+    name: Mind Veil
+    level: 1
+    range: self
+    target: self
+    genre_description: >
+      The Lotharian closes his surface thought like a hand closing over a
+      lamp, and goes dark to the universal Barsoomian read. Behind the veil
+      he may still read others while they read only the blank he chooses to
+      show — the root discipline of every deceit on a telepathic world.
+    mechanical_effect: >
+      Until the start of the caster's next turn, the caster's surface
+      thoughts cannot be read by the Barsoomian telepathic baseline and the
+      caster gains advantage on mental saves against domination, fear, and
+      illusion. The caster may still read unshielded minds normally.
+
+  # ── Level 2 ──
+
+  - id: realized_terror
+    name: Realized Terror
+    level: 2
+    save: mental
+    range: near
+    target: single
+    genre_description: >
+      The mentalist reaches past the surface and dredges up the watcher's
+      own private horror, then renders it solid in the air before them — a
+      pursuing beast, a dead friend, a thing with the watcher's own face.
+      It is conjured from the victim, so it cannot be argued with.
+    mechanical_effect: >
+      One creature in near range must make a mental save or be overcome by a
+      materialized personal terror: it cannot approach the phantom and must
+      spend its next action fleeing or freezing (narrator's read of the
+      character). A creature that knows Lotharian conjuring may attempt to
+      disbelieve as its action instead.
+
+  - id: false_legion
+    name: False Legion
+    level: 2
+    range: near
+    target: area
+    genre_description: >
+      Where one phantom bowman stood, the Lotharian raises a hundred — a
+      whole conjured host that fills a pass or a hall, marches, shouts, and
+      throws back an enemy who has no way to count the unreal. Lothar has
+      held its walls for ten thousand years on armies that were never there.
+    mechanical_effect: >
+      Conjures a convincing illusory body of troops filling a near-range
+      area for the scene. Hostile creatures that do not disbelieve treat the
+      legion as a real force for morale, line-of-sight, and movement; it
+      deals no direct damage but can block, screen, herd, or rout. Disbelief
+      (a successful mental save when a creature has cause to doubt) collapses
+      the legion for that creature only.
+
+  - id: thought_lance
+    name: Thought Lance
+    level: 2
+    save: mental
+    damage_die: "1d8"
+    damage_per_level: true
+    range: far
+    target: single
+    genre_description: >
+      No phantom, no figure — only the naked will driven like a spear into
+      another mind. The victim's own nerves report a wound that leaves no
+      mark, and a body that believes it is hurt is hurt.
+    mechanical_effect: >
+      A direct psychic strike on a single mind in far range. A mental save
+      halves the damage; on a failure the target takes caster_level x 1d8 as
+      its body answers the conviction of injury. Has no effect on a mind too
+      alien to read (narrator's call).
+
+  # ── Level 3 ──
+
+  - id: phantom_reality
+    name: Phantom Reality
+    level: 3
+    range: near
+    target: area
+    genre_description: >
+      The master mentalist conjures not a figure but a PLACE — a banquet, a
+      garden, a way out that is not there — full and solid to every sense,
+      and holds it real for as long as he can spend himself sustaining it.
+      The deepest Lotharians are said to sustain their own bodies the same
+      way, will outliving flesh.
+    mechanical_effect: >
+      Conjures a fully immersive multi-sensory environment overlaying a
+      near-range area for as long as the caster concentrates (each sustained
+      round may cost additional Effort / System Strain at the narrator's
+      adjudication). Creatures within treat it as real until given specific
+      cause to doubt and a successful mental save. Cannot directly kill, but
+      can lure, trap, conceal, and exhaust.
+
+  - id: domination
+    name: Domination
+    level: 3
+    save: mental
+    range: near
+    target: single
+    genre_description: >
+      The mentalist does not suggest now; he seizes — folds his will over
+      another's like a hand over a glove and moves it. The dominated mind
+      knows, distantly, that it walks and speaks at another's order, and can
+      do nothing about it but remember.
+    mechanical_effect: >
+      One creature in near range must make a mental save or fall under the
+      caster's control for the scene, taking actions the caster directs
+      short of obvious self-destruction. The target may re-attempt the save
+      each round it is ordered to do something against its deepest nature.
+      Ends if the caster is incapacitated.
+
+  # ── BARSOOMIAN SUPER-SCIENTIST ─────────────────────────────────────────
+  # The vanished-science tradition of Ras Thavas and Phor Tak. Expressed as
+  # WWN "spells" so the device-marvels resolve through the SAME Effort /
+  # System-Strain economy: the super-scientist's working is his apparatus and
+  # his exhausting concentration, not sorcery. The grotesque-cost register the
+  # retired heavy_metal ledger magic used to carry re-homes here, in the
+  # prose. NOTE: the everyday pulp TOYS (radium rifles, fliers, mechanical
+  # telepathy) are GEAR, authored in worlds/barsoom/items.yaml — NOT spells.
+  # Suggested 89-5 starting seeds: disintegration_ray + invisibility_compound.
+  # ── Level 1 ──
+
+  - id: disintegration_ray
+    name: Disintegration Ray
+    level: 1
+    save: evasion
+    damage_die: "1d6"
+    damage_per_level: true
+    range: far
+    target: single
+    genre_description: >
+      Phor Tak's perfected ray — a thin, silent line of unmaking, tuned to
+      eat metal, or wood, or flesh, but not all at once. Where it touches,
+      matter simply stops being, with a faint smell of nothing at all.
+    mechanical_effect: >
+      A ranged ray strikes a single target. An evasion save halves the
+      damage; on a failure the target takes caster_level x 1d6 as matter is
+      unmade. Against a chosen single material (a lock, a hull-plate, a
+      door) the ray destroys it outright at the narrator's adjudication.
+
+  - id: invisibility_compound
+    name: Invisibility Compound
+    level: 1
+    range: self
+    target: self
+    genre_description: >
+      The blue compound of Phor Tak, brushed over the skin or the hull, bends
+      the wan light around its wearer until he is a heat-shimmer and then
+      nothing. It is science, not sorcery — but to the man it hides from, the
+      distinction is academic.
+    mechanical_effect: >
+      Until the start of the caster's next turn (longer if reapplied), the
+      caster is invisible: attackers cannot target the caster without another
+      means of detection, and the caster gains advantage on stealth. Striking
+      or working a loud apparatus may reveal position (narrator's call).
+
+  - id: mechanical_mend
+    name: Mechanical Mend
+    level: 1
+    save: physical
+    range: near
+    target: single
+    genre_description: >
+      The super-scientist lays hands and instruments on a wound or a broken
+      mechanism and, with the cold confidence of a man who has rebuilt living
+      brains, sets it right — sealing flesh like solder, coaxing a dead ray-
+      tube back to a hum.
+    mechanical_effect: >
+      Restores a measure of HP to one touched living creature, OR repairs one
+      broken device, weapon, or flier-component in near range, for one
+      working. The exact amount and scope are narrator-adjudicated against
+      the Effort spent. Cannot regrow what is wholly gone (use the vat).
+
+  # ── Level 2 ──
+
+  - id: radium_burst
+    name: Radium Burst
+    level: 2
+    save: evasion
+    damage_die: "1d8"
+    damage_per_level: true
+    range: far
+    target: area
+    genre_description: >
+      An overcharged radium shell, or a hurled flask of the daylight-powder,
+      bursting in a flash of hard light that detonates the instant the sun
+      touches it. The super-scientist times it to the breath; the desert
+      sun does the rest.
+    mechanical_effect: >
+      A blast of exploding radium light fills a near-to-far point. Each
+      creature in the small area takes caster_level x 1d8; an evasion save
+      halves it. Indoors or in true dark the burst is feeble (halve again,
+      narrator's call) — radium shells need the light to fire.
+
+  - id: paralysis_field
+    name: Paralysis Field
+    level: 2
+    save: physical
+    range: near
+    target: single
+    genre_description: >
+      A device of the master mind that throws a field through which the
+      nerves will not carry their orders. The victim stands locked mid-step,
+      mind racing, body a statue — the precise tool of a science that takes
+      its subjects alive for the operating table.
+    mechanical_effect: >
+      One creature in near range must make a physical save or be wholly
+      paralyzed until the start of the caster's next turn — unable to move,
+      act, or speak, though fully aware. A fresh save may be granted each
+      round if the field must be sustained (narrator's adjudication).
+
+  - id: mechanical_brain
+    name: Mechanical Brain
+    level: 2
+    range: near
+    target: single
+    genre_description: >
+      The super-scientist quickens one of his thinking-engines — a brass and
+      crystal apparatus that calculates, perceives, or remembers beyond any
+      living mind — and bends its cold attention to the problem at hand:
+      reading a coded chart, predicting a flier's course, recalling a face.
+    mechanical_effect: >
+      For the scene, the caster gains the service of a mechanical intellect:
+      one significant deduction, recollection, calculation, or perception
+      that the apparatus can plausibly perform (decode, appraise, navigate,
+      identify). One genuine answer per working; narrator adjudicates scope.
+
+  # ── Level 3 ──
+
+  - id: synthetic_life
+    name: Synthetic Life
+    level: 3
+    range: near
+    target: single
+    genre_description: >
+      The signature horror of Ras Thavas: from the vats of cultured tissue
+      the master mind raises a living thing to order — a hormad, a grown
+      servant, a body without a history — answering to its grower and to no
+      law of birth. The cost is carried in the grower, and in what it does
+      to grow used to this.
+    mechanical_effect: >
+      Conjures/animates a single synthetic servitor creature for the scene
+      (a crude grown brute or a fine-made one, per Effort spent) that obeys
+      the caster's spoken orders. Its capabilities are narrator-set against
+      the working's cost. System Strain accrues; a vat-made thing is never
+      quite stable, and the narrator may surface that.
+
+  - id: brain_transference
+    name: Brain Transference
+    level: 3
+    save: physical
+    range: near
+    target: single
+    genre_description: >
+      The operation that made Ras Thavas legend and monster both: the living
+      brain lifted whole from one skull and set into another, the self
+      carried across into a new body while the old one is left vacant or
+      filled with a stranger. It is the deepest reach of Barsoomian science
+      and its deepest moral wound.
+    mechanical_effect: >
+      A bespoke, scene-defining working (not a combat strike). On a willing
+      or helpless subject, the caster transfers a mind into another body, or
+      performs a comparable radical bodily alteration. A physical save
+      resists if unwilling. Outcome, cost, and consequence are fully
+      narrator-adjudicated; this is a plot operation, gated by Effort and
+      heavy System Strain, never a free trick.

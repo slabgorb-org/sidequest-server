@@ -10,7 +10,7 @@ default-raise and these overrides are deleted. The Fate conflict engine
 from __future__ import annotations
 
 import random
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from opentelemetry import trace
 
@@ -29,10 +29,14 @@ from sidequest.telemetry.spans.fate import (
     fate_chargen_validated_span,
     fate_compel_accepted_span,
     fate_compel_offered_span,
+    fate_compel_refused_span,
     fate_consequence_taken_span,
     fate_point_delta_span,
     fate_stress_applied_span,
 )
+
+if TYPE_CHECKING:
+    from sidequest.game.encounter import StructuredEncounter
 
 _NO_D20_SURFACE = (
     "the 'fate' ruleset resolves via the Fate conflict engine (4dF + ladder), "
@@ -303,13 +307,25 @@ class FateRulesetModule(RulesetModule):
         aspect_text: str,
         actor: str = "",
         reason: str = "",
+        encounter: StructuredEncounter | None = None,
         _tracer: trace.Tracer | None = None,
     ) -> None:
         """Surface that the narrator proposed a compel (no economy change). The
         OTEL span lets the GM panel see the offer even when the player declines —
         including ``reason``, the proposed complication, so the lie-detector sees
-        WHAT was offered, not merely THAT something was."""
+        WHAT was offered, not merely THAT something was.
+
+        ADR-144 F3e closes the F2b deferral: when an UNRESOLVED ``encounter`` is
+        given (the explicit guard is ``encounter is not None and not
+        encounter.resolved``), PERSIST the offer as a PendingCompel so it survives to
+        the FATE_STATE projection and the player can accept/refuse it. A None
+        encounter (no active conflict) OR a resolved one (the conflict is over — its
+        compels would be stale fiction, dropped wholesale by the projection's
+        ``not enc.resolved`` gate) skips persistence: the offer still fires its span,
+        it just isn't actionable in the UI."""
         fate_compel_offered_span(actor=actor, aspect=aspect_text, reason=reason, _tracer=_tracer)
+        if encounter is not None and not encounter.resolved:
+            encounter.add_pending_compel(target=actor, aspect=aspect_text, reason=reason)
 
     def accept_compel(
         self,
@@ -322,6 +338,27 @@ class FateRulesetModule(RulesetModule):
         """Accept a compel: earn one fate point + emit the compel span."""
         after = self.earn_fate_point(sheet=sheet, reason="compel", actor=actor, _tracer=_tracer)
         fate_compel_accepted_span(
+            actor=actor, aspect=aspect_text, fate_points_after=after, _tracer=_tracer
+        )
+        return after
+
+    def refuse_compel(
+        self,
+        *,
+        sheet: FateSheet,
+        aspect_text: str,
+        actor: str = "",
+        _tracer: trace.Tracer | None = None,
+    ) -> int:
+        """Refuse a compel: pay one fate point to decline (SRD). The decline half
+        of the F3e round-trip. Reuses ``spend_fate_point``, which fails loud at
+        zero fate points (No Silent Fallbacks) — you cannot decline for free.
+        Validate-before-emit: the span fires only AFTER the spend succeeds, so a
+        rejected refusal logs no phantom decline (mirrors ``invoke_aspect``)."""
+        after = self.spend_fate_point(
+            sheet=sheet, reason="compel_refused", actor=actor, _tracer=_tracer
+        )
+        fate_compel_refused_span(
             actor=actor, aspect=aspect_text, fate_points_after=after, _tracer=_tracer
         )
         return after

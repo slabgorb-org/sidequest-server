@@ -36,7 +36,7 @@ from sidequest.game.fate_sheet import Aspect, FateSheet
 from sidequest.game.session import GameSnapshot, Npc
 from sidequest.handlers.fate_action import HANDLER as FATE_HANDLER
 from sidequest.protocol.fate import FateActionPayload
-from sidequest.protocol.messages import ErrorMessage, FateActionMessage
+from sidequest.protocol.messages import ErrorMessage, FateActionMessage, FateRollMessage
 from sidequest.server.session_handler import _State
 
 
@@ -66,13 +66,19 @@ def _depleted_thug() -> Npc:
     return Npc(core=CreatureCore(name="Thug", description="d", personality="p", fate_sheet=sheet))
 
 
-def _fate_session(snap: GameSnapshot) -> SimpleNamespace:
+def _fate_session(snap: GameSnapshot, *, room: object = None) -> SimpleNamespace:
+    # ``_room`` is the broadcast sink the 118-7 (F3g) roll fan-out reads
+    # (fate_action.py: ``room = sd._room`` → ``room.broadcast(roll_msg, ...)``).
+    # The unaffordable path returns its typed error BEFORE the broadcast block, so
+    # it needs no room (default None); the affordable path reaches it and needs a
+    # capturing double.
     sd = SimpleNamespace(
         snapshot=snap,
         genre_pack=SimpleNamespace(rules=SimpleNamespace(ruleset="fate")),
         genre_slug="fate_test",
         world_slug="test_world",
         player_id="p1",
+        _room=room,
     )
     return SimpleNamespace(_state=_State.Playing, _session_data=sd)
 
@@ -152,7 +158,18 @@ def test_affordable_invoke_still_resolves_to_a_roll():
     )
     snap = GameSnapshot(genre_slug="fate_test", characters=[hero], encounter=enc)
     snap.npcs.append(_depleted_thug())
-    session = _fate_session(snap)
+
+    # Post-118-7 (F3g): a resolved roll is BROADCAST to the whole table via
+    # ``sd._room`` and the handler returns [] (it must NOT also return the message —
+    # that would double-deliver to the sender). Capture the broadcast to prove the
+    # 4dF roll surfaced.
+    broadcasts: list[object] = []
+
+    def _capture_broadcast(msg: object, exclude_socket_id: object = None) -> list[str]:
+        broadcasts.append(msg)
+        return ["sock-hero"]
+
+    session = _fate_session(snap, room=SimpleNamespace(broadcast=_capture_broadcast))
 
     msg = FateActionMessage(
         payload=FateActionPayload(
@@ -168,8 +185,12 @@ def test_affordable_invoke_still_resolves_to_a_roll():
 
     out = asyncio.run(FATE_HANDLER.handle(session, msg))
 
-    # A payable invoke reaches the roll and broadcasts a FATE_ROLL (not an error).
-    assert len(out) == 1, f"a payable invoke must surface the 4dF roll; got {out!r}"
-    assert not isinstance(out[0], ErrorMessage), (
-        f"a payable invoke must NOT be reported as an error; got {out[0]!r}"
+    # A payable invoke reaches the roll and BROADCASTS a FATE_ROLL (not an error).
+    # The handler returns [] because the actor is reached by the broadcast.
+    assert out == [], f"a payable invoke broadcasts the roll and returns []; got {out!r}"
+    assert len(broadcasts) == 1, (
+        f"a payable invoke must broadcast exactly one FATE_ROLL; got {broadcasts!r}"
+    )
+    assert isinstance(broadcasts[0], FateRollMessage), (
+        f"the broadcast must be the 4dF roll, not {type(broadcasts[0]).__name__}"
     )

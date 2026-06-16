@@ -1044,19 +1044,41 @@ class FateConflictParticipant(BaseModel):
     side: str
 
 
+class FatePendingCompel(BaseModel):
+    """A narrator-offered compel awaiting the player's accept/refuse (ADR-144 F3e).
+
+    The player-facing projection of ``StructuredEncounter.pending_compels``:
+    ``aspect`` the compelled aspect, ``target`` the compelled PC, ``reason`` the
+    proposed complication the player reads before deciding. ``offered_delta`` is the
+    SRD accept reward (+1) the player gains by accepting — carried on the wire so the
+    Accept control renders a real, server-sourced delta instead of a hardcoded label.
+    Refuse is the separate SRD-fixed −1 cost, a client-rendered constant (there is no
+    stored refuse field — the cost is never variable).
+    """
+
+    model_config = {"extra": "forbid"}
+
+    aspect: str
+    target: str
+    reason: str = ""
+    offered_delta: int = 1
+
+
 class FateConflictEntry(BaseModel):
     """The active Fate conflict's participants by side (ADR-144 F3a).
 
     ``participants`` is in seating order — the engine's deterministic tiebreak
     order (``fate_opponent._live_player_actors``). Live per-exchange initiative
     (Notice/Empathy) is computed at resolution and surfaces in the F3f overlay,
-    not here.
+    not here. ``pending_compels`` (ADR-144 F3e) are the narrator's offered compels
+    awaiting accept/refuse — the player surface gates its control on this list.
     """
 
     model_config = {"extra": "forbid"}
 
     active: bool = True
     participants: list[FateConflictParticipant] = Field(default_factory=list)
+    pending_compels: list[FatePendingCompel] = Field(default_factory=list)
 
 
 class FateStatePayload(BaseModel):

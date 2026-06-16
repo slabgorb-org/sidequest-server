@@ -669,6 +669,48 @@ def concede_in_conflict(
     return earned
 
 
+def resolve_compel(
+    *,
+    action: str,
+    payload: FateActionPayload,
+    encounter: StructuredEncounter,
+    snapshot: GameSnapshot,
+    ruleset: FateRulesetModule,
+    actor_name: str,
+    _tracer: trace.Tracer | None = None,
+) -> int:
+    """Accept or refuse a narrator-offered compel (ADR-144 F3e). Pre-roll and
+    non-committing (like concede). Returns the fate-point delta (+1 accept /
+    -1 refuse). Fails loud if the compel was never offered, or — on refuse — if
+    the actor cannot pay the declining fate point (No Silent Fallbacks)."""
+    compel = encounter.find_pending_compel(target=actor_name, aspect=payload.aspect_text)
+    if compel is None:
+        verb = "accept" if action == "compel_accept" else "refuse"
+        raise FateConflictError(
+            f"{actor_name!r} has no pending compel on aspect {payload.aspect_text!r} "
+            f"to {verb} — a compel must be offered before it can be resolved "
+            "(No Silent Fallbacks)"
+        )
+    core = snapshot.find_creature_core(actor_name)
+    if core is None or core.fate_sheet is None:
+        raise FateConflictError(f"{actor_name!r} has no Fate sheet to resolve a compel with")
+    before = core.fate_sheet.fate_points
+    if action == "compel_accept":
+        ruleset.accept_compel(
+            sheet=core.fate_sheet, aspect_text=compel.aspect, actor=actor_name, _tracer=_tracer
+        )
+    else:
+        # refuse_compel pays one fate point and fails loud at zero. The pending
+        # compel is consumed ONLY after the spend succeeds (the line below is
+        # unreached on a rejected refusal), so a 0-fate refusal leaves the compel
+        # on the table for the player to (have to) accept.
+        ruleset.refuse_compel(
+            sheet=core.fate_sheet, aspect_text=compel.aspect, actor=actor_name, _tracer=_tracer
+        )
+    encounter.remove_pending_compel(compel)
+    return core.fate_sheet.fate_points - before
+
+
 @dataclass(frozen=True)
 class FateDispatchResult:
     """What one FATE_ACTION dispatch produced. ``commitment_pending`` mirrors the
@@ -683,6 +725,10 @@ class FateDispatchResult:
     #: player as a FATE_ROLL the moment they act, whether or not the exchange
     #: fired. None on a concession (pre-roll, non-committing).
     action_roll: FateOutcome | None = None
+    #: The fate-point delta this action applied (ADR-144 F3e): +1 on a compel
+    #: accept, -1 on a compel refuse, 0 otherwise. Lets the player surface show the
+    #: mechanical outcome inline (Sebastien/Jade legibility mandate).
+    fate_point_delta: int = 0
 
 
 def dispatch_fate_action(
@@ -731,6 +777,22 @@ def dispatch_fate_action(
             _tracer=_tracer,
         )
         return FateDispatchResult(commitment_pending=False, exchange=None)
+
+    # Compel accept/refuse (ADR-144 F3e) is pre-roll and non-committing, like
+    # concede — it resolves the narrator's offered compel and never seals onto the
+    # exchange ledger or rolls 4dF. The fate-point delta rides the result so the
+    # player surface can show the +/-1 inline.
+    if action in ("compel_accept", "compel_refuse"):
+        delta = resolve_compel(
+            action=action,
+            payload=payload,
+            encounter=encounter,
+            snapshot=snapshot,
+            ruleset=ruleset,
+            actor_name=actor_name,
+            _tracer=_tracer,
+        )
+        return FateDispatchResult(commitment_pending=False, exchange=None, fate_point_delta=delta)
 
     core = snapshot.find_creature_core(actor_name)
     if core is None or core.fate_sheet is None:

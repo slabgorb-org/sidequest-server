@@ -71,7 +71,30 @@ async def propose_fate_compel(args: ProposeFateCompelArgs, ctx: ToolContext) -> 
         raise ValueError(f"ruleset 'fate' resolved a non-Fate module: {type(module).__name__}")
     # offer_compel fires fate.compel.offered (no economy change). The GM panel sees the
     # offer even when the player declines — including the proposed complication (reason).
-    module.offer_compel(aspect_text=args.aspect_text, actor=args.actor, reason=args.compel_reason)
+    #
+    # ADR-144 F3e: PERSIST the offer onto the CANONICAL in-turn snapshot's active
+    # conflict (the one the end-of-turn ``room.save`` writes — the advance_confrontation
+    # discipline), NOT a fresh ``repository.load()`` copy that the save would clobber. The
+    # persisted PendingCompel rides the next FATE_STATE projection to the player's
+    # accept/refuse control. ``offer_compel`` itself fires the span unconditionally and
+    # only skips persistence when there is no UNRESOLVED conflict to attach to.
+    #
+    # ``ctx.snapshot`` is None on TWO distinct origins — they are NOT the same path:
+    #   (1) a non-conflict / legacy / fixture turn with no encounter to attach to — benign;
+    #       the offer was never persistable, the span still fires, the control just isn't
+    #       actionable. This is the expected not-actionable path.
+    #   (2) a None snapshot DURING A LIVE CONFLICT — the span fires but the PendingCompel is
+    #       dropped and the player never gets the accept/refuse control. That is a WIRING
+    #       BUG, not a benign default. The live path threads ``ctx.snapshot`` today so this
+    #       does not occur in production; if it ever surfaces it must be investigated, never
+    #       swallowed (No Silent Fallbacks).
+    encounter = ctx.snapshot.encounter if ctx.snapshot is not None else None
+    module.offer_compel(
+        aspect_text=args.aspect_text,
+        actor=args.actor,
+        reason=args.compel_reason,
+        encounter=encounter,
+    )
     return ToolResult.ok(
         {"offered": args.aspect_text, "actor": args.actor, "reason": args.compel_reason}
     )

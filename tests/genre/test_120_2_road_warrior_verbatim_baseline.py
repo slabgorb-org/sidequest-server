@@ -146,10 +146,12 @@ def test_road_warrior_circuit_kits_resolve_no_dangling_ids() -> None:
     assert pack.worlds, f"{SLUG} must ship at least one world for chargen to resolve through"
     for world_slug in pack.worlds:
         resolved = resolve_inventory(pack, world_slug)
-        assert resolved is not None, (
-            f"{SLUG}/{world_slug}: resolve_inventory must return a config"
-        )
+        assert resolved is not None, f"{SLUG}/{world_slug}: resolve_inventory must return a config"
         catalog_ids = {item.id for item in resolved.item_catalog}
+        assert resolved.starting_equipment, (
+            f"{SLUG}/{world_slug}: resolve_inventory produced NO class kits — the loop "
+            f"below would pass vacuously with zero kits to check"
+        )
         for klass, ids in resolved.starting_equipment.items():
             assert ids, f"{SLUG}/{world_slug}: class {klass!r} ships an EMPTY starting kit"
             dangling = [item_id for item_id in ids if item_id not in catalog_ids]

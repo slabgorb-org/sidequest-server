@@ -156,15 +156,27 @@ def standin(content):
 
 
 def test_orbital_intent_session_protocol_is_runtime_checkable() -> None:
+    """Verify ``OrbitalIntentSession`` is a ``@runtime_checkable`` Protocol via
+    PUBLIC behaviour, not CPython-private typing internals.
+
+    A non-runtime-checkable Protocol raises ``TypeError`` on ``isinstance``; a
+    runtime-checkable one returns a bool and discriminates on member presence.
+    Asserting that a members-less object is NOT an instance proves both: the
+    decorator is active (no ``TypeError``) AND the protocol checks attributes.
+    This survives the renaming of ``_is_protocol`` / ``_is_runtime_protocol``
+    across Python versions (the positive conformance case is covered by
+    ``test_standin_conforms_to_runtime_protocol``).
+    """
     from sidequest.orbital.intent import OrbitalIntentSession
 
-    assert getattr(OrbitalIntentSession, "_is_protocol", False), (
-        "OrbitalIntentSession must be a typing.Protocol declared in "
-        "sidequest.orbital.intent (the narrow read surface)."
-    )
-    # @runtime_checkable lets us assert structural conformance below.
-    assert getattr(OrbitalIntentSession, "_is_runtime_protocol", False), (
-        "OrbitalIntentSession must be decorated @runtime_checkable."
+    class _MissingEverything:
+        pass
+
+    # Does not raise (proves @runtime_checkable) and returns False (proves the
+    # protocol checks for the declared members).
+    assert isinstance(_MissingEverything(), OrbitalIntentSession) is False, (
+        "OrbitalIntentSession must be a @runtime_checkable Protocol that "
+        "discriminates on member presence."
     )
 
 

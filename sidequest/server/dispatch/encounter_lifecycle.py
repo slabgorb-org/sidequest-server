@@ -1599,8 +1599,22 @@ def instantiate_encounter_from_trigger(
             from sidequest.game.encounter import ContestState
             from sidequest.telemetry.spans.fate import fate_contest_seeded_span
 
-            target = cdef.player_metric.threshold if cdef.player_metric is not None else 3
-            enc.contest = ContestState(target=target)
+            # player_metric is guaranteed present in contest mode (ConfrontationDef
+            # ._validate, Westley minor F1) — no silent ``else 3`` default.
+            target = cdef.player_metric.threshold
+            # spec 2026-06-17 §2 (Westley major M2): honor an authored victory
+            # head-start. A content author can give either side a ``starting``
+            # advantage (tea_and_murder negotiation opponent starts at 1); seating
+            # MUST seed the tally from it or the authored asymmetry vanishes silently
+            # (No Silent Fallbacks). opponent_metric is optional in contest mode, so
+            # its head-start defaults to 0 when absent.
+            player_start = cdef.player_metric.starting
+            opponent_start = cdef.opponent_metric.starting if cdef.opponent_metric is not None else 0
+            enc.contest = ContestState(
+                target=target,
+                player_victories=player_start,
+                opponent_victories=opponent_start,
+            )
             player_seats = sum(1 for a in actors if a.side == "player")
             fate_contest_seeded_span(
                 encounter_type=encounter_type, target=target, player_seats=player_seats

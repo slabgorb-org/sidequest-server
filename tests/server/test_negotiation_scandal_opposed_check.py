@@ -82,29 +82,35 @@ def test_scandal_exposure_keeps_head_start():
     )
 
 
-# ── AC-4: terminal push always resolves (no frozen-dial soft-lock) ──────────
+# ── M1 (ADR-144 REPLACE): contest beats are display-only stubs, not dial pushes ──
 
 
-def test_scandal_weather_it_always_resolves():
-    """AC-4: scandal's terminal ``weather_it`` push must carry
-    ``resolution: true`` so the voluntary exit ends the confrontation on ANY
-    outcome tier (closes the 59-8 soft-lock class). The resolution *behavior* is
-    asserted end-to-end in the integration file; this pins the authored flag."""
+def test_scandal_beats_are_display_only_stubs_no_dial_resolution():
+    """Westley M1: scandal is a Fate Contest — it resolves via the 4dF exchange,
+    NEVER the dial apply_beat path. Its beats (incl. the former ``weather_it`` push)
+    are now display-only stubs: id + label for the world-class Abilities tab, with
+    NO dial-resolution field (``resolution`` / ``kind`` / ``deltas``). A surviving
+    ``resolution: true`` push would BE the bleed M1 closes (the dial resolving a
+    contest). Voluntary-exit behavior is now the Contest engine's concern — see the
+    Delivery Finding on contest withdraw."""
     cdef = find_confrontation_def(_pack().rules.confrontations, "scandal")
     weather_it = next((b for b in cdef.beats if b.id == "weather_it"), None)
-    assert weather_it is not None, "scandal must keep its weather_it push beat"
-    assert weather_it.resolution is True, (
-        "weather_it must declare resolution: true so the storm always resolves the scandal"
+    assert weather_it is not None, "scandal keeps weather_it as a display-only stub id"
+    assert weather_it.resolution is None, (
+        "a contest beat must NOT carry resolution: true — that would resolve the "
+        "contest via the dial, the ADR-144 layering M1 forbids"
     )
+    assert weather_it.kind is None and weather_it.stat_check is None
 
 
-def test_negotiation_walk_away_always_resolves():
-    """AC-4 (regression guard): negotiation's ``walk_away`` push already carries
-    ``resolution: true``; the conversion must not drop it."""
+def test_negotiation_beats_are_display_only_stubs_no_dial_resolution():
+    """Westley M1: negotiation is a Fate Contest; ``walk_away`` survives only as a
+    display-only stub id (no dial fields)."""
     cdef = find_confrontation_def(_pack().rules.confrontations, "negotiation")
     walk_away = next((b for b in cdef.beats if b.id == "walk_away"), None)
-    assert walk_away is not None, "negotiation must keep its walk_away push beat"
-    assert walk_away.resolution is True, "walk_away must stay resolution: true"
+    assert walk_away is not None, "negotiation keeps walk_away as a display-only stub id"
+    assert walk_away.resolution is None
+    assert walk_away.kind is None and walk_away.stat_check is None
 
 
 # ── AC-6: opponent seating + no-Other fail-loud (ADR-116) ───────────────────

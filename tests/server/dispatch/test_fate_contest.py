@@ -164,6 +164,49 @@ def test_first_to_three_resolves_with_winner_outcome():
     assert enc.outcome == "player_victory"
 
 
+def test_opponent_reaching_target_resolves_with_opponent_victory():
+    """Minor (Westley): the opponent-win path. The opponent crosses the target and
+    the contest resolves as ``opponent_victory`` — symmetric to the player path."""
+    enc = _contest_encounter()
+    enc.contest = ContestState(target=3, opponent_victories=2)  # one opp win ends it
+    snap = _snapshot(enc)
+    # Player seals a LOW total so the opponent (Random(0) -> 4dF sum -1, +0 Provoke
+    # = -1) wins the exchange. Player seals -3 -> margin (-1) - (-3) = 2 -> +1 opp
+    # victory -> tally 3 >= target 3 -> opponent_victory.
+    seal_fate_commit(
+        encounter=enc,
+        actor=enc.find_actor("Lady Ash"),
+        action="overcome",
+        skill="Rapport",
+        difficulty=0,
+        ladder_total=-3,
+    )
+
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer("oppwin")
+
+    result = run_fate_contest_exchange(
+        encounter=enc,
+        snapshot=snap,
+        ruleset=get_ruleset_module("fate"),
+        rng=random.Random(0),
+        _tracer=tracer,
+    )
+    assert enc.contest.opponent_victories >= enc.contest.target
+    assert result.resolved is True
+    assert enc.outcome == "opponent_victory"
+    span_names = {s.name for s in exporter.get_finished_spans()}
+    # Both resolution spans fire on the opponent-win path too.
+    assert "fate.contest.exchange" in span_names
+    assert "fate.contest.resolved" in span_names
+
+
 def test_tie_grants_each_side_a_boost_and_no_victory():
     # _ZeroDice -> opponent 4dF sum 0, Provoke 0 -> opponent total 0. Player seals 0
     # -> 0 == 0 tie: no victory, each top side gains a boost.
@@ -302,6 +345,67 @@ def test_seating_stamps_contest_state_and_emits_span():
     )
 
 
+def test_seating_honors_authored_victory_head_start():
+    """Westley major M2: a content author can give a side a victory head-start via
+    ``metric.starting`` (tea_and_murder negotiation opponent starts at 1; scandal at
+    2). Seating MUST seed ContestState.{player,opponent}_victories from it — otherwise
+    the authored asymmetry vanishes silently (No Silent Fallbacks). The existing
+    seating test uses the default starting=0; this covers the non-zero case."""
+    from types import SimpleNamespace
+
+    from sidequest.agents.orchestrator import NpcMention
+    from sidequest.game.character import Character
+    from sidequest.game.creature_core import CreatureCore
+    from sidequest.game.session import GameSnapshot, Npc
+    from sidequest.genre.models.rules import (
+        ConfrontationDef,
+        MetricDef,
+        ResolutionMode,
+        RulesConfig,
+        WinCondition,
+    )
+    from sidequest.server.dispatch.encounter_lifecycle import instantiate_encounter_from_trigger
+
+    # opponent gets a 1-victory head-start (the negotiation shape); player gets 0.
+    cdef = ConfrontationDef(
+        type="negotiation",
+        label="Polite Negotiation",
+        category="social",
+        resolution_mode=ResolutionMode.contest,
+        win_condition=WinCondition.dial_threshold,
+        player_metric=MetricDef(name="leverage", starting=0, threshold=3),
+        opponent_metric=MetricDef(name="leverage", starting=1, threshold=3),
+    )
+    pack = SimpleNamespace(rules=RulesConfig(ruleset="dial", confrontations=[cdef]))
+
+    pc = Character(
+        core=CreatureCore(name="Lady Ash", description="d", personality="p"),
+        char_class="Agent",
+        race="Human",
+        backstory="b",
+    )
+    vicar = Npc(core=CreatureCore(name="The Vicar", description="d", personality="p"))
+    snap = GameSnapshot(genre_slug="fate_test", characters=[pc], npcs=[vicar])
+
+    enc = instantiate_encounter_from_trigger(
+        snapshot=snap,
+        pack=pack,  # type: ignore[arg-type]
+        encounter_type="negotiation",
+        player_name="Lady Ash",
+        npcs_present=[NpcMention(name="The Vicar", side="opponent", role="rival")],
+        genre_slug="fate_test",
+    )
+
+    assert enc is not None and enc.contest is not None
+    assert enc.contest.target == 3
+    # The authored head-start is seeded into the tally — NOT silently dropped.
+    assert enc.contest.opponent_victories == cdef.opponent_metric.starting == 1, (
+        f"opponent head-start (starting={cdef.opponent_metric.starting}) must seed "
+        f"ContestState.opponent_victories; got {enc.contest.opponent_victories}"
+    )
+    assert enc.contest.player_victories == cdef.player_metric.starting == 0
+
+
 # ---------------------------------------------------------------------------
 # Task 7: dispatch_fate_action routes to the Contest engine (spec 2026-06-17 §2)
 # ---------------------------------------------------------------------------
@@ -362,6 +466,7 @@ def test_contest_turn_fires_contest_spans_and_no_dial(monkeypatch):
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
     import sidequest.game.ruleset as ruleset_pkg
+    import sidequest.server.dispatch.fate_conflict as fate_conflict_pkg
 
     provider = TracerProvider()
     exporter = InMemorySpanExporter()
@@ -383,6 +488,18 @@ def test_contest_turn_fires_contest_spans_and_no_dial(monkeypatch):
         return real_get(slug)
 
     monkeypatch.setattr(ruleset_pkg, "get_ruleset_module", _guarded_get)
+
+    # Hardened tripwire (Westley minor): a contest exchange must resolve through the
+    # Contest engine ONLY — it must NEVER fall through to the Conflict engine
+    # (run_fate_exchange). Make the Conflict entrypoint blow up so a regression that
+    # routes a contest turn into the Conflict path trips here, not silently in prod.
+    def _conflict_must_not_fire(*_a, **_kw):
+        raise AssertionError(
+            "run_fate_exchange (the Conflict engine) was called on a Contest turn — "
+            "the contest must resolve via run_fate_contest_exchange only (spec §0)"
+        )
+
+    monkeypatch.setattr(fate_conflict_pkg, "run_fate_exchange", _conflict_must_not_fire)
 
     enc = _contest_encounter()
     enc.contest = ContestState(target=3, player_victories=2)  # one win ends it
@@ -447,4 +564,74 @@ def test_contest_resolution_fires_universal_encounter_resolved_span():
         f"resolution — render trigger and forensic-timeline key on it; got {span_names}"
     )
     assert enc.resolved is True
+
+
+def test_resolution_signal_reports_contest_tally_not_frozen_metric():
+    """Westley major M3: on the contest path the dial metrics are seeded then NEVER
+    advanced — the engine only touches contest.player_victories/opponent_victories.
+    The resolution signal (and its OTEL span — the GM-panel lie detector) MUST report
+    the live victory tally, not the frozen start value of the EncounterMetric."""
+    import opentelemetry.trace as otel_trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from sidequest.telemetry.setup import init_tracer
+    from sidequest.telemetry.spans.encounter import (
+        SPAN_ENCOUNTER_RESOLUTION_SIGNAL_EMITTED,
+    )
+
+    # _build_resolution_signal emits encounter.resolution_signal_emitted on the GLOBAL
+    # tracer (Span.open), so capture on the global provider — same pattern as the
+    # seating test (test_seating_stamps_contest_state_and_emits_span).
+    init_tracer()
+    provider = otel_trace.get_tracer_provider()
+    assert isinstance(provider, TracerProvider)
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    enc = _contest_encounter()
+    # Frozen start values on the dial metrics — these MUST NOT be what gets reported.
+    assert enc.player_metric.current == 0
+    assert enc.opponent_metric.current == 0
+    enc.contest = ContestState(target=3, player_victories=2)  # one win ends it -> 3
+    snap = _snapshot(enc)
+    seal_fate_commit(
+        encounter=enc,
+        actor=enc.find_actor("Lady Ash"),
+        action="overcome",
+        skill="Rapport",
+        difficulty=0,
+        ladder_total=9,
+    )
+    run_fate_contest_exchange(
+        encounter=enc,
+        snapshot=snap,
+        ruleset=get_ruleset_module("fate"),
+        rng=random.Random(0),
+    )
+
+    assert enc.resolved is True
+    # The built signal is stashed on the snapshot — it must carry the victory tally.
+    signal = snap.pending_resolution_signal
+    assert signal is not None, "contest resolution must build a ResolutionSignal"
+    assert signal.final_player_metric == enc.contest.player_victories, (
+        f"final_player_metric must be the contest tally "
+        f"({enc.contest.player_victories}), not the frozen metric "
+        f"({enc.player_metric.current}); got {signal.final_player_metric}"
+    )
+    assert signal.final_opponent_metric == enc.contest.opponent_victories
+    # The frozen metric is NOT what was reported (the bug M3 fixes).
+    assert signal.final_player_metric != enc.player_metric.current
+
+    # And the GM-panel span carries the same tally (the lie detector).
+    sig_spans = [
+        s
+        for s in exporter.get_finished_spans()
+        if s.name == SPAN_ENCOUNTER_RESOLUTION_SIGNAL_EMITTED
+    ]
+    assert sig_spans, "encounter.resolution_signal_emitted span must fire on contest path"
+    span = sig_spans[-1]
+    assert span.attributes["final_player_metric"] == enc.contest.player_victories
+    assert span.attributes["final_opponent_metric"] == enc.contest.opponent_victories
     assert enc.outcome == "player_victory"

@@ -134,11 +134,17 @@ class BeatDef(BaseModel):
 
     id: str
     label: str
-    kind: BeatKind
+    # ``kind`` / ``stat_check`` are REQUIRED for every dial-resolved beat (all
+    # resolution modes except ``contest``). They are Optional ONLY so a Fate
+    # Contest def can carry display-only beat stubs (id + label, no dial inputs)
+    # for the class Abilities surface — see ConfrontationDef._validate, which
+    # fails loud if a non-contest beat omits them OR a contest beat carries any
+    # dial-resolution field (spec 2026-06-17 §2, Westley major M1; ADR-144).
+    kind: BeatKind | None = None
     base: int = 1
     deltas: dict[str, dict[str, Any]] | None = None
     target_tag: str | None = None
-    stat_check: str
+    stat_check: str | None = None
     risk: str | None = None  # narrator prose cue only — does not drive engine
     # One-line italic flavor hint for the BeatTile (D2 confrontation panel,
     # 2026-05-13). Optional — when absent the UI either renders no flavor
@@ -531,8 +537,27 @@ class ConfrontationDef(BaseModel):
             # table_showdown reads table_state, never the dials — return before
             # the dial_threshold requirement below.
             return self
-        if self.win_condition == WinCondition.dial_threshold and (
-            self.player_metric is None or self.opponent_metric is None
+        # spec 2026-06-17 §2 (Westley minor F1): a Fate Contest seeds its first-to-N
+        # victory target from player_metric.threshold (encounter_lifecycle.py). The
+        # cdef MUST author player_metric so the target is content-sourced — there is
+        # no silent default. Fail loud at LOAD so a content author discovers the gap
+        # before a player ever triggers the contest, not mid-seating. Checked BEFORE
+        # the generic dial_threshold requirement so contest mode gets its own message
+        # even though win_condition defaults to dial_threshold.
+        if self.resolution_mode == ResolutionMode.contest and self.player_metric is None:
+            raise ValueError(
+                f"confrontation '{self.confrontation_type}' uses resolution_mode "
+                "'contest' but is missing player_metric; the Contest victory target "
+                "is seeded from player_metric.threshold (No Silent Fallbacks)"
+            )
+        # A contest is exempt: it resolves via the 4dF exchange engine, not the dial,
+        # and only requires player_metric (checked above) — opponent_metric is optional
+        # even though win_condition defaults to dial_threshold (the metric is a victory
+        # tally, not a dial). Every other dial_threshold def needs both metrics.
+        if (
+            self.win_condition == WinCondition.dial_threshold
+            and self.resolution_mode != ResolutionMode.contest
+            and (self.player_metric is None or self.opponent_metric is None)
         ):
             raise ValueError(
                 f"confrontation '{self.confrontation_type}' uses win_condition "
@@ -603,6 +628,60 @@ class ConfrontationDef(BaseModel):
                     f"confrontation '{self.confrontation_type}' has duplicate beat id '{beat.id}'"
                 )
             seen.add(beat.id)
+        # spec 2026-06-17 §2 (Westley major M1, ADR-144 REPLACE): a Fate Contest
+        # resolves via the 4dF exchange engine, NOT the legacy apply_beat dial. Any
+        # beat it carries is a DISPLAY-ONLY stub (id + label, surfaced on the class
+        # Abilities tab via views._resolve_class_moves) — it must not smuggle a
+        # dial-resolution field, or the narrator could select an armed dial beat and
+        # run the dial engine in PARALLEL to the Contest engine (the layering ADR-144
+        # forbids). Fail loud naming every offending field (No Silent Fallbacks).
+        # Every OTHER resolution mode REQUIRES kind + stat_check on each beat (the
+        # dial inputs); those are Optional on BeatDef only to make the contest stub
+        # expressible, so enforce their presence here.
+        _DIAL_BEAT_FIELDS = (
+            "kind",
+            "stat_check",
+            "deltas",
+            "target_tag",
+            "risk",
+            "consequence",
+            "effect",
+            "resolution",
+            "reveals",
+            "requires",
+            "gold_delta",
+            "edge_delta",
+            "target_edge_delta",
+            "target_select",
+            "resource_deltas",
+        )
+        if self.resolution_mode == ResolutionMode.contest:
+            for beat in self.beats:
+                offending = [
+                    f for f in _DIAL_BEAT_FIELDS if getattr(beat, f, None) is not None
+                ]
+                # base defaults to 1 (non-None) — only flag a non-default magnitude.
+                if beat.base != 1:
+                    offending.append("base")
+                if beat.damage_channel != DamageChannel.none:
+                    offending.append("damage_channel")
+                if offending:
+                    raise ValueError(
+                        f"confrontation '{self.confrontation_type}' uses resolution_mode "
+                        f"'contest' but beat '{beat.id}' carries dial-resolution field(s) "
+                        f"{sorted(offending)}; a Fate Contest beat is a display-only stub "
+                        "(id + label + optional flavor/narrator_hint only) — the 4dF "
+                        "exchange engine resolves it, not the dial (ADR-144 REPLACE)"
+                    )
+        else:
+            for beat in self.beats:
+                if beat.kind is None or beat.stat_check is None:
+                    raise ValueError(
+                        f"confrontation '{self.confrontation_type}' beat '{beat.id}' is "
+                        f"missing required dial field(s) (kind={beat.kind!r}, "
+                        f"stat_check={beat.stat_check!r}); only a resolution_mode='contest' "
+                        "def may carry display-only beats without them"
+                    )
         # Derive intent vocabulary from label + every beat label, unioned
         # with any declared intent_verbs. Tokenization is shared with the
         # validator — both call confrontation_intent_validator.tokenize so

@@ -124,25 +124,25 @@ def _social_duel_encounter() -> StructuredEncounter:
     )
 
 
-def test_social_duel_opponent_dial_advances_on_dice(monkeypatch):
-    """End-to-end: the real social_duel cdef routes through the opposed_check
-    branch and the OPPONENT's dial advances from HIS OWN roll — no narrator-fiat
-    tool, no frozen 0/5. This is the mechanical inverse of the playtest bug.
+def test_social_duel_contest_does_not_advance_the_dial(monkeypatch):
+    """Westley M1 (ADR-144 REPLACE) — the inverse of the original opposed_check test:
+    social_duel is now a Fate Contest, so a stray beat_selection through the real
+    narration-apply path MUST NOT run the dial apply_beat engine. The dial metrics
+    stay frozen (the 4dF Contest engine, reached via FATE_ACTION, owns resolution).
+    A dial tripwire proves apply_beat is never reached."""
+    import sidequest.game.beat_kinds as beat_kinds_pkg
 
-    Player rolls low (5 + Cunning 12 mod +1 = 6 vs riposte DC 16 → Fail → no
-    player advance). Sir Iain rolls high (18 + Cunning 14 mod +2 = 20 vs DC 16
-    → Success → strike grants own=base=3). Opponent dial: 0 → 3.
-    """
-    from sidequest.server import narration_apply as _na
+    def _dial_tripwire(*_a, **_kw):
+        raise AssertionError("apply_beat (dial) reached on a Fate Contest — ADR-144 REPLACE")
 
-    monkeypatch.setattr(_na, "_roll_d20_server_side", lambda: 18)
+    monkeypatch.setattr(beat_kinds_pkg, "apply_beat", _dial_tripwire)
 
     pack = _pack()
     snap = GameSnapshot(genre_slug="tea_and_murder", world_slug="glenross")
-    snap.encounter = _social_duel_encounter()
+    enc = _social_duel_encounter()
+    enc.contest = ContestState(target=3)  # real social_duel is contest mode
+    snap.encounter = enc
 
-    # Narrator emits ONLY the opponent's beat (the SOUL gate drops PC-side
-    # selections; the player's beat rides the pending DICE_THROW stash).
     result = NarrationTurnResult(
         narration="",
         beat_selections=[
@@ -150,23 +150,25 @@ def test_social_duel_opponent_dial_advances_on_dice(monkeypatch):
         ],
     )
 
+    # No exception => the dial tripwire was never tripped.
     _apply_narration_result_to_snapshot(
         snap,
         result,
         player_name="Inspector Pryce",
         pack=pack,
-        opposed_player_d20=5,
-        opposed_player_beat_id="riposte",
-        opposed_player_actor="Inspector Pryce",
-        from_explicit_action=True,
+        from_explicit_action=False,
         room=room_for(snap),
     )
 
-    assert snap.encounter.player_metric.current == 0, "player rolled Fail — no advance"
-    assert snap.encounter.opponent_metric.current == 3, (
-        "Sir Iain's riposte (strike base 3) landed on his own roll — his dial must "
-        f"advance to 3, not freeze at 0; got {snap.encounter.opponent_metric.current}"
+    assert snap.encounter is not None and snap.encounter.resolved is False
+    assert snap.encounter.player_metric.current == 0
+    assert snap.encounter.opponent_metric.current == 0, (
+        "the dial must NOT advance on a contest — the stray beat is dropped and the "
+        "4dF FATE_ACTION exchange resolves the duel (ADR-144 REPLACE)"
     )
+    assert snap.encounter.contest is not None
+    assert snap.encounter.contest.player_victories == 0
+    assert snap.encounter.contest.opponent_victories == 0
 
 
 def test_social_duel_with_no_other_fails_loud():

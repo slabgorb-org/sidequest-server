@@ -164,9 +164,22 @@ def test_spaghetti_western_pack_loads_with_dual_dial_schema():
         cdef
         for cdef in pack.rules.confrontations
         if (
-            cdef.win_condition.value if hasattr(cdef.win_condition, "value") else cdef.win_condition
+            (
+                cdef.win_condition.value
+                if hasattr(cdef.win_condition, "value")
+                else cdef.win_condition
+            )
+            == "dial_threshold"
+            # Fate Contest (ADR-144) keeps win_condition=dial_threshold but resolves via
+            # the 4dF exchange — its beats are display-only stubs with no dial kind, so
+            # exclude it from this dial-beat-shape assertion (Westley M1).
+            and (
+                cdef.resolution_mode.value
+                if hasattr(cdef.resolution_mode, "value")
+                else cdef.resolution_mode
+            )
+            != "contest"
         )
-        == "dial_threshold"
     ]
     assert dial_confrontations, (
         "spaghetti_western must retain at least one dial_threshold confrontation "

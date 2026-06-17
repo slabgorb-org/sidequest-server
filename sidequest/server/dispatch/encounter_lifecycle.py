@@ -1585,6 +1585,20 @@ def instantiate_encounter_from_trigger(
             narrator_hints=[],
             security_tier=stamped_security_tier,
         )
+        # spec 2026-06-17 §2: a Fate Contest cdef stamps a first-to-N victory tally
+        # onto the encounter. dispatch_fate_action reads encounter.contest to select
+        # the Contest engine over the Conflict engine. target comes from the authored
+        # metric threshold (the 0->3 victory tally that replaced the 0->7 dial).
+        if cdef.resolution_mode == ResolutionMode.contest:
+            from sidequest.game.encounter import ContestState
+            from sidequest.telemetry.spans.fate import fate_contest_seeded_span
+
+            target = cdef.player_metric.threshold if cdef.player_metric is not None else 3
+            enc.contest = ContestState(target=target)
+            player_seats = sum(1 for a in actors if a.side == "player")
+            fate_contest_seeded_span(
+                encounter_type=encounter_type, target=target, player_seats=player_seats
+            )
         snapshot.encounter = enc
         _watcher_publish(
             "state_transition",

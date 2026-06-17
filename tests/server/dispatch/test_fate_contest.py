@@ -208,3 +208,95 @@ def test_non_contest_encounter_fails_loud():
             ruleset=get_ruleset_module("fate"),
             rng=random.Random(0),
         )
+
+
+def test_seating_stamps_contest_state_and_emits_span():
+    """instantiate_encounter_from_trigger stamps encounter.contest for a
+    contest-mode cdef and fires fate.contest.seeded (the GM-panel wiring proof).
+
+    Fixture shape: a lightweight pack stand-in (SimpleNamespace with a RulesConfig
+    carrying a single contest-mode ConfrontationDef) — same pattern used by
+    tests/server/dispatch/test_table_instantiation.py. The span capture installs an
+    InMemorySpanExporter on the global tracer provider (same pattern as
+    test_resolution_turn_same_type_suppresses_initiated_span in
+    tests/server/test_encounter_lifecycle.py).
+    """
+    from types import SimpleNamespace
+
+    import opentelemetry.trace as otel_trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from sidequest.agents.orchestrator import NpcMention
+    from sidequest.game.character import Character
+    from sidequest.game.creature_core import CreatureCore
+    from sidequest.game.session import GameSnapshot, Npc
+    from sidequest.genre.models.rules import (
+        ConfrontationDef,
+        MetricDef,
+        ResolutionMode,
+        RulesConfig,
+        WinCondition,
+    )
+    from sidequest.server.dispatch.encounter_lifecycle import instantiate_encounter_from_trigger
+    from sidequest.telemetry.setup import init_tracer
+
+    # Install in-memory span exporter onto the global provider (idempotent init_tracer).
+    init_tracer()
+    provider = otel_trace.get_tracer_provider()
+    assert isinstance(provider, TracerProvider)
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    # Build a contest-mode ConfrontationDef with player_metric.threshold=3.
+    cdef = ConfrontationDef(
+        type="negotiation",
+        label="Polite Negotiation",
+        category="social",
+        resolution_mode=ResolutionMode.contest,
+        win_condition=WinCondition.dial_threshold,
+        player_metric=MetricDef(name="leverage", threshold=3),
+        opponent_metric=MetricDef(name="leverage", threshold=3),
+    )
+    # Lightweight pack stand-in: encounter_lifecycle only reads pack.rules
+    # (find_confrontation_def) on the standard social/dial_threshold path.
+    # Use ruleset="dial" — RulesConfig(ruleset="fate") requires a FateConfig block,
+    # and pack.rules.ruleset is never accessed for a social contest seat anyway
+    # (no initiative roll, no edge publish on the non-combat, non-hp_depletion path).
+    pack = SimpleNamespace(rules=RulesConfig(ruleset="dial", confrontations=[cdef]))
+
+    pc = Character(
+        core=CreatureCore(name="Lady Ash", description="d", personality="p"),
+        char_class="Agent",
+        race="Human",
+        backstory="b",
+    )
+    vicar = Npc(core=CreatureCore(name="The Vicar", description="d", personality="p"))
+    snap = GameSnapshot(
+        genre_slug="fate_test",
+        characters=[pc],
+        npcs=[vicar],
+    )
+
+    enc = instantiate_encounter_from_trigger(
+        snapshot=snap,
+        pack=pack,  # type: ignore[arg-type]
+        encounter_type="negotiation",
+        player_name="Lady Ash",
+        npcs_present=[NpcMention(name="The Vicar", side="opponent", role="rival")],
+        genre_slug="fate_test",
+    )
+
+    assert enc is not None, "instantiate_encounter_from_trigger returned None"
+    # AC-1: contest state is stamped.
+    assert enc.contest is not None, "encounter.contest must not be None for contest-mode cdef"
+    # AC-2: target comes from cdef.player_metric.threshold.
+    assert enc.contest.target == 3, (
+        f"expected target=3 from cdef.player_metric.threshold; got {enc.contest.target}"
+    )
+    # AC-3: fate.contest.seeded span fired.
+    span_names = [s.name for s in exporter.get_finished_spans()]
+    assert "fate.contest.seeded" in span_names, (
+        f"expected fate.contest.seeded span; got spans: {span_names}"
+    )

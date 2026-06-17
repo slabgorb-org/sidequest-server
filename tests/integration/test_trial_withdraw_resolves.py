@@ -1,23 +1,18 @@
-"""Story 73-2: the ``trial`` confrontation (tea_and_murder) must gain a voluntary
-withdraw/concede exit — the same soft-lock fix 73-1 applied to negotiation/scandal
-and 59-8 applied to social_duel, now for the courtroom.
+"""Story 73-2 (re-authored 2026-06-17, Fate Contest binding): the ``trial``
+confrontation (tea_and_murder) must offer a voluntary withdraw/concede exit — the
+same soft-lock fix 73-1 applied to negotiation/scandal and 59-8 applied to
+social_duel, now for the courtroom. Like its three siblings, ``trial`` is now a
+**Fate Contest** (``resolution_mode: contest``, ADR-144), so the original
+``opposed_check`` content test was deleted with the conversion.
 
-Two playtest-grounded failures motivate this (67-10, 2026-05-31, Glenross):
+Two playtest-grounded failures motivate the surviving tests (67-10, 2026-05-31,
+Glenross):
 
   1. A committed "resolution beat" (Concede Gracefully) did NOT flip
      ``encounter.resolved`` — no ``encounter.resolved`` span fired, the panel
      never tore down, and the action input stayed locked (soft-lock).
-  2. The gap is structural for ``trial`` specifically: unlike its three siblings,
-     ``trial`` is still ``beat_selection`` (a frozen opponent) and has NO terminal
-     resolution beat at all — only ``yield`` (``kind: angle``), which advances the
-     opponent, it does not end the trial.
-
-RED before the fix:
-  - ``trial`` has no ``resolution_mode: opposed_check``      → AC-2 fails
-  - ``trial`` has no beat carrying ``resolution: true``      → AC-1 fails
-  - applying that (absent) beat cannot resolve on any tier   → AC-3 fails
-  - driving a concede through the opposed branch emits no
-    ``encounter.resolved`` span                              → AC-3 (OTEL) fails
+  2. ``trial`` had NO terminal resolution beat at all — only ``yield``
+     (``kind: angle``), which advances the opponent, it does not end the trial.
 
 The resolution beat is discovered structurally (``b.resolution is True``) rather
 than by a hard-coded id, so Dev is free to name the courtroom withdraw beat
@@ -25,6 +20,12 @@ than by a hard-coded id, so Dev is free to name the courtroom withdraw beat
 breaking these tests. NB: ``trial`` must NOT borrow ``auction``'s ``withdraw``
 beat id semantics — auction's ``withdraw`` is a table_resolution beat with no
 ``resolution: true`` flag.
+
+The voluntary-concede OTEL span (AC-3) is driven as a committed PLAYER
+beat-selection: the narrator-beat path in ``narration_apply`` fires
+``encounter_resolved_span(source="narrator_beat")`` regardless of resolution_mode,
+so the concede resolves the same way whether the contested beats are dial, opposed
+or contest.
 """
 
 from __future__ import annotations
@@ -43,7 +44,6 @@ from sidequest.game.encounter import (
 )
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.loader import load_genre_pack
-from sidequest.genre.models.rules import ResolutionMode
 from sidequest.protocol.dice import RollOutcome
 from sidequest.server.dispatch.confrontation import find_confrontation_def
 from sidequest.server.narration_apply import _apply_narration_result_to_snapshot
@@ -114,18 +114,6 @@ def _trial_encounter() -> StructuredEncounter:
             EncounterActor(name="Crown Prosecutor", role="participant", side="opponent"),
         ],
     )
-
-
-# ── AC-2: trial routes through opposed_check (not a frozen opponent) ──────────
-
-
-def test_trial_uses_opposed_check():
-    """AC-2: trial's resolution_mode is opposed_check, like its three siblings.
-
-    RED: trial declares no resolution_mode, so it defaults to
-    ``ResolutionMode.beat_selection`` — the frozen-opponent path 73-1 retired.
-    """
-    assert _cdef("trial").resolution_mode == ResolutionMode.opposed_check
 
 
 # ── AC-1: trial has an authored voluntary-exit resolution beat ───────────────
@@ -199,16 +187,17 @@ def test_trial_withdraw_outcome_is_neutral_resolution_not_a_victory():
 # ── AC-3 (OTEL): conceding through the real opposed branch fires the span ─────
 
 
-def test_trial_concede_emits_encounter_resolved_span(monkeypatch, otel_capture):
+def test_trial_concede_emits_encounter_resolved_span(otel_capture):
     """AC-3 (lie-detector): committing the trial withdraw beat through the real
     narration-apply path flips ``encounter.resolved`` AND fires the
     ``encounter.resolved`` OTEL span. The ABSENCE of that span was the playtest
     signal that the panel never tore down.
 
-    RED: trial is ``beat_selection``, so the opposed branch never runs, the player's
-    concede never resolves, and no ``encounter.resolved`` span is emitted.
+    Driven as a player beat-selection (the authored resolution beat) — the
+    narrator-beat path fires encounter_resolved_span(source="narrator_beat")
+    regardless of resolution_mode (contest or otherwise). No engine change needed.
     """
-    beat = _resolution_beat("trial")  # RED: fails here today (no such beat)
+    beat = _resolution_beat("trial")
 
     snap = GameSnapshot(genre_slug="tea_and_murder", world_slug="glenross")
     snap.encounter = StructuredEncounter(
@@ -217,9 +206,6 @@ def test_trial_concede_emits_encounter_resolved_span(monkeypatch, otel_capture):
         player_metric=EncounterMetric(name="conviction", current=0, starting=0, threshold=7),
         opponent_metric=EncounterMetric(name="conviction", current=0, starting=0, threshold=7),
         structured_phase=EncounterPhase.Setup,
-        # Both actors carry Nerve (the withdraw_case stat_check) so the opposed
-        # modifier resolves from each character's own sheet, not a fallthrough to
-        # the cdef default — the test stays self-contained.
         actors=[
             EncounterActor(
                 name="Inspector Pryce",
@@ -236,16 +222,17 @@ def test_trial_concede_emits_encounter_resolved_span(monkeypatch, otel_capture):
         ],
     )
 
-    from sidequest.server import narration_apply as _na
-
-    # Opponent rolls high; the player rolls low (Fail) and concedes anyway — the
-    # withdraw must resolve REGARDLESS of the dice (73-4 compound).
-    monkeypatch.setattr(_na, "_roll_d20_server_side", lambda: 18)
+    # Drive the concede as a committed PLAYER beat-selection — put the resolution
+    # beat in result.beat_selections as the player's beat. The narrator-beat path
+    # fires encounter_resolved_span(source="narrator_beat") regardless of
+    # resolution_mode, so no engine change is needed for this test.
     result = NarrationTurnResult(
         narration="",
         beat_selections=[
             BeatSelection(
-                actor="Crown Prosecutor", beat_id="cross_examine", outcome=RollOutcome.Success
+                actor="Inspector Pryce",
+                beat_id=beat.id,
+                outcome=RollOutcome.Fail,
             ),
         ],
     )
@@ -254,16 +241,10 @@ def test_trial_concede_emits_encounter_resolved_span(monkeypatch, otel_capture):
         result,
         player_name="Inspector Pryce",
         pack=_pack(),
-        opposed_player_d20=3,
-        opposed_player_beat_id=beat.id,
-        opposed_player_actor="Inspector Pryce",
         from_explicit_action=True,
         room=room_for(snap),
     )
 
-    # Pin the span to THIS trial concede — a bare "some encounter.resolved span
-    # fired" assertion could green on a span leaked from a fixture teardown or a
-    # different encounter. Require encounter_type == "trial".
     trial_resolved_spans = [
         s
         for s in otel_capture.get_finished_spans()
@@ -275,12 +256,6 @@ def test_trial_concede_emits_encounter_resolved_span(monkeypatch, otel_capture):
         "the trial encounter — its absence is the soft-lock signature from the "
         "67-10 playtest"
     )
-
-    # Panel-teardown proxy: the encounter must be RESOLVED in state (not merely
-    # present-and-unresolved, and not silently dropped). No `is None` escape arm —
-    # narration-apply mutates the encounter in place, so `is None` would only mask
-    # a future regression that clears the encounter without resolving it (exactly
-    # the soft-lock this story closes).
     assert snap.encounter is not None, "the trial encounter must not be dropped from state"
     assert snap.encounter.resolved is True, (
         "after a committed concede the confrontation must be resolved so the panel "

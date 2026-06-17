@@ -26,6 +26,7 @@ from sidequest.game.session import GameSnapshot
 # Shared sealed-commit / opponent-seating substrate lives in fate_conflict; import
 # the helpers (one direction only — fate_conflict imports THIS module lazily,
 # inside dispatch_fate_action, to break the cycle).
+from sidequest.server.dispatch.encounter_lifecycle import _stamp_encounter_presence
 from sidequest.server.dispatch.fate_conflict import (
     _seat_opponent_commits,
     _watcher_publish,
@@ -34,7 +35,9 @@ from sidequest.telemetry.spans import (
     fate_aspect_created_span,
     fate_contest_exchange_span,
     fate_contest_resolved_span,
+    npc_edge_published_span,
 )
+from sidequest.telemetry.spans.encounter import encounter_resolved_span
 
 
 class FateContestError(ValueError):
@@ -143,6 +146,40 @@ def run_fate_contest_exchange(
         encounter.resolved = True
         encounter.outcome = "opponent_victory"
 
+    # Story 72-12: presence stamp — the contest opponent was a SEATED participant
+    # this exchange (it rolled 4dF against the player), even when the narrator
+    # never name-dropped it in ``npcs_present`` prose. Mirror the opposed_check
+    # seam in narration_apply._resolve_opposed_check_branch (lines 7813-7844)
+    # but source="fate_contest". The primitive handles location=None (stamps turn,
+    # freezes location — No Silent Fallbacks).
+    opp_actor = next((a for a in encounter.actors if a.side == "opponent"), None)
+    if opp_actor is not None:
+        opp_npc = next((n for n in snapshot.npcs if n.core.name == opp_actor.name), None)
+        if opp_npc is not None:
+            player_actor = next((a for a in encounter.actors if a.side == "player"), None)
+            player_name_for_loc = player_actor.name if player_actor is not None else ""
+            actor_loc = snapshot.party_location(perspective=player_name_for_loc)
+            turn = snapshot.turn_manager.interaction
+            _stamp_encounter_presence(opp_npc, turn=turn, location=actor_loc)
+            _thresh = int(getattr(contest, "target", 0) or 0)
+            opponent_victories = contest.opponent_victories
+            if _thresh > 0:
+                _span_max = _thresh
+                _span_current = max(1, _thresh - int(opponent_victories))
+            else:
+                _span_max = opp_npc.core.hp.max
+                _span_current = opp_npc.core.hp.current
+            with npc_edge_published_span(
+                npc_name=opp_npc.core.name,
+                current=_span_current,
+                max=_span_max,
+                source="fate_contest",
+                turn_number=turn,
+                last_seen_turn=opp_npc.last_seen_turn,
+                last_seen_location=opp_npc.last_seen_location or "",
+            ):
+                pass
+
     fate_contest_exchange_span(
         winner_side=winner_side,
         victory_delta=victory_delta,
@@ -158,6 +195,20 @@ def run_fate_contest_exchange(
             opponent_victories=contest.opponent_victories,
             _tracer=_tracer,
         )
+        # Platform substrate: the universal encounter.resolved signal — consumed by
+        # the render trigger, forensic-timeline GM-panel mapping, and input-unlock.
+        # Fate keeps its own fate.contest.resolved (genre layer); this is the
+        # platform layer. Both fire (spec 2026-06-17 governing decision).
+        with encounter_resolved_span(
+            encounter_type=encounter.encounter_type,
+            outcome=encounter.outcome or "",
+            source="fate_contest",
+            _tracer=_tracer,
+        ):
+            pass
+        from sidequest.server.narration_apply import _build_resolution_signal
+
+        snapshot.pending_resolution_signal = _build_resolution_signal(encounter)
     _watcher_publish(
         "state_transition",
         {

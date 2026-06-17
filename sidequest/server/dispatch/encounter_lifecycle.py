@@ -630,10 +630,16 @@ def _requires_opponent(cdef) -> bool:
        ``social`` adversarial — only the ones that actually roll an
        opposed check need (and get) a metric-bearing Other. A social
        ``beat_selection`` parley still seats its NPC as ``neutral``.
+    3. ``resolution_mode: contest`` — a Fate Contest also resolves by rolling
+       BOTH sides each exchange; the contest engine
+       (``fate_contest.run_fate_contest_exchange`` → ``_seat_opponent_commits``)
+       raises if no opponent is seated, so the Other MUST be opponent-side
+       regardless of category (ADR-116). A contest with nobody on the other
+       side cannot resolve.
     """
     if _is_adversarial(cdef.category):
         return True
-    return cdef.resolution_mode == ResolutionMode.opposed_check
+    return cdef.resolution_mode in (ResolutionMode.opposed_check, ResolutionMode.contest)
 
 
 def _npc_is_adversary(npc: Npc) -> bool:

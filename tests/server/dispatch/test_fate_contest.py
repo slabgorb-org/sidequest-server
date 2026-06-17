@@ -401,3 +401,50 @@ def test_contest_turn_fires_contest_spans_and_no_dial(monkeypatch):
     assert result.exchange is not None
     assert result.exchange.resolved is True and "fate.contest.resolved" in names
     assert not any(".compute_dc" in n or n.endswith(".dial") for n in names)
+
+
+def test_contest_resolution_fires_universal_encounter_resolved_span():
+    """3b wiring test: a Fate Contest points-win fires BOTH fate.contest.resolved
+    (genre layer) AND encounter.resolved (platform substrate — render trigger,
+    forensic-timeline, input-unlock). The contest path must not drop the universal
+    teardown signal that every other resolution engine emits."""
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from sidequest.telemetry.spans.encounter import SPAN_ENCOUNTER_RESOLVED
+
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer("wiring")
+
+    enc = _contest_encounter()
+    enc.contest = ContestState(target=3, player_victories=2)  # one win ends it
+    snap = _snapshot(enc)
+    seal_fate_commit(
+        encounter=enc,
+        actor=enc.find_actor("Lady Ash"),
+        action="overcome",
+        skill="Rapport",
+        difficulty=0,
+        ladder_total=9,
+    )
+    run_fate_contest_exchange(
+        encounter=enc,
+        snapshot=snap,
+        ruleset=get_ruleset_module("fate"),
+        rng=random.Random(0),
+        _tracer=tracer,
+    )
+
+    span_names = [s.name for s in exporter.get_finished_spans()]
+    assert "fate.contest.resolved" in span_names, (
+        f"fate.contest.resolved span must fire on contest resolution; got {span_names}"
+    )
+    assert SPAN_ENCOUNTER_RESOLVED in span_names, (
+        "encounter.resolved (universal substrate signal) must ALSO fire on contest "
+        f"resolution — render trigger and forensic-timeline key on it; got {span_names}"
+    )
+    assert enc.resolved is True
+    assert enc.outcome == "player_victory"

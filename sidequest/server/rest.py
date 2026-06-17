@@ -34,6 +34,7 @@ from sidequest.genre.loader import (
 )
 from sidequest.genre.models.pack import picker_portrait_slug
 from sidequest.interior.render import render_interior_svg
+from sidequest.server.state_projection import project_session_state_view
 from sidequest.telemetry.spans.interior import emit_interior_render
 
 logger = logging.getLogger(__name__)
@@ -398,16 +399,17 @@ def create_rest_router() -> APIRouter:
     ) -> list[dict[str, Any]]:
         """Enumerate persisted game sessions for the GM dashboard State tab.
 
-        Walks ``<save_dir>/games/<slug>/save.db`` and projects each loaded
+        Enumerates slugs via ``PgForensicReader.list_saves()`` and loads each
+        snapshot via ``PgSaveRepository.load()``, projecting each loaded
         :class:`GameSnapshot` onto the ``SessionStateView`` shape defined in
-        ``sidequest-ui/src/types/watcher.ts``. Read-only; broken / empty DB
-        files are skipped rather than failing the request.
+        ``sidequest-ui/src/types/watcher.ts``. Read-only; a slug that fails to
+        load is skipped rather than failing the request.
 
-        Results are sorted by save-file modification time, newest first —
-        so the dashboard's default "index 0" pick lands on the
-        most-recently-touched session rather than an old save. Each view
-        includes ``last_activity_ts`` (ms since epoch) so the UI can also
-        pick explicitly.
+        Results are sorted by ``last_activity_ts``, most-recently-touched
+        first — so the dashboard's default "index 0" pick lands on the active
+        session rather than an old save. Each view includes
+        ``last_activity_ts`` (ms since epoch) so the UI can also pick
+        explicitly.
 
         If ``session_key`` is provided, only that slug's view is returned
         (still as a list, to keep the wire shape stable). Missing slug →
@@ -465,117 +467,18 @@ def create_rest_router() -> APIRouter:
                 continue
             if saved is None:
                 continue
-            snap = saved.snapshot
-            # Wave 2A snapshot split: NPCs live in two canonical stores —
-            # ``snap.npcs`` (mechanically engaged, carries CreatureCore +
-            # last_seen tracking) and ``snap.npc_pool`` (identity-only
-            # cast pool members). The legacy ``snap.npc_registry`` field
-            # was dropped in story 45-52; legacy saves migrate into
-            # ``snap.npc_pool`` on load. Project both canonical stores so
-            # the GM panel actually surfaces the NPCs that exist (the
-            # panel's JSON field name stays ``npc_registry`` to preserve
-            # the wire contract).
-            npc_registry: list[dict[str, Any]] = []
-            for npc in snap.npcs:
-                core = npc.core
-                edge = getattr(core, "edge", None)
-                hp_current = (
-                    int(edge.current) if edge is not None and edge.current is not None else 0
-                )
-                hp_max = int(edge.maximum) if edge is not None and edge.maximum is not None else 0
-                npc_registry.append(
-                    {
-                        "name": core.name or "",
-                        "pronouns": npc.pronouns or "",
-                        "role": npc.npc_role_id or "",
-                        "location": npc.last_seen_location or npc.location or "",
-                        "last_seen_turn": npc.last_seen_turn or 0,
-                        "age": npc.age or "",
-                        "appearance": npc.appearance or "",
-                        "ocean_summary": None,
-                        "ocean": npc.ocean,
-                        "hp": hp_current,
-                        "max_hp": hp_max,
-                    }
-                )
-            for member in snap.npc_pool:
-                # Pool members are identity-only — no HP or last_seen.
-                npc_registry.append(
-                    {
-                        "name": member.name or "",
-                        "pronouns": member.pronouns or "",
-                        "role": member.role or "",
-                        "location": "",
-                        "last_seen_turn": 0,
-                        "age": "",
-                        "appearance": member.appearance or "",
-                        "ocean_summary": None,
-                        "ocean": None,
-                        "hp": 0,
-                        "max_hp": 0,
-                    }
-                )
-            trope_states: list[dict[str, Any]] = []
-            for trope in snap.active_tropes:
-                trope_states.append(
-                    {
-                        "trope_definition_id": getattr(trope, "trope_id", ""),
-                        "status": str(getattr(trope, "status", "")),
-                        "progression": int(getattr(trope, "progression", 0) or 0),
-                    }
-                )
-            players: list[dict[str, Any]] = []
-            for char in snap.characters:
-                # Character.name / Character.level / Character.hp / Character.max_hp
-                # are Combatant-equivalent methods (Rust port — see
-                # sidequest/game/character.py:148-162), not attributes.
-                # getattr returns the bound method; call it.
-                name_attr = getattr(char, "name", None)
-                level_attr = getattr(char, "level", 1)
-                hp_attr = getattr(char, "hp", None)
-                max_hp_attr = getattr(char, "max_hp", None)
-                resolved_name = name_attr() if callable(name_attr) else name_attr
-                resolved_level = level_attr() if callable(level_attr) else level_attr
-                resolved_hp = hp_attr() if callable(hp_attr) else hp_attr
-                resolved_max_hp = max_hp_attr() if callable(max_hp_attr) else max_hp_attr
-                players.append(
-                    {
-                        "player_name": getattr(char, "player_name", "") or "",
-                        "character_name": resolved_name,
-                        "character_class": getattr(char, "archetype", "") or "",
-                        "character_hp": int(resolved_hp) if resolved_hp is not None else 0,
-                        "character_max_hp": int(resolved_max_hp)
-                        if resolved_max_hp is not None
-                        else 0,
-                        "character_level": int(resolved_level or 1),
-                        "character_xp": int(getattr(char, "xp", 0) or 0),
-                        "region_id": snap.current_region or "",
-                        "display_location": (snap.character_locations.get(resolved_name) or ""),
-                        "inventory": {
-                            "items": [],
-                            "gold": 0,
-                        },
-                    }
-                )
-            last_activity_ts = int(save_row.get("last_activity_ts") or 0)
+            # Project the loaded snapshot onto the SessionStateView wire shape.
+            # The projection (snapshot → view dict) lives in a pure, unit-tested
+            # helper so the GM-panel data contract can be exercised against
+            # synthetic snapshots without the DB round-trip above. Story 124-4
+            # corrected four silent dead reads that lived in the former inline
+            # block (trope id/progression, NPC HP, player inventory).
             views.append(
-                {
-                    "session_key": slug,
-                    "genre_slug": snap.genre_slug or "",
-                    "world_slug": snap.world_slug or "",
-                    "current_location": snap.party_location() or "",
-                    "discovered_regions": list(snap.discovered_regions),
-                    "narration_history_len": len(snap.narrative_log),
-                    "turn_mode": str(snap.turn_manager.phase),
-                    "npc_registry": npc_registry,
-                    "trope_states": trope_states,
-                    "players": players,
-                    "player_count": len(players),
-                    "has_music_director": False,
-                    "has_audio_mixer": False,
-                    "region_names": [],
-                    "last_activity_ts": last_activity_ts,
-                }
+                project_session_state_view(
+                    saved.snapshot,
+                    session_key=slug,
+                    last_activity_ts=int(save_row.get("last_activity_ts") or 0),
+                )
             )
         # Newest first — the dashboard's default "pick index 0" convention
         # then lands on the active session instead of the oldest save.

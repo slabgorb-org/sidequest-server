@@ -147,6 +147,22 @@ SPAN_ROUTES["fate.consequence.taken"] = SpanRoute(
         "aspect": (span.attributes or {}).get("aspect", ""),
     },
 )
+# Story 126-1: the harm-routing decision (GM panel = lie detector). ``sink`` names
+# WHERE a Fate-conflict hit was directed — under the ADR-144 binding it is always
+# "fate_sheet" and NEVER "core_hp". The GM panel reads ``sink`` to verify the bound
+# ruleset replaced the native HP track rather than leaking onto it.
+SPAN_ROUTES["fate.harm.routed"] = SpanRoute(
+    event_type="state_transition",
+    component="fate",
+    extract=lambda span: {
+        "field": "harm_routed",
+        "actor": (span.attributes or {}).get("actor", ""),
+        "by": (span.attributes or {}).get("by", ""),
+        "track": (span.attributes or {}).get("track", ""),
+        "shifts": (span.attributes or {}).get("shifts", 0),
+        "sink": (span.attributes or {}).get("sink", ""),
+    },
+)
 
 
 def fate_point_delta_span(
@@ -333,6 +349,35 @@ def fate_consequence_taken_span(
         **attrs,
     }
     with Span.open("fate.consequence.taken", attributes, tracer_override=_tracer):
+        pass
+
+
+def fate_harm_routed_span(
+    *,
+    actor: str,
+    by: str,
+    track: str,
+    shifts: int,
+    sink: str = "fate_sheet",
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``fate.harm.routed`` — the harm-application routing decision (Story
+    126-1). Fires once per attack that lands real harm (``shifts`` >= 1), BEFORE
+    the stress/consequence marks, recording that the hit was directed at the Fate
+    sheet rather than the legacy ``core.hp`` track. ``sink`` is the lie-detector
+    field: under the ADR-144 Fate binding it is always ``"fate_sheet"`` — the GM
+    panel flags any Fate-conflict harm that ever reports ``"core_hp"``."""
+    attributes: dict[str, Any] = {
+        "field": "harm_routed",
+        "actor": actor,
+        "by": by,
+        "track": track,
+        "shifts": shifts,
+        "sink": sink,
+        **attrs,
+    }
+    with Span.open("fate.harm.routed", attributes, tracer_override=_tracer):
         pass
 
 
@@ -1029,6 +1074,7 @@ __all__ = [
     "fate_contest_seeded_span",
     "fate_flavor_rider_span",
     "fate_consequence_taken_span",
+    "fate_harm_routed_span",
     "fate_exchange_committed_span",
     "fate_exchange_order_span",
     "fate_exchange_resolved_span",

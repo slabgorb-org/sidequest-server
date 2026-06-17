@@ -2657,6 +2657,14 @@ class CharacterBuilder:
         them, and only ``apply_fate_chargen`` consumes them)."""
         self._fate_choices = choices
 
+    def fate_choices(self) -> object | None:
+        """The interactive Fate chargen choices recorded by the scene walk, or
+        ``None`` for a non-fate pack / the default-seed path. Typed ``object``
+        to keep the builder ruleset-agnostic (mirrors ``record_fate_chargen``);
+        callers that need fields narrow it to ``FateChargenChoices``. Used by
+        the confirmation-summary renderer to show a Fate-shaped preview."""
+        return self._fate_choices
+
     def build(self, name: str) -> Character:
         """Build the final Character from accumulated choices.
 

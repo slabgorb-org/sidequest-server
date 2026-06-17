@@ -7,39 +7,35 @@ non-"combat" type names. The resolution-mode filter is the invariant: anything
 resolved through the calibrated tie-band geometry must use the calibrated
 threshold.
 
-NOTE (space_opera→SWN binding, Task 8): space_opera's combat AND ship_combat
-formerly used ``resolution_mode: opposed_check`` and so were swept up by these
-threshold tests. They have since moved to ``resolution_mode: beat_selection`` +
-``win_condition: hp_depletion`` (HP-to-0 resolution, no dual-dial metrics), so
-space_opera now has ZERO opposed_check confrontations. The resolution_mode
-filter handles this gracefully — those metricless combats are simply skipped by
-the opposed_check/sealed_letter threshold tests rather than asserted against.
-space_opera is consequently dropped from COMBAT_PACKS (the opposed_check
-existence guard) but stays in SHIPPED_PACKS, where its remaining dial
-(negotiation, chase) and sealed_letter (dogfight) confrontations are still
-checked.
+**Scoping (Phase 3 / 2026-06-17): ADR-093 covers the dial/WN family only.**
+
+Fate packs (tea_and_murder, spaghetti_western) are scoped OUT of this suite —
+they resolve via the Contest mode (``resolution_mode: contest``) and carry zero
+``opposed_check`` confrontations after Phase 3. Asserting ADR-093 calibration
+constraints against Contest-mode defs would be both wrong and vacuous.
+
+The dial/WN family keeps ``opposed_check``; road_warrior (cwn) is the sole
+remaining live exemplar. It has two opposed_check confrontations:
+  - negotiation @ threshold 10 (by design — ADR-093 does not calibrate
+    negotiation thresholds; see test_negotiation_thresholds_not_collapsed_below_5)
+  - chase @ threshold 7 (the ADR-093 calibrated value)
+
+road_warrior is therefore both the SHIPPED_PACKS member and the COMBAT_PACKS
+existence tripwire: it proves the test suite is non-vacuous (the threshold-7
+assertion has at least one opposed_check to check) and guards the WN→dial path
+from accidental removal.
 
 1. opponent_default_stats — no value equals 12 (the pre-calibration parity
    number). All present values must be 10 or below.
-2. Every ``resolution_mode: opposed_check`` confrontation has both
-   player_metric.threshold and opponent_metric.threshold equal to 7
-   (lowered from 10). Covers combat across all packs AND space_opera's
-   ship_combat. See TEA deviation log on session 45-41 for why this
-   broadens AC-3's literal "combat and chase" reading.
+2. Every ``resolution_mode: opposed_check`` confrontation (excluding negotiation
+   type, which ADR-093 explicitly leaves alone) has both
+   player_metric.threshold and opponent_metric.threshold equal to 7.
 3. Every ``resolution_mode: sealed_letter_lookup`` confrontation keeps its
    pre-calibration threshold (currently space_opera's dogfight at 30) —
    sealed-letter recalibration is v2 territory.
 4. Negotiation — the v1 calibration explicitly does NOT touch negotiation
    thresholds. This test asserts no negotiation threshold collapses below
    5 by accident (would over-shorten social scenes).
-
-Pack list covers the four packs calibrated by ADR-093 (caverns_and_claudes,
-elemental_harmony, mutant_wasteland, space_opera) plus tea_and_murder.
-Tea & Murder is included because it is social-only by design (no opposed_check
-confrontations) — its parametrize rows pass trivially today, but inclusion
-ensures any future addition of an opposed_check confrontation to tea_and_murder
-gets caught automatically. The COMBAT_PACKS list (below) is the per-pack
-wiring guard's stricter set, excluding tea_and_murder.
 """
 
 from __future__ import annotations
@@ -61,61 +57,25 @@ SHIPPED_PACKS = [
     "caverns_and_claudes",
     "elemental_harmony",
     "mutant_wasteland",
+    "road_warrior",
     "space_opera",
-    "tea_and_murder",
 ]
 
-# Packs that MUST expose at least one opposed_check confrontation. tea_and_murder is
-# excluded because it is social-only by design (negotiation, trial, auction,
-# social_duel, scandal — all beat_selection mode). The per-pack wiring test
-# enforces that each combat pack still has at least one opposed_check
-# confrontation; without this, the parametrized calibration tests would pass
-# vacuously for any pack whose combat confrontations were accidentally
-# removed.
+# Packs that MUST expose at least one opposed_check confrontation. This is the
+# WN-regression guard: if someone later converts road_warrior's opposed_check
+# defs to Contest or removes them, this test fails loudly rather than letting
+# the threshold-7 assertion pass vacuously over zero defs.
 #
-# space_opera is excluded as of the space_opera→SWN binding (Task 8): its
-# combat/ship_combat confrontations moved off resolution_mode: opposed_check to
-# ruleset:swn beat_selection + win_condition: hp_depletion (combat resolves on
-# HP reaching 0, no dual-dial metrics). space_opera therefore intentionally
-# carries ZERO opposed_check confrontations, so requiring one here would be a
-# false failure. It still ships dial confrontations (negotiation, chase) and a
-# sealed_letter_lookup (dogfight); those remain covered by the SHIPPED_PACKS
-# threshold tests above, which filter by resolution_mode and so correctly skip
-# the metricless hp_depletion combats rather than asserting against them.
-#
-# elemental_harmony is excluded for the same reason as of the WWN binding: its
-# combat confrontation ("Martial Exchange") moved off resolution_mode:
-# opposed_check to ruleset:wwn beat_selection + win_condition: hp_depletion,
-# exactly mirroring the space_opera→SWN migration. elemental_harmony therefore
-# intentionally carries ZERO opposed_check confrontations. Its remaining dial
-# confrontations (negotiation "Diplomatic Council", chase "Pursuit") are still
-# covered by the SHIPPED_PACKS threshold tests above.
-#
-# mutant_wasteland is excluded as of the AWN binding (epic 88, design §6.4): its
-# combat confrontation ("Wasteland Brawl") moved off resolution_mode:
-# opposed_check to ruleset:awn beat_selection + win_condition: hp_depletion,
-# again mirroring the space_opera→SWN / elemental_harmony→WWN migrations.
-# mutant_wasteland therefore intentionally carries ZERO opposed_check
-# confrontations. Its remaining dial confrontations (negotiation "Wasteland
-# Parley", chase "Wasteland Pursuit") are still covered by the SHIPPED_PACKS
-# threshold tests above. This is the documented by-design calibration migration,
-# NOT a regression.
-#
-# caverns_and_claudes is excluded as of the WWN binding (2026-06-12 port): its
-# combat confrontation ("Dungeon Combat") moved off resolution_mode:
-# opposed_check to ruleset:wwn beat_selection + win_condition: hp_depletion,
-# exactly mirroring the elemental_harmony→WWN / space_opera→SWN migrations.
-# caverns_and_claudes therefore intentionally carries ZERO opposed_check
-# confrontations. Its remaining dial confrontations (chase "Corridor Pursuit",
-# negotiation) are still covered by the SHIPPED_PACKS threshold tests above.
-#
-# Every shipped combat pack has now migrated its combat confrontation to an
-# SRD ruleset (beat_selection + hp_depletion), so COMBAT_PACKS is empty: there
-# is no longer any pack that must expose an opposed_check confrontation. The
-# per-pack opposed_check existence guard below parametrizes over this empty
-# list and so makes no assertion — the SHIPPED_PACKS threshold tests remain the
-# active calibration coverage.
-COMBAT_PACKS: list[str] = []
+# road_warrior (cwn) is the sole remaining dial/WN pack with opposed_check
+# confrontations after Phase 3. All other shipped packs in SHIPPED_PACKS have
+# migrated their combat confrontations to beat_selection + hp_depletion (WN
+# family) or Contest mode (Fate family):
+#   - caverns_and_claudes, elemental_harmony: WWN beat_selection + hp_depletion
+#   - mutant_wasteland: AWN beat_selection + hp_depletion
+#   - space_opera: SWN beat_selection + hp_depletion
+# road_warrior retains two opposed_check confrontations (negotiation @10, chase
+# @7) and belongs in this list as the live exemplar ensuring non-vacuous checks.
+COMBAT_PACKS: list[str] = ["road_warrior"]
 
 CALIBRATED_THRESHOLD = 7
 SEALED_LETTER_THRESHOLD = 30
@@ -172,11 +132,12 @@ def test_opponent_default_stats_no_parity_12_remains(pack_name: str):
 @pytest.mark.parametrize("pack_name", SHIPPED_PACKS)
 def test_opposed_check_thresholds_calibrated_to_7(pack_name: str):
     """ADR-093 AC-3: every confrontation using ``resolution_mode:
-    opposed_check`` has both player_metric.threshold and
-    opponent_metric.threshold equal to 7. Filtering by resolution_mode
-    rather than type name catches space_opera's ship_combat (mode is
-    opposed_check, type is "ship_combat") in addition to the literal
-    "combat" type across the other four packs."""
+    opposed_check`` (excluding negotiation type, which ADR-093 explicitly
+    leaves alone) has both player_metric.threshold and
+    opponent_metric.threshold equal to 7. Covers the dial/WN family;
+    road_warrior (cwn) is the live exemplar with a chase opposed_check @ 7.
+    Negotiation is skipped here — its floor is guarded by
+    test_negotiation_thresholds_not_collapsed_below_5."""
     rules = _load_rules_yaml(pack_name)
     confrontations = rules.get("confrontations", [])
 
@@ -184,6 +145,11 @@ def test_opposed_check_thresholds_calibrated_to_7(pack_name: str):
     for cdef in confrontations:
         ctype = cdef.get("type", "<unknown>")
         if cdef.get("resolution_mode") != OPPOSED_CHECK_MODE:
+            continue
+        # ADR-093 calibrates combat/chase opposed_checks to 7 but explicitly does
+        # NOT touch negotiation thresholds (see test_negotiation_thresholds_*).
+        # road_warrior's negotiation is opposed_check @ 10 by design (spec 2026-06-17 §5).
+        if ctype == "negotiation":
             continue
         for side in ("player_metric", "opponent_metric"):
             metric = cdef.get(side, {})
@@ -253,12 +219,13 @@ def test_negotiation_thresholds_not_collapsed_below_5(pack_name: str):
 def test_combat_pack_exposes_at_least_one_opposed_check_confrontation(pack_name: str):
     """Per-pack wiring guard: every COMBAT_PACKS entry must expose at least
     one ``resolution_mode: opposed_check`` confrontation. Without this, a
-    pack whose combat confrontation was accidentally deleted would still
+    pack whose combat confrontation was accidentally removed would still
     pass test_opposed_check_thresholds_calibrated_to_7 vacuously (empty
     `offending` list because no opposed_check entries to check).
 
-    Excludes tea_and_murder deliberately — it is social-only by design and has
-    no opposed_check confrontations. See COMBAT_PACKS comment.
+    Currently road_warrior is the sole COMBAT_PACKS member — the only
+    dial/WN pack retaining opposed_check confrontations after Phase 3.
+    See COMBAT_PACKS comment for the full exclusion rationale.
     """
     rules = _load_rules_yaml(pack_name)
     confrontations = rules.get("confrontations", [])

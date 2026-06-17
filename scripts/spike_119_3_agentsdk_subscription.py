@@ -47,24 +47,70 @@ _PROBE_MODEL = "claude-haiku-4-5-20251001"
 
 # Repo-context persona tells — strings that appear in the live reply only if the
 # SDK absorbed the repo CLAUDE.md / .claude agent personas (the 119-3 landmine).
-# A clean, isolated model knows none of these.
+# Deliberately repo-SPECIFIC and unambiguous: a clean, isolated model answering
+# "identify yourself" never emits these. Generic tokens a clean model CAN emit
+# (e.g. "orchestrate", "Claude Code") are excluded — they would false-positive a
+# clean run into a phantom contamination report (119-5 review finding).
 _PERSONA_TELLS = (
-    "Scrum Master",
-    "Pennyfarthing",
-    "orchestrator",
-    "Vizzini",
-    "Morpheus",
-    "Inigo Montoya",
-    "Dread Pirate",
-    "SOUL.md",
-    "genre pack",
-    "Claude Code",
+    "Pennyfarthing",  # the agent framework — never a generic word
+    "SideQuest",  # the project name — the actual 119-3 tell ("SideQuest orchestrator")
+    "SOUL.md",  # repo doctrine file
+    "genre pack",  # repo jargon
+    "Vizzini",  # SM persona
+    "Morpheus",  # alt SM persona
+    "Inigo Montoya",  # Dev persona
+    "Dread Pirate",  # Reviewer persona
+    "Buttercup",  # UX persona
 )
 
 
 def _refuse(msg: str) -> int:
     print(f"[isolation-smoke] REFUSED: {msg}", file=sys.stderr)
     return 1
+
+
+def _detect_persona_tells(text: str) -> list[str]:
+    """Return the repo-context persona tells present in ``text`` (case-insensitive).
+
+    Pure and side-effect free so the tell-list precision is unit-testable
+    without the live SDK.
+    """
+    lowered = text.lower()
+    return [tell for tell in _PERSONA_TELLS if tell.lower() in lowered]
+
+
+def _assess_reply(text: str) -> int:
+    """Judge one probe reply — 0 = isolation held, 1 = empty/contaminated.
+
+    An empty (or whitespace-only) reply is a REFUSAL, never a pass: the
+    contamination scan over an empty string is vacuous, so reporting "OK" would
+    silently green-light with zero signal — the exact No-Silent-Fallbacks trap
+    this smoke exists to avoid (119-5 review finding).
+
+    The full reply is echoed only on the empty/contaminated branches (stderr,
+    the diagnostic channel); a clean run prints just the verdict, so a
+    contaminated reply does not propagate into CI stdout logs on the happy path.
+    """
+    if not text.strip():
+        print(
+            "[isolation-smoke] INCONCLUSIVE: probe returned an empty reply — "
+            "cannot assess contamination; refusing to report a pass (No Silent "
+            "Fallbacks).",
+            file=sys.stderr,
+        )
+        return 1
+    leaked = _detect_persona_tells(text)
+    if leaked:
+        print(
+            f"[isolation-smoke] CONTAMINATED: repo-context persona tells {leaked} "
+            f"leaked into the live reply: {text!r}. The production isolation pins "
+            "(cwd=neutral / setting_sources=[] / add_dirs=[]) did not defeat "
+            "real-SDK context absorption — the 119-3 landmine has regressed.",
+            file=sys.stderr,
+        )
+        return 1
+    print("[isolation-smoke] OK: no repo-context contamination in the live reply.")
+    return 0
 
 
 async def _run_probe() -> int:
@@ -89,26 +135,14 @@ async def _run_probe() -> int:
             )
         ],
         # A single unused tool keeps to the proven 119-3 drive shape; the probe
-        # asks for self-identification, so the model answers with text.
+        # asks for self-identification, so the model answers with text. An empty
+        # reply (model emits only a tool call) is caught by _assess_reply's
+        # empty-text guard rather than silently passing.
         [ToolDefinition(name="noop", description="unused", input_schema={"type": "object"})],
         None,
         model=_PROBE_MODEL,
     )
-    text = result.text or ""
-    print(f"[isolation-smoke] probe reply: {text!r}")
-
-    leaked = [t for t in _PERSONA_TELLS if t.lower() in text.lower()]
-    if leaked:
-        print(
-            "[isolation-smoke] CONTAMINATED: repo-context persona tells leaked "
-            f"into the live reply: {leaked}. The production isolation pins "
-            "(cwd=neutral / setting_sources=[] / add_dirs=[]) did not defeat "
-            "real-SDK context absorption — the 119-3 landmine has regressed.",
-            file=sys.stderr,
-        )
-        return 1
-    print("[isolation-smoke] OK: no repo-context contamination in the live reply.")
-    return 0
+    return _assess_reply(result.text or "")
 
 
 def main() -> int:

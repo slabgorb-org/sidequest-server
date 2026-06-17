@@ -300,3 +300,48 @@ def test_seating_stamps_contest_state_and_emits_span():
     assert "fate.contest.seeded" in span_names, (
         f"expected fate.contest.seeded span; got spans: {span_names}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 7: dispatch_fate_action routes to the Contest engine (spec 2026-06-17 §2)
+# ---------------------------------------------------------------------------
+
+from sidequest.protocol.fate import FateActionPayload  # noqa: E402
+from sidequest.server.dispatch.fate_conflict import (  # noqa: E402
+    FateConflictError,
+    dispatch_fate_action,
+)
+from sidequest.server.dispatch.fate_contest import FateContestResult  # noqa: E402
+
+
+def _payload(action: str, skill: str = "Rapport") -> FateActionPayload:
+    return FateActionPayload(request_id="r1", action=action, skill=skill, difficulty=0)
+
+
+def test_dispatch_rejects_attack_in_a_contest():
+    enc = _contest_encounter()
+    snap = _snapshot(enc)
+    with pytest.raises(FateConflictError):
+        dispatch_fate_action(
+            payload=_payload("attack"),
+            actor_name="Lady Ash",
+            encounter=enc,
+            ruleset=get_ruleset_module("fate"),
+            snapshot=snap,
+            rng=_ZeroDice(),
+        )
+
+
+def test_dispatch_runs_contest_engine_when_barrier_closes():
+    enc = _contest_encounter()
+    snap = _snapshot(enc)  # 1 PC seated -> a single overcome closes the barrier
+    result = dispatch_fate_action(
+        payload=_payload("overcome"),
+        actor_name="Lady Ash",
+        encounter=enc,
+        ruleset=get_ruleset_module("fate"),
+        snapshot=snap,
+        rng=_ZeroDice(),
+    )
+    assert result.commitment_pending is False
+    assert isinstance(result.exchange, FateContestResult)

@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import random
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from opentelemetry import trace
 
@@ -49,6 +50,13 @@ from sidequest.telemetry.spans import (
     fate_taken_out_span,
 )
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
+
+if TYPE_CHECKING:
+    # fate_contest imports from fate_conflict at module level — use TYPE_CHECKING
+    # to break the cycle. At runtime, FateContestResult is imported lazily inside
+    # the barrier-close branch (Step 5). This guard keeps pyright happy on the
+    # widened FateDispatchResult.exchange type without introducing a circular import.
+    from sidequest.server.dispatch.fate_contest import FateContestResult
 
 logger = logging.getLogger(__name__)
 
@@ -720,7 +728,7 @@ class FateDispatchResult:
     conceded."""
 
     commitment_pending: bool
-    exchange: FateExchangeResult | None
+    exchange: FateExchangeResult | FateContestResult | None
     #: The acting PC's own 4dF roll (ADR-144 F3c / Story 118-3) — surfaced to the
     #: player as a FATE_ROLL the moment they act, whether or not the exchange
     #: fired. None on a concession (pre-roll, non-committing).
@@ -775,6 +783,13 @@ def dispatch_fate_action(
     # Bind a local so pyright narrows the action Literal past the concede guard
     # (member-access narrowing would not survive the resolve_action call).
     action = payload.action
+
+    # spec 2026-06-17 §2: a Contest has no harm — attacks are a Conflict action.
+    if encounter.contest is not None and action == "attack":
+        raise FateConflictError(
+            "'attack' is a Conflict action; this encounter is a Contest (no stress, "
+            "no consequences) — use 'overcome' (spec 2026-06-17 §2)"
+        )
 
     # Concession is pre-roll, non-committing.
     if action == "concede":
@@ -939,13 +954,26 @@ def dispatch_fate_action(
     )
 
     if fate_barrier_closed(encounter=encounter, snapshot=snapshot):
-        result = run_fate_exchange(
-            encounter=encounter,
-            snapshot=snapshot,
-            ruleset=ruleset,
-            rng=rng,
-            round_number=round_number,
-            _tracer=_tracer,
-        )
+        if encounter.contest is not None:
+            # Lazy import breaks the fate_conflict <-> fate_contest cycle.
+            from sidequest.server.dispatch.fate_contest import run_fate_contest_exchange
+
+            result = run_fate_contest_exchange(
+                encounter=encounter,
+                snapshot=snapshot,
+                ruleset=ruleset,
+                rng=rng,
+                round_number=round_number,
+                _tracer=_tracer,
+            )
+        else:
+            result = run_fate_exchange(
+                encounter=encounter,
+                snapshot=snapshot,
+                ruleset=ruleset,
+                rng=rng,
+                round_number=round_number,
+                _tracer=_tracer,
+            )
         return FateDispatchResult(commitment_pending=False, exchange=result, action_roll=outcome)
     return FateDispatchResult(commitment_pending=True, exchange=None, action_roll=outcome)

@@ -147,6 +147,12 @@ class Character(BaseModel):
     # chassis-voice block).
     background: str = ""
     drive: str = ""
+    # Player-authored physical appearance ("what you look like"), captured at
+    # chargen from the identity_capture scene's description input (Story 126-5).
+    # Distinct from `background` (history) and `backstory`. Default "" so legacy
+    # saves and characters built without an appearance input validate. Reserved
+    # as the seed for a future custom visual-prompt feature.
+    appearance: str = ""
 
     # Story 93-2: durable chargen provenance — one entry per ANSWERED scene
     # (the player's verbatim freeform text or chosen option label), in

@@ -337,6 +337,7 @@ def party_member_from_character(
     from sidequest.foundation.asset_urls import resolve_player_portrait_url
     from sidequest.protocol.models import (
         CharacterSheetDetails,
+        FateAspectEntry,
         InventoryItem,
         InventoryPayload,
         PartyMember,
@@ -425,6 +426,18 @@ def party_member_from_character(
         # only when non-empty (mechanics-first — Sebastien/Jade legibility).
         skills=dict(character.skills),
         foci=list(character.foci),
+        appearance=character.appearance,
+        # Deliverable B1: surface named Fate aspects on the player sheet,
+        # gated on fate_sheet presence (NOT ruleset string). Same Aspect→entry
+        # mapping the narrator projection uses (ruleset/fate_projection.py).
+        fate_aspects=(
+            [
+                FateAspectEntry(text=a.text, kind=a.kind, free_invokes=a.free_invokes)
+                for a in character.core.fate_sheet.aspects
+            ]
+            if character.core.fate_sheet is not None
+            else []
+        ),
     )
 
     # Currency noun from inventory.yaml::currency.name (pingpong

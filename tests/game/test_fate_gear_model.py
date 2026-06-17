@@ -40,7 +40,6 @@ from sidequest.genre.models.inventory import (
 )
 from sidequest.genre.models.rules import FateConfig
 
-
 # ---------------------------------------------------------------------------
 # Engine delta 1 — AspectKind gains "permission"
 # ---------------------------------------------------------------------------

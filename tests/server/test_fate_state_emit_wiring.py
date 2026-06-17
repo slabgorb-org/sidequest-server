@@ -112,9 +112,8 @@ def test_no_span_when_gated_off(capture_spans) -> None:
 
 
 def test_emitter_is_wired_into_session_handler() -> None:
-    from sidequest.server.websocket_handlers.fate_state_emit import _maybe_emit_fate_state
-
     import sidequest.server.websocket_session_handler as wsh
+    from sidequest.server.websocket_handlers.fate_state_emit import _maybe_emit_fate_state
 
     wired = getattr(wsh, "_maybe_emit_fate_state", None)
     assert wired is _maybe_emit_fate_state, (

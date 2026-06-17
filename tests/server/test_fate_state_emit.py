@@ -79,9 +79,8 @@ class _Sink:
 
 
 def test_emit_sends_message_on_fate_pack():
-    from sidequest.server.websocket_handlers.fate_state_emit import _maybe_emit_fate_state
-
     from sidequest.protocol.messages import FateStateMessage
+    from sidequest.server.websocket_handlers.fate_state_emit import _maybe_emit_fate_state
 
     sink = _Sink()
     _maybe_emit_fate_state(_Handler(), sd=_sd("fate"), snapshot=_snapshot(), emit_fn=sink)

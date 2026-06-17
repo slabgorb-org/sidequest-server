@@ -111,9 +111,8 @@ async def test_fires_on_open_ended_hook_via_classification() -> None:
     """The perseus_cloud repro. The open-ended hook trips ZERO curated markers,
     yet the classifier reports objective-given because the LLM classified it so —
     proving detection rides classification, not the keyword list."""
-    from sidequest.agents.post_narration_classifier import classify_unseeded_objective
-
     from sidequest.agents.dispatch_engagement_watcher import _UNMINTED_OBJECTIVE_MARKERS
+    from sidequest.agents.post_narration_classifier import classify_unseeded_objective
 
     # Premise guard: the hook genuinely trips none of the curated phrases, so the
     # OLD keyword path is silent on it. If a future marker covers it, fail loud so

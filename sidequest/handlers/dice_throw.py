@@ -75,7 +75,42 @@ class DiceThrowHandler:
 
         sd = session._session_data
         payload = msg.payload  # type: ignore[attr-defined]
-        rolling_player_id = getattr(msg, "player_id", "") or sd.player_id
+        # Story 118-9 / ADR-119: seat resolution is driven by the SERVER-
+        # authenticated identity (``sd.player_id`` — the Cf-Access identity bound
+        # at connect) as the SOLE source. Inbound ``msg.player_id`` is a client-
+        # controlled OUTPUT annotation, NEVER trusted as inbound identity. Trusting
+        # it (the old ``getattr(msg, "player_id", "") or sd.player_id``) let a
+        # client spoof another seat's player_id and roll AS that PC — the seat-map
+        # lookup below resolves the spoofed seat's character, so the victim's stats,
+        # their opposed-check pending actor, and the dice attribution all flow to
+        # the spoofer. This is the exact seat-spoof 118-8 fixed for FATE_ACTION
+        # (FateActionHandler explicitly mirrors this handler); the 118-9 audit
+        # confirmed DICE_THROW carried it too. A non-empty inbound id that disagrees
+        # with the authenticated one is a spoof attempt: surface it to the GM panel
+        # (the lie detector) and proceed as the authenticated PC.
+        rolling_player_id = sd.player_id
+        inbound_player_id = getattr(msg, "player_id", "") or ""
+        if inbound_player_id and inbound_player_id != rolling_player_id:
+            logger.warning(
+                "dice.throw.player_id_spoof_rejected inbound=%s authenticated=%s",
+                inbound_player_id,
+                rolling_player_id,
+            )
+            from sidequest.telemetry.watcher_hub import publish_event
+
+            publish_event(
+                "state_transition",
+                {
+                    "field": "session_binding",
+                    "op": "dice_throw_player_id_spoof_rejected",
+                    "inbound_player_id": inbound_player_id,
+                    "authenticated_player_id": rolling_player_id,
+                    "recovery": "auth_identity_enforced",
+                    "source": "dice_throw",
+                },
+                component="session",
+                severity="warning",
+            )
 
         snapshot = sd.snapshot
         encounter = snapshot.encounter

@@ -893,11 +893,22 @@ def dispatch_fate_action(
         # ``aspect_text``/boost defensive posture before any future narrator hint
         # interpolates ``commit.skill``.
         skill=sanitize_player_text(payload.skill),
-        target=payload.target,
+        # Story 118-9 / ADR-047: ``target`` and ``aspect_text`` are sealed beside
+        # the now-sanitized ``skill`` (118-8) and reach the narrator UNSANITIZED via
+        # ``render_encounter_summary`` — ``commit.target`` interpolates into the
+        # ``_resolve_attack`` hints, and ``commit.aspect_text`` survives raw on the
+        # F3a display projection. Sanitize both at the seal site for one consistent
+        # defensive posture across all three sealed player-text fields, KEEPING the
+        # hint-time + projection-time aspect sanitization as defense-in-depth.
+        # ``target`` is ``str | None`` (None = passive action); guard the None —
+        # ``sanitize_player_text(None)`` returns "", which would flip a passive
+        # action into a broken active one (``_opposition_total`` treats a non-None
+        # target as a real defender and rolls ``find_creature_core("")`` → raises).
+        target=(sanitize_player_text(payload.target) if payload.target is not None else None),
         difficulty=payload.difficulty,
         ladder_total=ladder_total,
         dice=dice,
-        aspect_text=payload.aspect_text,
+        aspect_text=sanitize_player_text(payload.aspect_text),
     )
 
     if fate_barrier_closed(encounter=encounter, snapshot=snapshot):

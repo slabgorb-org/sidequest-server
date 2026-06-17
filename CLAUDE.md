@@ -165,8 +165,9 @@ sidequest/
 │                     #   db_config.py, db_pool.py — connection config + psycopg_pool
 │                     #   importer.py — read-only legacy SQLite→Postgres importer
 │                     #   ruleset/ — pluggable SRD ruleset modules (registry.py, base.py
-│                     #     RulesetModule ABC, native.py default; without_number.py parent
-│                     #     with swn/awn/cwn/wwn siblings — ADR-142/143)
+│                     #     RulesetModule ABC; without_number.py parent with
+│                     #     swn/awn/cwn/wwn siblings + fate.py — ADR-142/143/144.
+│                     #     native.py vestigial: no live pack binds it)
 │                     #   creature_core.py — HpPool ablative HP on CreatureCore (Character + Npc)
 ├── dungeon/          # Runtime procedural Jaquaysed megadungeon — frontier hooks,
 │                     #   lookahead, materializer, region projection (ADR-106)
@@ -213,12 +214,23 @@ read-only import *source* via `sidequest/game/importer.py`.
 `sidequest/game/ruleset/` holds pluggable SRD ruleset modules behind the
 `RulesetModule` ABC (`base.py`), resolved through `registry.py` (ADR-117). A pack
 binds one via `ruleset:` in its `rules.yaml`; an unknown name raises
-`UnknownRulesetError` (fail loud). Modules: `native.py` (the dial/confrontation
-engine, ADR-033 — default) plus a **Without Number family** — `without_number.py`
-(the honest shared base extracted per ADR-142) with `swn.py` (Stars), `wwn.py`
-(Worlds), `cwn.py` (Cities), and `awn.py` (the AWN mutation variant) as siblings.
-Live bindings: SWN→space_opera, WWN→elemental_harmony + heavy_metal/barsoom +
-caverns_and_claudes/beneath_sunden, CWN→neon_dystopia, AWN→mutant_wasteland.
+`UnknownRulesetError` (fail loud). Six modules are registered, but **no live pack
+binds `native`** — every one of the 11 packs declares a Without Number or Fate
+ruleset (7 WN-family, 4 Fate):
+
+- `native.py` (the dial/confrontation engine, ADR-033) — still the schema default
+  for a pack that omits `ruleset:` and registered for back-compat, but
+  **vestigial**: nothing live binds it, there is no native turn flow in production.
+- **Without Number family** — `without_number.py` is the honest shared base
+  extracted per ADR-142; the four siblings subclass *it* (not each other — the
+  pre-ADR-142 "wwn subclasses swn" hierarchy was reparented): `swn.py` (Stars),
+  `wwn.py` (Worlds), `cwn.py` (Cities), `awn.py` (the AWN mutation variant).
+- `fate.py` — **Fate Core** (ADR-144), subclasses `RulesetModule` directly.
+
+Live bindings: SWN→space_opera; WWN→caverns_and_claudes + elemental_harmony +
+heavy_metal; CWN→neon_dystopia + road_warrior; AWN→mutant_wasteland;
+Fate→pulp_noir + spaghetti_western + tea_and_murder + wry_whimsy. Turn flows for
+both families: `orc-quest/docs/sequence/ruleset-turns.md`.
 
 Ablative HP (`creature_core.py`) layers `HpPool` (`current`/`max`/`base_max`)
 onto `CreatureCore`, shared by `Character` and `Npc`: damage flows through the
@@ -229,9 +241,18 @@ emits a `state_patch_hp` OTEL span.
 Balance It"):** when a pack binds a Without Number ruleset, that ruleset's engine
 **replaces** the native combat engine for what it covers — it is not layered on
 top and tuned to fit. The native beat/dial scaffolding is *removed* from a
-Without-Number combat path, not balanced against it. **ADR-114/-143 are partial**
-— the WN-owns-the-round work (de-nativizing combat under a WN binding, the
-dying/down window, solo-actuator) is in flight (epic 108).
+Without-Number combat path, not balanced against it. The same applies to Fate
+(ADR-144): the Fate engine replaces the native ruleset for the detective/social
+genres. End state — two SRDs, zero homebrew rulesets to balance. **ADR-114/-143
+are partial** — the WN-owns-the-round work (de-nativizing combat under a WN
+binding, the dying/down window, solo-actuator) is in flight (epic 108).
+
+**Determinative dice (ADR-074, doctrine):** the player throws the die and the
+settled physics faces ARE the roll; the server resolves from the reported faces
+and rolls RNG only for NPCs/opponents (no client to throw). The WN/d20 path works
+this way today; Story 126-7 brings Fate into line (today's Fate path still rolls
+`4dF` server-side with the tray as decoration — being torn out). Never "server
+rolls then animate a decoration."
 
 ### Intent Router (ADR-113, live/partial)
 

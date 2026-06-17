@@ -24,17 +24,21 @@ view. New summary fields go here, not in the builder.
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from opentelemetry import trace
 
 from sidequest.game.builder import CharacterBuilder, humanize_snake_case
 from sidequest.genre.models.inventory import InventoryConfig
 from sidequest.genre.models.pack import GenrePack
-from sidequest.genre.models.rules import RulesConfig
+from sidequest.genre.models.rules import FateConfig, RulesConfig
 from sidequest.protocol.messages import (
     CharacterCreationMessage,
     CharacterCreationPayload,
 )
+
+if TYPE_CHECKING:
+    from sidequest.game.ruleset.fate_chargen import FateChargenChoices
 
 # Canonical chargen field keys used by ``chargen_field_labels`` lookups in
 # rules.yaml. Genre packs can override any subset; unspecified keys fall
@@ -212,6 +216,30 @@ def render_confirmation_summary(
     if resolved_name is not None:
         _add("name", resolved_name)
 
+    # --- Fate packs: show the Fate sheet, not native Race/Class/Personality
+    # ([FATE/UX], playtest 2026-06-17). A ``ruleset: fate`` pack walks the
+    # interactive aspects/pyramid/stunts steps (121-8); the confirmation card
+    # must reflect THAT sheet, not the raw chargen-answer labels the native
+    # path renders ("Class: I Talk My Way In", "Personality: Anxious") — which
+    # are category errors in Fate and don't even read the committed character.
+    # Early-return a Fate-shaped preview built from the recorded choices so the
+    # card matches the wired sheet by construction. Only fires when the pack is
+    # fate-bound AND the interactive choices were recorded (the F4a default-
+    # seed path leaves them None and falls through to the native summary).
+    from sidequest.game.ruleset.fate_chargen import FateChargenChoices
+
+    fate_cfg = rules.ruleset_config()
+    fate_choices = builder.fate_choices()
+    if isinstance(fate_cfg, FateConfig) and isinstance(fate_choices, FateChargenChoices):
+        return _render_fate_confirmation_summary(
+            builder=builder,
+            cfg=fate_cfg,
+            choices=fate_choices,
+            resolved_name=resolved_name,
+            name_source=name_source,
+            player_id=player_id,
+        )
+
     # --- Race / Class / Personality ---------------------------------------
     # Only show fields the chargen actually accumulated. Genres like
     # caverns_and_claudes deliberately omit race/class scenes — we don't lie
@@ -386,6 +414,102 @@ def render_confirmation_summary(
         # the "Your Character" preview without parsing the summary
         # blob; the legacy ``summary`` is still emitted as a fallback
         # for any client that pre-dates this field.
+        character_preview=preview if preview else None,
+    )
+    return CharacterCreationMessage(payload=payload, player_id=player_id)
+
+
+def _render_fate_confirmation_summary(
+    *,
+    builder: CharacterBuilder,
+    cfg: FateConfig,
+    choices: FateChargenChoices,
+    resolved_name: str | None,
+    name_source: _NameSource,
+    player_id: str,
+) -> CharacterCreationMessage:
+    """Confirmation preview for a Fate-bound pack ([FATE/UX], playtest 2026-06-17).
+
+    Shows the Fate sheet the player just authored — High Concept, Trouble, free
+    aspects, the skill pyramid, stunts, and refresh/fate points — instead of the
+    native Race/Class/Personality fields (a category error in Fate). The sheet is
+    rebuilt from the recorded ``choices`` via ``build_fate_sheet`` — the SAME
+    constructor ``FateRulesetModule.apply_fate_chargen`` uses at ``build()`` time
+    — so the preview matches the wired character by construction. Pure view; no
+    validation (``build()`` re-validates and fails loud on an illegal sheet).
+
+    Emits ``character_creation.confirmation_rendered`` with ``ruleset="fate"`` so
+    the GM panel can confirm the Fate-shaped card fired (lie-detector parity with
+    the native path's event)."""
+    from sidequest.game.ruleset.fate_chargen import build_fate_sheet
+    from sidequest.game.ruleset.fate_resolution import ladder_name
+
+    sheet = build_fate_sheet(choices, cfg)
+
+    parts: list[str] = []
+    preview: dict[str, str] = {}
+
+    def _add(label: str, value: str) -> None:
+        parts.append(f"{label}: {value}")
+        preview[label] = value
+
+    if resolved_name is not None:
+        _add("Name", resolved_name)
+    pronoun = builder.accumulated().pronoun_hint
+    if pronoun is not None:
+        _add("Pronouns", pronoun)
+
+    high_concept = next((a.text for a in sheet.aspects if a.kind == "high_concept"), "")
+    trouble = next((a.text for a in sheet.aspects if a.kind == "trouble"), "")
+    if high_concept:
+        _add("High Concept", high_concept)
+    if trouble:
+        _add("Trouble", trouble)
+    free_aspects = [a.text for a in sheet.aspects if a.kind == "character"]
+    if free_aspects:
+        _add("Aspects", "; ".join(free_aspects))
+
+    # Skill pyramid, apex first; ladder-named so a mechanics-first player reads
+    # "Deceive (Great +4)", not a bare "+4" (player-facing math — Sebastien/Jade).
+    placed = sorted(
+        ((name, rating) for name, rating in sheet.skills.items() if rating > 0),
+        key=lambda kv: (-kv[1], kv[0]),
+    )
+    if placed:
+        _add(
+            "Skills",
+            ", ".join(f"{name} ({ladder_name(rating)} +{rating})" for name, rating in placed),
+        )
+
+    _add("Stunts", "; ".join(s.name for s in sheet.stunts) if sheet.stunts else "None")
+    _add("Refresh", str(sheet.refresh))
+    _add("Fate Points", str(sheet.fate_points))
+
+    summary = "\n".join(parts)
+
+    trace.get_current_span().add_event(
+        "character_creation.confirmation_rendered",
+        {
+            "event": "confirmation_rendered",
+            "ruleset": "fate",
+            "name_source": name_source.value,
+            "has_name": resolved_name is not None,
+            "aspect_count": len(sheet.aspects),
+            "skill_count": len(placed),
+            "stunt_count": len(sheet.stunts),
+            "refresh": sheet.refresh,
+            "player_id": player_id,
+        },
+    )
+
+    payload = CharacterCreationPayload(
+        phase="confirmation",
+        scene_index=None,
+        total_scenes=builder.total_scenes(),
+        summary=summary,
+        # Fate-shaped mirror of the joined ``summary``; the React client renders
+        # the preview dict generically (label -> value), so no client change is
+        # needed to show aspects/skills/stunts instead of Class/Personality.
         character_preview=preview if preview else None,
     )
     return CharacterCreationMessage(payload=payload, player_id=player_id)

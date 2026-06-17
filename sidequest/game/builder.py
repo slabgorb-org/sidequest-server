@@ -339,6 +339,10 @@ class SceneResult:
     anchors_added: list[LoreAnchor] = field(default_factory=list)
     choice_description: str | None = None
     choice_label: str | None = None
+    # Player-typed physical appearance from an identity_capture scene's
+    # description input. Rides the SceneResult so go_back/revert drops it with
+    # the scene. None for every non-story scene (Story 126-5).
+    appearance: str | None = None
     # Display-only vocation label derived from freeform text on a
     # class-selecting scene (every canned choice carries class_hint, but the
     # freeform path carries none). Feeds the {class} prose slot WITHOUT
@@ -452,6 +456,7 @@ class AccumulatedChoices:
     jungian_hint: str | None = None
     rpg_role_hint: str | None = None
     reputation_bonus: str | None = None
+    appearance: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -1512,6 +1517,8 @@ class CharacterBuilder:
                 acc.background = eff.background
                 if result.choice_label is not None:
                     acc.background_label = result.choice_label
+            if result.appearance is not None:
+                acc.appearance = result.appearance
             if eff.mutation_hint is not None:
                 acc.mutation_hint = eff.mutation_hint
             if eff.origin_trait is not None:
@@ -2540,17 +2547,18 @@ class CharacterBuilder:
         """Apply a StoryInput to the_story scene.
 
         Records pronouns into ``MechanicalEffects.pronoun_hint`` (matching
-        the existing pronouns-scene channel) and folds the freeform
-        background + description text into ``MechanicalEffects.background``
-        (matching the existing backstory-scene channel). When
-        ``identity_capture.pronouns_required`` is True, blank/whitespace
-        pronouns raise ``UnfilledArrangementError``.
+        the existing pronouns-scene channel) and routes the freeform fields
+        to their correct channels (Story 126-5):
 
-        Description and background are joined with a separator since
-        ``MechanicalEffects`` has no dedicated ``description`` field;
-        the combined text lands in ``background`` so downstream
-        AccumulatedChoices.background pickup is unchanged. Empty
-        components are dropped from the join.
+        - ``response.background`` ("what you did before") → ``MechanicalEffects.background``
+          → ``AccumulatedChoices.background`` → ``Character.background``
+        - ``response.description`` ("what you look like") → ``SceneResult.appearance``
+          → ``AccumulatedChoices.appearance`` → ``Character.appearance``
+
+        These MUST NOT be joined — appearance text in background pollutes
+        the canned-opening trigger-background lookup and the backstory.
+        When ``identity_capture.pronouns_required`` is True, blank/whitespace
+        pronouns raise ``UnfilledArrangementError``.
         """
         if not isinstance(self._phase, InProgress):
             raise WrongPhaseError(expected="InProgress", actual=self._phase_name())
@@ -2565,16 +2573,15 @@ class CharacterBuilder:
         if pronouns_required and not pronouns:
             raise UnfilledArrangementError("pronouns required")
 
-        # Compose the scene's recorded effects: pronoun_hint + background.
-        background_parts = [
-            response.background.strip(),
-            response.description.strip(),
-        ]
-        joined_background = " | ".join(p for p in background_parts if p)
+        # Background ("what you did before") stays the backstory channel.
+        # Appearance ("what you look like") routes to its own field via the
+        # SceneResult carrier — it MUST NOT be joined into background (Story 126-5).
+        typed_background = response.background.strip()
+        typed_appearance = response.description.strip()
 
         effects = MechanicalEffects(
             pronoun_hint=pronouns or None,
-            background=joined_background or None,
+            background=typed_background or None,
         )
 
         hooks = extract_hooks(scene.id, effects)
@@ -2587,6 +2594,7 @@ class CharacterBuilder:
                 hooks_added=hooks,
                 anchors_added=anchors,
                 choice_description=None,
+                appearance=typed_appearance or None,
                 scene_id=scene.id,
                 scene_index=scene_index,
             )
@@ -2965,6 +2973,10 @@ class CharacterBuilder:
             SPAN_CHARGEN_BACKSTORY_COMPOSED,
             {"method": backstory_method, "length": len(backstory_text)},
         )
+        span.add_event(
+            "chargen.appearance_captured",
+            {"present": bool(acc.appearance), "length": len(acc.appearance or "")},
+        )
 
         # Abilities: resolve from mutation / affinity / training hints.
         # Each hint type maps to an AbilitySource. The label and
@@ -3311,6 +3323,7 @@ class CharacterBuilder:
             archetype_provenance=None,
             background=acc.background_label or "",
             drive=acc.backstory_label or "",
+            appearance=acc.appearance or "",
             # Display-only flavor labels (symmetric with background_label).
             # acc.race_label / acc.class_label capture a CHOICE's chosen flavor
             # when it differs from the collapsed mechanical hint; empty when the

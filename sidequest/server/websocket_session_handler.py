@@ -507,6 +507,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
             from sidequest.handlers.client_error import HANDLER as CLIENT_ERROR_HANDLER
             from sidequest.handlers.dice_throw import HANDLER as DICE_THROW_HANDLER
             from sidequest.handlers.fate_action import HANDLER as FATE_ACTION_HANDLER
+            from sidequest.handlers.fate_throw import HANDLER as FATE_THROW_HANDLER
             from sidequest.handlers.journal_request import HANDLER as JOURNAL_REQUEST_HANDLER
             from sidequest.handlers.orbital_intent import HANDLER as ORBITAL_INTENT_HANDLER
             from sidequest.handlers.player_action import HANDLER as PLAYER_ACTION_HANDLER
@@ -521,6 +522,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                 "PLAYER_SEAT": PLAYER_SEAT_HANDLER,
                 "DICE_THROW": DICE_THROW_HANDLER,
                 "FATE_ACTION": FATE_ACTION_HANDLER,
+                "FATE_THROW": FATE_THROW_HANDLER,
                 "CHECK_THROW": CHECK_THROW_HANDLER,
                 "CLIENT_ERROR": CLIENT_ERROR_HANDLER,
                 "YIELD": YIELD_HANDLER,

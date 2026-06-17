@@ -740,9 +740,18 @@ def dispatch_fate_action(
     snapshot: GameSnapshot,
     rng: random.Random,
     round_number: int = 0,
+    thrown_faces: tuple[int, int, int, int] | None = None,
     _tracer: trace.Tracer | None = None,
 ) -> FateDispatchResult:
     """Route a player's Fate action to the exchange engine (ADR-144 F1d).
+
+    ``thrown_faces`` (ADR-148, Story 126-7): when the player physically threw the
+    4dF (arriving via ``FateThrowHandler``), the proactive action resolves from
+    those settled faces — the faces ARE the roll, no ``roll_4df`` on the player
+    path. ``None`` is the transitional legacy/internal path (server rolls the
+    player's action); it is removed when 126-8 lands and no server-rolled player
+    path remains. NPC/opponent and defense rolls (``_seat_opponent_commits`` /
+    ``_roll_defense``) stay server-side regardless.
 
     The routing decision is ``isinstance(ruleset, FateRulesetModule)`` — exactly
     how ``dispatch_dice_throw`` gates WN combat on ``WithoutNumberRulesetModule``.
@@ -855,24 +864,24 @@ def dispatch_fate_action(
         value=payload.difficulty,
         kind="active" if payload.target is not None else "passive",
     )
-    outcome = ruleset.resolve_action(
-        skill_rating=rating,
-        opposition=opposition,
-        rng=rng,
-        invoke_bonus=invoke_bonus,
-        actor=actor_name,
-        _tracer=_tracer,
-    )
-    # Story 118-6 AC#1 (F3d reroll execution): ``invoke_aspect`` returns 0 for
-    # 'reroll' — "the reroll itself is the caller's job" (fate.py:280). Perform it
-    # HERE: re-roll the 4dF and KEEP the new outcome (SRD — a reroll REPLACES, it is
-    # not take-better). The second ``resolve_action`` emits its own
-    # ``fate.action_resolved`` span, so the GM panel sees the kept reroll rather than
-    # the discarded first roll — without this the ``fate.aspect.invoked{mode='reroll'}``
-    # span would report a reroll the engine never performed (the Illusionism the
-    # OTEL lie-detector exists to catch). ``invoke_bonus`` is 0 for a reroll, so the
-    # re-roll carries no +2.
-    if invoked_reroll:
+    if thrown_faces is not None:
+        # ADR-148 (Story 126-7): the player physically threw — the four settled dF
+        # faces ARE the roll. Resolve from them; NEVER call roll_4df on this path.
+        # Reroll semantics under determinism: the client already RE-THREW and
+        # ``thrown_faces`` are the final faces, so we do NOT resolve a second time.
+        # The fate-point / free-invoke accounting for the reroll already happened in
+        # ``invoke_aspect`` above (the spend); ``invoke_bonus`` is 0 for a reroll, so
+        # the faces resolve with no +2 — the player-visible behavior (spend a fate
+        # point, get new dice) is unchanged, only the dice SOURCE moved to the client.
+        outcome = ruleset.resolve_action_from_faces(
+            skill_rating=rating,
+            opposition=opposition,
+            faces=thrown_faces,
+            invoke_bonus=invoke_bonus,
+            actor=actor_name,
+            _tracer=_tracer,
+        )
+    else:
         outcome = ruleset.resolve_action(
             skill_rating=rating,
             opposition=opposition,
@@ -881,6 +890,24 @@ def dispatch_fate_action(
             actor=actor_name,
             _tracer=_tracer,
         )
+        # Story 118-6 AC#1 (F3d reroll execution): ``invoke_aspect`` returns 0 for
+        # 'reroll' — "the reroll itself is the caller's job" (fate.py:280). Perform
+        # it HERE on the legacy server-rolled path: re-roll the 4dF and KEEP the new
+        # outcome (SRD — a reroll REPLACES, it is not take-better). The second
+        # ``resolve_action`` emits its own ``fate.action_resolved`` span, so the GM
+        # panel sees the kept reroll rather than the discarded first roll — without
+        # this the ``fate.aspect.invoked{mode='reroll'}`` span would report a reroll
+        # the engine never performed (the Illusionism the OTEL lie-detector exists to
+        # catch). ``invoke_bonus`` is 0 for a reroll, so the re-roll carries no +2.
+        if invoked_reroll:
+            outcome = ruleset.resolve_action(
+                skill_rating=rating,
+                opposition=opposition,
+                rng=rng,
+                invoke_bonus=invoke_bonus,
+                actor=actor_name,
+                _tracer=_tracer,
+            )
     ladder_total, dice = outcome.ladder_total, outcome.dice
 
     seal_fate_commit(

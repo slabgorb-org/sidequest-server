@@ -86,6 +86,12 @@ class MessageType(StrEnum):
     # actions or a concession). Routed to FateActionHandler → fate_conflict, gated
     # by isinstance(ruleset, FateRulesetModule). Distinct from DICE_THROW (beat+d20).
     FATE_ACTION = "FATE_ACTION"
+    # ADR-148 (Story 126-7): a player's PROACTIVE Fate roll is physics-is-the-roll
+    # — the four settled dF faces ARE the roll. FATE_THROW carries the action
+    # intent + the authoritative face[4] + the throw_params gesture (the Fate analog
+    # of DICE_THROW). Routed to FateThrowHandler → fate_conflict with thrown_faces.
+    # Distinct from FATE_ACTION (the non-roll verbs: concede / compel_*).
+    FATE_THROW = "FATE_THROW"
     BEAT_SELECTION = "BEAT_SELECTION"
     SCRAPBOOK_ENTRY = "SCRAPBOOK_ENTRY"
     YIELD = "YIELD"

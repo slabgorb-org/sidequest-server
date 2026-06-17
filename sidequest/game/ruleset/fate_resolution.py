@@ -96,16 +96,16 @@ def roll_4df(rng: random.Random) -> tuple[int, int, int, int]:
     )
 
 
-def resolve_action(
+def _build_outcome(
+    dice: tuple[int, int, int, int],
     *,
     skill_rating: int,
     opposition: Opposition,
-    rng: random.Random,
-    invoke_bonus: int = 0,
+    invoke_bonus: int,
 ) -> FateOutcome:
-    """Resolve one Fate action. ``invoke_bonus`` is the net +2-per-invoke
-    modifier already decided by the caller (reroll handling is a higher layer)."""
-    dice = roll_4df(rng)
+    """Ladder math shared by both resolution paths (ADR-148): sum the four dF
+    faces, add the skill rating and any invoke bonus, classify vs the opposition.
+    The dice *source* differs between callers; the resolution does not."""
     roll_total = sum(dice)
     ladder_total = roll_total + skill_rating + invoke_bonus
     shifts, tier = classify_outcome(ladder_total, opposition.value)
@@ -116,4 +116,42 @@ def resolve_action(
         opposition=opposition.value,
         shifts=shifts,
         tier=tier,
+    )
+
+
+def resolve_action(
+    *,
+    skill_rating: int,
+    opposition: Opposition,
+    rng: random.Random,
+    invoke_bonus: int = 0,
+) -> FateOutcome:
+    """NPC path: roll 4dF server-side. ``invoke_bonus`` is the net +2-per-invoke
+    modifier already decided by the caller (reroll handling is a higher layer)."""
+    return _build_outcome(
+        roll_4df(rng),
+        skill_rating=skill_rating,
+        opposition=opposition,
+        invoke_bonus=invoke_bonus,
+    )
+
+
+def resolve_action_from_faces(
+    *,
+    skill_rating: int,
+    opposition: Opposition,
+    faces: tuple[int, int, int, int],
+    invoke_bonus: int = 0,
+) -> FateOutcome:
+    """Player path (ADR-148): resolve from the client's settled dF faces — the
+    faces ARE the roll. Never touches an ``rng``. Fails loud on a malformed face
+    set (No Silent Fallbacks) — the wire layer validates too, this is defense in
+    depth."""
+    if len(faces) != 4 or any(f not in (-1, 0, 1) for f in faces):
+        raise ValueError(f"invalid dF faces: {faces!r}")
+    return _build_outcome(
+        tuple(faces),
+        skill_rating=skill_rating,
+        opposition=opposition,
+        invoke_bonus=invoke_bonus,
     )

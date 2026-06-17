@@ -30,7 +30,7 @@ from sidequest.protocol.dice import (
     DiceThrowPayload,
 )
 from sidequest.protocol.enums import MessageType, NarratorVerbosity, NarratorVocabulary
-from sidequest.protocol.fate import FateActionPayload
+from sidequest.protocol.fate import FateActionPayload, FateThrowPayload
 from sidequest.protocol.models import (
     ClassRequirement,
     CompanionMember,
@@ -1365,6 +1365,15 @@ class FateActionMessage(ProtocolBase):
     player_id: str = ""
 
 
+class FateThrowMessage(ProtocolBase):
+    """GameMessage::FateThrow — a player's PROACTIVE Fate roll with authoritative
+    dF faces (ADR-148, Story 126-7). Physics-is-the-roll, mirroring DICE_THROW."""
+
+    type: Literal[MessageType.FATE_THROW] = MessageType.FATE_THROW
+    payload: FateThrowPayload
+    player_id: str = ""
+
+
 class CheckThrowPayload(ProtocolBase):
     """Client -> server: initiate a non-beat SWN skill check or save.
 
@@ -1779,6 +1788,7 @@ _Phase1Variant = Annotated[
     | DiceRequestMessage
     | DiceThrowMessage
     | FateActionMessage
+    | FateThrowMessage
     | CheckThrowMessage
     | DiceResultMessage
     | OrbitalIntentMessage

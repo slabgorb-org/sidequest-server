@@ -193,7 +193,12 @@ def _fallback_seed(dice: tuple[int, int, int, int]) -> int:
     return s + 1
 
 
-def build_fate_roll_payload(outcome: FateOutcome, *, seed: int | None = None) -> FateRollPayload:
+def build_fate_roll_payload(
+    outcome: FateOutcome,
+    *,
+    seed: int | None = None,
+    throw_params: ThrowParams | None = None,
+) -> FateRollPayload:
     """Project a resolved 4dF roll onto the wire (ADR-144 F3c / Story 118-3).
 
     Faithful, lossless map of the engine's ``FateOutcome`` to the player-facing
@@ -203,9 +208,11 @@ def build_fate_roll_payload(outcome: FateOutcome, *, seed: int | None = None) ->
 
     ``throw_params`` + ``seed`` drive the 3D FateDiceTray replay animation (Story
     125-4 / ADR-144 F3g): the dice tumble instead of rendering the idle pickup
-    row. The gesture is a shared constant; the production caller supplies a
-    per-turn ``seed`` so each roll re-throws, while a dice-derived fallback keeps
-    the standalone projection self-consistent.
+    row. For a PLAYER throw (ADR-148, Story 126-7) the caller passes the THROWER's
+    own ``throw_params`` so every seat replays the identical tumble; for an NPC
+    roll (no client gesture) it defaults to the synthesized ``_DEFAULT_FATE_THROW``.
+    The production caller supplies a per-turn ``seed`` so each roll re-throws,
+    while a dice-derived fallback keeps the standalone projection self-consistent.
     """
     return FateRollPayload(
         dice=outcome.dice,
@@ -216,6 +223,6 @@ def build_fate_roll_payload(outcome: FateOutcome, *, seed: int | None = None) ->
         shifts=outcome.shifts,
         tier=str(outcome.tier),
         succeeded_with_style=outcome.tier == FateTier.SucceedWithStyle,
-        throw_params=_DEFAULT_FATE_THROW,
+        throw_params=throw_params if throw_params is not None else _DEFAULT_FATE_THROW,
         seed=seed if seed is not None else _fallback_seed(outcome.dice),
     )

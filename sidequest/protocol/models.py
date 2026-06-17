@@ -510,6 +510,11 @@ class CharacterSheetDetails(ProtocolBase):
     """Player-authored physical appearance from chargen (Story 126-5). Empty
     for characters built without an appearance input; the UI renders the
     Appearance section only when non-empty."""
+    fate_aspects: list[FateAspectEntry] = Field(default_factory=list)
+    """Named Fate character aspects (high_concept / trouble / character) for the
+    player sheet (Deliverable B1). Reuses the FateAspectEntry wire type. Empty
+    for non-Fate characters (fate_sheet is None); the UI renders an Aspects
+    section only when non-empty."""
 
 
 # ---------------------------------------------------------------------------
@@ -1212,3 +1217,16 @@ class TacticalGridPayload(ProtocolBase):
     """Typed location-entity manifest per ADR-109. Loaded from the room
     YAML's top-level ``entities`` block. Empty when the room has no
     manifest authored yet — graceful absence, not a lookup failure."""
+
+
+# ---------------------------------------------------------------------------
+# Forward-reference resolution
+# ---------------------------------------------------------------------------
+#
+# ``from __future__ import annotations`` (top of file) makes every annotation a
+# lazy string, so ``CharacterSheetDetails.fate_aspects: list[FateAspectEntry]``
+# refers to a class defined LATER in this module (Deliverable B1). Rebuild the
+# model now that ``FateAspectEntry`` is in module scope so pydantic resolves the
+# forward reference. Fail loud if it cannot — a silently-unresolved ref would
+# defeat the No Silent Fallbacks rule and surface as a confusing runtime error.
+CharacterSheetDetails.model_rebuild()

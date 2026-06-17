@@ -73,6 +73,12 @@ async def test_turn_complete_carries_spans_array_for_timeline_chart(monkeypatch)
     bar per pipeline phase, in observed order — so the GM panel sees
     where the turn time actually went rather than a single agent_llm
     bar filling the row.
+
+    124-2 evolved the flat-sequential bars into a depth-1 containment
+    tree: a ``turn`` root (depth 0, non-leaf) wholly contains the measured
+    phases (depth 1, leaf). The bug-#7 guarantee is preserved — every phase
+    still rides as its own bar, in observed order — and the test now also
+    pins the containment hierarchy the flame chart renders.
     """
     captured: list[dict[str, Any]] = []
 
@@ -98,8 +104,18 @@ async def test_turn_complete_carries_spans_array_for_timeline_chart(monkeypatch)
     payload = captured[0]
     assert "spans" in payload, "turn_complete must include `spans` array"
     spans = payload["spans"]
-    # One span per phase, dict iteration order preserved (Python 3.7+).
-    assert [s["name"] for s in spans] == [
+
+    # The first span is the turn-root container (depth 0, non-leaf).
+    root = spans[0]
+    assert root["name"] == "turn"
+    assert root["depth"] == 0
+    assert root["leaf"] is False
+    assert root["start_ms"] == 0
+
+    # The remaining spans are the pipeline phases, one bar each, depth-1
+    # leaf work, in observed order (dict iteration order, Python 3.7+).
+    phases = spans[1:]
+    assert [s["name"] for s in phases] == [
         "prompt_build",
         "narrator_subprocess",
         "narrator_extraction",
@@ -108,14 +124,19 @@ async def test_turn_complete_carries_spans_array_for_timeline_chart(monkeypatch)
         "broadcast",
         "dispatch_post",
     ]
-    # Each span has a numeric start_ms / duration_ms, monotonically
-    # advancing — the dashboard renders bars left-to-right based on
-    # these.
+    # Phases are depth-1 leaves with numeric start_ms / duration_ms,
+    # monotonically advancing — the dashboard tiles them left-to-right and
+    # nests them under the root container.
     running = 0
-    for span in spans:
+    for span in phases:
+        assert span["depth"] == 1
+        assert span["leaf"] is True
         assert span["start_ms"] == running
         assert span["duration_ms"] >= 1
         running += span["duration_ms"]
+    # The root contains every phase: it starts no later and ends no earlier.
+    assert root["start_ms"] <= phases[0]["start_ms"]
+    assert root["start_ms"] + root["duration_ms"] >= running
     # Every span carries a `component` (the dashboard's flame label).
     assert all("component" in s for s in spans)
 

@@ -207,6 +207,41 @@ def test_light_pool_wired_on_resume_for_save_predating_pool(tmp_path: Path) -> N
 
 
 @pytest.mark.integration
+def test_session_slug_bound_on_resume_connect(tmp_path: Path) -> None:
+    """Wiring gate (OTEL-INSPECTOR, sq-playtest 2026-06-16): the real slug-connect
+    path must bind the live-session slug so every span/event minted for the
+    session is tagged with it — the partition key the GM-panel Live view scopes
+    on so concurrent worlds stop bleeding into one timeline. Without the
+    ``bind_session_slug(slug)`` call in connect.py, live watcher spans go
+    untagged and the Live view can't isolate the session.
+    """
+    from sidequest.telemetry.watcher_hub import (
+        bind_session_slug,
+        current_session_slug,
+    )
+
+    if not (CONTENT_ROOT / _RESUME_GENRE).is_dir():
+        pytest.skip("content pack not found")
+    slug = "resume-binds-session-slug"
+    _persist_resume_snapshot(slug, light_pool=None)
+
+    # Clear any slug a prior test left on the process-global fallback so the
+    # assertion proves THIS connect set it (the bind runs inside the connect
+    # task; its value reaches us here via the process-global fallback).
+    bind_session_slug(None)
+
+    registry = RoomRegistry()
+    handler = _resume_handler(tmp_path, registry, "sock-resume")
+    run(_reconnect(handler, slug))
+
+    assert current_session_slug() == slug, (
+        "the slug-connect path did not bind the live-session slug — "
+        "bind_session_slug(slug) is not wired into connect.py, so live watcher "
+        "spans go untagged and the Live view can't isolate this session"
+    )
+
+
+@pytest.mark.integration
 def test_light_current_preserved_on_resume(tmp_path: Path) -> None:
     """A mid-delve `light` value must survive a reload: the resume-branch
     wire_genre_resources upsert re-applies the pack declaration WITHOUT

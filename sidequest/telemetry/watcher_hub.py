@@ -322,6 +322,51 @@ def _resolve_out_of_frame_sink() -> TelemetrySink | None:
     return _telemetry_sink
 
 
+# ---------------------------------------------------------------------------
+# Live session-slug binding (OTEL-INSPECTOR fix, sq-playtest 2026-06-16) — the
+# partition key that lets the GM-panel Live view scope its span stream to ONE
+# session instead of mixing every concurrent world into one timeline.
+#
+# DISTINCT from the integer ``session_id`` span attribute (the Postgres row id,
+# ``repository.session_id: int``). The dashboard's Live view selects by SLUG
+# (``SessionStateView.session_key`` == the save slug == ``payload.game_slug``),
+# so the partition key broadcast on every live event must be that slug STRING,
+# not the int row id. Naming it ``session_slug`` keeps the two unambiguous and
+# avoids clobbering the existing ``session_id`` attribute on cost/seed spans.
+#
+# Same ContextVar-authoritative / process-global-fallback shape (and rationale)
+# as the TelemetrySink binding above: each ``/ws`` connection runs as its own
+# asyncio Task with an isolated copied context, so two concurrent sessions in
+# one process resolve their OWN slug. ``WatcherSpanProcessor.on_start`` runs in
+# the connection's task, so it reads the right slug and stamps it on the span;
+# ``on_end`` (possibly on another thread) just reads the attribute back.
+# ---------------------------------------------------------------------------
+_process_session_slug: str | None = None  # process-global fallback binding
+_session_slug: ContextVar[str | None] = ContextVar("sidequest_session_slug", default=None)
+
+
+def bind_session_slug(slug: str | None) -> None:
+    """Bind the live-session slug for the current context (and process fallback).
+
+    Called once per ``/ws`` connection alongside :func:`bind_event_store`. The
+    ContextVar is authoritative (per-asyncio-task); the module-global is the
+    fallback for context-less span creation (process startup, background
+    threads, REST tasks, tests). ``None`` clears (used by tests)."""
+    global _process_session_slug
+    _process_session_slug = slug
+    _session_slug.set(slug)
+
+
+def current_session_slug() -> str | None:
+    """The live-session slug for an event/span: the context-bound one when
+    present, else the process-global fallback (``None`` if neither is bound —
+    an honest "session-less / infra" marker the UI shows in every view)."""
+    scoped = _session_slug.get()
+    if scoped is not None:
+        return scoped
+    return _process_session_slug
+
+
 # Event types that are LIVE-PUSH ONLY — broadcast to the GM panel but never
 # written to turn_telemetry. These carry ephemeral UI/keystroke state with no
 # forensic or mechanical value; event-sourcing them is pure write-amplification
@@ -614,6 +659,11 @@ def publish_event(
             "component": component,
             "event_type": event_type,
             "severity": severity,
+            # Envelope-level partition key for the Live view (OTEL-INSPECTOR).
+            # NOT placed in ``fields`` — persistence serializes ``fields``, and
+            # the telemetry row is already session-scoped, so this stays out of
+            # the persisted payload and rides the broadcast only.
+            "session_slug": current_session_slug(),
             "fields": fields,
         }
     )

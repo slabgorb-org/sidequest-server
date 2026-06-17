@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import random
 
+import pytest
+
 from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore
 from sidequest.game.encounter import (
@@ -198,7 +200,6 @@ def test_non_contest_encounter_fails_loud():
         actors=[EncounterActor(name="Lady Ash", role="lead", side="player")],
     )
     snap = _snapshot(enc)
-    import pytest
 
     with pytest.raises(FateContestError):
         run_fate_contest_exchange(

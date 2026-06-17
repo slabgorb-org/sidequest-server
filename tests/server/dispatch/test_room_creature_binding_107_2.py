@@ -33,17 +33,17 @@ from unittest import mock
 import pytest
 import yaml
 
+from sidequest.game.monster_manual import MonsterManual
+from sidequest.game.session import GameSnapshot
+from sidequest.game.turn import TurnManager
+from sidequest.server.dispatch import monster_manual_inject  # noqa: E402
+
 # RED: this module does not exist yet — the whole file fails at collection until
 # Naomi (dev) authors sidequest/server/dispatch/room_creature_binding.py.
 from sidequest.server.dispatch.room_creature_binding import (  # noqa: E402
     RoomCreatureBindingError,
     resolve_room_creatures,
 )
-
-from sidequest.game.monster_manual import MonsterManual
-from sidequest.game.session import GameSnapshot
-from sidequest.game.turn import TurnManager
-from sidequest.server.dispatch import monster_manual_inject  # noqa: E402
 from sidequest.telemetry.spans.monster_manual import (  # noqa: E402
     SPAN_MONSTER_MANUAL_ROOM_BOUND,
 )

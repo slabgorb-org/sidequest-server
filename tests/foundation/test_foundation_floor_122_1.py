@@ -56,7 +56,6 @@ from pathlib import Path
 import pytest
 
 # --- Package geography -------------------------------------------------------
-
 import sidequest  # noqa: E402  (path discovery needs the import side effect)
 
 SIDEQUEST_PKG: Path = Path(sidequest.__file__).resolve().parent

@@ -194,8 +194,8 @@ def test_arrange_visible_render_carries_ability_names():
         CharCreationScene(id="the_kit", title="Kit", narration="...", choices=[], allows_freeform=False),
         CharCreationScene(id="the_mouth", title="Mouth", narration="...", choices=[], allows_freeform=False),
     ]
-    from sidequest.genre.models.character import ClassDef
     from sidequest.game.builder import FreeformInput
+    from sidequest.genre.models.character import ClassDef
 
     builder = CharacterBuilder(scenes=scenes, rules=rules, rng=random.Random(0))
     builder.with_classes(

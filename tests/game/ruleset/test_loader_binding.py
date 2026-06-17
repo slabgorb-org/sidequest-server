@@ -14,15 +14,15 @@ _EH_AMAP = {
 }
 
 
-def test_ruleset_defaults_to_native():
+def test_ruleset_defaults_to_dial():
     rules = RulesConfig()
-    assert rules.ruleset == "native"
-    assert get_ruleset_module(rules.ruleset).slug == "native"
+    assert rules.ruleset == "dial"
+    assert get_ruleset_module(rules.ruleset).slug == "dial"
 
 
 def test_explicit_ruleset_parses():
-    rules = RulesConfig(ruleset="native")
-    assert rules.ruleset == "native"
+    rules = RulesConfig(ruleset="dial")
+    assert rules.ruleset == "dial"
 
 
 def test_unknown_ruleset_rejected_at_bind():

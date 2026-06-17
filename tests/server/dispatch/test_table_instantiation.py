@@ -85,7 +85,7 @@ def test_trigger_branch_declines_gracefully_when_no_table_mates():
     # Lightweight real pack stand-in: the branch only reads pack.rules
     # (find_confrontation_def over confrontations, plus ruleset on the happy
     # path which this no-mates case never reaches).
-    pack = SimpleNamespace(rules=RulesConfig(ruleset="native", confrontations=[cdef]))
+    pack = SimpleNamespace(rules=RulesConfig(ruleset="dial", confrontations=[cdef]))
 
     snap = GameSnapshot(genre="spaghetti_western")
     snap.genre_slug = "spaghetti_western"
@@ -279,7 +279,7 @@ def test_trigger_branch_seeds_from_real_snapshot():
     NPC disposition 0 (neutral) → "neutral".
     """
     cdef = _poker_cdef()
-    pack = SimpleNamespace(rules=RulesConfig(ruleset="native", confrontations=[cdef]))
+    pack = SimpleNamespace(rules=RulesConfig(ruleset="dial", confrontations=[cdef]))
 
     pc = _make_pc("Doc", wis=16, dex=12)
     npc = _make_npc("Ringo", ocean={"neuroticism": 0.4}, disposition_value=0)

@@ -104,6 +104,8 @@ class TestNoFailLoudRegression:
         # scorer still rejects an undeclared type.
         card = EntityCard.new(EntityType.NPC, "borin", content="Borin")
         bogus = card.model_copy(update={"entity_type": "totally_unknown_type"})
-        signals = PertinenceSignals(mention=0.0, here=0.0, recency=0.0, sim=None, present_scene=False)
+        signals = PertinenceSignals(
+            mention=0.0, here=0.0, recency=0.0, sim=None, present_scene=False
+        )
         with pytest.raises(ValueError):
             score_card(bogus, signals)

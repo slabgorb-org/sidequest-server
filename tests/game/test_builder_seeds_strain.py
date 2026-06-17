@@ -139,7 +139,9 @@ class TestSeedSystemStrainHelper:
     def test_cwn_returns_pool_maxed_at_body_score(self) -> None:
         rules = cwn_rules()
         stats = {"Brawn": 10, "Reflex": 12, "Body": 14, "Tech": 8, "Instinct": 11, "Cool": 13}
-        res = get_ruleset_module("cwn").seed_chargen_resources(rules=rules, stats=stats, class_def=None)
+        res = get_ruleset_module("cwn").seed_chargen_resources(
+            rules=rules, stats=stats, class_def=None
+        )
         pool = res.system_strain
         assert pool is not None
         assert pool.max == 14
@@ -150,7 +152,9 @@ class TestSeedSystemStrainHelper:
         rules = cwn_rules()
         # Body = 0 is edge-case; floor must clamp to 1.
         stats = {"Brawn": 10, "Reflex": 10, "Body": 0, "Tech": 10, "Instinct": 10, "Cool": 10}
-        res = get_ruleset_module("cwn").seed_chargen_resources(rules=rules, stats=stats, class_def=None)
+        res = get_ruleset_module("cwn").seed_chargen_resources(
+            rules=rules, stats=stats, class_def=None
+        )
         pool = res.system_strain
         assert pool is not None
         assert pool.max == 1
@@ -158,7 +162,9 @@ class TestSeedSystemStrainHelper:
     def test_non_cwn_returns_none(self) -> None:
         rules = native_rules()
         stats = {k: 10 for k in NATIVE_ABILITY_NAMES}
-        res = get_ruleset_module("native").seed_chargen_resources(rules=rules, stats=stats, class_def=None)
+        res = get_ruleset_module("dial").seed_chargen_resources(
+            rules=rules, stats=stats, class_def=None
+        )
         assert res.system_strain is None
 
     # -- Story 88-1 Item 4: AWN characters must get a System Strain pool --
@@ -177,7 +183,9 @@ class TestSeedSystemStrainHelper:
             "Wisdom": 11,
             "Charisma": 13,
         }
-        res = get_ruleset_module("awn").seed_chargen_resources(rules=rules, stats=stats, class_def=None)
+        res = get_ruleset_module("awn").seed_chargen_resources(
+            rules=rules, stats=stats, class_def=None
+        )
         pool = res.system_strain
         assert pool is not None, (
             "an AWN character must get a SystemStrainPool (AWN inherits CWN System "
@@ -190,7 +198,9 @@ class TestSeedSystemStrainHelper:
     def test_awn_uses_max_1_floor(self) -> None:
         rules = awn_rules()
         stats = {k: 10 for k in AWN_ABILITY_NAMES} | {"Constitution": 0}
-        res = get_ruleset_module("awn").seed_chargen_resources(rules=rules, stats=stats, class_def=None)
+        res = get_ruleset_module("awn").seed_chargen_resources(
+            rules=rules, stats=stats, class_def=None
+        )
         pool = res.system_strain
         assert pool is not None
         assert pool.max == 1
@@ -200,7 +210,9 @@ class TestSeedSystemStrainHelper:
         # SWN characters a strain pool (SWN has no System Strain).
         rules = swn_rules()
         stats = {k: 10 for k in AWN_ABILITY_NAMES}
-        res = get_ruleset_module("swn").seed_chargen_resources(rules=rules, stats=stats, class_def=None)
+        res = get_ruleset_module("swn").seed_chargen_resources(
+            rules=rules, stats=stats, class_def=None
+        )
         assert res.system_strain is None
 
 

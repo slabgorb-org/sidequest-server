@@ -50,7 +50,9 @@ class TestQuestTropeRegistration:
 
         for et in (EntityType.QUEST, EntityType.TROPE):
             declared = SIGNAL_APPLICABILITY.get(et) or SIGNAL_APPLICABILITY.get(str(et))
-            assert declared is not None, f"{et!r} must be in SIGNAL_APPLICABILITY (or scorer fails loud)"
+            assert declared is not None, (
+                f"{et!r} must be in SIGNAL_APPLICABILITY (or scorer fails loud)"
+            )
             assert len(declared) > 0
 
     def test_quest_trope_signals_exclude_here(self) -> None:
@@ -83,7 +85,9 @@ class TestNoFailLoudRegression:
         from sidequest.game.pertinence import PertinenceSignals, score_card
 
         card = EntityCard.new(EntityType.QUEST, "q1", content="The Smuggler's Debt — completed")
-        signals = PertinenceSignals(mention=1.0, here=0.0, recency=0.4, sim=0.2, present_scene=False)
+        signals = PertinenceSignals(
+            mention=1.0, here=0.0, recency=0.4, sim=0.2, present_scene=False
+        )
         result = score_card(card, signals)
         assert result.card_id == "quest:q1"
         assert isinstance(result.score, float)
@@ -93,7 +97,9 @@ class TestNoFailLoudRegression:
         from sidequest.game.pertinence import PertinenceSignals, score_card
 
         card = EntityCard.new(EntityType.TROPE, "t1", content="Redemption Arc — resolved")
-        signals = PertinenceSignals(mention=0.0, here=0.0, recency=0.0, sim=0.7, present_scene=False)
+        signals = PertinenceSignals(
+            mention=0.0, here=0.0, recency=0.0, sim=0.7, present_scene=False
+        )
         result = score_card(card, signals)
         assert result.card_id == "trope:t1"
         assert isinstance(result.score, float)
@@ -106,7 +112,8 @@ class TestNoFailLoudRegression:
 
         card = EntityCard.new(EntityType.QUEST, "q1", content="A quest")
         with_here = score_card(
-            card, PertinenceSignals(mention=0.0, here=1.0, recency=0.0, sim=0.0, present_scene=False)
+            card,
+            PertinenceSignals(mention=0.0, here=1.0, recency=0.0, sim=0.0, present_scene=False),
         )
         assert with_here.here_contribution == 0.0, "here must not contribute to a quest score"
 
@@ -118,6 +125,8 @@ class TestNoFailLoudRegression:
 
         card = EntityCard.new(EntityType.QUEST, "q1", content="A quest")
         bogus = card.model_copy(update={"entity_type": "totally_unknown_type"})
-        signals = PertinenceSignals(mention=0.0, here=0.0, recency=0.0, sim=0.0, present_scene=False)
+        signals = PertinenceSignals(
+            mention=0.0, here=0.0, recency=0.0, sim=0.0, present_scene=False
+        )
         with pytest.raises(ValueError):
             score_card(bogus, signals)

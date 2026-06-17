@@ -202,8 +202,7 @@ def test_accept_emits_quest_seeded_span(otel_capture) -> None:
 
     spans = _spans_named(otel_capture, SPAN_NAME)
     assert len(spans) == 1, (
-        f"exactly one {SPAN_NAME!r} span must fire on an authored-hook mint; "
-        f"got {len(spans)}"
+        f"exactly one {SPAN_NAME!r} span must fire on an authored-hook mint; got {len(spans)}"
     )
     attrs = dict(spans[0].attributes or {})
     assert attrs.get("quest_id") == "floor_boss_missing_person"

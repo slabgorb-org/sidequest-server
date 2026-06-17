@@ -602,40 +602,49 @@ class TestChargenCrossref:
         schema_path, pack_dir, _world = _build_pack(tmp_path)
 
         self._write_minimal_skills(pack_dir, ["Exert", "Notice"])
-        self._write_foci(pack_dir / "foci.yaml", [
-            {"id": "real-focus", "display_name": "Real Focus", "levels": []},
-        ])
-        self._write_backgrounds(pack_dir / "backgrounds.yaml", [
-            {"id": "bg-1", "display_name": "Background 1"},
-        ])
+        self._write_foci(
+            pack_dir / "foci.yaml",
+            [
+                {"id": "real-focus", "display_name": "Real Focus", "levels": []},
+            ],
+        )
+        self._write_backgrounds(
+            pack_dir / "backgrounds.yaml",
+            [
+                {"id": "bg-1", "display_name": "Background 1"},
+            ],
+        )
         # Genre-tier char_creation referencing a NONEXISTENT focus id
-        self._write_char_creation(pack_dir / "char_creation.yaml", [
-            {
-                "id": "origin",
-                "title": "Origin",
-                "narration": "Choose.",
-                "choices": [
-                    {
-                        "label": "Option A",
-                        "description": "The real one.",
-                        "mechanical_effects": {
-                            "background": "bg-1",
-                            "focus_id": "real-focus",
-                            "skill_grants": {"Exert": 0},
+        self._write_char_creation(
+            pack_dir / "char_creation.yaml",
+            [
+                {
+                    "id": "origin",
+                    "title": "Origin",
+                    "narration": "Choose.",
+                    "choices": [
+                        {
+                            "label": "Option A",
+                            "description": "The real one.",
+                            "mechanical_effects": {
+                                "background": "bg-1",
+                                "focus_id": "real-focus",
+                                "skill_grants": {"Exert": 0},
+                            },
                         },
-                    },
-                    {
-                        "label": "Option B",
-                        "description": "The broken one.",
-                        "mechanical_effects": {
-                            "background": "bg-1",
-                            "focus_id": "ghost-focus",  # DANGLING
-                            "skill_grants": {"Notice": 0},
+                        {
+                            "label": "Option B",
+                            "description": "The broken one.",
+                            "mechanical_effects": {
+                                "background": "bg-1",
+                                "focus_id": "ghost-focus",  # DANGLING
+                                "skill_grants": {"Notice": 0},
+                            },
                         },
-                    },
-                ],
-            }
-        ])
+                    ],
+                }
+            ],
+        )
 
         errors, _ = validate_pack_structure(pack_dir, schema_path)
 
@@ -659,34 +668,46 @@ class TestChargenCrossref:
 
         self._write_minimal_skills(pack_dir, ["Exert", "Notice"])
         # Genre-tier foci — NOT used since world overrides
-        self._write_foci(pack_dir / "foci.yaml", [
-            {"id": "genre-focus", "display_name": "Genre Focus", "levels": []},
-        ])
-        self._write_backgrounds(pack_dir / "backgrounds.yaml", [
-            {"id": "bg-1", "display_name": "Background 1"},
-        ])
+        self._write_foci(
+            pack_dir / "foci.yaml",
+            [
+                {"id": "genre-focus", "display_name": "Genre Focus", "levels": []},
+            ],
+        )
+        self._write_backgrounds(
+            pack_dir / "backgrounds.yaml",
+            [
+                {"id": "bg-1", "display_name": "Background 1"},
+            ],
+        )
         # World-tier foci — REPLACES genre (no merge)
-        self._write_foci(world_dir / "foci.yaml", [
-            {"id": "world-focus", "display_name": "World Focus", "levels": []},
-        ])
+        self._write_foci(
+            world_dir / "foci.yaml",
+            [
+                {"id": "world-focus", "display_name": "World Focus", "levels": []},
+            ],
+        )
         # World-tier char_creation references genre-only focus → dangling
-        self._write_char_creation(world_dir / "char_creation.yaml", [
-            {
-                "id": "origin",
-                "title": "Origin",
-                "narration": "Choose.",
-                "choices": [
-                    {
-                        "label": "Option A",
-                        "description": "References genre-only focus (now dangling).",
-                        "mechanical_effects": {
-                            "focus_id": "genre-focus",  # DANGLING in world context
-                            "skill_grants": {"Exert": 0},
-                        },
-                    }
-                ],
-            }
-        ])
+        self._write_char_creation(
+            world_dir / "char_creation.yaml",
+            [
+                {
+                    "id": "origin",
+                    "title": "Origin",
+                    "narration": "Choose.",
+                    "choices": [
+                        {
+                            "label": "Option A",
+                            "description": "References genre-only focus (now dangling).",
+                            "mechanical_effects": {
+                                "focus_id": "genre-focus",  # DANGLING in world context
+                                "skill_grants": {"Exert": 0},
+                            },
+                        }
+                    ],
+                }
+            ],
+        )
 
         errors, _ = validate_pack_structure(pack_dir, schema_path)
 
@@ -702,30 +723,39 @@ class TestChargenCrossref:
 
         self._write_minimal_skills(pack_dir, ["Exert"])
         # Genre-tier foci absent (pack ships no genre foci)
-        self._write_foci(world_dir / "foci.yaml", [
-            {"id": "world-focus", "display_name": "World Focus", "levels": []},
-        ])
-        self._write_backgrounds(world_dir / "backgrounds.yaml", [
-            {"id": "bg-1", "display_name": "Background 1"},
-        ])
-        self._write_char_creation(world_dir / "char_creation.yaml", [
-            {
-                "id": "origin",
-                "title": "Origin",
-                "narration": "Choose.",
-                "choices": [
-                    {
-                        "label": "Option A",
-                        "description": "Valid world focus ref.",
-                        "mechanical_effects": {
-                            "background": "bg-1",
-                            "focus_id": "world-focus",  # VALID at world tier
-                            "skill_grants": {"Exert": 0},
-                        },
-                    }
-                ],
-            }
-        ])
+        self._write_foci(
+            world_dir / "foci.yaml",
+            [
+                {"id": "world-focus", "display_name": "World Focus", "levels": []},
+            ],
+        )
+        self._write_backgrounds(
+            world_dir / "backgrounds.yaml",
+            [
+                {"id": "bg-1", "display_name": "Background 1"},
+            ],
+        )
+        self._write_char_creation(
+            world_dir / "char_creation.yaml",
+            [
+                {
+                    "id": "origin",
+                    "title": "Origin",
+                    "narration": "Choose.",
+                    "choices": [
+                        {
+                            "label": "Option A",
+                            "description": "Valid world focus ref.",
+                            "mechanical_effects": {
+                                "background": "bg-1",
+                                "focus_id": "world-focus",  # VALID at world tier
+                                "skill_grants": {"Exert": 0},
+                            },
+                        }
+                    ],
+                }
+            ],
+        )
 
         errors, _ = validate_pack_structure(pack_dir, schema_path)
 
@@ -745,29 +775,38 @@ class TestChargenCrossref:
         schema_path, pack_dir, _world = _build_pack(tmp_path)
 
         self._write_minimal_skills(pack_dir, ["Exert", "Notice"])
-        self._write_foci(pack_dir / "foci.yaml", [
-            {"id": "some-focus", "display_name": "Some Focus", "levels": []},
-        ])
-        self._write_backgrounds(pack_dir / "backgrounds.yaml", [
-            {"id": "bg-1", "display_name": "Background 1"},
-        ])
-        self._write_char_creation(pack_dir / "char_creation.yaml", [
-            {
-                "id": "origin",
-                "title": "Origin",
-                "narration": "Choose.",
-                "choices": [
-                    {
-                        "label": "Option A",
-                        "description": "Typo'd skill.",
-                        "mechanical_effects": {
-                            "focus_id": "some-focus",
-                            "skill_grants": {"Exert": 0, "Snek": 0},  # "Snek" is a typo
-                        },
-                    }
-                ],
-            }
-        ])
+        self._write_foci(
+            pack_dir / "foci.yaml",
+            [
+                {"id": "some-focus", "display_name": "Some Focus", "levels": []},
+            ],
+        )
+        self._write_backgrounds(
+            pack_dir / "backgrounds.yaml",
+            [
+                {"id": "bg-1", "display_name": "Background 1"},
+            ],
+        )
+        self._write_char_creation(
+            pack_dir / "char_creation.yaml",
+            [
+                {
+                    "id": "origin",
+                    "title": "Origin",
+                    "narration": "Choose.",
+                    "choices": [
+                        {
+                            "label": "Option A",
+                            "description": "Typo'd skill.",
+                            "mechanical_effects": {
+                                "focus_id": "some-focus",
+                                "skill_grants": {"Exert": 0, "Snek": 0},  # "Snek" is a typo
+                            },
+                        }
+                    ],
+                }
+            ],
+        )
 
         errors, _ = validate_pack_structure(pack_dir, schema_path)
 
@@ -789,21 +828,22 @@ class TestChargenCrossref:
         schema_path, pack_dir, _world = _build_pack(tmp_path)
 
         self._write_minimal_skills(pack_dir, ["Exert", "Notice"])
-        self._write_backgrounds(pack_dir / "backgrounds.yaml", [
-            {
-                "id": "bg-1",
-                "display_name": "Background 1",
-                "free_skill": "Sneke",  # typo — not in catalog
-                "quick_skills": ["Exert", "Notice"],
-            }
-        ])
+        self._write_backgrounds(
+            pack_dir / "backgrounds.yaml",
+            [
+                {
+                    "id": "bg-1",
+                    "display_name": "Background 1",
+                    "free_skill": "Sneke",  # typo — not in catalog
+                    "quick_skills": ["Exert", "Notice"],
+                }
+            ],
+        )
 
         errors, _ = validate_pack_structure(pack_dir, schema_path)
 
         offenders = [e for e in errors if "Sneke" in e]
-        assert offenders, (
-            f"Expected ERROR naming typo'd free_skill 'Sneke', got: {errors}"
-        )
+        assert offenders, f"Expected ERROR naming typo'd free_skill 'Sneke', got: {errors}"
         assert any("free_skill" in e for e in offenders), (
             f"Error must mention 'free_skill', got: {offenders}"
         )
@@ -814,15 +854,21 @@ class TestChargenCrossref:
         schema_path, pack_dir, _world = _build_pack(tmp_path)
 
         self._write_minimal_skills(pack_dir, ["Exert", "Notice"])
-        self._write_foci(pack_dir / "foci.yaml", [
-            {
-                "id": "focus-1",
-                "display_name": "Focus One",
-                "levels": [
-                    {"skills": {"Exert": 0, "Sneak": 1}, "abilities": []},  # "Sneak" not in catalog
-                ],
-            }
-        ])
+        self._write_foci(
+            pack_dir / "foci.yaml",
+            [
+                {
+                    "id": "focus-1",
+                    "display_name": "Focus One",
+                    "levels": [
+                        {
+                            "skills": {"Exert": 0, "Sneak": 1},
+                            "abilities": [],
+                        },  # "Sneak" not in catalog
+                    ],
+                }
+            ],
+        )
 
         errors, _ = validate_pack_structure(pack_dir, schema_path)
 
@@ -845,83 +891,111 @@ class TestChargenCrossref:
         schema_path, pack_dir, world_dir = _build_pack(tmp_path)
 
         self._write_minimal_skills(pack_dir, ["Exert", "Notice", "Sneak", "Heal"])
-        self._write_foci(pack_dir / "foci.yaml", [
-            {
-                "id": "load-bearer",
-                "display_name": "Load Bearer",
-                "levels": [{"skills": {"Exert": 0}, "abilities": []}],
-            },
-        ])
-        self._write_backgrounds(pack_dir / "backgrounds.yaml", [
-            {
-                "id": "Rope-Puller",
-                "display_name": "Rope-Puller",
-                "free_skill": "Exert",
-                "quick_skills": ["Exert", "Notice"],
-            },
-        ])
+        self._write_foci(
+            pack_dir / "foci.yaml",
+            [
+                {
+                    "id": "load-bearer",
+                    "display_name": "Load Bearer",
+                    "levels": [{"skills": {"Exert": 0}, "abilities": []}],
+                },
+            ],
+        )
+        self._write_backgrounds(
+            pack_dir / "backgrounds.yaml",
+            [
+                {
+                    "id": "Rope-Puller",
+                    "display_name": "Rope-Puller",
+                    "free_skill": "Exert",
+                    "quick_skills": ["Exert", "Notice"],
+                },
+            ],
+        )
         # Genre-tier char_creation — all refs valid
-        self._write_char_creation(pack_dir / "char_creation.yaml", [
-            {
-                "id": "trade",
-                "title": "Trade",
-                "narration": "Choose.",
-                "choices": [
-                    {
-                        "label": "Rope-Puller",
-                        "description": "A laborer who worked the winch.",
-                        "mechanical_effects": {
-                            "background": "Rope-Puller",
-                            "focus_id": "load-bearer",
-                            "skill_grants": {"Exert": 0},
-                        },
-                    }
-                ],
-            }
-        ])
+        self._write_char_creation(
+            pack_dir / "char_creation.yaml",
+            [
+                {
+                    "id": "trade",
+                    "title": "Trade",
+                    "narration": "Choose.",
+                    "choices": [
+                        {
+                            "label": "Rope-Puller",
+                            "description": "A laborer who worked the winch.",
+                            "mechanical_effects": {
+                                "background": "Rope-Puller",
+                                "focus_id": "load-bearer",
+                                "skill_grants": {"Exert": 0},
+                            },
+                        }
+                    ],
+                }
+            ],
+        )
         # World-tier with its own foci/backgrounds — all valid
-        self._write_foci(world_dir / "foci.yaml", [
-            {
-                "id": "world-scout",
-                "display_name": "World Scout",
-                "levels": [{"skills": {"Sneak": 0}, "abilities": []}],
-            },
-        ])
-        self._write_backgrounds(world_dir / "backgrounds.yaml", [
-            {
-                "id": "Forest-Kin",
-                "display_name": "Forest Kin",
-                "free_skill": "Sneak",
-                "quick_skills": ["Sneak", "Heal"],
-            },
-        ])
-        self._write_char_creation(world_dir / "char_creation.yaml", [
-            {
-                "id": "origin",
-                "title": "Origin",
-                "narration": "Choose.",
-                "choices": [
-                    {
-                        "label": "Forest Kin",
-                        "description": "Raised in the deep woods.",
-                        "mechanical_effects": {
-                            "background": "Forest-Kin",
-                            "focus_id": "world-scout",
-                            "skill_grants": {"Sneak": 0},
-                        },
-                    }
-                ],
-            }
-        ])
+        self._write_foci(
+            world_dir / "foci.yaml",
+            [
+                {
+                    "id": "world-scout",
+                    "display_name": "World Scout",
+                    "levels": [{"skills": {"Sneak": 0}, "abilities": []}],
+                },
+            ],
+        )
+        self._write_backgrounds(
+            world_dir / "backgrounds.yaml",
+            [
+                {
+                    "id": "Forest-Kin",
+                    "display_name": "Forest Kin",
+                    "free_skill": "Sneak",
+                    "quick_skills": ["Sneak", "Heal"],
+                },
+            ],
+        )
+        self._write_char_creation(
+            world_dir / "char_creation.yaml",
+            [
+                {
+                    "id": "origin",
+                    "title": "Origin",
+                    "narration": "Choose.",
+                    "choices": [
+                        {
+                            "label": "Forest Kin",
+                            "description": "Raised in the deep woods.",
+                            "mechanical_effects": {
+                                "background": "Forest-Kin",
+                                "focus_id": "world-scout",
+                                "skill_grants": {"Sneak": 0},
+                            },
+                        }
+                    ],
+                }
+            ],
+        )
 
         errors, _ = validate_pack_structure(pack_dir, schema_path)
 
         chargen_errors = [
-            e for e in errors
+            e
+            for e in errors
             if any(
                 kw in e
-                for kw in ("char_creation", "backgrounds.yaml", "foci.yaml", "skill_grants",
-                           "free_skill", "quick_skills", "background id", "focus_id", "skill '")
+                for kw in (
+                    "char_creation",
+                    "backgrounds.yaml",
+                    "foci.yaml",
+                    "skill_grants",
+                    "free_skill",
+                    "quick_skills",
+                    "background id",
+                    "focus_id",
+                    "skill '",
+                )
             )
         ]
         assert not chargen_errors, (
@@ -943,11 +1017,18 @@ class TestChargenCrossref:
         errors, _ = validate_pack_structure(pack_dir, schema_path)
 
         chargen_errors = [
-            e for e in errors
+            e
+            for e in errors
             if any(
                 kw in e
-                for kw in ("char_creation", "backgrounds.yaml", "foci.yaml",
-                           "background id", "focus_id", "skill '")
+                for kw in (
+                    "char_creation",
+                    "backgrounds.yaml",
+                    "foci.yaml",
+                    "background id",
+                    "focus_id",
+                    "skill '",
+                )
             )
         ]
         assert not chargen_errors, (

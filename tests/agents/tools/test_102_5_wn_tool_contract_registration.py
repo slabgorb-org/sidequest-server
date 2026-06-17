@@ -23,7 +23,7 @@ Registration contract pinned here:
 * All four tools are registered on ``default_registry`` by importing
   ``sidequest.agents.tools`` (the production registration path).
 * ``tool_definitions(ruleset=<slug>)`` advertises all four for EVERY WN slug
-  (swn/wwn/cwn/awn) and NONE of them for ``native``. Today's filter
+  (swn/wwn/cwn/awn) and NONE of them for ``dial``. Today's filter
   (``_RegisteredTool.ruleset: str | None``, exact-match, Story 73-15) cannot
   express a four-slug family — these tests force the seam extension.
 * The family declaration is data-driven on the Registry seam (a tuple of
@@ -96,12 +96,12 @@ def test_wn_tools_advertised_to_every_wn_ruleset(slug: str) -> None:
     assert not missing, f"ruleset {slug!r} is not advertised WN tools: {missing}"
 
 
-def test_wn_tools_hidden_from_native() -> None:
-    """ADR-117 tightening (73-15): a native pack's narrator never sees the WN
+def test_wn_tools_hidden_from_dial() -> None:
+    """ADR-117 tightening (73-15): a dial pack's narrator never sees the WN
     contract — these tools could only fail there."""
-    names = _names(default_registry.tool_definitions(ruleset="native"))
+    names = _names(default_registry.tool_definitions(ruleset="dial"))
     leaked = WN_TOOLS & names
-    assert not leaked, f"native pack advertises WN contract tools: {leaked}"
+    assert not leaked, f"dial pack advertises WN contract tools: {leaked}"
 
 
 def test_wn_tools_in_unfiltered_catalog_back_compat() -> None:
@@ -138,7 +138,7 @@ def test_family_ruleset_declaration_is_data_driven() -> None:
 
     for member in ("wwn", "cwn"):
         assert "novel_family_widget" in _names(reg.tool_definitions(ruleset=member))
-    for outsider in ("native", "swn"):
+    for outsider in ("dial", "swn"):
         assert "novel_family_widget" not in _names(reg.tool_definitions(ruleset=outsider))
     # Unfiltered back-compat unchanged.
     assert "novel_family_widget" in _names(reg.tool_definitions())
@@ -147,7 +147,7 @@ def test_family_ruleset_declaration_is_data_driven() -> None:
 def test_single_slug_declaration_still_works() -> None:
     """The 73-15 single-slug form survives the family extension — the five
     already-gated tools keep their exact-match behavior."""
-    names = _names(default_registry.tool_definitions(ruleset="native"))
+    names = _names(default_registry.tool_definitions(ruleset="dial"))
     assert "commit_effort" not in names
     assert "veterans_luck" not in names
     wwn_names = _names(default_registry.tool_definitions(ruleset="wwn"))

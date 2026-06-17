@@ -234,9 +234,7 @@ async def test_orchestrator_consumes_stashed_result_without_rerunning_bank(
         bank_result=bank_result,
     )
 
-    prompt_text, _registry = await orch.build_narrator_prompt(
-        "I study Old Tam's face.", ctx
-    )
+    prompt_text, _registry = await orch.build_narrator_prompt("I study Old Tam's face.", ctx)
 
     assert "zzz-old-tam-disposition-zzz" in prompt_text
 
@@ -275,9 +273,7 @@ async def test_redacted_directive_filtered_from_prompt_via_visibility() -> None:
         bank_result=bank_result,
     )
 
-    prompt_text, _registry = await orch.build_narrator_prompt(
-        "I study Old Tam's face.", ctx
-    )
+    prompt_text, _registry = await orch.build_narrator_prompt("I study Old Tam's face.", ctx)
 
     assert "zzz-PUBLIC-visible-zzz" in prompt_text
     assert "zzz-SECRET-redacted-zzz" not in prompt_text

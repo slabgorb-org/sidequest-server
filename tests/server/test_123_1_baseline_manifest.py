@@ -60,8 +60,7 @@ def _load_manifest() -> dict:
     except json.JSONDecodeError as exc:  # pragma: no cover - failure path
         pytest.fail(f"Baseline manifest is not valid JSON: {exc}")
     assert isinstance(data, dict), (
-        "Baseline manifest top-level must be a JSON object, got "
-        f"{type(data).__name__}."
+        f"Baseline manifest top-level must be a JSON object, got {type(data).__name__}."
     )
     return data
 
@@ -112,14 +111,12 @@ def test_every_bucket_has_required_fields() -> None:
             "affected test id/pattern."
         )
         assert all(isinstance(t, str) and t.strip() for t in tests), (
-            f"buckets[{i}] ({bucket['category']!r}) `tests` must be non-empty "
-            "strings."
+            f"buckets[{i}] ({bucket['category']!r}) `tests` must be non-empty strings."
         )
         # root_cause must be a real summary, not an empty placeholder.
         root_cause = bucket["root_cause"]
         assert isinstance(root_cause, str) and root_cause.strip(), (
-            f"buckets[{i}] ({bucket['category']!r}) must carry a non-empty "
-            "root_cause summary."
+            f"buckets[{i}] ({bucket['category']!r}) must carry a non-empty root_cause summary."
         )
 
 
@@ -168,18 +165,14 @@ def test_wwn_beatpool_bucket_is_present_and_deferred() -> None:
     matches = [
         b
         for b in _buckets()
-        if "wwn" in _bucket_blob(b)
-        or "beat" in _bucket_blob(b)
-        or "108" in _bucket_blob(b)
+        if "wwn" in _bucket_blob(b) or "beat" in _bucket_blob(b) or "108" in _bucket_blob(b)
     ]
     assert matches, (
         "Manifest has no bucket for the deliberate out-of-scope WWN class "
         "beat-pool failures (epic-108 / 108-3). The deferral must be documented "
         "so it is never mistaken for a fresh regression."
     )
-    assert any(
-        b.get("disposition") in {"deferred", "quarantined"} for b in matches
-    ), (
+    assert any(b.get("disposition") in {"deferred", "quarantined"} for b in matches), (
         "The WWN beat-pool bucket must be disposition=deferred (or quarantined) "
         "— it is owned by epic-108, not fixed here."
     )

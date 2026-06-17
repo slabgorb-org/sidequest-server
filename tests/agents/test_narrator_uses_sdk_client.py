@@ -127,10 +127,10 @@ async def test_orchestrator_routes_narration_through_sdk(
         # Fire the real dispatch closure exactly as the SDK-MCP bridge would,
         # so the orchestrator's tool_ctx flows into default_registry.dispatch.
         if tool_dispatch is not None:
-            await tool_dispatch(ToolUseBlock(id="toolu_1", name="roll_dice", arguments={"sides": 20}))
-        return await original_complete(
-            system_blocks, messages, tools, tool_dispatch, **kwargs
-        )
+            await tool_dispatch(
+                ToolUseBlock(id="toolu_1", name="roll_dice", arguments={"sides": 20})
+            )
+        return await original_complete(system_blocks, messages, tools, tool_dispatch, **kwargs)
 
     monkeypatch.setattr(client, "complete_with_tools", _complete_spy)
 

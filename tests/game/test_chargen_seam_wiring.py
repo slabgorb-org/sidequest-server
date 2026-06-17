@@ -231,8 +231,7 @@ def test_chargen_seam_wiring_full(
         f"Sneak not found in character.skills; got {character.skills}"
     )
     assert character.skills["Sneak"] == 0, (
-        f"Sneak should be 0 (background grant, max-of scene grant); "
-        f"got {character.skills['Sneak']}"
+        f"Sneak should be 0 (background grant, max-of scene grant); got {character.skills['Sneak']}"
     )
     assert "Exert" in character.skills, (
         f"Exert not found in character.skills; got {character.skills}"
@@ -255,10 +254,7 @@ def test_chargen_seam_wiring_full(
     )
 
     # A5: focus ability is on Character.abilities with correct type and source.
-    focus_abilities = [
-        a for a in character.abilities
-        if a.name == "Ignore Death"
-    ]
+    focus_abilities = [a for a in character.abilities if a.name == "Ignore Death"]
     assert len(focus_abilities) == 1, (
         f"Expected 1 'Ignore Death' ability; got {[a.name for a in character.abilities]}"
     )
@@ -287,9 +283,7 @@ def test_chargen_seam_wiring_full(
     )
 
     # Verify the class is what we expect (basic sanity).
-    assert character.char_class == "Warrior", (
-        f"Expected Warrior; got {character.char_class!r}"
-    )
+    assert character.char_class == "Warrior", f"Expected Warrior; got {character.char_class!r}"
 
 
 def test_chargen_seam_no_background_def_gives_no_skills(
@@ -419,14 +413,14 @@ def test_chargen_seam_max_of_skill_merge(
 
 
 def test_chargen_seam_base_defaults_return_empty() -> None:
-    """Native ruleset contribute_* methods return empty dicts / FociContribution."""
+    """Dial ruleset contribute_* methods return empty dicts / FociContribution."""
     from sidequest.game.ruleset import get_ruleset_module
 
-    native = get_ruleset_module("native")
-    bg_skills = native.contribute_background_skills(background_def=None, rng=random.Random(1))
+    dial = get_ruleset_module("dial")
+    bg_skills = dial.contribute_background_skills(background_def=None, rng=random.Random(1))
     assert bg_skills == {}
 
-    foci_contrib = native.contribute_foci(focus_defs=[])
+    foci_contrib = dial.contribute_foci(focus_defs=[])
     assert foci_contrib.skills == {}
     assert foci_contrib.abilities == []
 
@@ -436,9 +430,7 @@ def test_chargen_seam_wn_background_skills_with_none_def() -> None:
     from sidequest.game.ruleset import get_ruleset_module
 
     wwn = get_ruleset_module("wwn")
-    result = wwn.contribute_background_skills(
-        background_def=None, rng=random.Random(1)
-    )
+    result = wwn.contribute_background_skills(background_def=None, rng=random.Random(1))
     assert result == {}
 
 

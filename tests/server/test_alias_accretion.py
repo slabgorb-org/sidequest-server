@@ -116,9 +116,7 @@ class TestExtractEpithets:
     def test_name_first_scene_clause_wind_howls_rejected(self) -> None:
         from sidequest.game.alias_accretion import extract_epithets_for_npc
 
-        assert (
-            extract_epithets_for_npc("Borin, the wind howls through the window.", "Borin") == []
-        )
+        assert extract_epithets_for_npc("Borin, the wind howls through the window.", "Borin") == []
 
     def test_epithet_first_scene_clause_crowd_parts_rejected(self) -> None:
         """The MIRROR defect: an epithet-first scene clause comma-anchored to the
@@ -126,9 +124,7 @@ class TestExtractEpithets:
         descriptor — comma-closure alone won't catch this, the verb is the tell."""
         from sidequest.game.alias_accretion import extract_epithets_for_npc
 
-        assert (
-            extract_epithets_for_npc("the crowd parts, Borin walks through.", "Borin") == []
-        )
+        assert extract_epithets_for_npc("the crowd parts, Borin walks through.", "Borin") == []
 
     def test_epithet_first_scene_clause_door_swings_rejected(self) -> None:
         from sidequest.game.alias_accretion import extract_epithets_for_npc
@@ -168,9 +164,9 @@ class TestExtractEpithets:
         a finite verb in the noun phrase."""
         from sidequest.game.alias_accretion import extract_epithets_for_npc
 
-        assert extract_epithets_for_npc(
-            "the old smith, Borin, hammers at the forge.", "Borin"
-        ) == ["the old smith"]
+        assert extract_epithets_for_npc("the old smith, Borin, hammers at the forge.", "Borin") == [
+            "the old smith"
+        ]
 
 
 # ===========================================================================
@@ -292,9 +288,7 @@ class TestRealPromotionAccretionWiring:
     promoted ``Npc`` on ``snapshot.npcs`` and the emitted span, never source text.
     """
 
-    def test_real_promotion_path_accretes_epithet_and_emits_span(
-        self, otel_capture: Any
-    ) -> None:
+    def test_real_promotion_path_accretes_epithet_and_emits_span(self, otel_capture: Any) -> None:
         """Drive ``resolve_status_target`` with a pool member being promoted and an
         appositive promotion narration. The epithet must land on the NPC that is
         appended to ``snapshot.npcs`` (proving ``narration_text`` threads through
@@ -328,9 +322,7 @@ class TestRealPromotionAccretionWiring:
 
         # (3) The accretion is observable: the entity.alias_accreted span fired.
         spans = [s for s in otel_capture.get_finished_spans() if s.name == _ALIAS_ACCRETED_SPAN]
-        assert spans, (
-            "a real promotion-path accretion must emit an entity.alias_accreted span"
-        )
+        assert spans, "a real promotion-path accretion must emit an entity.alias_accreted span"
         attrs = dict(spans[-1].attributes or {})
         assert "Borin" in str(attrs.values())
         assert "the old smith" in str(attrs.values())

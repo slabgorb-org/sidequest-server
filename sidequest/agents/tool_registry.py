@@ -226,7 +226,7 @@ class Registry:
         """Tool definitions, optionally filtered to a bound ruleset.
 
         Story 73-15 (ADR-117 tightening): when ``ruleset`` is a slug (e.g.
-        ``"native"`` / ``"wwn"`` / ``"cwn"``), a tool is advertised iff it is
+        ``"dial"`` / ``"wwn"`` / ``"cwn"``), a tool is advertised iff it is
         ruleset-agnostic (``t.ruleset is None``) OR declares that exact slug.
         WWN/CWN-only tools therefore vanish from the narrator's surface on any
         other pack. ``ruleset=None`` (the default) returns the full catalog —

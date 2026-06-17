@@ -230,8 +230,7 @@ def test_player_action_emits_fate_flavor_rider_span():
     )
     attrs = dict(rider[0].attributes or {})
     assert attrs.get("attached") is True, (
-        f"flavor_rider span must record attached=True when text rides the action; "
-        f"got {attrs!r}"
+        f"flavor_rider span must record attached=True when text rides the action; got {attrs!r}"
     )
 
 
@@ -304,9 +303,7 @@ def test_player_action_is_mechanically_inert():
     false`` asserts."""
     snap_a, enc_a = _solo_combat()
     plain = dispatch_fate_action(
-        payload=FateActionPayload(
-            request_id="r1", action="attack", skill="Fight", target="Thug"
-        ),
+        payload=FateActionPayload(request_id="r1", action="attack", skill="Fight", target="Thug"),
         actor_name="Hero",
         encounter=enc_a,
         ruleset=get_ruleset_module("fate"),

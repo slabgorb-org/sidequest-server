@@ -127,9 +127,7 @@ async def test_max_turns_emits_loop_exceeded_span_then_raises(
     with pytest.raises(AnthropicSdkLoopExceeded):
         await _drive(_new_client())
 
-    loop_spans = [
-        s for s in otel_capture.get_finished_spans() if s.name == "narrator.tool_loop"
-    ]
+    loop_spans = [s for s in otel_capture.get_finished_spans() if s.name == "narrator.tool_loop"]
     assert loop_spans, "a ceiling-blown turn must still emit the summary span"
     assert dict(loop_spans[-1].attributes or {}).get("loop_exceeded") is True
 
@@ -149,9 +147,7 @@ async def test_cost_runaway_detector_fires_through_client(
     )
 
     fake = FakeQuery(
-        converged_text_stream(
-            text="ok", usage=fake_usage(input_tokens=60_000, output_tokens=12)
-        )
+        converged_text_stream(text="ok", usage=fake_usage(input_tokens=60_000, output_tokens=12))
     )
     monkeypatch.setattr(anthropic_sdk_client, "query", fake, raising=False)
 

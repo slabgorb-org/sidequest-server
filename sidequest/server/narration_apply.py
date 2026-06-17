@@ -6959,7 +6959,7 @@ def _resolve_dogfight_shot_phase(
 def _opposed_dc(beat: Any) -> int:
     """Per-side DC derived from beat ``base`` magnitude, clamped 10..=30.
 
-    Mirrors ``sidequest.game.ruleset.native.NativeRulesetModule.compute_dc``
+    Mirrors ``sidequest.game.ruleset.dial.DialRulesetModule.compute_dc``
     so a player using the dispatch path and an opponent using this resolver
     land on the same DC for the same beat.
     """

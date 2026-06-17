@@ -36,9 +36,7 @@ def test_invoke_mode_defaults_to_bonus():
 
 def test_invoke_mode_accepts_reroll():
     """The reroll half of F3d: the client can declare ``invoke_mode='reroll'``."""
-    p = FateActionPayload(
-        request_id="r1", action="attack", skill="Fight", invoke_mode="reroll"
-    )
+    p = FateActionPayload(request_id="r1", action="attack", skill="Fight", invoke_mode="reroll")
     assert p.invoke_mode == "reroll"
 
 
@@ -47,9 +45,7 @@ def test_invoke_mode_rejects_unknown_literal():
     rejected at the wire (Literal guard), not silently coerced to 'bonus'. Mirrors
     ``FateRulesetModule.invoke_aspect``'s own loud rejection of an unknown mode."""
     with pytest.raises(ValidationError):
-        FateActionPayload(
-            request_id="r1", action="attack", skill="Fight", invoke_mode="banana"
-        )
+        FateActionPayload(request_id="r1", action="attack", skill="Fight", invoke_mode="banana")
 
 
 def test_player_action_defaults_empty():
@@ -65,7 +61,5 @@ def test_player_action_preserves_freeform_text():
     (dispatch side) is a separate concern; here we only pin that the field carries
     the player's typed text without mangling it."""
     rider = "I swing from the chandelier and fire"
-    p = FateActionPayload(
-        request_id="r1", action="attack", skill="Fight", player_action=rider
-    )
+    p = FateActionPayload(request_id="r1", action="attack", skill="Fight", player_action=rider)
     assert p.player_action == rider

@@ -65,9 +65,9 @@ def _fate_pack():
     )
 
 
-def _native_pack():
+def _dial_pack():
     return SimpleNamespace(
-        rules=SimpleNamespace(ruleset="native", confrontations=[]), worlds=None, witnessed_acts=None
+        rules=SimpleNamespace(ruleset="dial", confrontations=[]), worlds=None, witnessed_acts=None
     )
 
 
@@ -136,7 +136,7 @@ def test_router_fate_block_equals_relocated_projector_output():
 
 def test_router_omits_fate_block_for_non_fate_pack():
     """F2a regression guard: the fate block is gated on ruleset == 'fate'."""
-    summary = _build_state_summary(_conflict_snapshot(), pack=_native_pack())
+    summary = _build_state_summary(_conflict_snapshot(), pack=_dial_pack())
     assert "fate" not in summary
 
 

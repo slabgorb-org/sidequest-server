@@ -149,7 +149,7 @@ class WithoutNumberRulesetModule(RulesetModule):
 
     def compute_dc(self, beat) -> int:
         raise NotImplementedError(
-            "SWN resolves attacks vs target AC via attack_params; compute_dc is native-only."
+            "WN resolves attacks vs target AC via attack_params; compute_dc is the dial engine's."
         )
 
     def offer_difficulty(self, *, beat: BeatDef, target_core: object | None) -> int:

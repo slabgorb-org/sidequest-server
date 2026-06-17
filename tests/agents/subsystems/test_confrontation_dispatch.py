@@ -359,8 +359,7 @@ def test_confrontation_handler_registered_with_dispatch_bank() -> None:
     )
     fn = registry["confrontation"]
     assert callable(fn) and getattr(fn, "__name__", "") == "run_confrontation_dispatch", (
-        f"registered confrontation handler should be run_confrontation_dispatch; "
-        f"got {fn!r}"
+        f"registered confrontation handler should be run_confrontation_dispatch; got {fn!r}"
     )
 
 

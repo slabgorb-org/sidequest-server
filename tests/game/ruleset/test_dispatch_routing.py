@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from sidequest.game.ruleset.native import NativeRulesetModule
+from sidequest.game.ruleset.dial import DialRulesetModule
 from tests.game.ruleset._dispatch_fixture import resolve_one_combat_beat
 
 
 def test_dispatch_uses_bound_module_for_stat_and_dc():
-    real = NativeRulesetModule()
+    real = DialRulesetModule()
     calls = {"stat_modifier": 0, "compute_dc": 0}
 
     def spy_stat(stats, stat_check):
@@ -20,7 +20,7 @@ def test_dispatch_uses_bound_module_for_stat_and_dc():
         calls["compute_dc"] += 1
         return real.compute_dc(beat)
 
-    spy = NativeRulesetModule()
+    spy = DialRulesetModule()
     spy.stat_modifier = spy_stat  # type: ignore[method-assign]
     spy.compute_dc = spy_dc  # type: ignore[method-assign]
 

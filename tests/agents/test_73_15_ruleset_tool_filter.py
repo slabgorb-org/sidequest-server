@@ -6,7 +6,7 @@ ADR-117 tightening. The narrator's advertised tool list (the
 registered tools regardless of the pack's bound ruleset. So the WWN-only tools
 (``commit_effort``, ``long_rest``, ``veterans_luck``) and CWN-only tools
 (``adjust_system_strain``, ``stabilize_mortal_injury``) appear on EVERY pack,
-including ``native`` ones. They self-guard fail-loud (handler raises
+including ``dial`` ones. They self-guard fail-loud (handler raises
 ``ValueError`` when ``pack.rules.ruleset`` != the required slug), so this is a
 *tightening*, not a correctness bug — the win is tool-budget + mis-attempt
 avoidance: the narrator should not see tools it can only fail to use.
@@ -142,9 +142,9 @@ def test_tool_definitions_unfiltered_returns_all_back_compat() -> None:
     }
 
 
-def test_tool_definitions_native_excludes_every_ruleset_gated_tool() -> None:
+def test_tool_definitions_dial_excludes_every_ruleset_gated_tool() -> None:
     reg = _sample_registry()
-    assert _names(reg.tool_definitions(ruleset="native")) == {"agnostic_read"}
+    assert _names(reg.tool_definitions(ruleset="dial")) == {"agnostic_read"}
 
 
 def test_tool_definitions_wwn_keeps_wwn_and_agnostic_drops_cwn() -> None:
@@ -167,7 +167,7 @@ def test_filter_is_declaration_driven_not_a_name_allowlist() -> None:
 
     A novel tool name the implementer could not have listed proves the filter
     is data-driven. An allowlist keyed on the real tool names would wrongly keep
-    this novel WWN tool on a native pack."""
+    this novel WWN tool on a dial pack."""
     reg = Registry()
 
     @tool(
@@ -180,7 +180,7 @@ def test_filter_is_declaration_driven_not_a_name_allowlist() -> None:
     async def _novel(args: _NoArgs, ctx: ToolContext) -> ToolResult:
         return ToolResult.ok({})
 
-    assert "totally_novel_wwn_widget" not in _names(reg.tool_definitions(ruleset="native"))
+    assert "totally_novel_wwn_widget" not in _names(reg.tool_definitions(ruleset="dial"))
     assert "totally_novel_wwn_widget" in _names(reg.tool_definitions(ruleset="wwn"))
 
 
@@ -191,7 +191,7 @@ def test_agnostic_tool_survives_every_ruleset_filter() -> None:
     async def _u(args: _NoArgs, ctx: ToolContext) -> ToolResult:
         return ToolResult.ok({})
 
-    for slug in ("native", "wwn", "cwn", "swn"):
+    for slug in ("dial", "wwn", "cwn", "swn"):
         assert "ubiquitous" in _names(reg.tool_definitions(ruleset=slug))
 
 
@@ -201,10 +201,10 @@ def test_agnostic_tool_survives_every_ruleset_filter() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_default_registry_native_excludes_the_five_gated_tools() -> None:
-    names = _names(default_registry.tool_definitions(ruleset="native"))
+def test_default_registry_dial_excludes_the_five_gated_tools() -> None:
+    names = _names(default_registry.tool_definitions(ruleset="dial"))
     assert GATED_ALL.isdisjoint(names), (
-        f"native pack still advertises gated tools: {GATED_ALL & names}"
+        f"dial pack still advertises gated tools: {GATED_ALL & names}"
     )
     # A ruleset-agnostic tool must survive.
     assert "roll_dice" in names
@@ -263,13 +263,13 @@ def test_default_registry_unfiltered_still_lists_all_gated_tools() -> None:
 
 
 @pytest.mark.asyncio
-async def test_commit_effort_self_guard_still_raises_on_native_pack() -> None:
-    """Even if the filter regresses and commit_effort is dispatched on a native
+async def test_commit_effort_self_guard_still_raises_on_dial_pack() -> None:
+    """Even if the filter regresses and commit_effort is dispatched on a dial
     pack, the handler must still fail loud (rendered as an error ToolResult).
 
     ADR-142 DD-5: commit_effort now serves every WN ruleset (swn/wwn/cwn/awn)
-    because Effort is WN-core, so the guard rejects only NON-WN packs (native
-    here). The fail-loud behavior on a native pack is unchanged; the error string
+    because Effort is WN-core, so the guard rejects only NON-WN packs (dial
+    here). The fail-loud behavior on a dial pack is unchanged; the error string
     now names the Without Number family rather than 'wwn-only'."""
     repository = MagicMock()
     repository.load.return_value = MagicMock()  # truthy session — get past the load guard
@@ -281,7 +281,7 @@ async def test_commit_effort_self_guard_still_raises_on_native_pack() -> None:
         repository=repository,
         otel_span=MagicMock(),
         perception_filter=_NoopFilter(),
-        genre_pack=SimpleNamespace(rules=SimpleNamespace(ruleset="native")),
+        genre_pack=SimpleNamespace(rules=SimpleNamespace(ruleset="dial")),
     )
     out = await default_registry.dispatch(
         ToolUseBlock(
@@ -291,7 +291,7 @@ async def test_commit_effort_self_guard_still_raises_on_native_pack() -> None:
     )
     assert out.is_error is True
     assert "without number" in out.content.lower()
-    assert "ruleset='native'" in out.content.lower()
+    assert "ruleset='dial'" in out.content.lower()
 
 
 class _NoopFilter:
@@ -382,12 +382,12 @@ def _advertised_tool_names(fake: FakeQuery) -> set[str]:
 
 
 @pytest.mark.asyncio
-async def test_native_pack_narration_excludes_gated_tools_from_sdk_array(
+async def test_dial_pack_narration_excludes_gated_tools_from_sdk_array(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fake = await _run_turn(monkeypatch, "native")
+    fake = await _run_turn(monkeypatch, "dial")
     sent = _advertised_tool_names(fake)
-    assert GATED_ALL.isdisjoint(sent), f"native narration leaked gated tools: {GATED_ALL & sent}"
+    assert GATED_ALL.isdisjoint(sent), f"dial narration leaked gated tools: {GATED_ALL & sent}"
     assert "roll_dice" in sent  # agnostic tool still advertised
 
 
@@ -415,17 +415,17 @@ async def test_narration_emits_ruleset_filter_otel_span(
 ) -> None:
     """OTEL Observability Principle: the filter decision is a subsystem decision
     and MUST emit a span so the GM panel can verify the tightening engaged."""
-    await _run_turn(monkeypatch, "native")
+    await _run_turn(monkeypatch, "dial")
     spans = [
         s for s in otel_capture.get_finished_spans() if s.name == "narrator.tools.ruleset_filter"
     ]
     assert len(spans) >= 1, "no narrator.tools.ruleset_filter span emitted"
     attrs = dict(spans[0].attributes or {})
-    assert attrs["tools.bound_ruleset"] == "native"
-    # Eleven gated tools dropped on a native pack: the original six (five CWN/WWN
+    assert attrs["tools.bound_ruleset"] == "dial"
+    # Eleven gated tools dropped on a dial pack: the original six (five CWN/WWN
     # tools + use_mutation/awn), the four WN-family contract tools (102-5:
     # wn_attack/wn_skill_check/wn_save/wn_adjudicate_dead_premise), and the Fate
-    # propose_fate_compel tool (116-2, ruleset="fate") — all hidden from a native
+    # propose_fate_compel tool (116-2, ruleset="fate") — all hidden from a dial
     # narrator.
     assert attrs["tools.excluded_count"] == 11
     # The advertised count is the full catalog minus the eleven gated tools.

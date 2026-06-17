@@ -155,9 +155,7 @@ async def test_narrator_turn_drives_wn_attack_through_production_dispatch(
     handler = _build_narration_tool_handler(
         bare_name="wn_attack", tool_dispatch=_dispatch, accumulator=accumulator
     )
-    sdk_reply = await handler(
-        {"attacker": "Vesska", "target": "Husk", "weapon": "Shard Knife"}
-    )
+    sdk_reply = await handler({"attacker": "Vesska", "target": "Husk", "weapon": "Shard Knife"})
 
     # The engine's adjudication is the SDK handler reply fed back to the model —
     # the narrator describes it, it does not invent one. The reply content is the

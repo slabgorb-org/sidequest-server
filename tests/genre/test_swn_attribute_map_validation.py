@@ -37,7 +37,7 @@ def test_swn_pack_map_to_undeclared_stat_fails_loud():
         RulesConfig(ruleset="swn", ability_score_names=SIX, swn=SwnConfig(attribute_map=bad))
 
 
-def test_native_pack_ignores_attribute_map():
-    # native packs never carry swn; no attribute_map requirement
-    rc = RulesConfig(ruleset="native", ability_score_names=SIX)
+def test_dial_pack_ignores_attribute_map():
+    # dial packs never carry swn; no attribute_map requirement
+    rc = RulesConfig(ruleset="dial", ability_score_names=SIX)
     assert rc.swn is None

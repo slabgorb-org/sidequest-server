@@ -36,9 +36,7 @@ def test_strike_subtracts_damage_total_minus_mitigation():
 
 def test_strike_floors_at_zero():
     target = _core(3)
-    apply_beat_hp_channel(
-        target=target, channel="strike", damage_total=99, target_mitigation=0
-    )
+    apply_beat_hp_channel(target=target, channel="strike", damage_total=99, target_mitigation=0)
     assert target.hp.current == 0
 
 
@@ -54,9 +52,7 @@ def test_mitigation_never_makes_a_strike_heal():
 def test_brace_is_noop_on_hp():
     target = _core(10)
     assert (
-        apply_beat_hp_channel(
-            target=target, channel="brace", damage_total=6, target_mitigation=0
-        )
+        apply_beat_hp_channel(target=target, channel="brace", damage_total=6, target_mitigation=0)
         == 0
     )
     assert target.hp.current == 10
@@ -86,9 +82,7 @@ def test_strike_emits_state_patch_hp_span(otel_capture):
 
     spans = otel_capture.get_finished_spans()
     hp_spans = [s for s in spans if s.name == "state_patch.hp"]
-    assert hp_spans, (
-        f"expected a state_patch.hp span; got span names: {[s.name for s in spans]}"
-    )
+    assert hp_spans, f"expected a state_patch.hp span; got span names: {[s.name for s in spans]}"
     attrs = hp_spans[0].attributes or {}
     assert attrs.get("field") == "hp", f"expected field='hp', got {attrs.get('field')!r}"
     assert attrs.get("actor") == "t"

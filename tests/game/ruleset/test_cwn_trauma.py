@@ -7,7 +7,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from sidequest.game.ruleset.cwn import CwnRulesetModule
-from sidequest.game.ruleset.native import NativeRulesetModule
+from sidequest.game.ruleset.dial import DialRulesetModule
 from sidequest.game.ruleset.swn import SwnRulesetModule
 from sidequest.genre.models.inventory import DamageSpec
 from sidequest.genre.models.rules import CwnConfig, TraumaConfig
@@ -33,7 +33,7 @@ def _exporter():
 
 def test_base_modules_passthrough_damage():
     spec = DamageSpec(dice="1d6")
-    for mod in (NativeRulesetModule(), SwnRulesetModule()):
+    for mod in (DialRulesetModule(), SwnRulesetModule()):
         r = mod.resolve_trauma(spec=spec, base_total=5, cfg=None, rng=random.Random(1))
         assert r.final_total == 5
         assert r.traumatic is False

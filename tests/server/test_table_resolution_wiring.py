@@ -138,7 +138,7 @@ def _poker_table_snapshot():
     snap.encounter = enc
     snap.turn_manager.record_interaction()
     pack = MagicMock()
-    pack.rules = RulesConfig(ruleset="native", confrontations=[cdef])
+    pack.rules = RulesConfig(ruleset="dial", confrontations=[cdef])
     return snap, pack
 
 
@@ -342,7 +342,7 @@ def test_folded_pc_seat_lowers_barrier_denominator() -> None:
     snap.encounter = enc
     snap.turn_manager.record_interaction()
     pack = MagicMock()
-    pack.rules = RulesConfig(ruleset="native", confrontations=[cdef])
+    pack.rules = RulesConfig(ruleset="dial", confrontations=[cdef])
 
     ts = enc.table_state
     # Doc wins; Jesse's seat must be folded by the engine.  We force this by
@@ -474,7 +474,7 @@ def test_fold_mark_fires_before_clear_on_multi_decision_point_hand() -> None:
     snap.encounter = enc
     snap.turn_manager.record_interaction()
     pack = MagicMock()
-    pack.rules = RulesConfig(ruleset="native", confrontations=[cdef])
+    pack.rules = RulesConfig(ruleset="dial", confrontations=[cdef])
 
     ts = enc.table_state
     # Doc the strongest hand so he wins the eventual showdown; Wyatt second.

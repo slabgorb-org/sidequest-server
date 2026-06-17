@@ -234,16 +234,16 @@ def test_native_module_is_not_a_without_number_module():
     an ``isinstance(ruleset, WithoutNumberRulesetModule)`` gate suppresses the
     scaffolding only under WN bindings and leaves native packs byte-for-byte
     untouched ("Do NOT regress the native module for native packs")."""
-    from sidequest.game.ruleset.native import NativeRulesetModule
+    from sidequest.game.ruleset.dial import DialRulesetModule
     from sidequest.game.ruleset.without_number import WithoutNumberRulesetModule
     from sidequest.game.ruleset.wwn import WwnRulesetModule
 
     assert isinstance(WwnRulesetModule(), WithoutNumberRulesetModule), (
         "WWN must be a WithoutNumberRulesetModule so the isinstance gate fires"
     )
-    assert not isinstance(NativeRulesetModule(), WithoutNumberRulesetModule), (
-        "the native module must NOT be a WithoutNumberRulesetModule — otherwise "
-        "an isinstance gate would wrongly suppress native scaffolding for native "
+    assert not isinstance(DialRulesetModule(), WithoutNumberRulesetModule), (
+        "the dial module must NOT be a WithoutNumberRulesetModule — otherwise "
+        "an isinstance gate would wrongly suppress dial scaffolding for dial "
         "packs (the regression this story forbids)"
     )
 

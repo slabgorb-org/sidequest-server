@@ -92,9 +92,7 @@ def test_accrete_for_turn_mints_pc_known_facts_into_store(
     assert frag.embedding_pending is True
 
 
-def test_accrete_for_turn_emits_watcher_event(
-    session_handler_factory, monkeypatch
-) -> None:
+def test_accrete_for_turn_emits_watcher_event(session_handler_factory, monkeypatch) -> None:
     """AC3: accretion is observable on the GM panel. Mirrors the
     run_worker watcher contract (component='lore')."""
     from sidequest.server.dispatch import lore_accretion
@@ -111,9 +109,7 @@ def test_accrete_for_turn_emits_watcher_event(
 
     lore_accretion.accrete_for_turn(handler, sd)
 
-    accretion_events = [
-        c for c in captured if c[1].get("field") == "lore_accretion"
-    ]
+    accretion_events = [c for c in captured if c[1].get("field") == "lore_accretion"]
     assert len(accretion_events) == 1
     kind, payload, component, _severity = accretion_events[0]
     assert kind == "state_transition"
@@ -142,9 +138,7 @@ def test_accrete_for_turn_is_idempotent_across_turns(
 # ---------------------------------------------------------------------------
 
 
-def test_handler_delegate_calls_accrete_for_turn(
-    session_handler_factory, monkeypatch
-) -> None:
+def test_handler_delegate_calls_accrete_for_turn(session_handler_factory, monkeypatch) -> None:
     from sidequest.server.dispatch import lore_accretion
 
     sd, handler = session_handler_factory(genre="caverns_and_claudes")
@@ -181,9 +175,7 @@ async def test_narration_turn_accretes_known_facts(
         return_value=NarrationTurnResult(narration="You survey the room.")
     )
 
-    await handler._execute_narration_turn(
-        sd, "look around", _build_turn_context(sd)
-    )
+    await handler._execute_narration_turn(sd, "look around", _build_turn_context(sd))
 
     assert f"lore_kf_{fact.fact_id}" in sd.lore_store.fragments
 

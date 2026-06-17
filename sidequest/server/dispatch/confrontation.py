@@ -365,10 +365,10 @@ def build_confrontation_payload(
         #    ``offer_difficulty`` seam (single-sourced with attack_params).
         is_net_run_offer = rules.ruleset == "cwn" and cdef.category == "hacking"
         if cdef.resolution_mode == ResolutionMode.opposed_check:
-            native_module = get_ruleset_module("native")
+            dial_module = get_ruleset_module("dial")
 
             def _offer_dc(beat_def: BeatDef) -> int:
-                return native_module.compute_dc(beat_def)
+                return dial_module.compute_dc(beat_def)
         elif is_net_run_offer:
             from sidequest.genre.models.rules import CwnConfig
 

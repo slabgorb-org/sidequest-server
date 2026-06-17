@@ -1095,7 +1095,7 @@ class RulesConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
     ruleset: str = (
-        "native"  # bound RulesetModule slug (pluggable-SRD Spec 0). Default = current dial engine.
+        "dial"  # bound RulesetModule slug (pluggable-SRD Spec 0). Default = the shared dial engine.
     )
     tone: str = ""
     lethality: str = ""

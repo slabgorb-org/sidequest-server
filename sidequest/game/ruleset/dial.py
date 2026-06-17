@@ -1,8 +1,11 @@
-"""NativeRulesetModule — the current SideQuest dial/confrontation turn, behind the seam.
+"""DialRulesetModule — SideQuest's dial/beat/confrontation turn, behind the seam.
 
-This is ADR-033's confrontation engine, relocated. It is the resolution model for packs
-that bind `ruleset: native` (and, later, the Fate family). It is NOT a fallback for other
-modules — it is one module among several, selected explicitly by the pack.
+This is ADR-033's confrontation engine, relocated. It is the shared d20 dial/beat/
+contest engine that packs bind via ``ruleset: dial`` AND that the Without Number
+family delegates ``compute_dc`` to (their own modules raise on it). It is NOT the
+Fate family's engine — a Fate pack resolves through fate_conflict / fate_contest,
+never here (spec 2026-06-17 closes that bleed). Selected explicitly by the pack;
+never a fallback.
 """
 
 from __future__ import annotations
@@ -25,7 +28,7 @@ from sidequest.genre.models.rules import BeatDef, ConfrontationDef
 def _stat_score(stats: dict[str, int], stat_check: str) -> int | None:
     """Look up a stat score with the case-insensitive ability-key fallback.
 
-    This is the relocated native-dial lookup (formerly dice._stat_modifier): try the
+    This is the relocated dial lookup (formerly dice._stat_modifier): try the
     exact key, then any key matching case-insensitively, else None (caller maps to 0).
     """
     score = stats.get(stat_check)
@@ -37,8 +40,8 @@ def _stat_score(stats: dict[str, int], stat_check: str) -> int | None:
     return score
 
 
-class NativeRulesetModule(RulesetModule):
-    slug = "native"
+class DialRulesetModule(RulesetModule):
+    slug = "dial"
 
     def find_confrontation(
         self, confrontations: list[ConfrontationDef], encounter_type: str
@@ -71,7 +74,7 @@ class NativeRulesetModule(RulesetModule):
         )
 
     def attack_params(self, *, beat, attacker_stats, attacker_core, target_core):
-        # native ignores target_core: its target number is the beat DC. The modifier is
+        # the dial engine ignores target_core: its target number is the beat DC. The modifier is
         # the stat mod plus any active status roll_modifier (e.g. fighting in the dark).
         # This reproduces the pre-generalization two-call path, now status-aware.
         attr_mod = self.stat_modifier(attacker_stats, beat.stat_check)

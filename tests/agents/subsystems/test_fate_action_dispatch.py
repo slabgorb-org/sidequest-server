@@ -122,7 +122,7 @@ def test_non_fate_ruleset_returns_error_not_silent_success():
         run_fate_action_dispatch(
             _dispatch("attack", skill="Fight", target="Thug"),
             snapshot=snap,
-            pack=SimpleNamespace(rules=SimpleNamespace(ruleset="native")),  # NOT fate
+            pack=SimpleNamespace(rules=SimpleNamespace(ruleset="dial")),  # NOT fate
             player_name="Hero",
         )
     )

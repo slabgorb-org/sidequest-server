@@ -32,7 +32,7 @@ from sidequest.server.dispatch.dice import DiceThrowOutcome, dispatch_dice_throw
 def _pack_with_combat() -> object:
     """Minimal GenrePack-shaped stub with dual-dial confrontation.
 
-    rules.ruleset = "native" so get_ruleset_module resolves correctly.
+    rules.ruleset = "dial" so get_ruleset_module resolves correctly.
     """
     cdef = ConfrontationDef(
         type="combat",
@@ -54,7 +54,7 @@ def _pack_with_combat() -> object:
     )
     rules = MagicMock(spec=RulesConfig)
     rules.confrontations = [cdef]
-    rules.ruleset = "native"
+    rules.ruleset = "dial"
     pack = MagicMock()
     pack.rules = rules
     return pack

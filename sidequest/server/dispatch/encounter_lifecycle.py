@@ -146,15 +146,11 @@ def reap_resolved_encounter_husk(
     # touched — only engine-fabricated stubs are quarantined.
     opponent_names = {a.name for a in enc.actors if a.side == "opponent"}
     reaped_stubs = [
-        npc.core.name
-        for npc in snapshot.npcs
-        if npc.ephemeral and npc.core.name in opponent_names
+        npc.core.name for npc in snapshot.npcs if npc.ephemeral and npc.core.name in opponent_names
     ]
     if reaped_stubs:
         snapshot.npcs[:] = [
-            npc
-            for npc in snapshot.npcs
-            if not (npc.ephemeral and npc.core.name in opponent_names)
+            npc for npc in snapshot.npcs if not (npc.ephemeral and npc.core.name in opponent_names)
         ]
         for stub_name in reaped_stubs:
             _watcher_publish(
@@ -964,7 +960,7 @@ def instantiate_table_encounter(
     stake_kind: str,
     stake_descriptor: str,
     seed: int,
-    ruleset_slug: str = "native",
+    ruleset_slug: str = "dial",
     seat_seeds: dict[str, dict] | None = None,
 ) -> StructuredEncounter:
     """Build + deal a table_resolution StructuredEncounter.
@@ -1179,7 +1175,7 @@ def instantiate_encounter_from_trigger(
             stake_kind="money",
             stake_descriptor=cdef.label,
             seed=snapshot.turn_manager.interaction,
-            ruleset_slug=pack.rules.ruleset if pack and pack.rules else "native",
+            ruleset_slug=pack.rules.ruleset if pack and pack.rules else "dial",
             seat_seeds=seat_seeds,
         )
         snapshot.encounter = enc

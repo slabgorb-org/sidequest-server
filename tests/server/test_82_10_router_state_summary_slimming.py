@@ -89,9 +89,7 @@ def test_router_summary_drops_phase_b_fields() -> None:
     """``narrative_log`` (a Phase B field, unbounded by construction) is
     populated on the snapshot but absent from the router summary."""
     snap = _snapshot_with_party_at("ropefoot")
-    snap.narrative_log.append(
-        NarrativeEntry(author="narrator", content="The cavern mouth yawns.")
-    )
+    snap.narrative_log.append(NarrativeEntry(author="narrator", content="The cavern mouth yawns."))
 
     summary = _build_state_summary(snap)
 
@@ -185,9 +183,7 @@ def test_slimmed_span_fires_with_before_after_evidence(otel_capture) -> None:
     snap = _snapshot_with_party_at("ropefoot")
     snap.npcs.append(_npc("Madge", last_seen_location="ropefoot"))
     snap.npcs.append(_npc("Farwander", last_seen_location="sunken_gate"))
-    snap.narrative_log.append(
-        NarrativeEntry(author="narrator", content="x" * 2000)
-    )
+    snap.narrative_log.append(NarrativeEntry(author="narrator", content="x" * 2000))
 
     _build_state_summary(snap)
 
@@ -285,8 +281,7 @@ def test_session_helpers_reexports_are_the_shared_objects() -> None:
 
     assert session_helpers._PHASE_B_DROP_FIELDS is snapshot_slimming._PHASE_B_DROP_FIELDS
     assert (
-        session_helpers._apply_phase_c_projections
-        is snapshot_slimming._apply_phase_c_projections
+        session_helpers._apply_phase_c_projections is snapshot_slimming._apply_phase_c_projections
     )
     assert session_helpers._KNOWN_FACTS_TAIL_K == snapshot_slimming._KNOWN_FACTS_TAIL_K
     assert session_helpers._DISCOVERED_CLUES_CAP == snapshot_slimming._DISCOVERED_CLUES_CAP

@@ -102,7 +102,7 @@ def test_no_span_when_gated_off(capture_spans) -> None:
     from sidequest.server.websocket_handlers.fate_state_emit import _maybe_emit_fate_state
 
     handler = type("H", (), {})()
-    _maybe_emit_fate_state(handler, sd=_sd("native"), snapshot=_snapshot(), emit_fn=lambda m, k: None)
+    _maybe_emit_fate_state(handler, sd=_sd("dial"), snapshot=_snapshot(), emit_fn=lambda m, k: None)
     assert not any(s.name == "fate.projection.emitted" for s in capture_spans.spans)
 
 

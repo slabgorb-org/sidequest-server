@@ -1,4 +1,5 @@
 """WN-core standard-array assignment is prime-aware (ADR-143 Step 2)."""
+
 from __future__ import annotations
 
 from sidequest.game.builder import CharacterBuilder
@@ -13,15 +14,17 @@ from sidequest.genre.models.rules import RulesConfig
 
 
 def _class(prime: str, display_name: str = "C") -> ClassDef:
-    return ClassDef.model_validate({
-        "id": "c",
-        "display_name": display_name,
-        "rpg_role": "control",
-        "jungian_default": "magician",
-        "prime_requisite": prime,
-        "minimum_score": 9,
-        "kit_table": "k",
-    })
+    return ClassDef.model_validate(
+        {
+            "id": "c",
+            "display_name": display_name,
+            "rpg_role": "control",
+            "jungian_default": "magician",
+            "prime_requisite": prime,
+            "minimum_score": 9,
+            "kit_table": "k",
+        }
+    )
 
 
 WWN_ABILITY_NAMES = ["STR", "DEX", "CON", "INT", "WIS", "CHA"]
@@ -70,14 +73,18 @@ def _one_choice_scenes() -> list[CharCreationScene]:
 def test_caster_prime_gets_top_value():
     module = get_ruleset_module("wwn")
     names = ["STR", "DEX", "CON", "INT", "WIS", "CHA"]
-    stats = module.assign_attributes(pool=[14, 12, 11, 10, 9, 7], ability_names=names, class_def=_class("INT"))
+    stats = module.assign_attributes(
+        pool=[14, 12, 11, 10, 9, 7], ability_names=names, class_def=_class("INT")
+    )
     assert stats["INT"] == 14  # prime lands the top value, NOT STR
 
 
 def test_warrior_prime_gets_top_value():
     module = get_ruleset_module("wwn")
     names = ["STR", "DEX", "CON", "INT", "WIS", "CHA"]
-    stats = module.assign_attributes(pool=[14, 12, 11, 10, 9, 7], ability_names=names, class_def=_class("STR"))
+    stats = module.assign_attributes(
+        pool=[14, 12, 11, 10, 9, 7], ability_names=names, class_def=_class("STR")
+    )
     assert stats["STR"] == 14
 
 
@@ -97,7 +104,9 @@ def test_prime_not_in_ability_names_falls_through():
     module = get_ruleset_module("wwn")
     names = ["STR", "DEX", "CON", "INT", "WIS", "CHA"]
     weird_class = _class("LUCK")  # not in ability_names
-    stats = module.assign_attributes(pool=[14, 12, 11, 10, 9, 7], ability_names=names, class_def=weird_class)
+    stats = module.assign_attributes(
+        pool=[14, 12, 11, 10, 9, 7], ability_names=names, class_def=weird_class
+    )
     # STR should get top value since prime is unrecognized
     assert stats["STR"] == 14
 
@@ -106,9 +115,11 @@ def test_remaining_values_fill_high_to_low_by_declaration():
     """After prime gets the top value, remaining stats fill high-to-low in declaration order."""
     module = get_ruleset_module("wwn")
     names = ["STR", "DEX", "CON", "INT", "WIS", "CHA"]
-    stats = module.assign_attributes(pool=[14, 12, 11, 10, 9, 7], ability_names=names, class_def=_class("INT"))
-    assert stats["INT"] == 14   # prime gets top
-    assert stats["STR"] == 12   # next in declaration order
+    stats = module.assign_attributes(
+        pool=[14, 12, 11, 10, 9, 7], ability_names=names, class_def=_class("INT")
+    )
+    assert stats["INT"] == 14  # prime gets top
+    assert stats["STR"] == 12  # next in declaration order
     assert stats["DEX"] == 11
     assert stats["CON"] == 10
     assert stats["WIS"] == 9

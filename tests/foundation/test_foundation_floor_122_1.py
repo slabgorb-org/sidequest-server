@@ -65,9 +65,7 @@ FOUNDATION_DIR: Path = SIDEQUEST_PKG / "foundation"
 DOMAIN_TIERS: tuple[str, ...] = ("game", "genre", "orbital", "magic", "interior")
 
 # The three modules Story 122-1 relocates to the foundation floor.
-RELOCATING_MODULES: frozenset[str] = frozenset(
-    {"asset_urls", "slug_fold", "reference_anchors"}
-)
+RELOCATING_MODULES: frozenset[str] = frozenset({"asset_urls", "slug_fold", "reference_anchors"})
 
 
 # --- AST import scanning -----------------------------------------------------
@@ -137,9 +135,9 @@ def _domain_violations() -> dict[str, list[str]]:
 
 
 def test_foundation_package_exists() -> None:
-    assert (
-        FOUNDATION_DIR / "__init__.py"
-    ).is_file(), "ADR-147 step 1: sidequest/foundation/ package must exist"
+    assert (FOUNDATION_DIR / "__init__.py").is_file(), (
+        "ADR-147 step 1: sidequest/foundation/ package must exist"
+    )
     assert importlib.util.find_spec("sidequest.foundation") is not None
 
 
@@ -204,9 +202,7 @@ def test_old_server_module_path_removed(module: str) -> None:
 
 
 def test_old_server_module_file_removed() -> None:
-    leftover = [
-        m for m in RELOCATING_MODULES if (SIDEQUEST_PKG / "server" / f"{m}.py").exists()
-    ]
+    leftover = [m for m in RELOCATING_MODULES if (SIDEQUEST_PKG / "server" / f"{m}.py").exists()]
     assert not leftover, f"server/ still holds relocated module files: {leftover}"
 
 
@@ -219,9 +215,10 @@ def test_asset_url_behaviour_preserved(monkeypatch: pytest.MonkeyPatch) -> None:
     from sidequest.foundation.asset_urls import resolve_asset_url
 
     monkeypatch.delenv("SIDEQUEST_ASSET_BASE_URL", raising=False)
-    assert resolve_asset_url(
-        "genre_packs/caverns_and_claudes/audio/music/combat.ogg"
-    ) == "https://cdn.slabgorb.com/genre_packs/caverns_and_claudes/audio/music/combat.ogg"
+    assert (
+        resolve_asset_url("genre_packs/caverns_and_claudes/audio/music/combat.ogg")
+        == "https://cdn.slabgorb.com/genre_packs/caverns_and_claudes/audio/music/combat.ogg"
+    )
 
     monkeypatch.setenv("SIDEQUEST_ASSET_BASE_URL", "local")
     assert (
@@ -300,18 +297,14 @@ def test_no_domain_tier_upward_edges_for_relocated_modules() -> None:
         ("game/cookbook/compose.py", "reference_anchors"),
     ],
 )
-def test_known_importer_no_longer_reaches_into_server(
-    importer: str, relocated_module: str
-) -> None:
+def test_known_importer_no_longer_reaches_into_server(importer: str, relocated_module: str) -> None:
     """The five concrete edges ADR-147 names (its own table lists five importer
     files though its Decision text says "four" — the test pins the real set)."""
     path = SIDEQUEST_PKG / importer
     assert path.exists(), f"expected importer {importer} to exist"
     targets = _import_targets(ast.parse(path.read_text(encoding="utf-8")))
     offending = [
-        t
-        for t in _imports_relocated_from_server(targets)
-        if t.split(".")[2] == relocated_module
+        t for t in _imports_relocated_from_server(targets) if t.split(".")[2] == relocated_module
     ]
     assert not offending, (
         f"{importer} still imports {relocated_module} from sidequest.server "

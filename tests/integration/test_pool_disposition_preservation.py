@@ -108,9 +108,7 @@ def test_promotion_preserves_nonneutral_disposition() -> None:
         ],
     )
 
-    promoted = resolve_status_target(
-        snapshot, actor_name="Mara", turn_num=4, trigger="test"
-    )
+    promoted = resolve_status_target(snapshot, actor_name="Mara", turn_num=4, trigger="test")
 
     assert promoted is not None
     assert int(promoted.disposition) == 18, (
@@ -131,9 +129,7 @@ def test_promotion_preserves_hostile_disposition() -> None:
         ],
     )
 
-    promoted = resolve_status_target(
-        snapshot, actor_name="Grish", turn_num=4, trigger="test"
-    )
+    promoted = resolve_status_target(snapshot, actor_name="Grish", turn_num=4, trigger="test")
 
     assert promoted is not None
     assert int(promoted.disposition) == -22
@@ -152,9 +148,7 @@ def test_promotion_with_no_prior_disposition_stays_neutral() -> None:
         npc_pool=[NpcPoolMember(name="Wexley", drawn_from="narrator_invented")],
     )
 
-    promoted = resolve_status_target(
-        snapshot, actor_name="Wexley", turn_num=4, trigger="test"
-    )
+    promoted = resolve_status_target(snapshot, actor_name="Wexley", turn_num=4, trigger="test")
 
     assert promoted is not None
     assert int(promoted.disposition) == 0
@@ -191,9 +185,7 @@ async def _setup_watcher(monkeypatch: pytest.MonkeyPatch, label: str) -> list[di
     return captured
 
 
-async def _wait_for_op(
-    captured: list[dict], op: str, *, timeout_s: float = 1.0
-) -> dict:
+async def _wait_for_op(captured: list[dict], op: str, *, timeout_s: float = 1.0) -> dict:
     deadline = asyncio.get_event_loop().time() + timeout_s
     while asyncio.get_event_loop().time() < deadline:
         for evt in captured:
@@ -229,9 +221,7 @@ async def test_promoted_from_pool_event_carries_disposition(
         ],
     )
 
-    promoted = resolve_status_target(
-        snapshot, actor_name="Mara", turn_num=7, trigger="befriend"
-    )
+    promoted = resolve_status_target(snapshot, actor_name="Mara", turn_num=7, trigger="befriend")
     await asyncio.sleep(0)
 
     assert promoted is not None

@@ -10,18 +10,25 @@ from sidequest.genre.models.character import Background, Focus, FocusLevel
 
 
 def test_background_grants_skills():
-    bg = Background.model_validate({
-        "id": "locksmith", "display_name": "Locksmith",
-        "free_skill": "Sneak", "quick_skills": ["Convince", "Work"],
-    })
+    bg = Background.model_validate(
+        {
+            "id": "locksmith",
+            "display_name": "Locksmith",
+            "free_skill": "Sneak",
+            "quick_skills": ["Convince", "Work"],
+        }
+    )
     assert bg.free_skill == "Sneak" and "Work" in bg.quick_skills
 
 
 def test_focus_levels_grant():
-    f = Focus.model_validate({
-        "id": "die_hard", "display_name": "Die Hard",
-        "levels": [{"skills": {"Endure": 1}, "abilities": []}],
-    })
+    f = Focus.model_validate(
+        {
+            "id": "die_hard",
+            "display_name": "Die Hard",
+            "levels": [{"skills": {"Endure": 1}, "abilities": []}],
+        }
+    )
     assert f.levels[0].skills["Endure"] == 1
 
 

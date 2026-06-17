@@ -288,7 +288,9 @@ async def test_load_fragments_loud_skips_blank_content_row(tmp_path: Path) -> No
         "load_fragments must return the valid fragment even when a sibling row "
         f"is corrupt; got {sorted(ids)}"
     )
-    assert "corrupt_frag" not in ids, "the blank-content row must be loud-skipped, not reconstructed"
+    assert "corrupt_frag" not in ids, (
+        "the blank-content row must be loud-skipped, not reconstructed"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -337,7 +339,9 @@ async def test_upsert_is_idempotent_and_updates_content(tmp_path: Path) -> None:
         ).fetchall()
 
     assert len(rows) == 1, f"upsert must keep exactly one row per id, got {len(rows)}"
-    assert rows[0][0] == "second", "upsert must UPDATE content (ON CONFLICT DO UPDATE), not DO NOTHING"
+    assert rows[0][0] == "second", (
+        "upsert must UPDATE content (ON CONFLICT DO UPDATE), not DO NOTHING"
+    )
     assert rows[0][1] == created_at_1, "created_at must be preserved across upsert (not reset)"
 
 

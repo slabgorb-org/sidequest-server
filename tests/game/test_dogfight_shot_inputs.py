@@ -120,7 +120,7 @@ def _weapon_lookup(weapon_id: str) -> _FakeWeapon | None:
 def test_build_inputs_fails_loud_when_not_swn():
     with pytest.raises(ValueError, match="SWN"):
         build_dogfight_shot_inputs(
-            ruleset_slug="native",
+            ruleset_slug="dial",
             cdef=None,
             encounter=None,
             pc_stats={},

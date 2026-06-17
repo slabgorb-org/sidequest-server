@@ -27,7 +27,7 @@ Contract pinned (TEA, 102-5 RED):
 * Slug honesty (epic invariant): module spans carry the BOUND module's slug —
   ``wwn.attack.resolved`` on a wwn pack, ``awn.attack.resolved`` on awn.
 * Guards (the commit_effort pattern): unknown actor → NOT_FOUND; no active
-  session → ERROR_FATAL; native pack → loud error through dispatch.
+  session → ERROR_FATAL; dial pack → loud error through dispatch.
 
 All tests FAIL until 102-5 is implemented (KeyError on the unregistered tool).
 """
@@ -267,20 +267,20 @@ async def test_attack_unknown_target_returns_not_found() -> None:
     assert r.message is not None and "Ghost" in r.message
 
 
-async def test_attack_on_native_pack_fails_loud_through_dispatch() -> None:
+async def test_attack_on_dial_pack_fails_loud_through_dispatch() -> None:
     """The per-tool self-guard backstop (73-15 AC-3 pattern): even if the
-    advertisement filter regresses, dispatching on a native pack is a loud
+    advertisement filter regresses, dispatching on a dial pack is a loud
     error ToolResult, never a silent generic resolution."""
     attacker = _pc("Vesska", items=[dict(_WEAPON)])
     target = _pc("Husk", ac=-100)
     store = _store_with(_snapshot([attacker, target]))
-    ctx = _make_ctx(store, genre_pack=_FakePack(rules=_FakeRules(ruleset="native", _cfg=object())))
+    ctx = _make_ctx(store, genre_pack=_FakePack(rules=_FakeRules(ruleset="dial", _cfg=object())))
 
     out = await _dispatch(
         "wn_attack", {"attacker": "Vesska", "target": "Husk", "weapon": "Shard Knife"}, ctx
     )
     assert out.is_error is True
-    assert "native" in out.content.lower() or "ruleset" in out.content.lower()
+    assert "dial" in out.content.lower() or "ruleset" in out.content.lower()
 
 
 async def test_attack_hit_with_no_resolvable_damage_fails_loud_not_zero() -> None:

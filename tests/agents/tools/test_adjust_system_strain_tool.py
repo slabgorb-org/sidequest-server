@@ -112,7 +112,7 @@ class _FakeAwnPack:
 
 @dataclass
 class _NonCwnRules:
-    ruleset: str = "native"
+    ruleset: str = "dial"
 
     def ruleset_config(self) -> None:
         return None

@@ -329,9 +329,7 @@ async def retrieve_lore_context(
                     "outcome": "empty_query_or_store",
                     "peak_similarity": None,
                     "embedding_model": None,
-                    "context_hint": (
-                        query_text[:80] + "…" if len(query_text) > 80 else query_text
-                    ),
+                    "context_hint": (query_text[:80] + "…" if len(query_text) > 80 else query_text),
                 },
                 component="lore",
             )
@@ -416,9 +414,7 @@ async def retrieve_lore_context(
                     # computed" from "best candidate scored exactly 0.0".
                     "peak_similarity": None,
                     "embedding_model": embedding_model,
-                    "context_hint": (
-                        query_text[:80] + "…" if len(query_text) > 80 else query_text
-                    ),
+                    "context_hint": (query_text[:80] + "…" if len(query_text) > 80 else query_text),
                 },
                 component="lore",
             )

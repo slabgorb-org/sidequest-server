@@ -7,7 +7,7 @@ new engine, no new span — F2b just makes the narrator able to fire the one alr
 Covers:
   * AC-4 — dispatch through the REAL `default_registry` fires `fate.compel.offered`
     (OTEL-span assertion, the canonical wiring shape — not a source grep).
-  * AC-5 — advertisement gate: present for `ruleset="fate"`, absent for `"wwn"`/`"native"`,
+  * AC-5 — advertisement gate: present for `ruleset="fate"`, absent for `"wwn"`/`"dial"`,
     present in the unfiltered (full) catalog.
   * AC-6 — import-time registration verified in a SUBPROCESS (in-process autouse conftest
     can mask a forgotten barrel line; project memory
@@ -110,9 +110,9 @@ def test_tool_advertised_to_fate_pack() -> None:
     assert TOOL_NAME in _names(default_registry.tool_definitions(ruleset="fate"))
 
 
-def test_tool_hidden_from_wwn_and_native_packs() -> None:
+def test_tool_hidden_from_wwn_and_dial_packs() -> None:
     assert TOOL_NAME not in _names(default_registry.tool_definitions(ruleset="wwn"))
-    assert TOOL_NAME not in _names(default_registry.tool_definitions(ruleset="native"))
+    assert TOOL_NAME not in _names(default_registry.tool_definitions(ruleset="dial"))
 
 
 def test_tool_present_in_unfiltered_catalog() -> None:

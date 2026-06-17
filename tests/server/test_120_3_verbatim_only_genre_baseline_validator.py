@@ -205,17 +205,17 @@ def test_wn_family_genre_derived_is_allowed(tmp_path: Path) -> None:
     assert item.provenance is not None and item.provenance.mode == "derived"
 
 
-def test_native_pack_genre_unprovenanced_is_exempt(tmp_path: Path) -> None:
-    """Boundary guard (CRITICAL): a NATIVE-ruleset pack's genre inventory is authored
+def test_dial_pack_genre_unprovenanced_is_exempt(tmp_path: Path) -> None:
+    """Boundary guard (CRITICAL): a DIAL-ruleset pack's genre inventory is authored
     homebrew with no SRD to be verbatim from — its items are legitimately unprovenanced.
-    The verbatim-only rule is gated to the WN family and must NOT fire for native packs,
-    or it breaks every native / homebrew pack's load (they carry unprovenanced gear by
+    The verbatim-only rule is gated to the WN family and must NOT fire for dial packs,
+    or it breaks every dial / homebrew pack's load (they carry unprovenanced gear by
     design)."""
     pack_dir = _copy_fixture(_NATIVE_FIXTURE, tmp_path)
     _append_catalog_item(pack_dir / "inventory.yaml", _unprovenanced_item("homebrew_charm_120_3"))
 
-    pack = load_genre_pack(pack_dir)  # must NOT raise — native is exempt
-    assert pack.rules.ruleset == "native"
+    pack = load_genre_pack(pack_dir)  # must NOT raise — dial is exempt
+    assert pack.rules.ruleset == "dial"
     assert pack.inventory is not None
     assert any(i.id == "homebrew_charm_120_3" for i in pack.inventory.item_catalog)
 

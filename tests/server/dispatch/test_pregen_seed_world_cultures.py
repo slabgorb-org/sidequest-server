@@ -151,7 +151,11 @@ def _world_pack(culture_names: list[str], *, world: str) -> GenrePack:
     return GenrePack.model_construct(
         cultures=[_culture("GenreOnly")],
         archetypes=[NpcArchetype.model_construct(name="Soldier")],
-        worlds={world: World.model_construct(cultures=[_culture(n) for n in culture_names], archetypes=[])},
+        worlds={
+            world: World.model_construct(
+                cultures=[_culture(n) for n in culture_names], archetypes=[]
+            )
+        },
         archetype_constraints=None,
     )
 
@@ -233,7 +237,9 @@ def test_seed_manual_two_cultures_under_cap_unaffected(monkeypatch, tmp_path) ->
     assert set(captured) == {"tsveri", "free_miners"}
 
 
-def test_seed_manual_span_reports_effective_and_seeded_culture_counts(monkeypatch, tmp_path) -> None:
+def test_seed_manual_span_reports_effective_and_seeded_culture_counts(
+    monkeypatch, tmp_path
+) -> None:
     """AC3 (OTEL lie-detector, load-bearing): the pregen.seed_manual span exposes
     the world's TRUE culture count (effective_culture_count) alongside the seeded
     count, so a silent truncation is observable on the GM panel. For a 5-culture

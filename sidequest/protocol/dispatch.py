@@ -62,6 +62,7 @@ def _recover_leading_json_array(value: str) -> list | None:
         return None
     return obj if isinstance(obj, list) else None
 
+
 # ---------------------------------------------------------------------------
 # Visibility
 # ---------------------------------------------------------------------------

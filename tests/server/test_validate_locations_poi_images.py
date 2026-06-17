@@ -38,6 +38,6 @@ def test_validator_clean_when_poi_slug_matches_location() -> None:
     """history POI 'vaskov-centrum' matches a location in poi_fixture — the
     validator must NOT raise a POI-slug error for it."""
     result = validate_locations_in_world(_POI_WORLD)
-    assert not any(
-        "vaskov-centrum" in i.message for i in result.errors
-    ), f"matched POI slug should not be an error: {[i.message for i in result.errors]}"
+    assert not any("vaskov-centrum" in i.message for i in result.errors), (
+        f"matched POI slug should not be an error: {[i.message for i in result.errors]}"
+    )

@@ -94,7 +94,7 @@ def test_build_turn_context_leaves_fate_state_none_for_non_fate_pack() -> None:
     zero tokens (same single-chokepoint discipline as magic_state / mutation_state)."""
     from sidequest.server.session_handler import _build_turn_context
 
-    sd = _make_sd(ruleset="native", with_fate_pc=True)
+    sd = _make_sd(ruleset="dial", with_fate_pc=True)
     ctx = _build_turn_context(sd)
 
     assert ctx.fate_state is None, "non-Fate pack must leave TurnContext.fate_state None"

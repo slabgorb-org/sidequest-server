@@ -145,7 +145,7 @@ class TestAccreteAliases:
         assert accrete_aliases(["old man"], ["old man"]) == ["old man"]
 
     def test_accretion_dedup_is_case_folded(self) -> None:
-        """"Old Man" must not be appended alongside "old man" — case-folded dedup,
+        """ "Old Man" must not be appended alongside "old man" — case-folded dedup,
         so the alias set doesn't bloat with casing variants."""
         from sidequest.game.alias_resolution import accrete_aliases
 

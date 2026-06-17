@@ -107,9 +107,7 @@ def test_barsoom_offers_earthman_origin_with_gravity_stat_edge() -> None:
     scenes = _barsoom_scenes(pack)
 
     earthman = [
-        (s, c)
-        for s, c in _race_choices(scenes)
-        if c.mechanical_effects.race_hint == "Earthman"
+        (s, c) for s, c in _race_choices(scenes) if c.mechanical_effects.race_hint == "Earthman"
     ]
     assert len(earthman) == 1, (
         f"barsoom chargen must offer exactly ONE Earthman origin choice (D1/D5); "
@@ -132,9 +130,7 @@ def test_barsoom_offers_native_origins() -> None:
     scenes = _barsoom_scenes(pack)
 
     native = [
-        (s, c)
-        for s, c in _race_choices(scenes)
-        if c.mechanical_effects.race_hint != "Earthman"
+        (s, c) for s, c in _race_choices(scenes) if c.mechanical_effects.race_hint != "Earthman"
     ]
     assert len(native) >= 2, (
         "barsoom chargen must offer at least two native origins (red Martian + "
@@ -152,9 +148,7 @@ def test_native_origins_carry_no_crunch_four_arms_fiction_only() -> None:
     scenes = _barsoom_scenes(pack)
 
     native = [
-        (s, c)
-        for s, c in _race_choices(scenes)
-        if c.mechanical_effects.race_hint != "Earthman"
+        (s, c) for s, c in _race_choices(scenes) if c.mechanical_effects.race_hint != "Earthman"
     ]
     assert native, "precondition: native origins must exist (see companion test)"
 
@@ -192,6 +186,4 @@ def test_barsoom_class_surface_offers_pulp_callings_not_doom() -> None:
     )
 
     leaked = offered & _DOOM_CALLINGS
-    assert not leaked, (
-        f"barsoom chargen must NOT offer the doom Callings; leaked {sorted(leaked)}"
-    )
+    assert not leaked, f"barsoom chargen must NOT offer the doom Callings; leaked {sorted(leaked)}"

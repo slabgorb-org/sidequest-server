@@ -59,9 +59,7 @@ def _has_pulp_noir_content() -> bool:
         return False
 
 
-pytestmark = pytest.mark.skipif(
-    not _has_pulp_noir_content(), reason="pulp_noir pack not on disk"
-)
+pytestmark = pytest.mark.skipif(not _has_pulp_noir_content(), reason="pulp_noir pack not on disk")
 
 
 def _load_pack() -> GenrePack:
@@ -135,7 +133,7 @@ class TestAC1PackLoadsAsFate:
     def test_pulp_noir_binds_fate_ruleset(self) -> None:
         pack = _load_pack()
         assert pack.rules.ruleset == "fate", (
-            "pulp_noir must bind ruleset: fate (defaults to 'native' pre-migration)"
+            "pulp_noir must bind ruleset: fate (defaults to 'dial' pre-migration)"
         )
 
     def test_pulp_noir_authors_a_valid_fate_block(self) -> None:
@@ -236,7 +234,7 @@ class TestAC3RoutesToFateNotNative:
 
     def test_native_module_is_not_the_fate_module(self) -> None:
         # Paired negative: proves the isinstance gate actually discriminates.
-        assert not isinstance(get_ruleset_module("native"), FateRulesetModule)
+        assert not isinstance(get_ruleset_module("dial"), FateRulesetModule)
 
 
 # ---------------------------------------------------------------------------
@@ -309,9 +307,7 @@ class TestAC5RealPackWiring:
         # base ABC signature omits it); narrow the type so the injection is honest.
         module = get_ruleset_module("fate")
         assert isinstance(module, FateRulesetModule)
-        module.seed_chargen_resources(
-            rules=pack.rules, stats={}, class_def=None, _tracer=tracer
-        )
+        module.seed_chargen_resources(rules=pack.rules, stats={}, class_def=None, _tracer=tracer)
 
         span = next(
             (s for s in exporter.get_finished_spans() if s.name == "fate.chargen.seeded"),

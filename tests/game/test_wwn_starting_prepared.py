@@ -145,7 +145,7 @@ def _fighter_def() -> ClassDef:
 # ---------------------------------------------------------------------------
 
 _wwn_mod = get_ruleset_module("wwn")
-_native_mod = get_ruleset_module("native")
+_dial_mod = get_ruleset_module("dial")
 
 
 class TestStartingPreparedSeeding:
@@ -215,14 +215,16 @@ class TestStartingPreparedSeeding:
     def test_no_wwn_magic_class_returns_empty_and_none(self) -> None:
         """Class with wwn_magic=None → empty effort, None spellcasting."""
         rules = _wwn_rules()
-        res = _wwn_mod.seed_chargen_resources(rules=rules, stats=_DEFAULT_STATS, class_def=_fighter_def())
+        res = _wwn_mod.seed_chargen_resources(
+            rules=rules, stats=_DEFAULT_STATS, class_def=_fighter_def()
+        )
         assert res.effort == {}
         assert res.spellcasting is None
 
     def test_non_wwn_ruleset_returns_empty_and_none(self) -> None:
         """Non-wwn ruleset → empty effort, None spellcasting."""
         rules = _native_rules()
-        res = _native_mod.seed_chargen_resources(
+        res = _dial_mod.seed_chargen_resources(
             rules=rules,
             stats={"STR": 10, "DEX": 10, "CON": 10, "INT": 10, "WIS": 10, "CHA": 10},
             class_def=_fighter_def(),

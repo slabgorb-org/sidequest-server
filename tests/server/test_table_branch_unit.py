@@ -119,7 +119,7 @@ def _poker_table_snapshot():
     # a real RulesConfig matches the live shape without GenrePack's full
     # required-field surface (mirrors test_space_opera_hp_e2e).
     pack = MagicMock()
-    pack.rules = RulesConfig(ruleset="native", confrontations=[cdef])
+    pack.rules = RulesConfig(ruleset="dial", confrontations=[cdef])
     return snap, pack
 
 

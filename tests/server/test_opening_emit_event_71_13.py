@@ -341,7 +341,8 @@ def _narration_texts_from_list(messages: list[object]) -> list[str]:
 
 @pytest.mark.asyncio
 async def test_anchor_peer_gets_live_pov_swap_not_only_on_reconnect(
-    handler: WebSocketSessionHandler, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+    handler: WebSocketSessionHandler,
+    monkeypatch: pytest.MonkeyPatch,  # noqa: F811
 ) -> None:
     """AC2 — RED: anchor-peer currently gets raw 3rd-person via room.broadcast.
 
@@ -404,7 +405,8 @@ async def test_anchor_peer_gets_live_pov_swap_not_only_on_reconnect(
 
 @pytest.mark.asyncio
 async def test_visible_to_private_opening_card_excluded_from_non_recipients(
-    handler: WebSocketSessionHandler, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+    handler: WebSocketSessionHandler,
+    monkeypatch: pytest.MonkeyPatch,  # noqa: F811
 ) -> None:
     """AC3 — RED: visible_to private card currently leaks to ALL players via broadcast.
 
@@ -419,9 +421,7 @@ async def test_visible_to_private_opening_card_excluded_from_non_recipients(
     """
     await _connect(handler)
     await _walk_to_confirmation(handler)
-    _q_driver, q_peer = _make_mp(
-        handler, slug="opening-71-13-visible-to"
-    )
+    _q_driver, q_peer = _make_mp(handler, slug="opening-71-13-visible-to")
 
     # Explicit VisibilityTagRule for NARRATION — projection filter must honour
     # visible_to regardless of content-pack state.
@@ -459,7 +459,8 @@ async def test_visible_to_private_opening_card_excluded_from_non_recipients(
 
 @pytest.mark.asyncio
 async def test_opening_events_persisted_with_seq_assigned(
-    handler: WebSocketSessionHandler, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+    handler: WebSocketSessionHandler,
+    monkeypatch: pytest.MonkeyPatch,  # noqa: F811
 ) -> None:
     """AC5 — RED: opening messages currently have seq=0 (no EventLog persistence).
 
@@ -501,7 +502,8 @@ async def test_opening_events_persisted_with_seq_assigned(
 
 @pytest.mark.asyncio
 async def test_emit_author_resolved_fires_with_project_emitter_true(
-    handler: WebSocketSessionHandler, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+    handler: WebSocketSessionHandler,
+    monkeypatch: pytest.MonkeyPatch,  # noqa: F811
 ) -> None:
     """AC7 (OTEL) — RED: emit.author_resolved does NOT fire for the opening today.
 
@@ -542,7 +544,8 @@ async def test_emit_author_resolved_fires_with_project_emitter_true(
     await _fire_opening(handler, monkeypatch, opening_factory=_std_opening)
 
     narration_author_resolved = [
-        e for e in watcher_events
+        e
+        for e in watcher_events
         if e.get("kind") == "NARRATION" and e.get("project_emitter") is True
     ]
     assert narration_author_resolved, (
@@ -555,7 +558,8 @@ async def test_emit_author_resolved_fires_with_project_emitter_true(
 
 @pytest.mark.asyncio
 async def test_projection_filter_decide_fires_per_connected_player(
-    handler: WebSocketSessionHandler, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+    handler: WebSocketSessionHandler,
+    monkeypatch: pytest.MonkeyPatch,  # noqa: F811
 ) -> None:
     """AC7 (OTEL) — RED: projection.filter.decide does NOT fire for opening today.
 
@@ -607,14 +611,14 @@ async def test_projection_filter_decide_fires_per_connected_player(
         f"(Track A — driver projected like a peer).  Got: {decided!r}"
     )
     assert PEER_PID in decided, (
-        f"Peer ({PEER_PID!r}) must receive a projection.filter.decide span. "
-        f"Got: {decided!r}"
+        f"Peer ({PEER_PID!r}) must receive a projection.filter.decide span. Got: {decided!r}"
     )
 
 
 @pytest.mark.asyncio
 async def test_solo_opening_also_persisted_with_seq(
-    handler: WebSocketSessionHandler, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+    handler: WebSocketSessionHandler,
+    monkeypatch: pytest.MonkeyPatch,  # noqa: F811
 ) -> None:
     """AC8/Q3 — RED: solo opening currently has seq=0 (no EventLog persistence).
 
@@ -659,7 +663,8 @@ async def test_solo_opening_also_persisted_with_seq(
 
 @pytest.mark.asyncio
 async def test_render_queued_frame_not_persisted_as_narration(
-    handler: WebSocketSessionHandler, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+    handler: WebSocketSessionHandler,
+    monkeypatch: pytest.MonkeyPatch,  # noqa: F811
 ) -> None:
     """sq-playtest 2026-05-28 #G1 regression — a RENDER_QUEUED frame in the
     opening list must NOT be persisted as a NARRATION event.
@@ -723,8 +728,7 @@ async def test_render_queued_frame_not_persisted_as_narration(
     plain = __import__("os").environ["SIDEQUEST_DATABASE_URL"]
     with psycopg.connect(plain, autocommit=True) as conn:
         rows = conn.execute(
-            "SELECT seq, kind, payload_json FROM events "
-            "WHERE session_id = %s ORDER BY seq",
+            "SELECT seq, kind, payload_json FROM events WHERE session_id = %s ORDER BY seq",
             (session_id,),
         ).fetchall()
 
@@ -837,9 +841,7 @@ async def test_solo_cold_open_seed_journaled_author_anchored_and_joiner_excluded
     view = views.build_game_state_view(handler)
     real_filter = handler._projection_filter  # type: ignore[attr-defined]
     assert real_filter is not None
-    joiner_decision = real_filter.project(
-        envelope=envelope, view=view, player_id="p_joiner_later"
-    )
+    joiner_decision = real_filter.project(envelope=envelope, view=view, player_id="p_joiner_later")
     assert joiner_decision.include is False
 
     # …and (b) STRUCTURALLY with ZERO genre rules (packs without
@@ -851,7 +853,5 @@ async def test_solo_cold_open_seed_journaled_author_anchored_and_joiner_excluded
     assert structural_decision.include is False
 
     # The author keeps their own seed on reconnect.
-    author_decision = real_filter.project(
-        envelope=envelope, view=view, player_id=sd.player_id
-    )
+    author_decision = real_filter.project(envelope=envelope, view=view, player_id=sd.player_id)
     assert author_decision.include is True

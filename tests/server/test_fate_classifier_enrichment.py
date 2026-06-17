@@ -41,9 +41,9 @@ def _fate_pack():
     )
 
 
-def _native_pack():
+def _dial_pack():
     return SimpleNamespace(
-        rules=SimpleNamespace(ruleset="native", confrontations=[]), worlds=None, witnessed_acts=None
+        rules=SimpleNamespace(ruleset="dial", confrontations=[]), worlds=None, witnessed_acts=None
     )
 
 
@@ -63,7 +63,7 @@ def test_state_summary_carries_fate_block_for_fate_pack():
 
 
 def test_state_summary_omits_fate_block_for_non_fate_pack():
-    summary = _build_state_summary(_conflict_snapshot(), pack=_native_pack())
+    summary = _build_state_summary(_conflict_snapshot(), pack=_dial_pack())
     assert "fate" not in summary
 
 

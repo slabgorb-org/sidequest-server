@@ -431,7 +431,7 @@ def seed_manual(
     # that failed to load defaults to combat-enabled (the model default), since
     # the no-culture fallback path is the legacy combat behavior.
     combat_encounters = getattr(getattr(pack, "rules", None), "combat_encounters", True)
-    ruleset = getattr(getattr(pack, "rules", None), "ruleset", "native") if pack else "native"
+    ruleset = getattr(getattr(pack, "rules", None), "ruleset", "dial") if pack else "dial"
     # Story 90-5 (item 3): a ruleset-module seeding failure must still be
     # OTEL-visible. Capture the failure message and BREAK instead of raising
     # mid-loop — the ``pregen.seed_manual`` span below fires with this
@@ -450,7 +450,7 @@ def seed_manual(
             if data is not None:
                 logger.info("pregen.encounter_generated (tier=%d, ruleset=%s)", tier, ruleset)
                 manual.add_encounter(data, tier, [])
-            elif ruleset != "native":
+            elif ruleset != "dial":
                 # Story 90-1: a ruleset-module pack seeds from its bestiary or
                 # fails LOUD — the old warning-only skip shipped silently-empty
                 # encounter pools (No Silent Fallbacks). Native packs keep the

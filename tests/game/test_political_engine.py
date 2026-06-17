@@ -67,8 +67,12 @@ def test_drain_reduces_belief_and_soft_couples_defiance():
 def test_awakening_act_raises_defiance_directly():
     state = _state(defiance=0)
     apply_witnessed_act(
-        state=state, premises=[_humbug()], blocs=[_munchkins(awaken_delta=15)],
-        act_id="rally", witnesses=["Dorothy"], turn=1,
+        state=state,
+        premises=[_humbug()],
+        blocs=[_munchkins(awaken_delta=15)],
+        act_id="rally",
+        witnesses=["Dorothy"],
+        turn=1,
     )
     assert state.blocs["munchkins"].defiance == 15  # awakened, no premise drain (act != drained_by)
     assert state.premises["humbug"].belief_reserve == 90
@@ -77,8 +81,12 @@ def test_awakening_act_raises_defiance_directly():
 def test_belief_clamps_at_zero_and_collapse_fires_once():
     state = _state(reserve=30)
     events = apply_witnessed_act(
-        state=state, premises=[_humbug()], blocs=[_munchkins()],
-        act_id="expose", witnesses=["Dorothy"], turn=1,
+        state=state,
+        premises=[_humbug()],
+        blocs=[_munchkins()],
+        act_id="expose",
+        witnesses=["Dorothy"],
+        turn=1,
     )
     assert state.premises["humbug"].belief_reserve == 0  # 30-40 clamped
     assert state.premises["humbug"].collapsed is True
@@ -87,8 +95,12 @@ def test_belief_clamps_at_zero_and_collapse_fires_once():
     assert collapse_events[0].detail == "He flees."
     # collapsed premise does not drain again
     again = apply_witnessed_act(
-        state=state, premises=[_humbug()], blocs=[_munchkins()],
-        act_id="expose", witnesses=["Dorothy"], turn=2,
+        state=state,
+        premises=[_humbug()],
+        blocs=[_munchkins()],
+        act_id="expose",
+        witnesses=["Dorothy"],
+        turn=2,
     )
     assert not any(e.effect == "drained" for e in again)
 
@@ -96,8 +108,12 @@ def test_belief_clamps_at_zero_and_collapse_fires_once():
 def test_bloc_tips_when_defiance_crosses_threshold():
     state = _state(defiance=60)
     events = apply_witnessed_act(
-        state=state, premises=[_humbug()], blocs=[_munchkins(defiance=60, awaken_delta=15)],
-        act_id="rally", witnesses=["Dorothy"], turn=1,
+        state=state,
+        premises=[_humbug()],
+        blocs=[_munchkins(defiance=60, awaken_delta=15)],
+        act_id="rally",
+        witnesses=["Dorothy"],
+        turn=1,
     )
     assert state.blocs["munchkins"].defiance == 75
     assert state.blocs["munchkins"].tipped is True
@@ -108,8 +124,12 @@ def test_bloc_tips_when_defiance_crosses_threshold():
 def test_unmatched_act_is_a_noop():
     state = _state()
     events = apply_witnessed_act(
-        state=state, premises=[_humbug()], blocs=[_munchkins()],
-        act_id="not_an_act", witnesses=["Dorothy"], turn=1,
+        state=state,
+        premises=[_humbug()],
+        blocs=[_munchkins()],
+        act_id="not_an_act",
+        witnesses=["Dorothy"],
+        turn=1,
     )
     assert events == []
     assert state.premises["humbug"].belief_reserve == 90
@@ -120,8 +140,12 @@ def test_coupling_can_tip_a_propping_bloc():
     # Soft coupling alone can push a bloc over the line — caught by the final pass.
     state = _state(reserve=90, defiance=69)
     apply_witnessed_act(
-        state=state, premises=[_humbug()], blocs=[_munchkins(defiance=69)],
-        act_id="expose", witnesses=["Dorothy"], turn=1,
+        state=state,
+        premises=[_humbug()],
+        blocs=[_munchkins(defiance=69)],
+        act_id="expose",
+        witnesses=["Dorothy"],
+        turn=1,
     )
     # coupled += floor(40*0.5)=20 → 89 ≥ 70
     assert state.blocs["munchkins"].tipped is True
@@ -153,8 +177,12 @@ def test_unrelated_act_does_not_tip_bloc_already_at_threshold():
     # drain humbug, couple munchkins, or awaken munchkins must leave it un-tipped.
     state = _state(defiance=70)
     events = apply_witnessed_act(
-        state=state, premises=[_humbug()], blocs=[_munchkins(defiance=70)],
-        act_id="not_an_act", witnesses=["Dorothy"], turn=1,
+        state=state,
+        premises=[_humbug()],
+        blocs=[_munchkins(defiance=70)],
+        act_id="not_an_act",
+        witnesses=["Dorothy"],
+        turn=1,
     )
     assert not any(e.effect == "tipped" for e in events)
     assert state.blocs["munchkins"].tipped is False
@@ -166,8 +194,12 @@ def test_unrelated_act_does_not_collapse_premise_already_at_threshold():
     # must not collapse it — the dial did not move this turn.
     state = _state(reserve=20)
     events = apply_witnessed_act(
-        state=state, premises=[_humbug()], blocs=[_munchkins()],
-        act_id="not_an_act", witnesses=["Dorothy"], turn=1,
+        state=state,
+        premises=[_humbug()],
+        blocs=[_munchkins()],
+        act_id="not_an_act",
+        witnesses=["Dorothy"],
+        turn=1,
     )
     assert not any(e.effect == "collapsed" for e in events)
     assert state.premises["humbug"].collapsed is False
@@ -201,6 +233,4 @@ def test_touched_bloc_tips_while_at_rest_bloc_does_not_in_same_call():
     assert state.blocs["winkies"].tipped is False
     tipped_ids = {e.target_id for e in events if e.effect == "tipped"}
     assert tipped_ids == {"munchkins"}
-    assert not any(
-        le.effect == "tipped" and le.target_id == "winkies" for le in state.ledger
-    )
+    assert not any(le.effect == "tipped" and le.target_id == "winkies" for le in state.ledger)

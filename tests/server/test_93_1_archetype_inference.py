@@ -439,8 +439,7 @@ class TestAllFreeformInferenceUnblocks:
         )
         # Single per-chargen call — cost scales with drama, not with retries.
         assert len(inference_calls) == 1, (
-            f"expected exactly one inference call per chargen confirm, "
-            f"got {len(inference_calls)}"
+            f"expected exactly one inference call per chargen confirm, got {len(inference_calls)}"
         )
 
         sd = handler._session_data  # type: ignore[attr-defined]
@@ -971,9 +970,7 @@ class TestSdkFailureDegradesLoudly:
         # Story 119-3: the transport seam is the module-level ``query``; a
         # RaisingFakeQuery makes consuming its stream raise — the agent-SDK
         # analog of ``messages.create`` blowing up mid-call.
-        fake_query = RaisingFakeQuery(
-            _FakeTransportError("simulated agent-SDK transport failure")
-        )
+        fake_query = RaisingFakeQuery(_FakeTransportError("simulated agent-SDK transport failure"))
         monkeypatch.setattr(llm_factory, "query", fake_query, raising=False)
         _disable_default_hint_stamping(monkeypatch)
 

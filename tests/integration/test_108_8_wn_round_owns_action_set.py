@@ -291,7 +291,7 @@ def test_native_attack_does_not_engage_wn_synthesis(otel_capture):
 
     fixture_pack = Path(__file__).resolve().parents[1] / "fixtures" / "packs" / "test_genre"
     pack = load_genre_pack(fixture_pack)
-    assert pack.rules.ruleset == "native", "precondition: test_genre binds the native ruleset"
+    assert pack.rules.ruleset == "dial", "precondition: test_genre binds the dial ruleset"
 
     snap = GameSnapshot(
         genre_slug="test_genre",

@@ -59,7 +59,7 @@ def test_ruleset_module_worlds_resolve_a_nonempty_bestiary() -> None:
         except PackNotFound:
             continue
         pack = load_genre_pack(pack_dir)
-        if pack.rules.ruleset == "native":
+        if pack.rules.ruleset == "dial":
             continue
         found_any = True
         for world_slug in pack.worlds:
@@ -114,7 +114,7 @@ def test_barsoom_world_bestiary_wins_over_genre() -> None:
     except PackNotFound:
         pytest.skip("heavy_metal not on disk")
     pack = load_genre_pack(pack_dir)
-    assert pack.rules.ruleset != "native", "precondition: heavy_metal is a ruleset-module pack"
+    assert pack.rules.ruleset != "dial", "precondition: heavy_metal is a ruleset-module pack"
     assert "barsoom" in pack.worlds, "precondition: barsoom world present"
 
     bestiary, source = pack.effective_bestiary("barsoom")

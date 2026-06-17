@@ -3,14 +3,14 @@ from __future__ import annotations
 from sidequest.game.ruleset.awn import AwnRulesetModule
 from sidequest.game.ruleset.base import RulesetModule, UnknownRulesetError
 from sidequest.game.ruleset.cwn import CwnRulesetModule
+from sidequest.game.ruleset.dial import DialRulesetModule
 from sidequest.game.ruleset.fate import FateRulesetModule
-from sidequest.game.ruleset.native import NativeRulesetModule
 from sidequest.game.ruleset.swn import SwnRulesetModule
 from sidequest.game.ruleset.wwn import WwnRulesetModule
 
 # Modules are stateless behavior -> safe singletons. New modules register here as their plans land.
 _REGISTRY: dict[str, RulesetModule] = {
-    NativeRulesetModule.slug: NativeRulesetModule(),
+    DialRulesetModule.slug: DialRulesetModule(),
     SwnRulesetModule.slug: SwnRulesetModule(),
     CwnRulesetModule.slug: CwnRulesetModule(),
     WwnRulesetModule.slug: WwnRulesetModule(),

@@ -26,8 +26,8 @@ def _state(n: int, max_dp: int = 1) -> TableState:
     )
 
 
-def test_native_module_deals_and_resolves_through_seam():
-    module = get_ruleset_module("native")
+def test_dial_module_deals_and_resolves_through_seam():
+    module = get_ruleset_module("dial")
     st = _state(2, max_dp=1)
     module.deal_table(st, rng=random.Random(1))
     st.find_seat("seat_1").private_state["strength"] = 999
@@ -44,7 +44,7 @@ def test_native_module_deals_and_resolves_through_seam():
 def test_seam_is_available_on_every_module():
     # Real smoke-call (not just hasattr): the inherited delegation must EXECUTE
     # on every module, not merely exist as a name.
-    for slug in ("native", "swn", "cwn"):
+    for slug in ("dial", "swn", "cwn"):
         module = get_ruleset_module(slug)
         st = _state(2, max_dp=1)
         module.deal_table(st, rng=random.Random(42))  # inherited; must not raise

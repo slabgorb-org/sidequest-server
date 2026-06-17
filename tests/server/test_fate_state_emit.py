@@ -97,13 +97,13 @@ def test_emit_sends_message_on_fate_pack():
 # ---------------------------------------------------------------------------
 
 
-def test_emit_skipped_for_native_pack():
-    """No Silent Fallbacks / never co-render with the native overlay: a native pack
+def test_emit_skipped_for_dial_pack():
+    """No Silent Fallbacks / never co-render with the dial overlay: a dial pack
     must NOT emit FATE_STATE even when the snapshot carries Fate-shaped state."""
     from sidequest.server.websocket_handlers.fate_state_emit import _maybe_emit_fate_state
 
     sink = _Sink()
-    _maybe_emit_fate_state(_Handler(), sd=_sd("native"), snapshot=_snapshot(), emit_fn=sink)
+    _maybe_emit_fate_state(_Handler(), sd=_sd("dial"), snapshot=_snapshot(), emit_fn=sink)
     assert sink.sent == []
 
 

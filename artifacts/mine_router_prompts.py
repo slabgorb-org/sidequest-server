@@ -119,7 +119,9 @@ def main() -> int:
         for row in rows_out:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
 
-    print(f"mined {len(rows_out)} prompt rows from {len({r['source_save'] for r in rows_out})} saves -> {out}")
+    print(
+        f"mined {len(rows_out)} prompt rows from {len({r['source_save'] for r in rows_out})} saves -> {out}"
+    )
     if skipped:
         print(f"skipped {len(skipped)} sessions:", file=sys.stderr)
         for line in skipped:

@@ -105,7 +105,9 @@ def test_dial_threshold_emits_signal_span_with_yield_side_none(otel_capture) -> 
 
     _apply_narration_result_to_snapshot(
         snap,
-        NarrationTurnResult(narration="Dorothy's resolve carries the standoff.", beat_selections=[]),
+        NarrationTurnResult(
+            narration="Dorothy's resolve carries the standoff.", beat_selections=[]
+        ),
         player_name="Dorothy",
         room=room_for(snap),
     )

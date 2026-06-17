@@ -115,7 +115,7 @@ CONFRONTATION_TRIGGER_CORE: str = (
     'NEVER fabricate a filler Other ("Unknown Adversary", '
     '"the attacker", "the attack the player prepares for") '
     "from the player's own anticipation — that is the same "
-    "\"do NOT invent a filler\" rule that governs referent "
+    '"do NOT invent a filler" rule that governs referent '
     "resolution. Wait for a real Other to commit: an "
     "antagonist acting, a creature appearing, or the player "
     "striking a PRESENT target. An anticipated or "

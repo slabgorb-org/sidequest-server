@@ -25,18 +25,16 @@ from sidequest.game.projection_filter import FilterDecision, ProjectionFilter
 from sidequest.game.session import (
     GameSnapshot,
 )
+
+# _KIND_TO_MESSAGE_CLS relocated to the protocol tier (122-8, ADR-147); imported
+# here for the replay path (_build_message_for_kind) and re-exported for
+# back-compat consumers (server/emitters.py, tests).
 from sidequest.protocol.messages import (
-    ConfrontationMessage,
+    _KIND_TO_MESSAGE_CLS,
     ConfrontationPayload,
-    DungeonMapMessage,
-    NarrationMessage,
-    NarrationSegmentMessage,
     NarrationSegmentPayload,
-    ScrapbookEntryMessage,
     ScrapbookEntryPayload,
-    SecretNoteMessage,
     SecretNotePayload,
-    TacticalGridMessage,
 )
 from sidequest.server.session_state import (  # noqa: F401 — back-compat re-export; defs moved to leaf module (64-6), consumed by external importers + mock.patch targets
     _AUDIO_INTERPRETER,
@@ -57,37 +55,6 @@ logger = logging.getLogger(__name__)
 
 
 tracer = trace.get_tracer("sidequest.server.session_handler")
-
-# ---------------------------------------------------------------------------
-# Event-kind → message class mapping (MP-03 Task 3)
-# Extend this dict as additional kinds are routed through _emit_event.
-# ---------------------------------------------------------------------------
-
-_KIND_TO_MESSAGE_CLS: dict[str, type] = {
-    "NARRATION": NarrationMessage,
-    "NARRATION_SEGMENT": NarrationSegmentMessage,
-    "CONFRONTATION": ConfrontationMessage,
-    "SECRET_NOTE": SecretNoteMessage,
-    "SCRAPBOOK_ENTRY": ScrapbookEntryMessage,
-    # Cavern renderer revival (ADR-096 Task 20b). Emitted on room entry; not
-    # event-sourced (no replay on reconnect — room payloads are re-emitted on
-    # the next room transition; the initial room is emitted at chargen time).
-    "TACTICAL_GRID": TacticalGridMessage,
-    # Beneath Sünden BETTER fix (seam 3). Procedural megadungeon map
-    # frame; not event-sourced (re-emitted every narration turn — the UI
-    # just replaces its MapState, so reconnect repopulates on the next
-    # turn). The NEW ADR-055 map message (ADR-019 MAP_UPDATE is dead).
-    "DUNGEON_MAP": DungeonMapMessage,
-    # ADR-136 (RELATIONSHIPS) is deliberately ABSENT here. Like its transient
-    # sibling LOCATION_DESCRIPTION, the relationship roster is emitted via the
-    # non-durable _emit_shared_world_frame broadcast path (not _emit_event), so
-    # it is never written to the events table and never replayed by
-    # _build_message_for_kind. On reconnect the resume site re-runs
-    # _maybe_emit_relationships, which rebroadcasts a fresh roster from live
-    # snapshot state. Registering it here would be a latent reconnect crash: a
-    # stray persisted RELATIONSHIPS row would fall through _build_message_for_kind's
-    # per-kind branches to the terminal ValueError (no reconstructor exists).
-}
 
 # Kinds persisted to the events table by side-channel writers (e.g.
 # ``telemetry.watcher_hub._maybe_persist_encounter_row``) for OTEL replay

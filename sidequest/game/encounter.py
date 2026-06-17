@@ -185,6 +185,23 @@ class FateSealedCommit(BaseModel):
     aspect_text: str = ""
 
 
+class ContestState(BaseModel):
+    """First-to-N victory tally for a Fate Contest (ADR-144, spec 2026-06-17).
+
+    The Contest analogue of the Conflict's stress track: each exchange the side
+    with the higher 4dF total scores 1 victory (2 on a 3+ margin); a tie grants
+    each side a boost and no victory. First side to ``target`` victories wins.
+    There is no stress and no consequences — that is what distinguishes a Contest
+    from a Conflict. ``target`` is seeded from the cdef's metric threshold (the
+    re-authored ``0->3`` victory tally that replaced the ``0->7`` dial)."""
+
+    model_config = {"extra": "forbid"}
+
+    target: int = 3
+    player_victories: int = 0
+    opponent_victories: int = 0
+
+
 class PendingCompel(BaseModel):
     """One narrator-offered compel awaiting the player's accept/refuse (ADR-144 F3e).
 
@@ -269,6 +286,10 @@ class StructuredEncounter(BaseModel):
     Proactive actions seal here until every live seated PC has committed; the
     exchange walk consumes and clears it. Always empty for native/WN encounters
     and between Fate exchanges (sibling to ``wn_commits``)."""
+    #: Set when this encounter resolves as a Fate Contest (cdef.resolution_mode ==
+    #: contest). None for every Conflict / dial / table encounter. Selects the
+    #: contest exchange engine in dispatch_fate_action (spec 2026-06-17 §2).
+    contest: ContestState | None = None
     situation_aspects: list[Aspect] = Field(default_factory=list)
     """ADR-144 F1c: scene-scoped Fate aspects placed by create-advantage (and
     boosts from ties). Distinct from character/consequence aspects, which live on

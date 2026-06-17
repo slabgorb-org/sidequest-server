@@ -326,12 +326,17 @@ class ResolutionMode(StrEnum):  # noqa: UP042 — matches project convention (se
       WHICH beat the opponent took, but never the outcome tier — the
       engine derives it from the dice. See:
       ``.archive/handoffs/opposed-checks-design.md``.
+    - ``contest``: Fate Core Contest (ADR-144). Both sides roll 4dF + skill;
+      the higher result scores a victory (2 on a 3+ margin); a tie grants
+      each side a boost. First to N victories (the metric ``threshold``) wins.
+      No stress, no consequences. **Fate packs only.**
     """
 
     beat_selection = "beat_selection"
     sealed_letter_lookup = "sealed_letter_lookup"
     opposed_check = "opposed_check"
     table_resolution = "table_resolution"
+    contest = "contest"
 
 
 class InteractionCell(BaseModel):

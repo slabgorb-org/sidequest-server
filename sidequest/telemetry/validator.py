@@ -507,6 +507,16 @@ class Validator:
         # (`sidequest/telemetry/turn_timings.py`) inserts them in
         # observed order, so the bars line up with the actual
         # pipeline sequence.
+        # Each span carries dependency hierarchy (depth + leaf) so the GM
+        # panel can render the pipeline as a nested flame chart rather than a
+        # single flat row (124-2). The honest containment available today: the
+        # turn (depth 0, a container) wholly contains its measured phases
+        # (depth 1, leaf work). Hierarchy fields are ADDITIVE — older
+        # dashboards keep reading the flat name/start_ms/duration_ms fields and
+        # ignore depth/leaf. (Deeper caller▸callee nesting sourced from the
+        # per-turn OTEL span tree is a future enhancement — see the 124-2
+        # Delivery Findings; we do not fabricate sub-phase parents we can't
+        # measure, per the epic-124 "real telemetry only" guardrail.)
         phase_spans: list[dict] = []
         running = 0
         for phase_name, duration_ms in record.phase_durations_ms.items():
@@ -516,19 +526,38 @@ class Validator:
                     "component": "pipeline",
                     "start_ms": running,
                     "duration_ms": int(duration_ms),
+                    "depth": 1,
+                    "leaf": True,
                 }
             )
             running += int(duration_ms)
-        # Tail-add `agent_llm` if it isn't already broken out into
-        # phases (e.g. degraded turns missing per-phase data) so the
-        # Timeline always has at least one bar.
-        if not phase_spans:
+        if phase_spans:
+            # Root container spanning the whole turn (depth 0, non-leaf). Its
+            # duration is the real turn wall-clock, falling back to the summed
+            # phase time only when total wasn't recorded — never invented.
+            phase_spans.insert(
+                0,
+                {
+                    "name": "turn",
+                    "component": "pipeline",
+                    "start_ms": 0,
+                    "duration_ms": int(record.total_duration_ms) or running,
+                    "depth": 0,
+                    "leaf": False,
+                },
+            )
+        else:
+            # Degraded turn with no per-phase data: a single `agent_llm` span
+            # IS the turn — its own depth-0 leaf root — so the Timeline always
+            # has at least one bar.
             phase_spans.append(
                 {
                     "name": "agent_llm",
                     "component": record.agent_name or "narrator",
                     "start_ms": 0,
                     "duration_ms": int(record.agent_duration_ms),
+                    "depth": 0,
+                    "leaf": True,
                 }
             )
 

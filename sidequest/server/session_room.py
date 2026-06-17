@@ -779,6 +779,19 @@ class SessionRoom:
         with self._lock:
             return bool(self._pending_actions)
 
+    def pending_action_texts(self) -> dict[str, str]:
+        """Read-only ``player_id -> sealed action text`` for this round.
+
+        Story 126-4: the authoritative TURN_STATUS roster carries each sealed
+        player's action text so the WAIT-phase peer strip can recover it when
+        the best-effort ACTION_REVEAL frame is missed (ADR-036 collaborative
+        visibility). Sourced from the same buffer the dispatcher drains — a
+        player is present here iff they have sealed this round. Snapshot copy
+        under the lock; never mutates the buffer or the barrier.
+        """
+        with self._lock:
+            return {pid: pa.action for pid, pa in self._pending_actions.items()}
+
     def mark_crash_released(self, player_id: str) -> None:
         """Drop a crashed player from this interaction's barrier denominator.
 

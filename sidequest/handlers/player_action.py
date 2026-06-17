@@ -707,7 +707,9 @@ class PlayerActionHandler:
                 # roster — correct (active broadcast precedes the buffer
                 # write / barrier.submit at lines below).
                 active_roster = build_turn_status_roster(
-                    sd.snapshot, session._room.playing_player_ids()
+                    sd.snapshot,
+                    session._room.playing_player_ids(),
+                    session._room.pending_action_texts(),
                 )
                 turn_active_msg = TurnStatusMessage(
                     payload=TurnStatusPayload(
@@ -825,7 +827,9 @@ class PlayerActionHandler:
                     # barrier_fired so the UI sees the round's terminal
                     # state on this final broadcast.
                     submitted_roster = build_turn_status_roster(
-                        snapshot, session._room.playing_player_ids()
+                        snapshot,
+                        session._room.playing_player_ids(),
+                        session._room.pending_action_texts(),
                     )
                     if barrier_fired:
                         # Barrier fired → _submitted was cleared on the phase
@@ -848,6 +852,13 @@ class PlayerActionHandler:
                             "player_name": acting_name,
                             "player_id": sd.player_id,
                             "slug": session._room.slug,
+                            # Story 126-4: how many roster rows carry sealed
+                            # action text — the GM panel's lie-detector for the
+                            # WAIT-phase text-recovery channel (ADR-036). Count
+                            # only; the text itself never rides telemetry.
+                            "roster_action_text_count": sum(
+                                1 for e in submitted_roster if e.action
+                            ),
                         },
                         component="session",
                     )

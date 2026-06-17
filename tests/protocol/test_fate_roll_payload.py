@@ -241,6 +241,12 @@ def test_game_message_parses_fate_roll_wire_form():
             "shifts": 2,
             "tier": "Succeed",
             "succeeded_with_style": False,
+            "throw_params": {
+                "velocity": [0.1, 2.0, -0.3],
+                "angular": [1.0, -2.0, 0.5],
+                "position": [0.5, 0.5],
+            },
+            "seed": 4242,
         },
     }
     parsed = GameMessage.model_validate(wire)

@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from sidequest.game.ruleset.fate_resolution import FateOutcome, FateTier, ladder_name
+from sidequest.protocol.dice import ThrowParams
 from sidequest.protocol.models import (
     FateAspectEntry,
     FateCharacterEntry,
@@ -170,13 +171,41 @@ def build_fate_state_payload(snapshot: GameSnapshot) -> FateStatePayload:
     return FateStatePayload(characters=characters, scene_aspects=scene_aspects, conflict=conflict)
 
 
-def build_fate_roll_payload(outcome: FateOutcome) -> FateRollPayload:
+# A non-degenerate default tumble for the 3D FateDiceTray (Story 125-4 / ADR-144
+# F3g). Mirrors the dF fallback gesture in handlers/dice_throw.py — velocity +
+# angular are constant; the per-roll variation lives in the seed (which drives the
+# dice' initial rotation in replayThrowParams on the client).
+_DEFAULT_FATE_THROW = ThrowParams(
+    velocity=(0.0, 4.0, -1.0),
+    angular=(0.5, 0.5, 0.5),
+    position=(0.5, 0.5),
+)
+
+
+def _fallback_seed(dice: tuple[int, int, int, int]) -> int:
+    """A deterministic dice-derived seed for callers that don't supply a session
+    seed (tests / non-handler projection). The production caller
+    (``handlers/fate_action``) passes a per-turn seed via ``generate_dice_seed``
+    so each roll re-throws even when two rolls land on the same faces."""
+    s = 0
+    for face in dice:
+        s = s * 7 + (face + 1)  # face in {-1, 0, 1} -> {0, 1, 2}
+    return s + 1
+
+
+def build_fate_roll_payload(outcome: FateOutcome, *, seed: int | None = None) -> FateRollPayload:
     """Project a resolved 4dF roll onto the wire (ADR-144 F3c / Story 118-3).
 
     Faithful, lossless map of the engine's ``FateOutcome`` to the player-facing
     ``FATE_ROLL`` payload, adding the two derived legibility fields: the ladder
     ADJECTIVE (the player reads "Great", not "+4") and the succeed-with-style
     flag. The raw dice tuple previously reached only the OTEL span.
+
+    ``throw_params`` + ``seed`` drive the 3D FateDiceTray replay animation (Story
+    125-4 / ADR-144 F3g): the dice tumble instead of rendering the idle pickup
+    row. The gesture is a shared constant; the production caller supplies a
+    per-turn ``seed`` so each roll re-throws, while a dice-derived fallback keeps
+    the standalone projection self-consistent.
     """
     return FateRollPayload(
         dice=outcome.dice,
@@ -187,4 +216,6 @@ def build_fate_roll_payload(outcome: FateOutcome) -> FateRollPayload:
         shifts=outcome.shifts,
         tier=str(outcome.tier),
         succeeded_with_style=outcome.tier == FateTier.SucceedWithStyle,
+        throw_params=_DEFAULT_FATE_THROW,
+        seed=seed if seed is not None else _fallback_seed(outcome.dice),
     )

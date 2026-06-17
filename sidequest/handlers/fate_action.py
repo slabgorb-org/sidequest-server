@@ -137,10 +137,18 @@ class FateActionHandler:
         # this is the player-facing surface, attributed to the acting PC. A
         # concession is pre-roll (action_roll is None) → nothing to show.
         if result.action_roll is not None:
+            from sidequest.game.dice import generate_dice_seed
             from sidequest.game.ruleset.fate_projection import build_fate_roll_payload
             from sidequest.protocol.messages import FateRollMessage
 
-            payload_out = build_fate_roll_payload(result.action_roll)
+            # Per-turn replay seed so the 3D FateDiceTray re-throws each roll and
+            # every seat animates the same tumble (Story 125-4 / ADR-144 F3g) —
+            # keyed exactly like the dF dice path in handlers/dice_throw.py.
+            roll_seed = generate_dice_seed(
+                f"{sd.genre_slug}:{sd.world_slug}:{acting_player_id}",
+                snapshot.turn_manager.interaction,
+            )
+            payload_out = build_fate_roll_payload(result.action_roll, seed=roll_seed)
             roll_msg = FateRollMessage(payload=payload_out, player_id=acting_player_id)
             room = sd._room
             if room is None:

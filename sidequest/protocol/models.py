@@ -13,6 +13,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from sidequest.protocol.base import ProtocolBase
+from sidequest.protocol.dice import ThrowParams
 from sidequest.protocol.provenance import Provenance
 from sidequest.protocol.types import NonBlankString
 
@@ -1105,6 +1106,11 @@ class FateRollPayload(BaseModel):
     tuple previously reached only the OTEL span) by ``build_fate_roll_payload``.
     A roll is an EVENT, so this rides a dedicated ``FATE_ROLL`` message rather
     than the change-gated ``FATE_STATE`` snapshot.
+
+    ``throw_params`` + ``seed`` mirror ``DiceResultPayload`` (Story 125-4 / ADR-144
+    F3g): they let the 3D ``FateDiceTray`` replay-animate the dice instead of
+    rendering the idle pickup row. Both are REQUIRED — an optional field would
+    silently fall back to the idle (null) render (No Silent Fallbacks).
     """
 
     model_config = {"extra": "forbid"}
@@ -1120,6 +1126,11 @@ class FateRollPayload(BaseModel):
     #: One of Fail / Tie / Succeed / SucceedWithStyle.
     tier: str
     succeeded_with_style: bool
+    #: Drag-and-flick gesture for the 3D dice animation (animation only, not
+    #: outcome). Mirrors ``DiceResultPayload.throw_params``.
+    throw_params: ThrowParams
+    #: Deterministic physics seed so every seat replays the same tumble.
+    seed: int
 
 
 class LocationEntityResolution(BaseModel):

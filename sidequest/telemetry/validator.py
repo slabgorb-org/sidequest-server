@@ -567,6 +567,18 @@ class Validator:
                 # Identity
                 "turn_id": record.turn_id,
                 "turn_number": record.turn_id,  # alias for legacy dashboard consumers
+                # Forensic round bucket. turn_complete is published OUT OF FRAME
+                # (the validator runs on its own background task — no open turn
+                # SaveTransaction, so no event_seq), so the persisted row's
+                # `round` column is stamped from this field. Without it the row
+                # lands round=NULL/seq=NULL and the forensic round-bundle reader
+                # (`_telemetry_for_round`: event_seq-in-range OR round=N) can
+                # never match it — the saved-session Timing tab reads only
+                # turn_complete, so it showed "No data yet" for every save
+                # (2026-06-17 dust_and_lead). turn_id IS turn_manager.interaction,
+                # the same value narrative_log.round_number is written with, so it
+                # is exactly the forensic round number.
+                "round": record.turn_id,
                 "player_id": record.player_id,
                 "player_input": record.player_input,
                 "agent_name": record.agent_name,

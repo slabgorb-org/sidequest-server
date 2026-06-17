@@ -32,28 +32,16 @@ switching spelling. Dynamic imports (``importlib.import_module``/``__import__``)
 are ``ast.Call`` nodes, not import statements, and are a documented
 out-of-scope limitation — see ``_server_import_targets``.
 
-GRANDFATHERED EXCEPTION (loud, pinned, and self-expiring — NOT a silent fallback)
---------------------------------------------------------------------------------
-``sidequest/game/projection/validator.py`` reaches up into
-``sidequest.server.session_handler`` for ``_KIND_TO_MESSAGE_CLS`` via two lazy
-in-method imports. ADR-147 NAMES this edge in its diagnosis (the "smell that
-proves the layering is dishonest" paragraph) but deliberately did NOT schedule a
-move for it — the §Decision moves table and the 5-step §Implementation Plan
-cover only the six relocated units, none of which is this one. Relocating
-``_KIND_TO_MESSAGE_CLS`` (defined in ``server/session_handler.py``, also consumed
-by ``server/emitters.py``) is genuine design work outside this 2pt guard story
-and outside ADR-147's sanctioned scope.
-
-So the guard grandfathers exactly this one (file, target) pair: it lands
-ENFORCING against every *other* edge today rather than deferring the whole guard
-to ``xfail``. The exception is pinned to exact import targets — a new offending
-import elsewhere, or validator.py importing a *different* server symbol, fails
-``test_no_upward_imports_beyond_grandfathered``. And
-``test_grandfathered_exceptions_are_still_live`` fails the moment the edge is
-removed, forcing this exception to be DELETED rather than lingering forever. See
-the Conflict delivery finding (122-5) recommending a follow-up to move
-``_KIND_TO_MESSAGE_CLS`` down to the protocol tier, after which this whole block
-goes away.
+ZERO GRANDFATHERED EXCEPTIONS (as of story 122-8)
+-------------------------------------------------
+The guard once grandfathered a single edge: ``game/projection/validator.py``
+reached up into ``server.session_handler`` for ``_KIND_TO_MESSAGE_CLS`` via two
+lazy in-method imports. Story 122-8 relocated that registry down to the protocol
+tier (``sidequest.protocol.messages``) — the layer-honest home, since protocol
+already owns every message class it maps to — so validator now imports it
+from below with no upward edge. ``GRANDFATHERED`` is consequently empty and the
+law is enforced with no exceptions. The dict is retained (empty) so a future,
+genuinely-unavoidable edge can be pinned loudly rather than silenced.
 """
 
 from __future__ import annotations
@@ -80,20 +68,12 @@ GUARDED_TIERS: tuple[str, ...] = (
     "interior",
 )
 
-# The one upward edge ADR-147 acknowledges but does not schedule a move for.
-# Keyed by package-relative posix path; value is the exact set of server import
-# targets that file is permitted to reference. Anything outside this set — in
-# this file or any other — is a violation. See the module docstring.
-GRANDFATHERED: dict[str, frozenset[str]] = {
-    "game/projection/validator.py": frozenset(
-        {
-            # `from sidequest.server.session_handler import _KIND_TO_MESSAGE_CLS`
-            # contributes both the module path and the imported-name path.
-            "sidequest.server.session_handler",
-            "sidequest.server.session_handler._KIND_TO_MESSAGE_CLS",
-        }
-    ),
-}
+# Upward edges the guard permits, keyed by package-relative posix path; value is
+# the exact set of server import targets that file may reference. EMPTY as of
+# story 122-8 — the last edge (validator.py → session_handler._KIND_TO_MESSAGE_CLS)
+# was eliminated by relocating the registry to the protocol tier. Anything that
+# imports up into sidequest.server is now a violation. See the module docstring.
+GRANDFATHERED: dict[str, frozenset[str]] = {}
 
 
 # --- AST import scanning -----------------------------------------------------
@@ -254,30 +234,6 @@ def test_no_upward_imports_beyond_grandfathered() -> None:
         "permit; move the imported symbol down (see ADR-147 §The moves) rather "
         "than reaching up. Upward edges:\n"
         + "\n".join(f"  {f}: {hits}" for f, hits in sorted(violations.items()))
-    )
-
-
-# ---------------------------------------------------------------------------
-# Self-expiry: a grandfathered exception that is no longer needed must be
-# deleted, not left to rot. If validator.py stops importing the pinned target,
-# this fails — forcing removal of the exception (and this whole block).
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("rel_path", sorted(GRANDFATHERED))
-def test_grandfathered_exceptions_are_still_live(rel_path: str) -> None:
-    path = SIDEQUEST_PKG / rel_path
-    assert path.exists(), (
-        f"Grandfathered file {rel_path} no longer exists — delete its entry "
-        "from GRANDFATHERED (the edge it covered is gone)."
-    )
-    actual = _server_import_targets(_parse_module(path), _package_parts_for(path))
-    expected = GRANDFATHERED[rel_path]
-    stale = sorted(expected - actual)
-    assert not stale, (
-        f"{rel_path} no longer imports {stale} from sidequest.server — the "
-        "ADR-147 grandfather exception is stale. DELETE the now-unnecessary "
-        "entry from GRANDFATHERED so the guard tightens automatically."
     )
 
 

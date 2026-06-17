@@ -45,6 +45,7 @@ from sidequest.protocol.fate import FateActionPayload
 
 # Phase 1 payload classes
 from sidequest.protocol.messages import (
+    _KIND_TO_MESSAGE_CLS,
     ActionQueueMessage,
     ActionQueuePayload,
     ChapterMarkerMessage,
@@ -198,6 +199,7 @@ __all__ = [
     "TacticalGridPayload",
     "TokenPayload",
     # Phase 1 payloads + messages
+    "_KIND_TO_MESSAGE_CLS",
     "ActionQueueMessage",
     "ActionQueuePayload",
     "CharacterCreationMessage",

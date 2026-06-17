@@ -20,6 +20,7 @@ from sidequest.game.projection.rules import (
     VisibilityTagRule,
 )
 from sidequest.protocol.enums import MessageType
+from sidequest.protocol.messages import _KIND_TO_MESSAGE_CLS
 
 
 class ValidationError(Exception):
@@ -29,13 +30,10 @@ class ValidationError(Exception):
 def _filter_reachable_kinds() -> frozenset[str]:
     """Kinds that flow through ``_emit_event`` today.
 
-    Derived from ``session_handler._KIND_TO_MESSAGE_CLS`` at call time so the
-    two definitions cannot drift. Deferred import mirrors
-    ``_schema_fields_for_kind`` — the server module imports game modules, so
-    validator must not import the server module at its own load time.
+    Derived from the protocol-tier ``_KIND_TO_MESSAGE_CLS`` registry (story
+    122-8, ADR-147) so the two definitions cannot drift. The registry now lives
+    below this module, so the import is a normal top-level one — no deferral.
     """
-    from sidequest.server.session_handler import _KIND_TO_MESSAGE_CLS  # noqa: PLC0415
-
     return frozenset(_KIND_TO_MESSAGE_CLS.keys())
 
 
@@ -99,14 +97,7 @@ def _flatten_schema(model: type[BaseModel], *, prefix: str) -> dict[str, Any]:
 
 
 def _schema_fields_for_kind(kind: str) -> dict[str, Any]:
-    """Return the flat field-name → python-type map for a kind's payload.
-
-    The import of session_handler is deferred to function scope to avoid a
-    circular import (session_handler imports game modules; game/projection/
-    validator must not be in that chain at module load time).
-    """
-    from sidequest.server.session_handler import _KIND_TO_MESSAGE_CLS  # noqa: PLC0415
-
+    """Return the flat field-name → python-type map for a kind's payload."""
     message_cls = _KIND_TO_MESSAGE_CLS.get(kind)
     if message_cls is None:
         return {}

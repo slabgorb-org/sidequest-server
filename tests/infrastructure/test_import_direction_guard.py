@@ -105,9 +105,17 @@ def _resolve_relative(level: int, module: str | None, package_parts: list[str]) 
     ``level`` is the number of leading dots; ``level==1`` is the current package,
     each extra dot strips one trailing package component. Returns ``None`` for an
     over-deep relative import (one Python itself would reject at import time).
+
+    The valid floor is the top-level package itself: the deepest legal drop leaves
+    ``package_parts[:1]`` (just ``sidequest``). Dropping the whole list
+    (``drop >= len(package_parts)``) escapes *above* ``sidequest`` and must resolve
+    to ``None``. The boundary is ``>=``, not ``>``: at ``drop == len`` the slice
+    ``package_parts[:0]`` is empty, which the old ``drop > len`` guard let through
+    and joined into a misleading bare module name (e.g. ``"server"``) instead of
+    rejecting the root escape.
     """
     drop = level - 1
-    if drop > len(package_parts):
+    if drop >= len(package_parts):
         return None
     base = package_parts[: len(package_parts) - drop]
     suffix = module.split(".") if module else []
@@ -162,16 +170,21 @@ def _server_import_targets(tree: ast.AST, package_parts: list[str]) -> set[str]:
 def _parse_module(path: Path) -> ast.AST:
     """Read + parse a module, failing loud (not crashing) on bad input.
 
-    A malformed or non-UTF-8 ``.py`` file under a guarded tier must produce a
-    clear, actionable failure naming the file — not an opaque ``SyntaxError`` /
-    ``UnicodeDecodeError`` traceback unrelated to the layering law (No Silent
-    Fallbacks: fail loud *and* legibly).
+    A malformed, non-UTF-8, or unreadable ``.py`` file under a guarded tier must
+    produce a clear, actionable failure naming the file — not an opaque
+    ``SyntaxError`` / ``UnicodeDecodeError`` / ``OSError`` traceback unrelated to
+    the layering law (No Silent Fallbacks: fail loud *and* legibly). ``OSError``
+    covers a file that vanished between glob and read, a permission error, or a
+    path that is unexpectedly a directory — none of which should crash the whole
+    suite opaquely.
     """
     rel = path.relative_to(SIDEQUEST_PKG).as_posix()
     try:
         source = path.read_text(encoding="utf-8")
     except UnicodeDecodeError as exc:
         pytest.fail(f"import-direction guard: {rel} is not valid UTF-8 ({exc}).")
+    except OSError as exc:
+        pytest.fail(f"import-direction guard: {rel} could not be read ({exc}).")
     try:
         return ast.parse(source)
     except SyntaxError as exc:
@@ -213,6 +226,27 @@ def test_guarded_tiers_exist_and_have_modules() -> None:
     assert not missing, f"ADR-147 guarded tiers missing from sidequest/: {missing}"
     empty = [t for t in GUARDED_TIERS if not _iter_py_files(SIDEQUEST_PKG / t)]
     assert not empty, f"ADR-147 guarded tiers contain no .py files: {empty}"
+
+
+def test_sidequest_pkg_is_the_real_package() -> None:
+    """``SIDEQUEST_PKG`` must be the actual importable ``sidequest`` package root.
+
+    Identity check: every scan (``_scan_tier``, ``_package_parts_for``) is anchored
+    at ``SIDEQUEST_PKG``. If that root ever resolved to a stray directory or a
+    namespace-package shadow, the whole guard would run against the wrong tree and
+    pass vacuously. Pin it to the regular package whose ``__init__.py`` Python
+    actually imported as ``sidequest``.
+    """
+    assert SIDEQUEST_PKG.name == "sidequest", (
+        f"import-direction guard anchored at the wrong root: {SIDEQUEST_PKG}"
+    )
+    assert (SIDEQUEST_PKG / "__init__.py").is_file(), (
+        f"{SIDEQUEST_PKG} is not a regular package (no __init__.py) — guard root is wrong"
+    )
+    assert Path(sidequest.__file__).resolve() == SIDEQUEST_PKG / "__init__.py", (
+        "SIDEQUEST_PKG does not match the location Python imported `sidequest` from "
+        "— a shadowing package may be on the path"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -275,6 +309,33 @@ def test_overdeep_relative_import_does_not_crash() -> None:
     tree = ast.parse("from ....server import x\n")
     pkg = ["sidequest", "game"]
     assert _server_import_targets(tree, pkg) == set()
+
+
+def test_resolve_relative_rejects_root_escape_at_boundary() -> None:
+    # drop == len(package_parts) escapes ABOVE the `sidequest` top-level and must
+    # resolve to None. `from ...server import x` inside sidequest/game/ has
+    # level=3 -> drop=2 == len(["sidequest","game"]). The pre-122-7 `drop > len`
+    # boundary wrongly let this through as an empty base joined to a bare
+    # "server"; the `drop >= len` boundary rejects it.
+    assert _resolve_relative(3, "server", ["sidequest", "game"]) is None
+    tree = ast.parse("from ...server import session_handler\n")
+    assert _server_import_targets(tree, ["sidequest", "game"]) == set()
+
+
+def test_resolve_relative_keeps_deepest_valid_drop() -> None:
+    # The boundary must not over-tighten: dropping len-1 components leaves the
+    # top-level `sidequest` package, which is valid. `from .. import server`
+    # inside sidequest/game/ resolves to sidequest.server.
+    assert _resolve_relative(2, None, ["sidequest", "game"]) == "sidequest"
+
+
+def test_parse_module_fails_loud_on_unreadable_file() -> None:
+    # An OSError on read (vanished file, permission denied, path-is-a-directory)
+    # must become a clear, attributable guard failure naming the file — not an
+    # opaque traceback (No Silent Fallbacks).
+    probe = SIDEQUEST_PKG / "game" / "does_not_exist_122_7_guard_probe.py"
+    with pytest.raises(pytest.fail.Exception, match="could not be read"):
+        _parse_module(probe)
 
 
 def test_package_parts_for_handles_init_and_module() -> None:

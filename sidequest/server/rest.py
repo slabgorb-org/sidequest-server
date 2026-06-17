@@ -399,16 +399,17 @@ def create_rest_router() -> APIRouter:
     ) -> list[dict[str, Any]]:
         """Enumerate persisted game sessions for the GM dashboard State tab.
 
-        Walks ``<save_dir>/games/<slug>/save.db`` and projects each loaded
+        Enumerates slugs via ``PgForensicReader.list_saves()`` and loads each
+        snapshot via ``PgSaveRepository.load()``, projecting each loaded
         :class:`GameSnapshot` onto the ``SessionStateView`` shape defined in
-        ``sidequest-ui/src/types/watcher.ts``. Read-only; broken / empty DB
-        files are skipped rather than failing the request.
+        ``sidequest-ui/src/types/watcher.ts``. Read-only; a slug that fails to
+        load is skipped rather than failing the request.
 
-        Results are sorted by save-file modification time, newest first —
-        so the dashboard's default "index 0" pick lands on the
-        most-recently-touched session rather than an old save. Each view
-        includes ``last_activity_ts`` (ms since epoch) so the UI can also
-        pick explicitly.
+        Results are sorted by ``last_activity_ts``, most-recently-touched
+        first — so the dashboard's default "index 0" pick lands on the active
+        session rather than an old save. Each view includes
+        ``last_activity_ts`` (ms since epoch) so the UI can also pick
+        explicitly.
 
         If ``session_key`` is provided, only that slug's view is returned
         (still as a list, to keep the wire shape stable). Missing slug →

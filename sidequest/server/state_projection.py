@@ -23,16 +23,17 @@ from __future__ import annotations
 from typing import Any
 
 
-def _project_inventory_items(items: list[dict]) -> list[dict[str, Any]]:
+def _project_inventory_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Map raw ``CreatureCore.inventory.items`` dicts onto the ``ItemView`` shape."""
     out: list[dict[str, Any]] = []
     for it in items:
+        nw = it.get("narrative_weight")
         out.append(
             {
                 "id": it.get("id") or it.get("name") or "",
                 "name": it.get("name") or "",
                 "description": it.get("description") or "",
-                "narrative_weight": float(it.get("narrative_weight") or 0.0),
+                "narrative_weight": float(nw) if nw is not None else 0.0,
                 "state": it.get("state") or "",
                 "source_turn": int(it.get("source_turn") or 0),
                 "tags": list(it.get("tags") or []),
@@ -98,8 +99,9 @@ def _project_trope_states(snap: Any) -> list[dict[str, Any]]:
     """Project ``snap.active_tropes`` (``TropeState`` → ``TropeStateView``).
 
     ``trope_definition_id`` comes from ``TropeState.id`` and ``progression`` from
-    ``TropeState.progress`` (a float in ``[0, 1]``) — NOT the absent ``trope_id``
-    / ``progression`` names, and with no ``int()`` cast that would truncate a
+    ``TropeState.progress`` (a float conventionally in ``[0, 1]`` — clamped by the
+    tick engine, not by the Pydantic field) — NOT the absent ``trope_id`` /
+    ``progression`` names, and with no ``int()`` cast that would truncate a
     fractional progression to ``0``.
     """
     trope_states: list[dict[str, Any]] = []
@@ -108,7 +110,7 @@ def _project_trope_states(snap: Any) -> list[dict[str, Any]]:
             {
                 "trope_definition_id": getattr(trope, "id", "") or "",
                 "status": str(getattr(trope, "status", "")),
-                "progression": float(getattr(trope, "progress", 0.0) or 0.0),
+                "progression": float(getattr(trope, "progress", 0.0)),
             }
         )
     return trope_states

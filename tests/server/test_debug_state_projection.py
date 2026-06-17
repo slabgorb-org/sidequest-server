@@ -1,37 +1,35 @@
-"""RED suite for story 124-4 — honest data behind the Inspector State tab.
+"""Regression suite for story 124-4 — honest data behind the Inspector State tab.
 
 The State-tab redesign (epic 124) centerpieces three graphics — the OCEAN
 sparkline, the trope progression bar plot, and the inventory narrative-weight
-bars. All three must bind to REAL data (no-fabrication rule). Investigation of
-the live ``debug_state`` projection (``sidequest/server/rest.py`` ~:466-579)
-found that two of them are fed dead reads, and the third is never populated:
+bars. All three must bind to REAL data (no-fabrication rule). Before 124-4, the
+inline ``debug_state`` projection in ``rest.py`` had two dead reads, and the
+third source was never populated (all now fixed in
+``sidequest/server/state_projection.py``):
 
-  1. INVENTORY — every player is emitted with ``inventory={"items": [], ...}``
-     (rest.py:554-557). The character's real items
-     (``char.core.inventory.items``) are never read, so the weight-bar table
-     has nothing to render.
+  1. INVENTORY — every player was emitted with ``inventory={"items": [], ...}``.
+     The character's real items (``char.core.inventory.items``) were never read,
+     so the weight-bar table had nothing to render.
 
-  2. TROPE ID — the projection reads ``getattr(trope, "trope_id", "")`` but
+  2. TROPE ID — the projection read ``getattr(trope, "trope_id", "")`` but
      ``TropeState`` has no ``trope_id`` field (it is ``id``). With
-     ``model_config = {"extra": "ignore"}`` the read returns the default ``""``,
-     so every trope row shows a BLANK id in production.
+     ``model_config = {"extra": "ignore"}`` the read returned the default ``""``,
+     so every trope row showed a BLANK id in production.
 
-  3. TROPE PROGRESSION — the projection reads
+  3. TROPE PROGRESSION — the projection read
      ``int(getattr(trope, "progression", 0) or 0)`` but the field is
-     ``progress: float`` (not ``progression``). The read returns ``0`` for every
+     ``progress: float`` (not ``progression``). The read returned ``0`` for every
      trope, and the ``int()`` cast would truncate a real 0..1 value anyway. So
-     the progression bar is pinned at 0 for every trope — a textbook
+     the progression bar was pinned at 0 for every trope — a textbook
      "convincing prose, zero mechanical backing" lie the GM panel exists to
      catch.
 
-To test this with synthetic snapshots (the fixture-driven pattern this repo
+These tests use synthetic snapshots (the fixture-driven pattern this repo
 prefers over DB-coupled endpoint tests — see server CLAUDE.md "No Source-Text
-Wiring Tests"), the inline projection must be EXTRACTED from the async route
-into a pure function ``project_session_state_view(snap, *, session_key,
-last_activity_ts) -> dict``. These tests import that function; the import is the
-first thing to turn green (extraction), then the three assertions drive the
-field fixes. Dev may relocate the helper via a logged deviation, but the
-behavioral contract below is fixed.
+Wiring Tests"). 124-4 EXTRACTED the inline projection from the async route into
+a pure function ``project_session_state_view(snap, *, session_key,
+last_activity_ts) -> dict`` (now in ``sidequest/server/state_projection.py``);
+these tests import that function and the assertions guard the field fixes.
 """
 
 from __future__ import annotations
@@ -42,8 +40,7 @@ from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.game.session import GameSnapshot, Npc, TropeState
 
-# Extraction target (does not exist yet — RED). Dev lifts the inline projection
-# block out of rest.py::debug_state into this pure, snapshot-only function.
+# Projection helper extracted from rest.py::debug_state (story 124-4).
 from sidequest.server.state_projection import project_session_state_view
 
 
@@ -175,10 +172,10 @@ def test_projection_carries_trope_status() -> None:
 def test_projection_reads_npc_hp_from_hp_pool() -> None:
     """hp/max_hp must come from core.hp (HpPool), not the absent `core.edge`.
 
-    rest.py:481-485 reads ``getattr(core, "edge", None).maximum`` — but
-    CreatureCore was re-pointed edge→hp and HpPool's field is ``max`` (not
-    ``maximum``), so every NPC currently projects 0/0. The registry HP column
-    must show the real pool.
+    Before 124-4, the inline projection read ``getattr(core, "edge", None).maximum``
+    — but CreatureCore was re-pointed edge→hp and HpPool's field is ``max`` (not
+    ``maximum``), so every NPC projected 0/0 (now fixed in state_projection.py).
+    The registry HP column must show the real pool.
     """
     npc = Npc(
         core=CreatureCore(

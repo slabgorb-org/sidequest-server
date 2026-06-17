@@ -3159,6 +3159,9 @@ class CharacterBuilder:
         # ADR-144 F4a: a ruleset: fate pack seeds a FateSheet here; every WN/native
         # module returns fate_sheet=None.
         fate_sheet = _res.fate_sheet
+        # Only a Fate pack seeds a FateSheet here (WN/native return None); capture the
+        # Fate-pack signal BEFORE the interactive override below reassigns fate_sheet.
+        _is_fate_pack = fate_sheet is not None
         # ADR-144 F4a2: if the player walked the interactive Fate chargen flow, the
         # recorded choices REPLACE the default seed with a player-authored,
         # server-validated sheet (apply_fate_chargen fails loud on an illegal one).
@@ -3174,6 +3177,35 @@ class CharacterBuilder:
             fate_sheet = self._ruleset.apply_fate_chargen(
                 rules=self._rules, choices=self._fate_choices
             ).fate_sheet
+
+        # Terminal Fate-chargen lie-detector (playtest 2026-06-17 — Keith's "Both"
+        # decision, code half). Gated on _is_fate_pack so it never fires on a
+        # WN/native pack. At finalize, record whether the sheet was player-authored
+        # (interactive steps recorded choices -> ``derived``) or only the pack-default
+        # seed survived (no fate_chargen_step scenes -> ``default_fallback``, the
+        # silent default-sheet bug). The load guard makes default_fallback impossible
+        # for a SHIPPED pack; this span is the GM-panel proof the interactive flow
+        # fired (or the alarm that it did not).
+        if _is_fate_pack and fate_sheet is not None:
+            from sidequest.telemetry.spans.fate import (
+                fate_chargen_default_fallback_span,
+                fate_chargen_derived_span,
+            )
+
+            if self._fate_choices is not None:
+                fate_chargen_derived_span(
+                    actor=name,
+                    skill_count=len(fate_sheet.skills),
+                    aspect_count=len(fate_sheet.aspects),
+                    refresh=fate_sheet.refresh,
+                )
+            else:
+                fate_chargen_default_fallback_span(
+                    actor=name,
+                    skill_count=len(fate_sheet.skills),
+                    aspect_count=len(fate_sheet.aspects),
+                    refresh=fate_sheet.refresh,
+                )
 
         # Chargen contribution application (ADR-143 Task 10): background skills
         # + foci skill/ability grants, delegated to the bound RulesetModule.

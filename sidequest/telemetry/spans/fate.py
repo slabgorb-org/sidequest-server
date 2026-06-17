@@ -552,6 +552,36 @@ SPAN_ROUTES["fate.chargen.seeded"] = SpanRoute(
         "refresh": (span.attributes or {}).get("refresh", 0),
     },
 )
+# --- Terminal chargen outcome (playtest 2026-06-17, Keith "Both" decision) -----
+# The seeded span (above) fires for the FLOOR; these two are the TERMINAL signal at
+# chargen finalize — did the player author the sheet (derived), or did only the
+# pack-default seed survive (default_fallback, the silent default-sheet collapse)?
+# The load guard (_validate_fate_chargen_steps) makes default_fallback impossible
+# for a shipped pack, so on the GM panel a default_fallback span is the lie-detector
+# firing: a Fate PC finalized with no interactive chargen. Literal keys (no SPAN_*
+# constant) — the routing-completeness lint only inspects SPAN_* constants.
+SPAN_ROUTES["fate.chargen.derived"] = SpanRoute(
+    event_type="state_transition",
+    component="fate",
+    extract=lambda span: {
+        "field": "chargen_derived",
+        "actor": (span.attributes or {}).get("actor", ""),
+        "skill_count": (span.attributes or {}).get("skill_count", 0),
+        "aspect_count": (span.attributes or {}).get("aspect_count", 0),
+        "refresh": (span.attributes or {}).get("refresh", 0),
+    },
+)
+SPAN_ROUTES["fate.chargen.default_fallback"] = SpanRoute(
+    event_type="state_transition",
+    component="fate",
+    extract=lambda span: {
+        "field": "chargen_default_fallback",
+        "actor": (span.attributes or {}).get("actor", ""),
+        "skill_count": (span.attributes or {}).get("skill_count", 0),
+        "aspect_count": (span.attributes or {}).get("aspect_count", 0),
+        "refresh": (span.attributes or {}).get("refresh", 0),
+    },
+)
 # --- F4a2: interactive chargen spans (GM panel = lie detector) ----------------
 # The player walked the interactive Fate chargen flow (archetype -> aspects ->
 # pyramid -> stunts) and the server validated it to a legal sheet. One span per
@@ -894,6 +924,58 @@ def fate_chargen_seeded_span(
         **attrs,
     }
     with Span.open("fate.chargen.seeded", attributes, tracer_override=_tracer):
+        pass
+
+
+def fate_chargen_derived_span(
+    *,
+    skill_count: int,
+    aspect_count: int,
+    refresh: int,
+    actor: str = "",
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``fate.chargen.derived`` — at chargen finalize the interactive Fate
+    steps ran and the player-authored sheet REPLACED the pack-default seed (the
+    healthy terminal path). GM-panel counterpart to ``fate.chargen.default_fallback``
+    (playtest 2026-06-17, Keith's "Both" decision — the code-half lie detector)."""
+    attributes: dict[str, Any] = {
+        "field": "chargen_derived",
+        "actor": actor,
+        "skill_count": skill_count,
+        "aspect_count": aspect_count,
+        "refresh": refresh,
+        **attrs,
+    }
+    with Span.open("fate.chargen.derived", attributes, tracer_override=_tracer):
+        pass
+
+
+def fate_chargen_default_fallback_span(
+    *,
+    skill_count: int,
+    aspect_count: int,
+    refresh: int,
+    actor: str = "",
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``fate.chargen.default_fallback`` — at chargen finalize ONLY the
+    pack-default seed survived (no interactive ``fate_chargen_step`` scenes ran), so
+    the player got the genre-default loadout identical for everyone (the playtest
+    2026-06-17 default-sheet collapse). The load guard makes this impossible for a
+    SHIPPED pack; this span is the terminal lie-detector for any path that still
+    finalizes a Fate PC with no recorded choices (e.g. the base/default funnel)."""
+    attributes: dict[str, Any] = {
+        "field": "chargen_default_fallback",
+        "actor": actor,
+        "skill_count": skill_count,
+        "aspect_count": aspect_count,
+        "refresh": refresh,
+        **attrs,
+    }
+    with Span.open("fate.chargen.default_fallback", attributes, tracer_override=_tracer):
         pass
 
 

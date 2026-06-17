@@ -1930,6 +1930,67 @@ def _load_single_scenario(scenario_path: Path) -> ScenarioPack:
     return scenario
 
 
+def _validate_fate_chargen_steps(
+    *,
+    ruleset: str,
+    worlds: dict[str, World],
+    genre_char_creation: list[CharCreationScene],
+    path: Path,
+) -> None:
+    """Fail loud if a Fate pack's effective chargen omits the interactive steps.
+
+    A ``ruleset: fate`` pack authors the player's sheet through three
+    ``fate_chargen_step`` scenes (``aspects`` -> ``pyramid`` -> ``stunts``). Without
+    all three the builder never records ``FateChargenChoices`` and the player
+    silently receives the pack-default loadout (the playtest 2026-06-17 default-sheet
+    collapse — every Oz traveler handed the same Dorothy sheet). The
+    world-replaces-genre rule (``resolve_char_creation_scenes``) means each world runs
+    its OWN char_creation when it declares one, else the genre default — so we check
+    each world's EFFECTIVE scene list. A missing step is a LOAD-time error, not a
+    runtime silent fallback (No Silent Fallbacks): it makes it physically impossible
+    for a Fate pack — including future homebrew — to ship a chargen that yields the
+    default sheet. Keith's "guard" half of the Both decision (2026-06-17).
+
+    No-op for every non-Fate ruleset (WN family / native): they seed no FateSheet, so
+    the fate_chargen_step contract does not apply.
+    """
+    if ruleset != "fate":
+        return
+    required = {"aspects", "pyramid", "stunts"}
+    for slug, world in worlds.items():
+        # World-replaces-genre: a world's own scenes when it declares them, else the
+        # genre default (mirrors resolve_char_creation_scenes — no merge).
+        effective = world.char_creation if world.char_creation else genre_char_creation
+        present = {
+            scene.mechanical_effects.fate_chargen_step
+            for scene in effective
+            if scene.mechanical_effects is not None
+            and scene.mechanical_effects.fate_chargen_step is not None
+        }
+        missing = required - present
+        if missing:
+            is_world_tier = bool(world.char_creation)
+            tier_path = (
+                path / "worlds" / slug / "char_creation.yaml"
+                if is_world_tier
+                else path / "char_creation.yaml"
+            )
+            tier = "world" if is_world_tier else "genre"
+            raise GenreLoadError(
+                path=tier_path,
+                detail=(
+                    f"Fate pack world {slug!r} resolves a {tier}-tier char_creation that "
+                    f"omits the fate_chargen_step scene(s) {sorted(missing)} (a Fate "
+                    "chargen needs all of aspects + pyramid + stunts). Without them the "
+                    "builder never records the player's choices and every traveler "
+                    "silently gets the pack-default Fate sheet. Add the missing "
+                    "interactive step scene(s) — see pulp_noir/char_creation.yaml for the "
+                    "canonical aspects/pyramid/stunts trio. [Fate chargen load guard, "
+                    "playtest 2026-06-17]"
+                ),
+            )
+
+
 # ---------------------------------------------------------------------------
 # Top-level pack loader
 # ---------------------------------------------------------------------------
@@ -2292,6 +2353,19 @@ def load_genre_pack(path: Path | str) -> GenrePack:
                     "genre default; every world must supply or inherit one."
                 ),
             )
+
+    # Fate packs (playtest 2026-06-17, Keith's "Both" decision — code half): every
+    # world's EFFECTIVE char_creation must carry the three interactive
+    # fate_chargen_step scenes, or the builder never records FateChargenChoices and
+    # every traveler silently gets the pack-default Fate sheet. Fail loud at LOAD so a
+    # Fate pack — including future homebrew — physically cannot ship a default-sheet
+    # chargen. No-op for non-Fate rulesets.
+    _validate_fate_chargen_steps(
+        ruleset=rules.ruleset,
+        worlds=worlds,
+        genre_char_creation=char_creation,
+        path=path,
+    )
 
     # === Pack-level class roster — world-first aggregation (epic 94) ===
     # Genre/world boundary correction (supersedes ADR-120 "mechanics-in-genre"):

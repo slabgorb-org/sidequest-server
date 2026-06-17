@@ -21,10 +21,15 @@ def fate_action_resolved_span(
     opposition_kind: str,
     shifts: int,
     tier: str,
+    source: str = "server_rolled",
     _tracer: trace.Tracer | None = None,
     **attrs: Any,
 ) -> None:
-    """Emit ``fate.action_resolved`` — one Fate roll resolved."""
+    """Emit ``fate.action_resolved`` — one Fate roll resolved. ``source`` ∈
+    {``"player_thrown"``, ``"server_rolled"``} (ADR-148, Story 126-7): the GM-panel
+    lie detector reads it to confirm a player's dice really came from the client
+    and an NPC's really came from the server RNG. Defaults to ``"server_rolled"``
+    so every existing NPC/defense caller is tagged without a change."""
     attributes: dict[str, Any] = {
         "field": "action_resolved",
         "actor": actor,
@@ -35,6 +40,7 @@ def fate_action_resolved_span(
         "opposition_kind": opposition_kind,
         "shifts": shifts,
         "tier": tier,
+        "source": source,
         **attrs,
     }
     with Span.open("fate.action_resolved", attributes, tracer_override=_tracer):

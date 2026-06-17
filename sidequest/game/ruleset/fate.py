@@ -16,7 +16,12 @@ from opentelemetry import trace
 
 from sidequest.game.fate_sheet import Aspect, FateSheet
 from sidequest.game.ruleset.base import RulesetModule
-from sidequest.game.ruleset.fate_resolution import FateOutcome, Opposition, resolve_action
+from sidequest.game.ruleset.fate_resolution import (
+    FateOutcome,
+    Opposition,
+    resolve_action,
+    resolve_action_from_faces,
+)
 from sidequest.telemetry.spans.fate import (
     fate_action_resolved_span,
     fate_aspect_invoked_span,
@@ -201,7 +206,8 @@ class FateRulesetModule(RulesetModule):
         actor: str = "",
         _tracer: trace.Tracer | None = None,
     ) -> FateOutcome:
-        """Resolve one Fate action and emit the lie-detector span."""
+        """NPC path: roll 4dF server-side and emit the lie-detector span tagged
+        ``source=server_rolled`` (ADR-148)."""
         outcome = resolve_action(
             skill_rating=skill_rating,
             opposition=opposition,
@@ -217,6 +223,41 @@ class FateRulesetModule(RulesetModule):
             opposition_kind=opposition.kind,
             shifts=outcome.shifts,
             tier=outcome.tier.value,
+            source="server_rolled",
+            _tracer=_tracer,
+        )
+        return outcome
+
+    def resolve_action_from_faces(
+        self,
+        *,
+        skill_rating: int,
+        opposition: Opposition,
+        faces: tuple[int, int, int, int],
+        invoke_bonus: int = 0,
+        actor: str = "",
+        _tracer: trace.Tracer | None = None,
+    ) -> FateOutcome:
+        """Player path (ADR-148): resolve from the client's thrown dF faces — the
+        faces ARE the roll, never an rng — and emit the same lie-detector span
+        tagged ``source=player_thrown`` so the GM panel can confirm the dice came
+        from the client. The Fate ladder math is identical to the NPC path."""
+        outcome = resolve_action_from_faces(
+            skill_rating=skill_rating,
+            opposition=opposition,
+            faces=faces,
+            invoke_bonus=invoke_bonus,
+        )
+        fate_action_resolved_span(
+            actor=actor,
+            skill_rating=skill_rating,
+            dice=outcome.dice,
+            ladder_total=outcome.ladder_total,
+            opposition=outcome.opposition,
+            opposition_kind=opposition.kind,
+            shifts=outcome.shifts,
+            tier=outcome.tier.value,
+            source="player_thrown",
             _tracer=_tracer,
         )
         return outcome

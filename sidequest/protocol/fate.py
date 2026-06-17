@@ -12,7 +12,10 @@ from __future__ import annotations
 
 from typing import Literal
 
+from pydantic import model_validator
+
 from sidequest.protocol.base import ProtocolBase
+from sidequest.protocol.dice import ThrowParams
 
 
 class FateActionPayload(ProtocolBase):
@@ -55,3 +58,44 @@ class FateActionPayload(ProtocolBase):
     invoke_mode: Literal["bonus", "reroll"] = "bonus"
     aspect_text: str = ""
     player_action: str = ""
+
+
+class FateThrowPayload(ProtocolBase):
+    """Player-thrown PROACTIVE Fate action (ADR-148, Story 126-7).
+
+    The Fate analog of ``DiceThrowPayload``: the four settled dF faces ARE the
+    roll. The server resolves the action from ``face`` and NEVER calls ``roll_4df``
+    on this path; ``throw_params`` is the gesture echoed on ``FATE_ROLL`` so every
+    seat replays the same tumble (animation only). Faces are authoritative at the
+    wire — exactly four, each in {-1, 0, 1}, ``extra='forbid'`` (inherited). A
+    distinct, faces-required message (not an optional ``face`` on ``FATE_ACTION``)
+    keeps the player-thrown contract unforgeable: an empty/absent faces field
+    cannot re-open the server-rolls-for-players backdoor (No Silent Fallbacks).
+
+    ``action`` is restricted to the three ROLL verbs; the non-roll verbs
+    (``concede`` / ``compel_*``) never throw and stay on ``FateActionPayload``.
+    The remaining fields mirror ``FateActionPayload``'s intent surface so the
+    handler can build the dispatch from a throw 1:1.
+    """
+
+    request_id: str
+    action: Literal["overcome", "create_advantage", "attack"]
+    skill: str = ""
+    target: str | None = None
+    difficulty: int = 0
+    invoke_aspect: str = ""
+    invoke_mode: Literal["bonus", "reroll"] = "bonus"
+    aspect_text: str = ""
+    player_action: str = ""
+    throw_params: ThrowParams
+    face: tuple[int, int, int, int]
+
+    @model_validator(mode="after")
+    def _validate_faces(self) -> FateThrowPayload:
+        # ``tuple[int, int, int, int]`` already enforces exactly-4 at the pydantic
+        # layer; this adds the value-range check with a clear message (defense in
+        # depth — the engine re-validates in resolve_action_from_faces).
+        for f in self.face:
+            if f not in (-1, 0, 1):
+                raise ValueError("each dF face must be -1, 0, or +1")
+        return self

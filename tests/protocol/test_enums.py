@@ -143,6 +143,10 @@ def test_message_type_fate_action_wire_string() -> None:
     assert MessageType.FATE_ACTION == "FATE_ACTION"
 
 
+def test_message_type_fate_throw_wire_string() -> None:
+    assert MessageType.FATE_THROW == "FATE_THROW"
+
+
 def test_message_type_beat_selection_wire_string() -> None:
     assert MessageType.BEAT_SELECTION == "BEAT_SELECTION"
 
@@ -277,10 +281,18 @@ def test_message_type_complete_count() -> None:
     snapshot (per-PC sheets + scene situation aspects + active conflict). Emitted
     reactively when the Fate state changes, ruleset=='fate'-gated; transient
     broadcast, never event-sourced. Intentional addition; bumped 55 → 56.
+    ADR-144 F3c (story 118-7) added FATE_ROLL — the broadcast of a resolved 4dF
+    roll (dice + ladder + tier + replay throw_params/seed) so every seat sees the
+    soloist's roll. This count test was not updated at the time (pre-existing
+    drift, caught here 2026-06-17); bumped 56 → 57.
+    ADR-148 (story 126-7) added FATE_THROW — the player's PROACTIVE Fate roll with
+    authoritative dF faces (physics-is-the-roll, the Fate analog of DICE_THROW).
+    Routed to FateThrowHandler → fate_conflict with thrown_faces; distinct from the
+    non-roll FATE_ACTION verbs. Intentional addition; bumped 57 → 58.
     When new variants land, update this count and the individual wire-string
     test above so the contract test keeps catching silent drift.
     """
-    assert len(MessageType) == 56
+    assert len(MessageType) == 58
 
 
 # ===========================================================================

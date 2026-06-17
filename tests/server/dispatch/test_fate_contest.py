@@ -321,7 +321,7 @@ def _payload(action: str, skill: str = "Rapport") -> FateActionPayload:
 def test_dispatch_rejects_attack_in_a_contest():
     enc = _contest_encounter()
     snap = _snapshot(enc)
-    with pytest.raises(FateConflictError):
+    with pytest.raises(FateConflictError, match="Contest"):
         dispatch_fate_action(
             payload=_payload("attack"),
             actor_name="Lady Ash",

@@ -506,6 +506,10 @@ class CharacterSheetDetails(ProtocolBase):
     foci: list[str] = Field(default_factory=list)
     """WN-family focus ids (ADR-143 Task 11). Empty for non-WN characters.
     Rendered by the UI as a Foci section only when non-empty."""
+    appearance: str = ""
+    """Player-authored physical appearance from chargen (Story 126-5). Empty
+    for characters built without an appearance input; the UI renders the
+    Appearance section only when non-empty."""
 
 
 # ---------------------------------------------------------------------------

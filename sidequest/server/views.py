@@ -425,6 +425,7 @@ def party_member_from_character(
         # only when non-empty (mechanics-first — Sebastien/Jade legibility).
         skills=dict(character.skills),
         foci=list(character.foci),
+        appearance=character.appearance,
     )
 
     # Currency noun from inventory.yaml::currency.name (pingpong

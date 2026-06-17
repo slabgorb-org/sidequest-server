@@ -239,7 +239,7 @@ NARRATOR_MODEL: str = "opus"
 # Story 61-3 promoted this from a soft warning to a hard refuse-or-truncate cap.
 # Renamed in 61-8 §C1 to stop the "lying name" the Reviewer flagged (the
 # behavior gate is HARD: cross this and the SDK call is refused before billing).
-# ~500K tokens, half of Opus 4.7's 1M window (ADR-098).
+# ~500K tokens, half of Opus 4.8's 1M window (ADR-098).
 PROMPT_BUDGET_BYTES_HARD = 2_000_000
 
 # Recency-zone narrative-window tunables (Story 49-1; tightened to K=2 in 57-1).
@@ -3325,7 +3325,7 @@ class Orchestrator:
         """Hard-cap canary (Story 61-3 — promotes ADR-098 §Bound canary).
 
         When ``len(system_prompt) + len(user_message) > PROMPT_BUDGET_BYTES_HARD``
-        (~2 MB ≈ 500K tokens, half of Opus 4.7's 1M window), refuses the
+        (~2 MB ≈ 500K tokens, half of Opus 4.8's 1M window), refuses the
         narrator turn. The 2026-05-23 incident burned $313 in 48h while a
         SOFT warning scrolled past unread overnight; the hard refuse stops
         the SDK call from billing and the LOUD emit pages the operator.

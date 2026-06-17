@@ -57,7 +57,7 @@ class CallType(StrEnum):
 
 _DEFAULT: dict[CallType, str] = {
     CallType.NARRATION: "claude-sonnet-4-6",
-    CallType.NARRATION_IMPORTANT: "claude-opus-4-7",
+    CallType.NARRATION_IMPORTANT: "claude-opus-4-8",
     CallType.CLASSIFICATION: "claude-haiku-4-5-20251001",
     CallType.SCRATCH: "claude-haiku-4-5-20251001",
 }

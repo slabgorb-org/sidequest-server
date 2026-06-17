@@ -16,7 +16,7 @@ def test_narration_defaults_to_sonnet() -> None:
 
 
 def test_narration_important_defaults_to_opus() -> None:
-    assert resolve_model(CallType.NARRATION_IMPORTANT) == "claude-opus-4-7"
+    assert resolve_model(CallType.NARRATION_IMPORTANT) == "claude-opus-4-8"
 
 
 def test_classification_defaults_to_haiku() -> None:
@@ -28,12 +28,12 @@ def test_scratch_defaults_to_haiku() -> None:
 
 
 def test_per_pack_override_takes_precedence() -> None:
-    pack_overrides = {CallType.NARRATION: "claude-opus-4-7"}
-    assert resolve_model(CallType.NARRATION, pack_overrides=pack_overrides) == "claude-opus-4-7"
+    pack_overrides = {CallType.NARRATION: "claude-opus-4-8"}
+    assert resolve_model(CallType.NARRATION, pack_overrides=pack_overrides) == "claude-opus-4-8"
 
 
 def test_partial_override_falls_back_to_default() -> None:
-    pack_overrides = {CallType.NARRATION: "claude-opus-4-7"}
+    pack_overrides = {CallType.NARRATION: "claude-opus-4-8"}
     assert (
         resolve_model(CallType.CLASSIFICATION, pack_overrides=pack_overrides)
         == "claude-haiku-4-5-20251001"

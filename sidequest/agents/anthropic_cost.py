@@ -53,13 +53,13 @@ _PRICING: dict[str, ModelPricing] = {
         cached_input_write_per_mtok_usd=1.25,
         cached_input_write_1h_per_mtok_usd=2.0,
     ),
-    "claude-opus-4-7": ModelPricing(
-        model="claude-opus-4-7",
-        input_per_mtok_usd=15.0,
-        output_per_mtok_usd=75.0,
-        cached_input_read_per_mtok_usd=1.50,
-        cached_input_write_per_mtok_usd=18.75,
-        cached_input_write_1h_per_mtok_usd=30.0,
+    "claude-opus-4-8": ModelPricing(
+        model="claude-opus-4-8",
+        input_per_mtok_usd=5.0,
+        output_per_mtok_usd=25.0,
+        cached_input_read_per_mtok_usd=0.50,
+        cached_input_write_per_mtok_usd=6.25,
+        cached_input_write_1h_per_mtok_usd=10.0,
     ),
 }
 

@@ -28,10 +28,10 @@ def test_haiku_4_5_pricing_constants() -> None:
     assert p.output_per_mtok_usd == 5.0
 
 
-def test_opus_4_7_pricing_constants() -> None:
-    p = model_pricing("claude-opus-4-7")
-    assert p.input_per_mtok_usd == 15.0
-    assert p.output_per_mtok_usd == 75.0
+def test_opus_4_8_pricing_constants() -> None:
+    p = model_pricing("claude-opus-4-8")
+    assert p.input_per_mtok_usd == 5.0
+    assert p.output_per_mtok_usd == 25.0
 
 
 def test_unknown_model_raises() -> None:

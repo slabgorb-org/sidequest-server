@@ -1418,6 +1418,30 @@ class RulesConfig(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _fate_packs_have_no_opposed_check(self) -> RulesConfig:
+        """spec 2026-06-17 §4 — the bleed tripwire. A Fate-bound pack must resolve
+        its confrontations through Fate's own mechanics (Contest / Conflict), never
+        the d20 dial's ``opposed_check``. Authoring one is a content error and fails
+        pack load loudly (No Silent Fallbacks). The gate is ``ruleset == 'fate'``
+        ONLY — the Without Number family (cwn/awn/swn/wwn) legitimately authors
+        ``opposed_check`` via the shared dial engine and is untouched (spec §0)."""
+        if self.ruleset != "fate":
+            return self
+        offenders = [
+            c.confrontation_type
+            for c in self.confrontations
+            if c.resolution_mode == ResolutionMode.opposed_check
+        ]
+        if offenders:
+            raise ValueError(
+                f"Fate-bound pack authors opposed_check confrontation(s) {offenders!r}; "
+                "a Fate pack resolves through the Contest mode (resolution_mode: "
+                "contest) or a Conflict, never the d20 dial's opposed_check. See "
+                "spec 2026-06-17 §3 for the Contest schema (ADR-144)."
+            )
+        return self
+
     def ruleset_config(self) -> SwnConfig | FateConfig | None:
         """The config block for the bound ruleset, or None for engines that carry none.
 

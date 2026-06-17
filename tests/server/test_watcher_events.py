@@ -74,7 +74,18 @@ async def test_publish_event_shape(bound_hub: WatcherHub) -> None:
     await asyncio.sleep(0.05)
     assert len(sock.events) == 1
     ev = sock.events[0]
-    assert set(ev) == {"timestamp", "component", "event_type", "severity", "fields"}
+    # ``session_slug`` joined the envelope as the Live-view partition key
+    # (OTEL-INSPECTOR, 2026-06-16) — None here since no slug is bound in this
+    # unit context.
+    assert set(ev) == {
+        "timestamp",
+        "component",
+        "event_type",
+        "severity",
+        "session_slug",
+        "fields",
+    }
+    assert ev["session_slug"] is None
     assert ev["event_type"] == "turn_complete"
     assert ev["component"] == "orchestrator"
     assert ev["severity"] == "info"

@@ -361,6 +361,7 @@ class ConnectHandler:
             from sidequest.game.pg import sessions as _pg_sessions
             from sidequest.server.session_state import _build_pg_repos_for_slug
             from sidequest.telemetry.watcher_hub import bind_event_store as _bind_event_store
+            from sidequest.telemetry.watcher_hub import bind_session_slug as _bind_session_slug
 
             _pg_pool = _db_pool.get_pool()
             _bootstrap_row = _pg_sessions.get_game(_pg_pool, slug=slug)
@@ -389,6 +390,12 @@ class ConnectHandler:
             # the sink's own session_tx. The in-frame census path threads the
             # turn tx explicitly through emit_event → emit_mechanical_census.
             _bind_event_store(_pg_telemetry_sink)
+            # Bind the live-session slug in THIS connection's context so every
+            # span/event minted for this session is tagged with it (the Live
+            # view's partition key). Same per-task ContextVar scoping as the
+            # telemetry-sink bind above — keeps concurrent sessions from
+            # bleeding into one Live timeline (OTEL-INSPECTOR, 2026-06-16).
+            _bind_session_slug(slug)
             if not player_id:
                 player_id = str(uuid.uuid4())
 

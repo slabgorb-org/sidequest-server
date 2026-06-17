@@ -21,6 +21,7 @@ back onto the FastAPI loop where the WebSocket sends happen.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from datetime import UTC, datetime
 from typing import Any
@@ -32,6 +33,7 @@ from opentelemetry.sdk.trace.export import SpanProcessor
 from sidequest.telemetry.watcher_hub import (
     WATCHER_SYNTHETIC_ATTR,
     WatcherHub,
+    current_session_slug,
     publish_event,
     watcher_hub,
 )
@@ -58,6 +60,20 @@ class WatcherSpanProcessor(SpanProcessor):
         # No start-event broadcast for now — the dashboard renders spans
         # at close time only, and doubling the volume would just waste
         # bandwidth without adding insight.
+        #
+        # We DO stamp the live-session slug here, though: on_start runs
+        # synchronously in the task that opened the span (the per-connection
+        # ``/ws`` task), so the ContextVar resolves to THIS session's slug. We
+        # cannot read it in on_end — that may run on a background thread with no
+        # session context — so we capture it now as a span attribute and read it
+        # back at close. This is the partition key the Live view scopes on so
+        # concurrent sessions stop bleeding into one timeline (OTEL-INSPECTOR,
+        # sq-playtest 2026-06-16).
+        slug = current_session_slug()
+        if slug:
+            # Telemetry must never break span creation.
+            with contextlib.suppress(Exception):
+                span.set_attribute("session_slug", slug)
         return
 
     def on_end(self, span: ReadableSpan) -> None:
@@ -77,6 +93,13 @@ class WatcherSpanProcessor(SpanProcessor):
             for k, v in span.attributes.items():
                 attrs[str(k)] = v
 
+        # Lift the live-session slug stamped at on_start onto the envelope (the
+        # partition key the Live view scopes on). Pop it out of ``attrs`` so it
+        # rides as envelope metadata only and doesn't clutter ``fields`` — and
+        # so it never collides with the integer ``session_id`` attribute that
+        # cost/seed spans carry. ``None`` for context-less / infra spans.
+        session_slug = attrs.pop("session_slug", None)
+
         severity = "info"
         if span.status is not None and span.status.status_code.name == "ERROR":
             severity = "error"
@@ -88,6 +111,7 @@ class WatcherSpanProcessor(SpanProcessor):
                 "component": "sidequest-server",
                 "event_type": "agent_span_close",
                 "severity": severity,
+                "session_slug": session_slug,
                 "fields": {
                     "name": span.name,
                     "duration_ms": duration_ms,
@@ -116,6 +140,7 @@ class WatcherSpanProcessor(SpanProcessor):
                     "component": "watcher",
                     "event_type": "validation_warning",
                     "severity": "error",
+                    "session_slug": session_slug,
                     "fields": {
                         "check": "route_extract",
                         "span": span.name,
@@ -146,6 +171,7 @@ class WatcherSpanProcessor(SpanProcessor):
                 "component": route.component,
                 "event_type": route.event_type,
                 "severity": typed_severity,
+                "session_slug": session_slug,
                 "fields": fields,
             }
         )

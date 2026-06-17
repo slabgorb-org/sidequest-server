@@ -341,8 +341,8 @@ def _narration_texts_from_list(messages: list[object]) -> list[str]:
 
 @pytest.mark.asyncio
 async def test_anchor_peer_gets_live_pov_swap_not_only_on_reconnect(
-    handler: WebSocketSessionHandler,
-    monkeypatch: pytest.MonkeyPatch,  # noqa: F811
+    handler: WebSocketSessionHandler,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """AC2 — RED: anchor-peer currently gets raw 3rd-person via room.broadcast.
 
@@ -405,8 +405,8 @@ async def test_anchor_peer_gets_live_pov_swap_not_only_on_reconnect(
 
 @pytest.mark.asyncio
 async def test_visible_to_private_opening_card_excluded_from_non_recipients(
-    handler: WebSocketSessionHandler,
-    monkeypatch: pytest.MonkeyPatch,  # noqa: F811
+    handler: WebSocketSessionHandler,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """AC3 — RED: visible_to private card currently leaks to ALL players via broadcast.
 
@@ -459,8 +459,8 @@ async def test_visible_to_private_opening_card_excluded_from_non_recipients(
 
 @pytest.mark.asyncio
 async def test_opening_events_persisted_with_seq_assigned(
-    handler: WebSocketSessionHandler,
-    monkeypatch: pytest.MonkeyPatch,  # noqa: F811
+    handler: WebSocketSessionHandler,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """AC5 — RED: opening messages currently have seq=0 (no EventLog persistence).
 
@@ -502,8 +502,8 @@ async def test_opening_events_persisted_with_seq_assigned(
 
 @pytest.mark.asyncio
 async def test_emit_author_resolved_fires_with_project_emitter_true(
-    handler: WebSocketSessionHandler,
-    monkeypatch: pytest.MonkeyPatch,  # noqa: F811
+    handler: WebSocketSessionHandler,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """AC7 (OTEL) — RED: emit.author_resolved does NOT fire for the opening today.
 
@@ -558,8 +558,8 @@ async def test_emit_author_resolved_fires_with_project_emitter_true(
 
 @pytest.mark.asyncio
 async def test_projection_filter_decide_fires_per_connected_player(
-    handler: WebSocketSessionHandler,
-    monkeypatch: pytest.MonkeyPatch,  # noqa: F811
+    handler: WebSocketSessionHandler,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """AC7 (OTEL) — RED: projection.filter.decide does NOT fire for opening today.
 
@@ -617,8 +617,8 @@ async def test_projection_filter_decide_fires_per_connected_player(
 
 @pytest.mark.asyncio
 async def test_solo_opening_also_persisted_with_seq(
-    handler: WebSocketSessionHandler,
-    monkeypatch: pytest.MonkeyPatch,  # noqa: F811
+    handler: WebSocketSessionHandler,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """AC8/Q3 — RED: solo opening currently has seq=0 (no EventLog persistence).
 
@@ -663,8 +663,8 @@ async def test_solo_opening_also_persisted_with_seq(
 
 @pytest.mark.asyncio
 async def test_render_queued_frame_not_persisted_as_narration(
-    handler: WebSocketSessionHandler,
-    monkeypatch: pytest.MonkeyPatch,  # noqa: F811
+    handler: WebSocketSessionHandler,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """sq-playtest 2026-05-28 #G1 regression — a RENDER_QUEUED frame in the
     opening list must NOT be persisted as a NARRATION event.

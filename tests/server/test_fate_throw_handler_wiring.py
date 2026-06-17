@@ -18,8 +18,6 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-from sidequest.handlers.fate_throw import HANDLER as FATE_THROW_HANDLER
-
 import sidequest.game.ruleset.fate_resolution as fr
 from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore
@@ -27,6 +25,7 @@ from sidequest.game.encounter import EncounterActor, EncounterMetric, Structured
 from sidequest.game.fate_sheet import Aspect, FateSheet
 from sidequest.game.persistence import GameMode
 from sidequest.game.session import GameSnapshot, Npc
+from sidequest.handlers.fate_throw import HANDLER as FATE_THROW_HANDLER
 from sidequest.protocol.dice import ThrowParams
 from sidequest.protocol.fate import FateThrowPayload
 from sidequest.protocol.messages import FateRollMessage, FateThrowMessage

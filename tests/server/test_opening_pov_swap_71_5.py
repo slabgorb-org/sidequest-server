@@ -215,8 +215,8 @@ async def _fire_opening(
 
 @pytest.mark.asyncio
 async def test_opening_does_not_use_room_broadcast(
-    handler: WebSocketSessionHandler,
-    monkeypatch: pytest.MonkeyPatch,  # noqa: F811
+    handler: WebSocketSessionHandler,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """AC1 (wiring) — the opening NARRATION must NOT use room.broadcast.
 
@@ -249,8 +249,8 @@ async def test_opening_does_not_use_room_broadcast(
 
 @pytest.mark.asyncio
 async def test_broadcast_to_peers_watcher_event_retired(
-    handler: WebSocketSessionHandler,
-    monkeypatch: pytest.MonkeyPatch,  # noqa: F811
+    handler: WebSocketSessionHandler,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """AC7 (OTEL retire) — RED: opening.broadcast_to_peers IS emitted now; must vanish after fix.
 
@@ -292,8 +292,8 @@ async def test_broadcast_to_peers_watcher_event_retired(
 
 @pytest.mark.asyncio
 async def test_pov_swap_helper_watcher_event_retired(
-    handler: WebSocketSessionHandler,
-    monkeypatch: pytest.MonkeyPatch,  # noqa: F811
+    handler: WebSocketSessionHandler,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """AC7 (OTEL retire) — RED: opening.narration_pov_swapped IS emitted now; must vanish.
 

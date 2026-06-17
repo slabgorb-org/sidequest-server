@@ -11,7 +11,7 @@ tab reconciles to the server's view rather than its local accumulator.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 
 from sidequest.game.session import GameSnapshot
 from sidequest.game.turn import TurnPhase
@@ -22,6 +22,7 @@ from sidequest.protocol.types import NonBlankString
 def build_turn_status_roster(
     snapshot: GameSnapshot,
     playing_player_ids: Iterable[str],
+    pending_action_texts: Mapping[str, str] | None = None,
 ) -> list[TurnStatusEntry]:
     """Build the canonical sealed-letter roster for the current round.
 
@@ -33,11 +34,18 @@ def build_turn_status_roster(
     - ``status="submitted"`` if the player_id is in
       ``snapshot.turn_manager._submitted`` (the runtime barrier set),
       ``"pending"`` otherwise.
+    - ``action`` set to the player's sealed action text when present in
+      ``pending_action_texts`` (Story 126-4). A player is in that map iff they
+      have buffered an action this round, so this is the seal text regardless
+      of the runtime ``_submitted`` set (which the barrier clears on fire) —
+      letting :func:`project_all_submitted` keep the text on the terminal
+      broadcast. ADR-036: peer action text is visible during WAIT.
 
     Entries with blank player_id / character_name are skipped — NonBlankString
     would otherwise raise and break the entire TURN_STATUS broadcast.
     """
     submitted: set[str] = object.__getattribute__(snapshot.turn_manager, "_submitted")
+    texts: Mapping[str, str] = pending_action_texts or {}
     entries: list[TurnStatusEntry] = []
     for pid in playing_player_ids:
         if not pid or not pid.strip():
@@ -50,6 +58,7 @@ def build_turn_status_roster(
                 player_id=NonBlankString(pid),
                 character_name=NonBlankString(seat_name),
                 status="submitted" if pid in submitted else "pending",
+                action=(texts.get(pid) or None),
             )
         )
     return entries
@@ -58,6 +67,7 @@ def build_turn_status_roster(
 def build_seal_reconcile_roster(
     snapshot: GameSnapshot,
     playing_player_ids: Iterable[str],
+    pending_action_texts: Mapping[str, str] | None = None,
 ) -> list[TurnStatusEntry]:
     """Roster reflecting the CURRENT seal truth for a (re)connecting peer.
 
@@ -98,7 +108,7 @@ def build_seal_reconcile_roster(
     must not perturb the barrier it only reports).
     """
     durable_seat_ids = list(snapshot.player_seats.keys())
-    base = build_turn_status_roster(snapshot, durable_seat_ids)
+    base = build_turn_status_roster(snapshot, durable_seat_ids, pending_action_texts)
     if snapshot.turn_manager.phase == TurnPhase.InputCollection:
         return base
     # Barrier already fired — project the round's terminal all-submitted state.

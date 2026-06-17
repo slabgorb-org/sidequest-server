@@ -1834,8 +1834,14 @@ class ConnectHandler:
                 # projects the terminal all-submitted state once the barrier has
                 # fired so a resolving round never regresses a sealed peer.
                 if GameMode(row.mode) == GameMode.MULTIPLAYER and room is not None:
+                    # Story 126-4: carry the sealed action text so a peer who
+                    # reconnects mid-WAIT recovers the text too, not just the
+                    # seal status (runtime-only; empty after a process reload,
+                    # like _submitted — same out-of-scope caveat).
                     reconcile_roster = build_seal_reconcile_roster(
-                        snapshot, room.playing_player_ids()
+                        snapshot,
+                        room.playing_player_ids(),
+                        room.pending_action_texts(),
                     )
                     if reconcile_roster:
                         bootstrap_msgs.append(

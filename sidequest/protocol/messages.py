@@ -596,6 +596,14 @@ class TurnStatusEntry(ProtocolBase):
     character_name: NonBlankString
     status: str
     """'pending' = composing, 'submitted' = sealed, 'auto_resolved' = timed out."""
+    action: str | None = None
+    """The player's sealed action text, for sealed (submitted/auto_resolved)
+    players only. Story 126-4: ADR-036 makes peer action text visible during
+    WAIT; the text's only other carrier is the best-effort ACTION_REVEAL frame,
+    so a submitted-only (no preceding composing) turn shows the seal status but
+    no text when that single frame is missed. Carrying the text on the
+    authoritative roster lets the UI recover it. ``None`` for pending players
+    (dropped from the wire by ProtocolBase's empty-default elision)."""
 
 
 class TurnStatusPayload(ProtocolBase):

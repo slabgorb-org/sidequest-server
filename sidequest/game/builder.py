@@ -48,6 +48,7 @@ from sidequest.protocol.messages import (
     FateStuntOption,
 )
 from sidequest.protocol.models import ClassRequirement, CreationChoice, RolledStat
+from sidequest.protocol.sanitize import sanitize_player_text
 from sidequest.protocol.types import NonBlankString
 from sidequest.telemetry.spans.reference import (
     reference_url_attached_span,
@@ -3299,12 +3300,18 @@ class CharacterBuilder:
         # OQ1 (Story 126-5): a player-typed appearance is a better narrator-
         # facing description than the generic "A {race} {class}". Gated on
         # non-empty so characters without an appearance input keep the generic.
+        #
+        # ADR-047 (126-5 review): core.description is NARRATOR-FACING — it rides
+        # into LLM prompts via the state_summary snapshot dump and the
+        # AsideResolver. Sanitize the player-authored appearance at this boundary
+        # (same raw-stored / sanitized-at-narrator-boundary split as
+        # fate_projection.py; the raw text stays on Character.appearance for the
+        # React-escaped player sheet). If sanitizing strips the text to empty
+        # (e.g. the appearance was ONLY prompt-structure markup), fall back to
+        # the generic so the non-blank CreatureCore validator never sees "".
         generic_description = f"{indefinite_article(race_str).capitalize()} {race_str} {class_str}"
-        core_description = (
-            acc.appearance.strip()
-            if (acc.appearance and acc.appearance.strip())
-            else generic_description
-        )
+        typed_appearance = acc.appearance.strip() if acc.appearance else ""
+        core_description = sanitize_player_text(typed_appearance) or generic_description
 
         character = Character(
             core=CreatureCore(

@@ -123,7 +123,9 @@ def _hero_vs_thug(*, thug_sheet: FateSheet | None = None):
             EncounterActor(name="Thug", role="foe", side="opponent"),
         ]
     )
-    snap = GameSnapshot(genre_slug="fate_test", characters=[_pc("Hero", {"Fight": 4})], encounter=enc)
+    snap = GameSnapshot(
+        genre_slug="fate_test", characters=[_pc("Hero", {"Fight": 4})], encounter=enc
+    )
     snap.npcs.append(_npc("Thug", {"Athletics": 1}, sheet=thug_sheet))
     return module, enc, snap
 
@@ -143,7 +145,9 @@ def test_attack_harm_lands_on_fate_sheet_and_leaves_core_hp_untouched():
 
     _seal_attack(enc, module, "Hero", 4, "Thug")
     exporter, tracer = _otel()
-    run_fate_exchange(encounter=enc, snapshot=snap, ruleset=module, rng=_FixedRng(0), _tracer=tracer)
+    run_fate_exchange(
+        encounter=enc, snapshot=snap, ruleset=module, rng=_FixedRng(0), _tracer=tracer
+    )
 
     # Harm landed on the Fate sheet.
     assert thug_core.fate_sheet.stress["physical"].boxes[1].checked is True
@@ -167,7 +171,9 @@ def test_taken_out_attack_leaves_core_hp_untouched():
 
     _seal_attack(enc, module, "Hero", 4, "Thug")
     exporter, tracer = _otel()
-    run_fate_exchange(encounter=enc, snapshot=snap, ruleset=module, rng=_FixedRng(0), _tracer=tracer)
+    run_fate_exchange(
+        encounter=enc, snapshot=snap, ruleset=module, rng=_FixedRng(0), _tracer=tracer
+    )
 
     assert enc.find_actor("Thug").withdrawn is True  # taken out
     assert snap.find_creature_core("Thug").hp.current == 10  # but core.hp pristine
@@ -185,7 +191,9 @@ def test_attack_emits_fate_harm_routed_span_naming_the_fate_sheet_sink():
     module, enc, snap = _hero_vs_thug()
     _seal_attack(enc, module, "Hero", 4, "Thug")
     exporter, tracer = _otel()
-    run_fate_exchange(encounter=enc, snapshot=snap, ruleset=module, rng=_FixedRng(0), _tracer=tracer)
+    run_fate_exchange(
+        encounter=enc, snapshot=snap, ruleset=module, rng=_FixedRng(0), _tracer=tracer
+    )
 
     spans = exporter.get_finished_spans()
     assert _HARM_SPAN in [s.name for s in spans], (
@@ -212,7 +220,9 @@ def test_taken_out_attack_still_emits_harm_routed_to_fate_sheet():
 
     _seal_attack(enc, module, "Hero", 4, "Thug")
     exporter, tracer = _otel()
-    run_fate_exchange(encounter=enc, snapshot=snap, ruleset=module, rng=_FixedRng(0), _tracer=tracer)
+    run_fate_exchange(
+        encounter=enc, snapshot=snap, ruleset=module, rng=_FixedRng(0), _tracer=tracer
+    )
 
     spans = exporter.get_finished_spans()
     assert _HARM_SPAN in [s.name for s in spans]
@@ -232,12 +242,16 @@ def test_missed_attack_emits_no_harm_routed_span():
             EncounterActor(name="Thug", role="foe", side="opponent"),
         ]
     )
-    snap = GameSnapshot(genre_slug="fate_test", characters=[_pc("Hero", {"Fight": 0})], encounter=enc)
+    snap = GameSnapshot(
+        genre_slug="fate_test", characters=[_pc("Hero", {"Fight": 0})], encounter=enc
+    )
     # Thug defends with Athletics 3 vs Hero's ladder 0 → shifts -3 (clean miss).
     snap.npcs.append(_npc("Thug", {"Athletics": 3}))
     _seal_attack(enc, module, "Hero", 0, "Thug")
     exporter, tracer = _otel()
-    run_fate_exchange(encounter=enc, snapshot=snap, ruleset=module, rng=_FixedRng(0), _tracer=tracer)
+    run_fate_exchange(
+        encounter=enc, snapshot=snap, ruleset=module, rng=_FixedRng(0), _tracer=tracer
+    )
 
     thug_core = snap.find_creature_core("Thug")
     assert all(not b.checked for b in thug_core.fate_sheet.stress["physical"].boxes)  # no harm

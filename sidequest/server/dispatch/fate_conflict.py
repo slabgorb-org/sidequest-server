@@ -46,6 +46,7 @@ from sidequest.telemetry.spans import (
     fate_exchange_order_span,
     fate_exchange_resolved_span,
     fate_flavor_rider_span,
+    fate_harm_routed_span,
     fate_opponent_decided_span,
     fate_taken_out_span,
 )
@@ -534,6 +535,12 @@ def _resolve_attack(
         else:
             hints.append(f"{commit.actor}'s attack on {commit.target} missed (shifts={shifts}).")
         return
+    # Story 126-1: record the harm-routing decision (GM-panel lie detector) BEFORE
+    # the marks. The hit is directed at the Fate sheet (stress/consequences), never
+    # the legacy core.hp track — sink="fate_sheet" is the ADR-144 binding invariant.
+    fate_harm_routed_span(
+        actor=commit.target, by=commit.actor, track=track, shifts=shifts, _tracer=_tracer
+    )
     survived = absorb_shifts(
         module=ruleset,
         sheet=target_core.fate_sheet,

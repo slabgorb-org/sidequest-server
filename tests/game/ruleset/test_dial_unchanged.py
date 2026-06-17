@@ -1,4 +1,4 @@
-# tests/game/ruleset/test_native_unchanged.py
+# tests/game/ruleset/test_dial_unchanged.py
 import pytest
 
 from sidequest.game.ruleset.dial import DialRulesetModule

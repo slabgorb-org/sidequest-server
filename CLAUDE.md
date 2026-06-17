@@ -165,9 +165,9 @@ sidequest/
 │                     #   db_config.py, db_pool.py — connection config + psycopg_pool
 │                     #   importer.py — read-only legacy SQLite→Postgres importer
 │                     #   ruleset/ — pluggable SRD ruleset modules (registry.py, base.py
-│                     #     RulesetModule ABC; without_number.py parent with
-│                     #     swn/awn/cwn/wwn siblings + fate.py — ADR-142/143/144.
-│                     #     native.py vestigial: no live pack binds it)
+│                     #     RulesetModule ABC; dial.py default; without_number.py parent
+│                     #     with swn/awn/cwn/wwn siblings + fate.py — ADR-142/143/144.
+│                     #     dial.py vestigial: no live pack binds it)
 │                     #   creature_core.py — HpPool ablative HP on CreatureCore (Character + Npc)
 ├── dungeon/          # Runtime procedural Jaquaysed megadungeon — frontier hooks,
 │                     #   lookahead, materializer, region projection (ADR-106)
@@ -215,12 +215,12 @@ read-only import *source* via `sidequest/game/importer.py`.
 `RulesetModule` ABC (`base.py`), resolved through `registry.py` (ADR-117). A pack
 binds one via `ruleset:` in its `rules.yaml`; an unknown name raises
 `UnknownRulesetError` (fail loud). Six modules are registered, but **no live pack
-binds `native`** — every one of the 11 packs declares a Without Number or Fate
+binds `dial`** — every one of the 11 packs declares a Without Number or Fate
 ruleset (7 WN-family, 4 Fate):
 
-- `native.py` (the dial/confrontation engine, ADR-033) — still the schema default
+- `dial.py` (the dial/confrontation engine, ADR-033) — still the schema default
   for a pack that omits `ruleset:` and registered for back-compat, but
-  **vestigial**: nothing live binds it, there is no native turn flow in production.
+  **vestigial**: nothing live binds it, there is no dial turn flow in production.
 - **Without Number family** — `without_number.py` is the honest shared base
   extracted per ADR-142; the four siblings subclass *it* (not each other — the
   pre-ADR-142 "wwn subclasses swn" hierarchy was reparented): `swn.py` (Stars),
@@ -280,7 +280,7 @@ is still backlog.
 | Prompt engineering | 008 (three-tier taxonomy), 009 (attention-aware zones), 066 (persistent Opus sessions, Full/Delta tier — *superseded by 098*) |
 | Agent system | 011 (JSON patches), 012 (session mgmt), 057 (narrator-crunch separation), 059 (monster manual server-side pregen), 067 (unified narrator agent — supersedes 010), **098 (stateless narrator turns — supersedes 066)**, **102 (tool-use protocol for structured output — supersedes 039)**, 113 (intent router — mechanical-engagement spine, *live/partial*) |
 | Characters | 007 (unified model), 014 (diamonds/coal), 015 (builder FSM), 016 (three-mode chargen), 080 (unified narrative weight) |
-| Encounters | 033 (confrontation engine — `ruleset/native.py`), 077 (dogfight subsystem), 078 (edge/composure combat), 093 (confrontation difficulty calibration), 114 (ablative HP substrate — `creature_core.py`, *partial*), 116 (a confrontation requires an Other), 117 (pluggable ruleset module system — the `RulesetModule` seam), 139 (confrontation integrity invariants — *partial*), **142 (Without Number core extraction — `without_number.py` base + reparented siblings, *partial*)**, **143 (WN combat owns the WN round — bind, don't balance; *partial*)** |
+| Encounters | 033 (confrontation engine — `ruleset/dial.py`), 077 (dogfight subsystem), 078 (edge/composure combat), 093 (confrontation difficulty calibration), 114 (ablative HP substrate — `creature_core.py`, *partial*), 116 (a confrontation requires an Other), 117 (pluggable ruleset module system — the `RulesetModule` seam), 139 (confrontation integrity invariants — *partial*), **142 (Without Number core extraction — `without_number.py` base + reparented siblings, *partial*)**, **143 (WN combat owns the WN round — bind, don't balance; *partial*)** |
 | World / NPCs | 018 (trope engine), 020 (NPC disposition), 022 (world maturity), 042 (OCEAN evolution), 055 (room graph navigation), 091 (culture-corpus Markov naming) |
 | Progression | 021 (four-track), 052 (narrative axis), 081 (advancement effect variants — deferred), 095 (class mechanical surface) |
 | Narrative pacing | 024 (dual-track tension), 025 (pacing detection), 050 (image pacing throttle), 051 (two-tier turn counter — see DRIFT) |

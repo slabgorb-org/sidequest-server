@@ -345,3 +345,59 @@ def test_dispatch_runs_contest_engine_when_barrier_closes():
     )
     assert result.commitment_pending is False
     assert isinstance(result.exchange, FateContestResult)
+
+
+# ---------------------------------------------------------------------------
+# Task 12: §0 no-bleed proof — contest turn fires fate.contest.* and never
+# touches the dial engine (spec 2026-06-17 §0/§5)
+# ---------------------------------------------------------------------------
+
+
+def test_contest_turn_fires_contest_spans_and_no_dial(monkeypatch):
+    """spec §0/§5 no-bleed proof: a Fate contest exchange resolves through the
+    Contest engine — fate.contest.* spans fire and the dial engine is never
+    reached (no get_ruleset_module('dial'/'native') call during the turn)."""
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    import sidequest.game.ruleset as ruleset_pkg
+
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer("nobleed")
+
+    # Obtain the Fate ruleset BEFORE installing the guard so the legitimate
+    # "fate" lookup does not trip the tripwire.
+    fate_ruleset = get_ruleset_module("fate")
+
+    # Tripwire: fail if anything resolves the dial engine during the turn.
+    real_get = ruleset_pkg.get_ruleset_module
+
+    def _guarded_get(slug):
+        assert slug not in ("dial", "native"), (
+            f"dial engine reached on a Fate contest path (slug={slug!r}) — the bleed "
+            "the spec closes (spec 2026-06-17 §0)"
+        )
+        return real_get(slug)
+
+    monkeypatch.setattr(ruleset_pkg, "get_ruleset_module", _guarded_get)
+
+    enc = _contest_encounter()
+    enc.contest = ContestState(target=3, player_victories=2)  # one win ends it
+    snap = _snapshot(enc)
+    result = dispatch_fate_action(
+        payload=_payload("overcome"),
+        actor_name="Lady Ash",
+        encounter=enc,
+        ruleset=fate_ruleset,
+        snapshot=snap,
+        rng=_ZeroDice(),
+        _tracer=tracer,
+    )
+    names = {s.name for s in exporter.get_finished_spans()}
+    assert "fate.contest.exchange" in names
+    assert result.exchange is not None
+    assert result.exchange.resolved is True and "fate.contest.resolved" in names
+    assert not any(".compute_dc" in n or n.endswith(".dial") for n in names)

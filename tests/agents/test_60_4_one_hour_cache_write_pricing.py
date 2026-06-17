@@ -23,7 +23,7 @@ Pricing (Anthropic public, 2026-05-15 snapshot):
 |------------------|---------|--------------------|-----------------|
 | Sonnet 4.6       | $3.00   | $3.75              | $6.00           |
 | Haiku 4.5        | $1.00   | $1.25              | $2.00           |
-| Opus 4.7         | $15.00  | $18.75             | $30.00          |
+| Opus 4.8         | $5.00   | $6.25              | $10.00          |
 """
 
 from __future__ import annotations
@@ -77,13 +77,13 @@ def test_haiku_4_5_one_hour_write_rate_is_2x_input() -> None:
     )
 
 
-def test_opus_4_7_one_hour_write_rate_is_2x_input() -> None:
-    p = model_pricing("claude-opus-4-7")
+def test_opus_4_8_one_hour_write_rate_is_2x_input() -> None:
+    p = model_pricing("claude-opus-4-8")
     one_hour_attr = _find_one_hour_write_rate(p)
-    assert one_hour_attr is not None, "ModelPricing.<opus 4.7> must expose a 1h cache_write rate"
+    assert one_hour_attr is not None, "ModelPricing.<opus 4.8> must expose a 1h cache_write rate"
     value = getattr(p, one_hour_attr)
-    assert value == pytest.approx(30.0, rel=1e-6), (
-        f"Opus 4.7 1h-write rate must be $30.00/Mtok (2x the $15/M input "
+    assert value == pytest.approx(10.0, rel=1e-6), (
+        f"Opus 4.8 1h-write rate must be $10.00/Mtok (2x the $5/M input "
         f"rate); got {value!r} on {one_hour_attr!r}"
     )
 

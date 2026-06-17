@@ -33,10 +33,10 @@ def test_every_wn_module_is_a_without_number_module(slug: str) -> None:
     )
 
 
-def test_native_is_not_a_wn_module() -> None:
-    """Native packs keep today's turn flow byte-for-byte — the regression
-    half of AC4. Native must never bind the sealed round."""
-    assert not isinstance(get_ruleset_module("native"), WithoutNumberRulesetModule)
+def test_dial_is_not_a_wn_module() -> None:
+    """Dial packs keep today's turn flow byte-for-byte — the regression
+    half of AC4. Dial must never bind the sealed round."""
+    assert not isinstance(get_ruleset_module("dial"), WithoutNumberRulesetModule)
 
 
 @pytest.mark.parametrize("slug", WN_SLUGS)
@@ -60,10 +60,10 @@ def test_every_wn_module_rolls_a_real_initiative_order(slug: str) -> None:
     )
 
 
-def test_native_rolls_no_initiative() -> None:
-    """Native returns None — no ordering is the truthful state, not a fallback."""
+def test_dial_rolls_no_initiative() -> None:
+    """Dial returns None — no ordering is the truthful state, not a fallback."""
     assert (
-        get_ruleset_module("native").roll_initiative(
+        get_ruleset_module("dial").roll_initiative(
             actor_dex_scores={"A": 10, "B": 12}, rng=random.Random(7)
         )
         is None

@@ -359,7 +359,7 @@ def generate_enemy_from_bestiary(
     args: argparse.Namespace,
     rng: random.Random,
 ) -> EnemyBlock:
-    """Generate an enemy from the resolved bestiary (``ruleset != native``).
+    """Generate an enemy from the resolved bestiary (``ruleset != dial``).
 
     The bestiary entry supplies the combat layer (level / hp / armor_class /
     attack_bonus, SRD-aligned per the bound ruleset); encountergen composes
@@ -808,7 +808,7 @@ def main(argv: list[str] | None = None) -> int:
     # enemies come from the pack-root bestiary instead (story 90-1). Fail
     # loud when the bestiary is absent: silently seeding an empty Monster
     # Manual pool was the 87-4 bug this branch retires.
-    if pack.rules.ruleset != "native":
+    if pack.rules.ruleset != "dial":
         bestiary, _source = pack.effective_bestiary(args.world)
         if bestiary is None:
             world_clause = f" world '{args.world}'" if args.world else ""

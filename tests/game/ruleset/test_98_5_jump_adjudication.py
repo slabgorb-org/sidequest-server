@@ -29,7 +29,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 import sidequest.telemetry.spans as spans_module
 from sidequest.game.ruleset import get_ruleset_module
-from sidequest.game.ruleset.native import NativeRulesetModule
+from sidequest.game.ruleset.dial import DialRulesetModule
 from sidequest.genre.models.world import CartographyConfig, Region, Route
 
 # ---------------------------------------------------------------------------
@@ -130,14 +130,14 @@ def test_swn_underrated_drive_makes_strained_jump_costs_extra_fuel():
     assert strained.source == "route"  # still a routed jump, not a default
 
 
-def test_native_ruleset_has_no_jump_adjudication():
+def test_dial_ruleset_has_no_jump_adjudication():
     """AC1: the base seam default fails loud (mirrors ``ship_attack_params``) —
     a ruleset with no jump model raises rather than silently inventing a cost.
     The slug appears in the message so the GM/dev can see which module declined."""
-    native = NativeRulesetModule()
+    dial = DialRulesetModule()
     with pytest.raises(NotImplementedError) as exc:
-        native.adjudicate_jump(route=_authored_route(), drive_rating=1, rng=random.Random(1))
-    assert "native" in str(exc.value)
+        dial.adjudicate_jump(route=_authored_route(), drive_rating=1, rng=random.Random(1))
+    assert "dial" in str(exc.value)
 
 
 # ---------------------------------------------------------------------------

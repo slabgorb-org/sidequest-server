@@ -3317,12 +3317,16 @@ def test_character_effort_block_hydrates(tmp_path: Path) -> None:
 
     assert "high_mage" in effort, f"effort dict must be keyed by source; got {list(effort)!r}"
     pool = effort["high_mage"]
-    assert isinstance(pool, EffortPool), f"effort value must be an EffortPool; got {type(pool).__name__}"
+    assert isinstance(pool, EffortPool), (
+        f"effort value must be an EffortPool; got {type(pool).__name__}"
+    )
     assert pool.source == "high_mage", (
         f"EffortPool.source must be set from the fixture key; got {pool.source!r}"
     )
     assert pool.max == 3, f"EffortPool.max must hydrate from the block; got {pool.max}"
-    assert pool.available == 3, f"a freshly-seeded pool must be fully available; got {pool.available}"
+    assert pool.available == 3, (
+        f"a freshly-seeded pool must be fully available; got {pool.available}"
+    )
 
 
 def test_missing_effort_block_leaves_core_effort_empty_dict(tmp_path: Path) -> None:
@@ -3378,11 +3382,7 @@ def test_multiple_effort_sources_hydrate_independently(tmp_path: Path) -> None:
         tmp_path,
         "two_sources",
         extra_character_yaml=(
-            "  effort:\n"
-            "    high_mage:\n"
-            "      max: 3\n"
-            "    vowed:\n"
-            "      max: 2\n"
+            "  effort:\n    high_mage:\n      max: 3\n    vowed:\n      max: 2\n"
         ),
     )
 
@@ -3651,9 +3651,7 @@ def test_spellcasting_hydration_emits_wwn_magic_hydrated_span(
     assert not isinstance(sources, str), (
         f"effort_sources must be a JSON array even when empty; got {sources!r}"
     )
-    assert list(sources) == [], (
-        f"a spellcasting-only fixture seeds no effort; got {sources!r}"
-    )
+    assert list(sources) == [], f"a spellcasting-only fixture seeds no effort; got {sources!r}"
 
 
 def test_non_caster_emits_no_wwn_magic_hydrated_span(
@@ -3702,9 +3700,7 @@ def test_canonical_wwn_fixture_hydrates_effort_spellcasting_and_hp_depletion(
     exporter = _capture_spans(monkeypatch)
     from sidequest.game.scene_harness import hydrate_fixture
 
-    snapshot = hydrate_fixture(
-        name="combat_wwn_emberfront", fixtures_dir=CANONICAL_FIXTURES_DIR
-    )
+    snapshot = hydrate_fixture(name="combat_wwn_emberfront", fixtures_dir=CANONICAL_FIXTURES_DIR)
 
     core = snapshot.characters[0].core
     # Effort: source-keyed by "channeler" (the real elemental_harmony Channeler source).
@@ -3724,8 +3720,7 @@ def test_canonical_wwn_fixture_hydrates_effort_spellcasting_and_hp_depletion(
     # Encounter: hp_depletion with both actors seated for the cast/strike spine.
     enc = snapshot.encounter
     assert enc is not None and enc.win_condition == "hp_depletion", (
-        f"fixture must stand up an hp_depletion combat; got "
-        f"{enc.win_condition if enc else None!r}"
+        f"fixture must stand up an hp_depletion combat; got {enc.win_condition if enc else None!r}"
     )
     assert {a.side for a in enc.actors} == {"player", "opponent"}, (
         f"both sides must seat for the cast defender lookup; got {[a.side for a in enc.actors]!r}"

@@ -188,13 +188,13 @@ def test_seed_chargen_resources_floor_when_low_wisdom() -> None:
 
 
 def test_seed_chargen_resources_empty_for_non_wwn_rules() -> None:
-    """A native-ruleset RulesConfig must produce empty effort, None spellcasting."""
+    """A dial-ruleset RulesConfig must produce empty effort, None spellcasting."""
     native_rules = RulesConfig(
         stat_generation="standard_array",
         ability_score_names=list(WWN_ABILITY_NAMES),
         point_buy_budget=27,
     )
-    module = get_ruleset_module("native")
+    module = get_ruleset_module("dial")
     res = module.seed_chargen_resources(rules=native_rules, stats={"INT": 14}, class_def=None)
     assert res.effort == {}
     assert res.spellcasting is None

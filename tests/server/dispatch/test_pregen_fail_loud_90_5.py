@@ -14,7 +14,7 @@ warning and the entire 90-1 suite still passes.
 These tests close that gap:
 
 * **Item 2 (coverage lock — passes today):** a ruleset-module pack with failing
-  encounter generation RAISES ``EncounterSeedError``; a native pack does NOT
+  encounter generation RAISES ``EncounterSeedError``; a dial pack does NOT
   (keeps the legacy warning-only skip — ADR-006). A revert-to-silent breaks the
   ruleset lock.
 * **Item 3 (RED — fails today):** the ``pregen.seed_manual`` span must fire WITH
@@ -53,7 +53,7 @@ def _stub_pack(*, ruleset: str, combat_encounters: bool = True) -> Any:
 
     Mirrors ``tests/server/dispatch/test_pregen.py::_stub_pack`` but adds the
     ``rules`` namespace the failure branch keys on (``getattr(pack.rules,
-    "ruleset", "native")``). No cultures → the ``DEFAULT_NPC_FALLBACK_COUNT``
+    "ruleset", "dial")``). No cultures → the ``DEFAULT_NPC_FALLBACK_COUNT``
     namegen loop (monkeypatched), so the test exercises the *encounter* branch.
     """
     pack = SimpleNamespace(
@@ -117,10 +117,10 @@ def test_seed_manual_raises_for_ruleset_pack_when_encounters_empty(
 def test_seed_manual_native_pack_does_not_raise_on_empty_encounters(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Regression guard (ADR-006): a NATIVE pack keeps the legacy warning-only
-    skip — failing encounter generation must NOT raise, so native sessions still
+    """Regression guard (ADR-006): a DIAL pack keeps the legacy warning-only
+    skip — failing encounter generation must NOT raise, so dial sessions still
     bind with whatever the Manual had. The loud-fail is ruleset-module only."""
-    monkeypatch.setattr(pregen, "load_genre_pack", lambda _dir: _stub_pack(ruleset="native"))
+    monkeypatch.setattr(pregen, "load_genre_pack", lambda _dir: _stub_pack(ruleset="dial"))
     monkeypatch.setattr(pregen, "namegen_main", _fake_namegen)
     monkeypatch.setattr(pregen, "encountergen_main", _failing_encountergen)
 
@@ -134,7 +134,7 @@ def test_seed_manual_native_pack_does_not_raise_on_empty_encounters(
             manual=manual,
             rng=random.Random(905),
         )
-    assert len(manual.encounters) == 0, "native empty-encounter path stays warning-only (no pool)"
+    assert len(manual.encounters) == 0, "dial empty-encounter path stays warning-only (no pool)"
 
 
 # ---------------------------------------------------------------------------

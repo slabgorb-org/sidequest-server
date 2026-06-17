@@ -158,9 +158,7 @@ def _package_with(*dispatches: SubsystemDispatch, turn_id: str = "turn-1") -> Di
     )
 
 
-def _footnote(
-    *, summary: str, fact_id: str | None, marker: int = 1
-) -> Footnote:
+def _footnote(*, summary: str, fact_id: str | None, marker: int = 1) -> Footnote:
     return Footnote(
         marker=marker,
         fact_id=fact_id,
@@ -356,9 +354,9 @@ async def test_off_enum_category_does_not_crash_and_clue_still_discovers(caplog)
     )
     assert len(snap.characters[0].known_facts) == 1
     # Fail LOUD: the coercion must surface, not swallow silently.
-    assert any(
-        "category_coerced" in r.getMessage() for r in caplog.records
-    ), "off-enum category coercion must emit a WARNING (no silent fallback)"
+    assert any("category_coerced" in r.getMessage() for r in caplog.records), (
+        "off-enum category coercion must emit a WARNING (no silent fallback)"
+    )
 
 
 @pytest.mark.asyncio
@@ -603,8 +601,7 @@ def test_scenario_clue_handler_registered_with_dispatch_bank() -> None:
     )
     fn = registry["scenario_clue"]
     assert callable(fn) and getattr(fn, "__name__", "") == "run_scenario_clue_dispatch", (
-        f"registered scenario_clue handler should be run_scenario_clue_dispatch; "
-        f"got {fn!r}"
+        f"registered scenario_clue handler should be run_scenario_clue_dispatch; got {fn!r}"
     )
 
 

@@ -63,7 +63,12 @@ from sidequest.genre.models.premises import PremisesFile, WitnessedActsFile
 from sidequest.genre.models.progression import ProgressionConfig
 from sidequest.genre.models.psionics import PsionicDisciplineCatalog
 from sidequest.genre.models.rigs_world import ChassisInstanceConfig, RigsWorldConfig
-from sidequest.genre.models.rules import FateConfig, RulesConfig, WinCondition
+from sidequest.genre.models.rules import (
+    FateConfig,
+    ResolutionMode,
+    RulesConfig,
+    WinCondition,
+)
 from sidequest.genre.models.scenario import ScenarioNpc, ScenarioPack
 from sidequest.genre.models.theme import GenreTheme
 from sidequest.genre.models.tropes import SeedTrope, TropeDefinition
@@ -715,9 +720,16 @@ def _validate_confrontation_beats(rules: RulesConfig) -> None:
         wn_combat = (
             is_wn and cd.category == "combat" and cd.win_condition == WinCondition.hp_depletion
         )
-        if not wn_combat:
+        # spec 2026-06-17 §2 (Westley major M1, ADR-144): a Fate Contest resolves via
+        # the 4dF exchange engine and authors ZERO dial beats — exempt it from the
+        # "at least one beat" rule exactly as WN combat is exempt. (A contest def MAY
+        # still carry display-only beat stubs for the Abilities tab; those just don't
+        # trip this branch because cd.beats is then non-empty.)
+        is_contest = cd.resolution_mode == ResolutionMode.contest
+        if not wn_combat and not is_contest:
             raise PackError(f"confrontation '{cd.confrontation_type}' must have at least one beat")
-        _emit_wn_beat_optional(rules.ruleset, cd.confrontation_type)
+        if wn_combat:
+            _emit_wn_beat_optional(rules.ruleset, cd.confrontation_type)
 
 
 def _validate_genre_baseline_no_bespoke(ruleset: str, inventory: InventoryConfig | None) -> None:

@@ -58,6 +58,14 @@ _log = logging.getLogger(__name__)
 _VALID_SIDES = ("player", "opponent", "neutral")
 
 
+def _raise_missing_ruleset(context: str) -> str:
+    raise ValueError(
+        f"{context}: pack/rules missing — cannot resolve ruleset slug. A missing "
+        f"ruleset is a configuration error, not a silent 'dial' default "
+        f"(spec 2026-06-17 §1, No Silent Fallbacks)."
+    )
+
+
 class NoOpponentAvailableError(ValueError):
     """Raised when a category=combat encounter resolves to zero opponents
     after both the narrator's ``npcs_present`` and the location-scoped
@@ -146,15 +154,11 @@ def reap_resolved_encounter_husk(
     # touched — only engine-fabricated stubs are quarantined.
     opponent_names = {a.name for a in enc.actors if a.side == "opponent"}
     reaped_stubs = [
-        npc.core.name
-        for npc in snapshot.npcs
-        if npc.ephemeral and npc.core.name in opponent_names
+        npc.core.name for npc in snapshot.npcs if npc.ephemeral and npc.core.name in opponent_names
     ]
     if reaped_stubs:
         snapshot.npcs[:] = [
-            npc
-            for npc in snapshot.npcs
-            if not (npc.ephemeral and npc.core.name in opponent_names)
+            npc for npc in snapshot.npcs if not (npc.ephemeral and npc.core.name in opponent_names)
         ]
         for stub_name in reaped_stubs:
             _watcher_publish(
@@ -626,10 +630,16 @@ def _requires_opponent(cdef) -> bool:
        ``social`` adversarial — only the ones that actually roll an
        opposed check need (and get) a metric-bearing Other. A social
        ``beat_selection`` parley still seats its NPC as ``neutral``.
+    3. ``resolution_mode: contest`` — a Fate Contest also resolves by rolling
+       BOTH sides each exchange; the contest engine
+       (``fate_contest.run_fate_contest_exchange`` → ``_seat_opponent_commits``)
+       raises if no opponent is seated, so the Other MUST be opponent-side
+       regardless of category (ADR-116). A contest with nobody on the other
+       side cannot resolve.
     """
     if _is_adversarial(cdef.category):
         return True
-    return cdef.resolution_mode == ResolutionMode.opposed_check
+    return cdef.resolution_mode in (ResolutionMode.opposed_check, ResolutionMode.contest)
 
 
 def _npc_is_adversary(npc: Npc) -> bool:
@@ -964,7 +974,7 @@ def instantiate_table_encounter(
     stake_kind: str,
     stake_descriptor: str,
     seed: int,
-    ruleset_slug: str = "native",
+    ruleset_slug: str,
     seat_seeds: dict[str, dict] | None = None,
 ) -> StructuredEncounter:
     """Build + deal a table_resolution StructuredEncounter.
@@ -1179,7 +1189,11 @@ def instantiate_encounter_from_trigger(
             stake_kind="money",
             stake_descriptor=cdef.label,
             seed=snapshot.turn_manager.interaction,
-            ruleset_slug=pack.rules.ruleset if pack and pack.rules else "native",
+            ruleset_slug=(
+                pack.rules.ruleset
+                if pack and pack.rules
+                else _raise_missing_ruleset("table_resolution")
+            ),
             seat_seeds=seat_seeds,
         )
         snapshot.encounter = enc
@@ -1577,6 +1591,34 @@ def instantiate_encounter_from_trigger(
             narrator_hints=[],
             security_tier=stamped_security_tier,
         )
+        # spec 2026-06-17 §2: a Fate Contest cdef stamps a first-to-N victory tally
+        # onto the encounter. dispatch_fate_action reads encounter.contest to select
+        # the Contest engine over the Conflict engine. target comes from the authored
+        # metric threshold (the 0->3 victory tally that replaced the 0->7 dial).
+        if cdef.resolution_mode == ResolutionMode.contest:
+            from sidequest.game.encounter import ContestState
+            from sidequest.telemetry.spans.fate import fate_contest_seeded_span
+
+            # player_metric is guaranteed present in contest mode (ConfrontationDef
+            # ._validate, Westley minor F1) — no silent ``else 3`` default.
+            target = cdef.player_metric.threshold
+            # spec 2026-06-17 §2 (Westley major M2): honor an authored victory
+            # head-start. A content author can give either side a ``starting``
+            # advantage (tea_and_murder negotiation opponent starts at 1); seating
+            # MUST seed the tally from it or the authored asymmetry vanishes silently
+            # (No Silent Fallbacks). opponent_metric is optional in contest mode, so
+            # its head-start defaults to 0 when absent.
+            player_start = cdef.player_metric.starting
+            opponent_start = cdef.opponent_metric.starting if cdef.opponent_metric is not None else 0
+            enc.contest = ContestState(
+                target=target,
+                player_victories=player_start,
+                opponent_victories=opponent_start,
+            )
+            player_seats = sum(1 for a in actors if a.side == "player")
+            fate_contest_seeded_span(
+                encounter_type=encounter_type, target=target, player_seats=player_seats
+            )
         snapshot.encounter = enc
         _watcher_publish(
             "state_transition",

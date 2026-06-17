@@ -225,9 +225,7 @@ def test_skills_yaml_loads_entries(tmp_path: Path) -> None:
 
     pack_dir = _clone_pack(_CAVERNS_PACK_DIR, tmp_path / "pack_with_skills")
     (pack_dir / "skills.yaml").write_text(
-        "- Administer\n"
-        "- Connect\n"
-        "- Convince\n",
+        "- Administer\n- Connect\n- Convince\n",
         encoding="utf-8",
     )
     pack = load_genre_pack(pack_dir)
@@ -253,9 +251,7 @@ def test_resolve_backgrounds_world_first() -> None:
     )
     world_bg = cast(
         Background,
-        Background.model_construct(
-            id="locksmith", display_name="Locksmith", free_skill="Sneak"
-        ),
+        Background.model_construct(id="locksmith", display_name="Locksmith", free_skill="Sneak"),
     )
     world_obj = cast(World, World.model_construct(backgrounds={"locksmith": world_bg}))
     pack = cast(
@@ -420,21 +416,24 @@ def test_with_chargen_defs_stores_backgrounds_and_foci() -> None:
             )
         ],
     )
-    rules = cast(RulesConfig, RulesConfig.model_construct(
-        ruleset="native",
-        stat_generation="roll_4d6_drop_lowest",
-        ability_score_names=["STR", "DEX", "CON", "INT", "WIS", "CHA"],
-        default_class=None,
-        default_race=None,
-        edge_config=None,
-        point_buy_budget=27,
-        standard_array=None,
-        race_label=None,
-        class_label=None,
-        disposition_thresholds=None,
-        allowed_classes=[],
-        confrontations=[],
-    ))
+    rules = cast(
+        RulesConfig,
+        RulesConfig.model_construct(
+            ruleset="dial",
+            stat_generation="roll_4d6_drop_lowest",
+            ability_score_names=["STR", "DEX", "CON", "INT", "WIS", "CHA"],
+            default_class=None,
+            default_race=None,
+            edge_config=None,
+            point_buy_budget=27,
+            standard_array=None,
+            race_label=None,
+            class_label=None,
+            disposition_thresholds=None,
+            allowed_classes=[],
+            confrontations=[],
+        ),
+    )
 
     builder = CharacterBuilder(scenes=[scene], rules=rules)
     returned = builder.with_chargen_defs(backgrounds={"locksmith": bg}, foci={"die_hard": focus})
@@ -468,21 +467,24 @@ def test_builder_defaults_empty_chargen_defs() -> None:
             )
         ],
     )
-    rules = cast(RulesConfig, RulesConfig.model_construct(
-        ruleset="native",
-        stat_generation="roll_4d6_drop_lowest",
-        ability_score_names=["STR", "DEX", "CON", "INT", "WIS", "CHA"],
-        default_class=None,
-        default_race=None,
-        edge_config=None,
-        point_buy_budget=27,
-        standard_array=None,
-        race_label=None,
-        class_label=None,
-        disposition_thresholds=None,
-        allowed_classes=[],
-        confrontations=[],
-    ))
+    rules = cast(
+        RulesConfig,
+        RulesConfig.model_construct(
+            ruleset="dial",
+            stat_generation="roll_4d6_drop_lowest",
+            ability_score_names=["STR", "DEX", "CON", "INT", "WIS", "CHA"],
+            default_class=None,
+            default_race=None,
+            edge_config=None,
+            point_buy_budget=27,
+            standard_array=None,
+            race_label=None,
+            class_label=None,
+            disposition_thresholds=None,
+            allowed_classes=[],
+            confrontations=[],
+        ),
+    )
 
     builder = CharacterBuilder(scenes=[scene], rules=rules)
     assert builder._backgrounds == {}

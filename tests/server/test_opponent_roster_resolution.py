@@ -192,9 +192,7 @@ def test_router_name_matching_roster_is_left_alone():
         player_name="Kirk",
         npcs_present=[],
         genre_slug=snap.genre_slug,
-        materialized_threat=NpcMention(
-            name="Wailthroat", role="hostile", side="opponent"
-        ),
+        materialized_threat=NpcMention(name="Wailthroat", role="hostile", side="opponent"),
     )
     opponents = [a.name for a in enc.actors if a.side == "opponent"]
     assert opponents == ["Wailthroat"], (
@@ -217,9 +215,7 @@ def test_no_colocated_bound_creature_seats_router_name():
         player_name="Kirk",
         npcs_present=[],
         genre_slug=snap.genre_slug,
-        materialized_threat=NpcMention(
-            name="Arena Opponent", role="hostile", side="opponent"
-        ),
+        materialized_threat=NpcMention(name="Arena Opponent", role="hostile", side="opponent"),
     )
     opponents = [a.name for a in enc.actors if a.side == "opponent"]
     assert opponents == ["Arena Opponent"], (

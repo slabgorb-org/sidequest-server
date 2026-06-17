@@ -1,6 +1,7 @@
 tone: gonzo-sincere
 lethality: moderate
 magic_level: none
+ruleset: dial
 
 stat_generation: point_buy
 point_buy_budget: 27

@@ -129,7 +129,7 @@ def test_item_use_beat_carries_no_server_difficulty() -> None:
     from sidequest.genre.models.rules import RulesConfig
 
     core = _core_with_items([_POTION])
-    rules = RulesConfig(ruleset="native")
+    rules = RulesConfig(ruleset="dial")
     payload = build_confrontation_payload(
         encounter=_encounter(),
         cdef=_hp_combat_cdef(),

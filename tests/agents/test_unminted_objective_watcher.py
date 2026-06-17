@@ -102,9 +102,7 @@ def test_watcher_emits_span_on_hit() -> None:
     from sidequest.agents.dispatch_engagement_watcher import run_unminted_objective_watcher
 
     tracer, exporter = _fresh_tracer_and_exporter()
-    run_unminted_objective_watcher(
-        narration=_OBJECTIVE_PROSE, snapshot=_snapshot(), tracer=tracer
-    )
+    run_unminted_objective_watcher(narration=_OBJECTIVE_PROSE, snapshot=_snapshot(), tracer=tracer)
 
     names = [s.name for s in exporter.get_finished_spans()]
     assert "narration.unminted_objective.suspected" in names, (

@@ -75,9 +75,7 @@ def import_sqlite_save(sqlite_path: str, pool: ConnectionPool) -> ImportSummary:
         ).fetchone()
         if meta is None:
             raise ValueError(f"{sqlite_path}: session_meta has no id=1 row")
-        game = src.execute(
-            "SELECT slug, mode, claude_session_id FROM games"
-        ).fetchone()
+        game = src.execute("SELECT slug, mode, claude_session_id FROM games").fetchone()
         if game is None:
             raise ValueError(f"{sqlite_path}: games table is empty")
 
@@ -87,8 +85,7 @@ def import_sqlite_save(sqlite_path: str, pool: ConnectionPool) -> ImportSummary:
         claude_session_id = game["claude_session_id"]
 
         narr_rows = src.execute(
-            "SELECT round_number, author, content, tags, created_at "
-            "FROM narrative_log ORDER BY id"
+            "SELECT round_number, author, content, tags, created_at FROM narrative_log ORDER BY id"
         ).fetchall()
         scrb_rows = src.execute(
             "SELECT turn_id, scene_title, scene_type, location, image_url, "
@@ -106,9 +103,7 @@ def import_sqlite_save(sqlite_path: str, pool: ConnectionPool) -> ImportSummary:
             "SELECT event_seq, player_id, include, payload_json "
             "FROM projection_cache ORDER BY event_seq, player_id"
         ).fetchall()
-        gs = src.execute(
-            "SELECT snapshot_json, saved_at FROM game_state WHERE id = 1"
-        ).fetchone()
+        gs = src.execute("SELECT snapshot_json, saved_at FROM game_state WHERE id = 1").fetchone()
 
         # No Silent Fallbacks: this descoped one-save importer covers exactly
         # the tables coyote_star-mp populates. Any OTHER source table that
@@ -117,14 +112,19 @@ def import_sqlite_save(sqlite_path: str, pool: ConnectionPool) -> ImportSummary:
         # instead, so a reuse against a richer save (beneath_sunden-mp has
         # dungeon data) is caught rather than losing campaign state.
         _handled = {
-            "session_meta", "games", "game_state", "narrative_log",
-            "scrapbook_entries", "events", "turn_telemetry", "projection_cache",
+            "session_meta",
+            "games",
+            "game_state",
+            "narrative_log",
+            "scrapbook_entries",
+            "events",
+            "turn_telemetry",
+            "projection_cache",
         }
         src_tables = {
             row[0]
             for row in src.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table' "
-                "AND name NOT LIKE 'sqlite_%'"
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
             ).fetchall()
         }
         for table in sorted(src_tables - _handled):
@@ -165,8 +165,7 @@ def import_sqlite_save(sqlite_path: str, pool: ConnectionPool) -> ImportSummary:
         game_state_count = 0
         if gs is not None:
             conn.execute(
-                "INSERT INTO game_state (session_id, snapshot_json, saved_at) "
-                "VALUES (%s, %s, %s)",
+                "INSERT INTO game_state (session_id, snapshot_json, saved_at) VALUES (%s, %s, %s)",
                 (session_id, gs["snapshot_json"], _norm_ts(gs["saved_at"])),
             )
             game_state_count = 1

@@ -64,7 +64,9 @@ class _FakeClient:
         return {"embedding": list(self._embedding), "model": self._model, "latency_ms": 1}
 
 
-def _embedded_frag(id_: str, embedding: list[float], content: str = "lore body text") -> LoreFragment:
+def _embedded_frag(
+    id_: str, embedding: list[float], content: str = "lore body text"
+) -> LoreFragment:
     frag = LoreFragment.new(
         id=id_,
         category=LoreCategory.History,
@@ -226,7 +228,11 @@ async def test_retrieve_flags_nan_embedding_as_degenerate(
     events = _lore_events(captured_events)
     assert events, "NaN-embedding retrieval must still emit an event"
     outcomes = {f.get("outcome") for f in events}
-    assert outcomes & {"degenerate_embedding", "zero_magnitude_embedding", "non_finite_embedding"}, (
+    assert outcomes & {
+        "degenerate_embedding",
+        "zero_magnitude_embedding",
+        "non_finite_embedding",
+    }, (
         "a non-finite (NaN/Inf) query embedding must surface a distinct degenerate "
         f"outcome, not a silent no-hits with a NaN peak; got outcomes {outcomes}"
     )

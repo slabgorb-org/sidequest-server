@@ -9,7 +9,7 @@ exactly that amount and nothing else changes.
 from __future__ import annotations
 
 from sidequest.game.creature_core import CreatureCore
-from sidequest.game.ruleset.native import NativeRulesetModule
+from sidequest.game.ruleset.dial import DialRulesetModule
 from sidequest.game.ruleset.swn import SwnRulesetModule
 from sidequest.game.status import Status, StatusSeverity
 from sidequest.genre.models.rules import BeatDef
@@ -60,8 +60,8 @@ def test_swn_attack_applies_darkness_penalty():
     assert dark.target_number == lit.target_number
 
 
-def test_native_attack_applies_darkness_penalty():
-    ruleset = NativeRulesetModule()
+def test_dial_attack_applies_darkness_penalty():
+    ruleset = DialRulesetModule()
     beat = _beat()
     stats = {"STRENGTH": 10}
     lit = ruleset.attack_params(

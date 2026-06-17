@@ -241,9 +241,7 @@ def test_unpicked_sibling_choice_in_same_scene_does_not_surface() -> None:
         description="Cuts purses in the dark.",
     )
 
-    char = _make_character(
-        "Pious", [_choice("the_calling", "What is your calling?", "Cleric")]
-    )
+    char = _make_character("Pious", [_choice("the_calling", "What is your calling?", "Cleric")])
 
     linked = linked_lore_for_character(store, char)
     assert [i.fragment_id for i in linked] == [picked]
@@ -262,12 +260,8 @@ def test_cross_character_firewall_shared_store() -> None:
         store, scene_id="the_calling", index=1, label="Rogue", description="Guile."
     )
 
-    alice = _make_character(
-        "Alice", [_choice("the_calling", "What is your calling?", "Cleric")]
-    )
-    bob = _make_character(
-        "Bob", [_choice("the_calling", "What is your calling?", "Rogue")]
-    )
+    alice = _make_character("Alice", [_choice("the_calling", "What is your calling?", "Cleric")])
+    bob = _make_character("Bob", [_choice("the_calling", "What is your calling?", "Rogue")])
 
     alice_ids = {i.fragment_id for i in linked_lore_for_character(store, alice)}
     bob_ids = {i.fragment_id for i in linked_lore_for_character(store, bob)}
@@ -375,9 +369,7 @@ def test_no_fabricated_lore_route_when_no_page_exists() -> None:
     _seed_choice_fragment(
         store, scene_id="the_calling", index=0, label="Cleric", description="Faith."
     )
-    char = _make_character(
-        "Pious", [_choice("the_calling", "What is your calling?", "Cleric")]
-    )
+    char = _make_character("Pious", [_choice("the_calling", "What is your calling?", "Cleric")])
 
     linked = linked_lore_for_character(store, char)
     assert linked and linked[0].lore_route is None

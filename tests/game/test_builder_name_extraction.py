@@ -270,9 +270,15 @@ def _heavy_metal_shape(confirm_narration: str) -> CharacterBuilder:
     """origins/crucible/the_road choice scenes (freeform-allowed) + a terminal
     display confirmation scene — the heavy_metal/barsoom all-freeform shape."""
     scenes = [
-        make_scene("origins", choices=[make_choice("O", race_hint="Servant")], allows_freeform=True),
-        make_scene("crucible", choices=[make_choice("C", class_hint="Warrior")], allows_freeform=True),
-        make_scene("the_road", choices=[make_choice("R", goals="reach_helium")], allows_freeform=True),
+        make_scene(
+            "origins", choices=[make_choice("O", race_hint="Servant")], allows_freeform=True
+        ),
+        make_scene(
+            "crucible", choices=[make_choice("C", class_hint="Warrior")], allows_freeform=True
+        ),
+        make_scene(
+            "the_road", choices=[make_choice("R", goals="reach_helium")], allows_freeform=True
+        ),
         _confirm_scene(confirm_narration),
     ]
     return CharacterBuilder(scenes=scenes, rules=simple_rules())

@@ -138,7 +138,9 @@ def test_serialized_sheet_carries_skills_and_foci() -> None:
 
     dumped = member.model_dump()
     sheet_data = dumped["sheet"]
-    assert "skills" in sheet_data, f"'skills' key missing from serialized sheet: {sorted(sheet_data)}"
+    assert "skills" in sheet_data, (
+        f"'skills' key missing from serialized sheet: {sorted(sheet_data)}"
+    )
     assert "foci" in sheet_data, f"'foci' key missing from serialized sheet: {sorted(sheet_data)}"
     assert sheet_data["skills"] == {"Connect": 0, "Notice": 1}
     assert sheet_data["foci"] == ["Wanderer"]

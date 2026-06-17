@@ -29,7 +29,7 @@ def _stub_pack(*, combat_encounters: bool) -> Any:
     """No-culture stub pack exposing only what seed_manual reads."""
     return SimpleNamespace(
         archetype_constraints=None,
-        rules=SimpleNamespace(combat_encounters=combat_encounters),
+        rules=SimpleNamespace(combat_encounters=combat_encounters, ruleset="dial"),
         effective_cultures=lambda _world: ([], "genre"),
         # One spawnable archetype keeps the namegen mint loop engaged —
         # seed_manual skips namegen entirely when the spawnable pool is

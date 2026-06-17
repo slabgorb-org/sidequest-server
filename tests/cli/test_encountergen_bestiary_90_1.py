@@ -51,10 +51,10 @@ from sidequest.genre.models.pack import GenrePack, World
 # The combat-layer fields a bestiary entry must supply (90-1 schema decision).
 BESTIARY_ENTRY_REQUIRED_FIELDS = {"id", "name", "level", "hp", "armor_class", "attack_bonus"}
 
-# The complete native fixture pack ships everything load_genre_pack + the native
+# The complete dial fixture pack ships everything load_genre_pack + the dial
 # generation path need (rules.allowed_classes, archetypes, cultures, ...).
 _FIXTURE_PACKS_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "packs"
-_NATIVE_FIXTURE_PACK = _FIXTURE_PACKS_DIR / "test_genre"
+_DIAL_FIXTURE_PACK = _FIXTURE_PACKS_DIR / "test_genre"
 
 
 # ---------------------------------------------------------------------------
@@ -180,13 +180,13 @@ def _make_ruleset_module_pack(
     world_bestiary_ids: tuple[str, ...] | None = ("worldbeast",),
     genre_bestiary_ids: tuple[str, ...] | None = ("genrebeast",),
 ) -> Path:
-    """Copy the native fixture pack and rebind it to a ruleset module (swn — the
+    """Copy the dial fixture pack and rebind it to a ruleset module (swn — the
     lightest binding, attribute_map only) so main() takes the bestiary branch.
     No shipped content involved."""
     dst = tmp_path / "test_genre"
-    shutil.copytree(_NATIVE_FIXTURE_PACK, dst)
+    shutil.copytree(_DIAL_FIXTURE_PACK, dst)
 
-    # Bind swn — drops the native allowed_classes routing in main(). The swn
+    # Bind swn — drops the dial allowed_classes routing in main(). The swn
     # block needs a complete attribute_map (RulesConfig fail-loud, no default).
     rules_path = dst / "rules.yaml"
     rules = yaml.safe_load(rules_path.read_text(encoding="utf-8"))
@@ -206,7 +206,7 @@ def _make_ruleset_module_pack(
 
 
 # Corpus files the test_genre fixture's cultures reference. namegen resolves a
-# pack-local corpus/ dir first, so stubbing these makes the native generation
+# pack-local corpus/ dir first, so stubbing these makes the dial generation
 # path self-contained — no dependency on shipped sidequest-content corpus.
 _FIXTURE_CORPUS_FILES = (
     "english.txt",
@@ -221,11 +221,11 @@ _FIXTURE_CORPUS_FILES = (
 _STUB_CORPUS_WORDS = "\n".join(f"Stubname{n:03d}" for n in range(250)) + "\n"
 
 
-def _make_native_pack(tmp_path: Path) -> Path:
-    """Copy the native fixture pack with a self-contained corpus so the native
+def _make_dial_pack(tmp_path: Path) -> Path:
+    """Copy the dial fixture pack with a self-contained corpus so the dial
     namegen path resolves without shipped content."""
     dst = tmp_path / "test_genre"
-    shutil.copytree(_NATIVE_FIXTURE_PACK, dst)
+    shutil.copytree(_DIAL_FIXTURE_PACK, dst)
     corpus_dir = dst / "corpus"
     corpus_dir.mkdir(exist_ok=True)
     for fname in _FIXTURE_CORPUS_FILES:
@@ -332,20 +332,20 @@ def test_main_fails_loud_when_ruleset_module_resolves_no_bestiary(
 
 
 # ---------------------------------------------------------------------------
-# Native-dial regression lock (synthetic native fixture) — must stay GREEN
+# Dial regression lock (synthetic dial fixture) — must stay GREEN
 # ---------------------------------------------------------------------------
 
 
-def test_native_fixture_pack_routes_through_allowed_classes(
+def test_dial_fixture_pack_routes_through_allowed_classes(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A native pack keeps the allowed_classes generation path — the bestiary
-    branch must not steal native routing. Uses the synthetic native fixture, not
+    """A dial pack keeps the allowed_classes generation path — the bestiary
+    branch must not steal dial routing. Uses the synthetic dial fixture, not
     a shipped pack."""
-    pack_dir = _make_native_pack(tmp_path)
+    pack_dir = _make_dial_pack(tmp_path)
     pack = load_genre_pack(pack_dir)
-    assert pack.rules.ruleset == "native", "precondition: test_genre fixture is native"
-    assert pack.rules.allowed_classes, "precondition: native fixture declares allowed_classes"
+    assert pack.rules.ruleset == "dial", "precondition: test_genre fixture is dial"
+    assert pack.rules.allowed_classes, "precondition: dial fixture declares allowed_classes"
 
     rc = main(
         [

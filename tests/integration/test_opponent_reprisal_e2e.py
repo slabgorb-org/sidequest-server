@@ -477,9 +477,9 @@ def test_capability_gate_swn_provides_native_fails_loud():
     )
     assert out.hit is True and out.target_ac == 2, "SWN must resolve a real outcome"
 
-    native = get_ruleset_module("native")
+    dial = get_ruleset_module("dial")
     with pytest.raises(NotImplementedError):
-        native.resolve_opponent_attack(
+        dial.resolve_opponent_attack(
             attacker_stats={"Physique": 10},
             stat_check="Physique",
             attack_bonus=1,

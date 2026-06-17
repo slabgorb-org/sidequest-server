@@ -91,7 +91,7 @@ def test_end_scene_emits_reclaim_span_for_wwn_session(otel_capture):
 
 
 def test_end_scene_leaves_effort_untouched_for_non_wwn_session():
-    """A native/non-wwn session does NOT reclaim Effort — the gate is strict."""
+    """A dial/non-wwn session does NOT reclaim Effort — the gate is strict."""
     pc = _pc_with_effort()
     snap = GameSnapshot(
         genre_slug="caverns_and_claudes",
@@ -99,7 +99,7 @@ def test_end_scene_leaves_effort_untouched_for_non_wwn_session():
         turn_manager=TurnManager(),
         characters=[pc],
     )
-    session = Session(snap, ruleset="native")
+    session = Session(snap, ruleset="dial")
 
     session.end_scene("scene_end", turn=1)
 

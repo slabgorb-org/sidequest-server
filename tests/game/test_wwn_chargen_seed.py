@@ -142,11 +142,13 @@ def fighter_def() -> ClassDef:
 # Unit tests for seed_chargen_resources (migrated from seed_wwn_magic, ADR-143)
 # ---------------------------------------------------------------------------
 
+
 def _wwn_module():
     return get_ruleset_module("wwn")
 
-def _native_module():
-    return get_ruleset_module("native")
+
+def _dial_module():
+    return get_ruleset_module("dial")
 
 
 class TestSeedWwnMagicHelper:
@@ -271,14 +273,18 @@ class TestSeedWwnMagicHelper:
     def test_non_wwn_ruleset_returns_empty_and_none(self) -> None:
         rules = native_rules()
         stats = {"STR": 10, "DEX": 10, "CON": 10, "INT": 10, "WIS": 10, "CHA": 10}
-        res = _native_module().seed_chargen_resources(rules=rules, stats=stats, class_def=fighter_def())
+        res = _dial_module().seed_chargen_resources(
+            rules=rules, stats=stats, class_def=fighter_def()
+        )
         assert res.effort == {}
         assert res.spellcasting is None
 
     def test_non_magic_class_returns_empty_and_none(self) -> None:
         rules = wwn_rules()
         stats = {"Might": 10, "Grace": 10, "Vigor": 10, "Wits": 10, "Spirit": 10, "Presence": 10}
-        res = _wwn_module().seed_chargen_resources(rules=rules, stats=stats, class_def=fighter_def())
+        res = _wwn_module().seed_chargen_resources(
+            rules=rules, stats=stats, class_def=fighter_def()
+        )
         assert res.effort == {}
         assert res.spellcasting is None
 

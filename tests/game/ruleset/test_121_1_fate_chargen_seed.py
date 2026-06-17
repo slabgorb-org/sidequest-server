@@ -132,7 +132,7 @@ class TestAC1FateConfigSchema:
         assert cfg.skills == NOIR_SKILLS
 
     def test_non_fate_pack_ruleset_config_is_not_fateconfig(self) -> None:
-        # Regression: ruleset_config() must not leak a FateConfig for native.
+        # Regression: ruleset_config() must not leak a FateConfig for dial.
         assert not isinstance(RulesConfig().ruleset_config(), FateConfig)
 
     def test_fate_pack_without_fate_block_fails_loud(self) -> None:
@@ -203,7 +203,7 @@ class TestAC3SeedBuildsPopulatedSheet:
         assert res.fate_sheet.skills == NOIR_SKILLS
 
     def test_non_fate_modules_return_no_fate_sheet(self) -> None:
-        # Regression: broadening ChargenResources must NOT start handing WN/native
+        # Regression: broadening ChargenResources must NOT start handing WN/dial
         # characters a fate sheet.
         wwn_rules = RulesConfig.model_validate(
             {
@@ -230,7 +230,7 @@ class TestAC3SeedBuildsPopulatedSheet:
             is None
         )
         assert (
-            get_ruleset_module("native")
+            get_ruleset_module("dial")
             .seed_chargen_resources(rules=RulesConfig(), stats={}, class_def=None)
             .fate_sheet
             is None
@@ -264,8 +264,8 @@ class TestAC5ChargenSeededSpan:
 
     def test_non_fate_seed_does_not_emit_chargen_seeded_span(self) -> None:
         exporter, tracer = _exporter()
-        # native module: even if it accepted a tracer, no fate.chargen.seeded.
-        get_ruleset_module("native").seed_chargen_resources(
+        # dial module: even if it accepted a tracer, no fate.chargen.seeded.
+        get_ruleset_module("dial").seed_chargen_resources(
             rules=RulesConfig(), stats={}, class_def=None
         )
         assert "fate.chargen.seeded" not in [s.name for s in exporter.get_finished_spans()]
@@ -295,7 +295,7 @@ class TestAC4AndAC6BuilderWiring:
         assert character.core.fate_sheet.skills == NOIR_SKILLS
 
     def test_non_fate_character_has_no_fate_sheet(self) -> None:
-        # Paired negative: a native pack build leaves fate_sheet None.
+        # Paired negative: a dial pack build leaves fate_sheet None.
         native_rules = RulesConfig(
             stat_generation="standard_array",
             ability_score_names=["STR", "DEX", "CON", "INT", "WIS", "CHA"],
@@ -308,13 +308,13 @@ class TestAC4AndAC6BuilderWiring:
         character = builder.build("Arven Steel")
         assert character.core.fate_sheet is None
 
-    def test_fate_pack_routes_to_fate_module_not_native(self) -> None:
+    def test_fate_pack_routes_to_fate_module_not_dial(self) -> None:
         # The mechanical-engagement wire: a fate-bound pack resolves to the Fate
         # module, so dispatch routes combat to fate_conflict (isinstance gate),
-        # NOT to native beats. Behavior-based — never a source grep.
+        # NOT to dial beats. Behavior-based — never a source grep.
         module = get_ruleset_module(fate_rules().ruleset)
         assert isinstance(module, FateRulesetModule)
-        assert not isinstance(get_ruleset_module("native"), FateRulesetModule)
+        assert not isinstance(get_ruleset_module("dial"), FateRulesetModule)
 
     def test_fate_pack_builds_without_d20_stats(self) -> None:
         # De-d20 risk pin (SM Assessment): the builder/chargen path must not

@@ -118,11 +118,7 @@ def captured_watcher_events(monkeypatch) -> Iterator[list[dict[str, Any]]]:
 
 
 def _keep_events(captured: list[dict]) -> list[dict]:
-    return [
-        e
-        for e in captured
-        if e["event_type"] == "scratch_sweep_skipped_same_region_drift"
-    ]
+    return [e for e in captured if e["event_type"] == "scratch_sweep_skipped_same_region_drift"]
 
 
 def _apply(snap, pack, *, location: str) -> None:
@@ -263,8 +259,7 @@ def test_genuine_region_change_still_sweeps_scratch(
     )
     assert "Bruised Ribs" in remaining, "Wound persists across the scene boundary"
     assert _keep_events(captured_watcher_events) == [], (
-        "the keep event must NOT fire on a genuine region change; "
-        f"got {captured_watcher_events!r}"
+        f"the keep event must NOT fire on a genuine region change; got {captured_watcher_events!r}"
     )
 
 

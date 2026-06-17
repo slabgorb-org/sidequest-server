@@ -12,12 +12,7 @@ from sidequest.genre.loader import load_genre_pack
 
 # Resolve the live content repo relative to this test file.
 # tests/genre/test_*.py -> tests/genre -> tests -> sidequest-server -> oq-3
-_CONTENT = (
-    Path(__file__).resolve().parents[3]
-    / "sidequest-content"
-    / "genre_packs"
-    / "wry_whimsy"
-)
+_CONTENT = Path(__file__).resolve().parents[3] / "sidequest-content" / "genre_packs" / "wry_whimsy"
 
 
 @pytest.mark.skipif(not _CONTENT.exists(), reason="sidequest-content not checked out beside server")

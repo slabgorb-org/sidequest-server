@@ -34,7 +34,9 @@ def _exporter():
 
 def _one(exporter, name):
     spans = [s for s in exporter.get_finished_spans() if s.name == name]
-    assert len(spans) == 1, f"expected exactly one {name}; got {[s.name for s in exporter.get_finished_spans()]}"
+    assert len(spans) == 1, (
+        f"expected exactly one {name}; got {[s.name for s in exporter.get_finished_spans()]}"
+    )
     return dict(spans[0].attributes or {})
 
 

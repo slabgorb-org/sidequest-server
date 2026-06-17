@@ -117,7 +117,15 @@ def _render(builder: CharacterBuilder, lobby_name: str | None = "Sam Spade") -> 
 class TestFateConfirmationPreview:
     def test_preview_carries_fate_sheet_keys(self) -> None:
         preview = _render(_walked_to_confirmation())
-        for key in ("High Concept", "Trouble", "Aspects", "Skills", "Stunts", "Refresh", "Fate Points"):
+        for key in (
+            "High Concept",
+            "Trouble",
+            "Aspects",
+            "Skills",
+            "Stunts",
+            "Refresh",
+            "Fate Points",
+        ):
             assert key in preview, f"fate confirmation preview missing {key!r}: {list(preview)}"
 
     def test_preview_drops_native_category_error_keys(self) -> None:

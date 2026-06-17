@@ -78,7 +78,7 @@ def _two_pc_dice_session(*, authenticated_player_id: str) -> SimpleNamespace:
     snap.player_seats = {"p1": "Donut", "p2": "Carl"}
     sd = SimpleNamespace(
         snapshot=snap,
-        genre_pack=SimpleNamespace(rules=SimpleNamespace(ruleset="native")),
+        genre_pack=SimpleNamespace(rules=SimpleNamespace(ruleset="dial")),
         genre_slug="dice_test",
         world_slug="test_world",
         player_id=authenticated_player_id,

@@ -350,8 +350,7 @@ async def test_missing_decision_key_does_not_mint(monkeypatch) -> None:
     assert snap.quest_log == {}, "a missing decision must NOT mint"
     assert "floor_boss_missing_person" in snap.pending_quest_offers
     assert any(
-        e == "quest_offer.mismatch" and p.get("reason") == "unknown_decision"
-        for e, p in captured
+        e == "quest_offer.mismatch" and p.get("reason") == "unknown_decision" for e, p in captured
     ), f"expected quest_offer.mismatch(reason=unknown_decision); got {captured}"
 
 
@@ -418,9 +417,7 @@ def test_watcher_flags_accept_with_empty_quest_log() -> None:
     # Accept was dispatched, but the snapshot's quest_log is empty (the engine
     # never minted — the exact router-claimed-but-engine-idle case).
     snap = GameSnapshot(genre_slug="space_opera", world_slug="perseus_cloud")
-    package = _package_with(
-        _quest_offer_dispatch(decision="accept", confidence=0.9)
-    )
+    package = _package_with(_quest_offer_dispatch(decision="accept", confidence=0.9))
 
     mismatches = detect_dispatch_engagement_mismatch(package=package, snapshot=snap)
 

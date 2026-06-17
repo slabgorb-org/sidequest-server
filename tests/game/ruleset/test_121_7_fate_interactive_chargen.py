@@ -401,12 +401,12 @@ class TestAC4ApplyFateChargen:
             )
 
     def test_non_fate_module_has_no_apply_fate_chargen_path(self) -> None:
-        # Paired negative: a native module routes combat to beats; it carries no
+        # Paired negative: a dial module routes combat to beats; it carries no
         # Fate interactive chargen. Either the method is absent or it refuses.
-        native = get_ruleset_module("native")
-        if hasattr(native, "apply_fate_chargen"):
+        dial = get_ruleset_module("dial")
+        if hasattr(dial, "apply_fate_chargen"):
             with pytest.raises(Exception):  # noqa: B017 - any loud refusal is acceptable
-                native.apply_fate_chargen(rules=RulesConfig(), choices=legal_choices())
+                dial.apply_fate_chargen(rules=RulesConfig(), choices=legal_choices())
 
 
 # ---------------------------------------------------------------------------
@@ -502,12 +502,12 @@ class TestAC6BuilderWiring:
         assert sheet is not None
         assert sheet.skills == NOIR_SKILLS
 
-    def test_fate_pack_routes_to_fate_module_not_native(self) -> None:
+    def test_fate_pack_routes_to_fate_module_not_dial(self) -> None:
         from sidequest.game.ruleset.fate import FateRulesetModule
 
         module = get_ruleset_module(fate_rules().ruleset)
         assert isinstance(module, FateRulesetModule)
-        assert not isinstance(get_ruleset_module("native"), FateRulesetModule)
+        assert not isinstance(get_ruleset_module("dial"), FateRulesetModule)
 
 
 # ---------------------------------------------------------------------------

@@ -164,11 +164,11 @@ def test_award_turn_xp_suppressed_under_wwn(snap_with_char, monkeypatch):
     assert suppressed[0].get("field") == "xp"
 
 
-def test_award_turn_xp_still_applies_under_native(snap_with_char):
-    """The native dial engine keeps the per-turn tick — the gate is WN-only."""
+def test_award_turn_xp_still_applies_under_dial(snap_with_char):
+    """The dial engine keeps the per-turn tick — the gate is WN-only."""
     from sidequest.game.ruleset.registry import get_ruleset_module
 
-    award_turn_xp(snap_with_char, in_combat=True, ruleset=get_ruleset_module("native"))
+    award_turn_xp(snap_with_char, in_combat=True, ruleset=get_ruleset_module("dial"))
     assert snap_with_char.characters[0].core.xp == 25
 
 
@@ -187,7 +187,7 @@ def test_without_number_family_suppresses_native_xp_capability():
         assert get_ruleset_module(slug).awards_native_turn_xp is False, (
             f"{slug} must not use the native per-turn XP tick"
         )
-    assert get_ruleset_module("native").awards_native_turn_xp is True
+    assert get_ruleset_module("dial").awards_native_turn_xp is True
 
 
 def test_award_turn_xp_suppressed_for_every_seated_pc_under_wwn(mp_snap_two_seats):

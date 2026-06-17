@@ -1,21 +1,23 @@
-"""Story 72-12 — presence-stamp ``last_seen_turn`` / ``last_seen_location`` at the
-encounter seams 72-8 did NOT cover: the ``opposed_check`` social-resolution path
-and the ``participant_joined`` seating path. Doctrine: "presence means presence" —
-any time an NPC is a seated opponent or joins as a participant, its recency is
-stamped, regardless of whether the seam is combat-category.
+"""Story 72-12 (re-authored 2026-06-17, Fate Contest binding) — presence-stamp
+``last_seen_turn`` / ``last_seen_location`` at the encounter seams 72-8 did NOT
+cover: the social-resolution path (now a **Fate Contest**, ADR-144 — was
+``opposed_check`` pre-conversion) and the ``participant_joined`` seating path.
+Doctrine: "presence means presence" — any time an NPC is a seated opponent or
+joins as a participant, its recency is stamped, regardless of whether the seam is
+combat-category.
 
 72-8 closed two COMBAT seams only (``_seed_combat_hp_depletion_to_npcs`` and
 ``_publish_combat_edge_to_npcs``), both gated behind ``cdef.category == "combat"``
 in ``instantiate_encounter_from_trigger``. So a non-combat opponent — a social
-duellist seated as ``opponent`` via ``opposed_check`` — went un-stamped while it
-was demonstrably present and trading dice rolls with the party. 72-6's
-last-seen prune then read that present opponent as stale.
+duellist seated as ``opponent`` and trading 4dF in a Fate Contest — went
+un-stamped while it was demonstrably present. 72-6's last-seen prune then read
+that present opponent as stale.
 
 This suite drives the two NEW seams through their PRODUCTION call paths (no
 direct call to a private stamp helper — that would not prove wiring):
 
-* Seam 1 — ``narration_apply._apply_narration_result_to_snapshot`` →
-  ``_resolve_opposed_check_branch`` (the real social-duel resolution handshake).
+* Seam 1 — ``fate_contest.run_fate_contest_exchange`` (the real social-duel
+  Fate Contest exchange; the opponent is seated and rolls 4dF, stamping recency).
 * Seam 2 — ``encounter_lifecycle.instantiate_encounter_from_trigger`` (the real
   seating path that fires ``participant_joined_span`` per actor).
 
@@ -30,12 +32,13 @@ AC6 (no regression on the existing 72-8 combat seams) is guarded by the untouche
 is not re-implemented here.
 
 These tests rely on the real ``tea_and_murder`` content pack (the ``social_duel``
-cdef carries the opposed-check beats + opponent stats); skipped when absent, the
-same guard ``test_glenross_social_duel_opposed_check.py`` already uses.
+cdef is a contest-mode confrontation); skipped when absent, the same guard
+``test_glenross_social_duel_opposed_check.py`` already uses.
 """
 
 from __future__ import annotations
 
+import random
 from pathlib import Path
 
 import pytest
@@ -46,23 +49,25 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
 
-from sidequest.agents.orchestrator import BeatSelection, NarrationTurnResult, NpcMention
+from sidequest.agents.orchestrator import NpcMention
 from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.game.encounter import (
+    ContestState,
     EncounterActor,
     EncounterMetric,
     EncounterPhase,
     StructuredEncounter,
 )
+from sidequest.game.fate_sheet import FateSheet
+from sidequest.game.ruleset import get_ruleset_module
 from sidequest.game.session import GameSnapshot, Npc
 from sidequest.game.turn import TurnManager
 from sidequest.genre.loader import load_genre_pack
-from sidequest.protocol.dice import RollOutcome
 from sidequest.server.dispatch.encounter_lifecycle import (
     instantiate_encounter_from_trigger,
 )
-from sidequest.server.narration_apply import _apply_narration_result_to_snapshot
-from tests._helpers.session_room import room_for
+from sidequest.server.dispatch.fate_conflict import seal_fate_commit
+from sidequest.server.dispatch.fate_contest import run_fate_contest_exchange
 
 CONTENT_GENRE_PACKS = (
     Path(__file__).resolve().parents[3].parent / "sidequest-content" / "genre_packs"
@@ -97,6 +102,11 @@ def _make_opponent_npc(*, location: str | None, turn: int) -> Npc:
             inventory=Inventory(),
             statuses=[],
             hp=HpPool(current=10, max=10, base_max=10),
+            # The Fate Contest seats the opponent via ``_seat_opponent_commits``,
+            # which reads its FateSheet from the snapshot NPC. A bare NPC has none,
+            # so give it a basic mental-track skill (any rating works — the stamp
+            # rides on the opponent being SEATED, not on the roll outcome).
+            fate_sheet=FateSheet(skills={"Rapport": 1, "Provoke": 0}),
         ),
         npc_role_id="hostile",
         last_seen_location=location,
@@ -105,12 +115,14 @@ def _make_opponent_npc(*, location: str | None, turn: int) -> Npc:
 
 
 def _social_duel_encounter() -> StructuredEncounter:
-    """A live Duel of Wits: Pryce (player) vs Sir Iain (opponent), 0/7 dials.
+    """A live Duel of Wits: Pryce (player) vs Sir Iain (opponent), Fate Contest.
 
-    Both carry per_actor_state stats so the opposed-check modifier resolves
-    cleanly (cloned from test_glenross_social_duel_opposed_check.py)."""
-    return StructuredEncounter(
+    Both carry per_actor_state stats (legacy from the opposed-check era; harmless
+    under the contest engine). ``enc.contest`` is stamped so
+    ``run_fate_contest_exchange`` resolves the duel as a Fate Contest."""
+    enc = StructuredEncounter(
         encounter_type="social_duel",
+        category="social",
         win_condition="dial_threshold",
         player_metric=EncounterMetric(name="barbs_landed", current=0, starting=0, threshold=7),
         opponent_metric=EncounterMetric(name="barbs_landed", current=0, starting=0, threshold=7),
@@ -130,6 +142,8 @@ def _social_duel_encounter() -> StructuredEncounter:
             ),
         ],
     )
+    enc.contest = ContestState(target=3)
+    return enc
 
 
 @pytest.fixture
@@ -150,46 +164,50 @@ def otel_capture():
         processor.shutdown()
 
 
-def _drive_opposed_duel(snap: GameSnapshot, monkeypatch) -> None:
-    """Resolve one social_duel round through the real opposed_check handshake.
+def _drive_contest_duel(snap: GameSnapshot) -> None:
+    """Resolve one social_duel round through the real Fate Contest engine.
 
-    Sir Iain rolls 18 (Success); Pryce rolls 5 (Fail). Tiers are irrelevant to
-    presence-stamping — what matters is that Sir Iain is a SEATED opponent this
-    turn, so his recency must be stamped regardless of outcome.
+    The player seals an overcome commit; ``run_fate_contest_exchange`` fires
+    ``_seat_opponent_commits`` for the NPC opponent, then resolves the exchange.
+    Outcome is irrelevant to presence-stamping — what matters is that Sir Iain is
+    a SEATED opponent this exchange (he rolls 4dF), so his recency must be stamped
+    regardless of the result, even though the narrator never name-drops him.
+
+    The player commit is sealed directly (no Character needed in the snapshot) so
+    the fixture stays minimal — it mirrors the engine-direct drive in
+    ``test_fate_contest.py``.
     """
-    from sidequest.server import narration_apply as _na
-
-    monkeypatch.setattr(_na, "_roll_d20_server_side", lambda: 18)
-
-    result = NarrationTurnResult(
-        narration="",  # NB: no prose name-drop — stamp must come from PRESENCE.
-        beat_selections=[
-            BeatSelection(actor=_OPPONENT, beat_id="riposte", outcome=RollOutcome.Success),
-        ],
+    enc = snap.encounter
+    assert enc is not None
+    player_actor = enc.find_actor(_PLAYER)
+    assert player_actor is not None
+    seal_fate_commit(
+        encounter=enc,
+        actor=player_actor,
+        action="overcome",
+        skill="Rapport",
+        difficulty=0,
+        ladder_total=1,
     )
-    _apply_narration_result_to_snapshot(
-        snap,
-        result,
-        player_name=_PLAYER,
-        pack=_pack(),
-        opposed_player_d20=5,
-        opposed_player_beat_id="riposte",
-        opposed_player_actor=_PLAYER,
-        from_explicit_action=True,
-        room=room_for(snap),
+    run_fate_contest_exchange(
+        encounter=enc,
+        snapshot=snap,
+        ruleset=get_ruleset_module("fate"),
+        rng=random.Random(0),
+        round_number=1,
     )
 
 
 # ---------------------------------------------------------------------------
-# Seam 1 — opposed_check social resolution
+# Seam 1 — Fate Contest social resolution
 # ---------------------------------------------------------------------------
 
 
-def test_opposed_check_social_stamps_presence_without_prose_mention(monkeypatch) -> None:
-    """AC1 — an NPC seated as the opponent in an opposed_check social duel gets
+def test_opposed_check_social_stamps_presence_without_prose_mention() -> None:
+    """AC1 — an NPC seated as the opponent in a Fate Contest social duel gets
     ``last_seen_turn`` advanced to the encounter turn and ``last_seen_location``
     set to the acting PC's location, even though the narrator never names it in
-    prose. Driven through the production resolution handshake (wiring guard)."""
+    prose. Driven through the production contest exchange (wiring guard)."""
     snap = GameSnapshot(
         genre_slug="tea_and_murder",
         world_slug="glenross",
@@ -200,10 +218,10 @@ def test_opposed_check_social_stamps_presence_without_prose_mention(monkeypatch)
     npc = _make_opponent_npc(location=_STALE_LOC, turn=_STALE_TURN)
     snap.npcs.append(npc)
 
-    _drive_opposed_duel(snap, monkeypatch)
+    _drive_contest_duel(snap)
 
     assert npc.last_seen_turn == 5, (
-        "an opposed_check social opponent is PRESENT this turn; its last_seen_turn "
+        "a Fate Contest social opponent is PRESENT this turn; its last_seen_turn "
         f"must advance to the encounter turn (5), got {npc.last_seen_turn}"
     )
     assert npc.last_seen_location == _HALL, (
@@ -212,10 +230,8 @@ def test_opposed_check_social_stamps_presence_without_prose_mention(monkeypatch)
     )
 
 
-def test_opposed_check_presence_stamp_rides_npc_edge_published_span(
-    otel_capture, monkeypatch
-) -> None:
-    """AC2 — the opposed_check presence stamp is surfaced as
+def test_opposed_check_presence_stamp_rides_npc_edge_published_span(otel_capture) -> None:
+    """AC2 — the Fate Contest presence stamp is surfaced as
     ``last_seen_turn`` / ``last_seen_location`` attributes on a
     ``npc.edge_published`` span (the same GM-panel lie-detector span family 72-8
     uses for the combat seams), not buried in an un-observable mutation."""
@@ -228,11 +244,9 @@ def test_opposed_check_presence_stamp_rides_npc_edge_published_span(
     snap.encounter = _social_duel_encounter()
     snap.npcs.append(_make_opponent_npc(location=_STALE_LOC, turn=_STALE_TURN))
 
-    _drive_opposed_duel(snap, monkeypatch)
+    _drive_contest_duel(snap)
 
-    edge_spans = [
-        s for s in otel_capture.get_finished_spans() if s.name == "npc.edge_published"
-    ]
+    edge_spans = [s for s in otel_capture.get_finished_spans() if s.name == "npc.edge_published"]
     assert edge_spans, (
         "opposed_check presence stamp never emitted a npc.edge_published span; "
         f"finished spans={[s.name for s in otel_capture.get_finished_spans()]!r}"
@@ -240,9 +254,7 @@ def test_opposed_check_presence_stamp_rides_npc_edge_published_span(
     # ``npc_edge_published_span`` stores the NPC name under ``npc_name`` (not
     # ``name``) — filter on the real key and fail loud if no span matches the
     # opponent, rather than silently falling back to "any edge span".
-    stamped = [
-        s for s in edge_spans if (dict(s.attributes or {})).get("npc_name") == _OPPONENT
-    ]
+    stamped = [s for s in edge_spans if (dict(s.attributes or {})).get("npc_name") == _OPPONENT]
     assert stamped, (
         "no npc.edge_published span carried npc_name=={!r}; emitted npc_names={!r}".format(
             _OPPONENT,
@@ -263,7 +275,7 @@ def test_opposed_check_presence_stamp_rides_npc_edge_published_span(
     )
 
 
-def test_opposed_check_no_resolved_location_stamps_turn_not_location(monkeypatch) -> None:
+def test_opposed_check_no_resolved_location_stamps_turn_not_location() -> None:
     """AC5 (seam 1) — when the acting PC has no resolved location,
     ``party_location`` returns None: the presence stamp advances
     ``last_seen_turn`` but must NOT overwrite ``last_seen_location`` with a
@@ -278,7 +290,7 @@ def test_opposed_check_no_resolved_location_stamps_turn_not_location(monkeypatch
     npc = _make_opponent_npc(location=_STALE_LOC, turn=_STALE_TURN)
     snap.npcs.append(npc)
 
-    _drive_opposed_duel(snap, monkeypatch)
+    _drive_contest_duel(snap)
 
     assert npc.last_seen_turn == 5, "turn must still advance when location is unresolved"
     assert npc.last_seen_location == _STALE_LOC, (
@@ -371,9 +383,7 @@ def test_participant_joined_stamp_rides_participant_joined_span(otel_capture) ->
         genre_slug="tea_and_murder",
     )
 
-    joined = [
-        s for s in otel_capture.get_finished_spans() if s.name == "participant.joined"
-    ]
+    joined = [s for s in otel_capture.get_finished_spans() if s.name == "participant.joined"]
     assert joined, (
         "no participant.joined span fired; "
         f"finished={[s.name for s in otel_capture.get_finished_spans()]!r}"
@@ -467,9 +477,7 @@ def test_participant_joined_router_named_stamps_location(otel_capture) -> None:
 
     # Span layer (OTEL lie-detector) — discriminating because the NPC started at
     # _STALE_LOC, so the span carrying _HALL proves the WRITTEN value reached it.
-    joined = [
-        s for s in otel_capture.get_finished_spans() if s.name == "participant.joined"
-    ]
+    joined = [s for s in otel_capture.get_finished_spans() if s.name == "participant.joined"]
     iain = [s for s in joined if (dict(s.attributes or {})).get("name") == _OPPONENT]
     assert iain, (
         "no participant.joined span for the router-named opponent; "

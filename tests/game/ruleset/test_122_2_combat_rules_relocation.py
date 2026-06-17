@@ -29,7 +29,7 @@ Test layers:
   that regardless of the new module's name.
 
 * **Behavior characterization (GREEN, stays GREEN):** both helpers are exercised
-  through their real consumers — ``NativeRulesetModule`` and a Without-Number
+  through their real consumers — ``DialRulesetModule`` and a Without-Number
   sibling — so the relocation cannot silently change combat resolution and the
   wiring (consumer → relocated helper) is proven end-to-end on both touched
   modules.
@@ -44,7 +44,7 @@ import pytest
 
 from sidequest.game.creature_core import CreatureCore, Inventory
 from sidequest.game.ruleset import get_ruleset_module
-from sidequest.game.ruleset.native import NativeRulesetModule
+from sidequest.game.ruleset.dial import DialRulesetModule
 from sidequest.genre.models.inventory import DamageSpec
 from sidequest.genre.models.rules import BeatDef, RulesConfig
 
@@ -108,16 +108,16 @@ def _game_tier_py_files() -> list[Path]:
 # ---------------------------------------------------------------------------
 
 
-def test_native_module_imports_nothing_from_server():
-    """native.py must not import upward into sidequest.server (ADR-147 law).
+def test_dial_module_imports_nothing_from_server():
+    """dial.py must not import upward into sidequest.server (ADR-147 law).
 
     Today its only server imports ARE the two helpers being relocated
-    (lines 21-22), so this is the precise RED marker for 122-2's native edge.
+    (lines 21-22), so this is the precise RED marker for 122-2's dial edge.
     """
-    native_path = _SIDEQUEST_ROOT / "game" / "ruleset" / "native.py"
-    offenders = _server_imports(native_path)
+    dial_path = _SIDEQUEST_ROOT / "game" / "ruleset" / "dial.py"
+    offenders = _server_imports(dial_path)
     assert offenders == [], (
-        "game/ruleset/native.py still imports upward into sidequest.server "
+        "game/ruleset/dial.py still imports upward into sidequest.server "
         f"(ADR-147 forbids game->server): {offenders}"
     )
 
@@ -179,7 +179,7 @@ class _FakeConfrontationDef:
         self.label = label
 
 
-@pytest.mark.parametrize("module_name", ["native", "wwn"])
+@pytest.mark.parametrize("module_name", ["dial", "wwn"])
 def test_find_confrontation_returns_exact_match(module_name: str):
     """Both touched consumers resolve a def by exact confrontation_type match."""
     module = get_ruleset_module(module_name)
@@ -193,7 +193,7 @@ def test_find_confrontation_returns_exact_match(module_name: str):
     assert result.label == "Sword Duel"
 
 
-@pytest.mark.parametrize("module_name", ["native", "wwn"])
+@pytest.mark.parametrize("module_name", ["dial", "wwn"])
 def test_find_confrontation_returns_none_on_miss(module_name: str):
     """No matching confrontation_type returns None (caller handles the miss)."""
     module = get_ruleset_module(module_name)
@@ -205,13 +205,13 @@ def test_find_confrontation_returns_first_match_on_duplicate_type():
     """The iteration order contract: the FIRST def whose type matches wins."""
     first = _FakeConfrontationDef("duel", "First")
     second = _FakeConfrontationDef("duel", "Second")
-    result = NativeRulesetModule().find_confrontation([first, second], "duel")
+    result = DialRulesetModule().find_confrontation([first, second], "duel")
     assert result is first
     assert result.label == "First"
 
 
 def test_find_confrontation_empty_list_returns_none():
-    assert NativeRulesetModule().find_confrontation([], "duel") is None
+    assert DialRulesetModule().find_confrontation([], "duel") is None
 
 
 # ---------------------------------------------------------------------------
@@ -253,7 +253,7 @@ def test_resolve_damage_beat_override_wins_priority1():
         hp={"current": 10, "max": 10, "base_max": 10},
     )
     pack = _pack_with_unarmed(DamageSpec(dice="1d4", bonus=0))
-    spec = NativeRulesetModule().resolve_damage(beat=beat, actor_core=actor, pack=pack)
+    spec = DialRulesetModule().resolve_damage(beat=beat, actor_core=actor, pack=pack)
     assert spec is not None
     assert spec.dice == "2d6"
     assert spec.bonus == 1
@@ -270,7 +270,7 @@ def test_resolve_damage_equipped_weapon_beats_unarmed_priority2():
         hp={"current": 10, "max": 10, "base_max": 10},
     )
     pack = _pack_with_unarmed(DamageSpec(dice="1d4", bonus=0))
-    spec = NativeRulesetModule().resolve_damage(beat=beat, actor_core=actor, pack=pack)
+    spec = DialRulesetModule().resolve_damage(beat=beat, actor_core=actor, pack=pack)
     assert spec is not None
     assert spec.dice == "1d8"
 
@@ -286,7 +286,7 @@ def test_resolve_damage_unarmed_floor_when_empty_handed_priority4():
         hp={"current": 10, "max": 10, "base_max": 10},
     )
     pack = _pack_with_unarmed(DamageSpec(dice="1d4", bonus=0))
-    spec = NativeRulesetModule().resolve_damage(beat=beat, actor_core=actor, pack=pack)
+    spec = DialRulesetModule().resolve_damage(beat=beat, actor_core=actor, pack=pack)
     assert spec is not None
     assert spec.dice == "1d4"
 
@@ -302,5 +302,5 @@ def test_resolve_damage_returns_none_when_nothing_resolves():
         hp={"current": 10, "max": 10, "base_max": 10},
     )
     pack = _pack_with_unarmed(None)
-    spec = NativeRulesetModule().resolve_damage(beat=beat, actor_core=actor, pack=pack)
+    spec = DialRulesetModule().resolve_damage(beat=beat, actor_core=actor, pack=pack)
     assert spec is None

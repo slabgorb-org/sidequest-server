@@ -49,6 +49,7 @@ def test_builds_table_state_with_seats_and_deals():
         stake_kind="money",
         stake_descriptor="the pot",
         seed=7,
+        ruleset_slug="dial",
     )
     assert enc.table_state is not None
     assert enc.win_condition == "table_showdown"
@@ -70,6 +71,7 @@ def test_single_seat_fails_loud():
             stake_kind="money",
             stake_descriptor="the pot",
             seed=7,
+            ruleset_slug="dial",
         )
 
 
@@ -85,7 +87,7 @@ def test_trigger_branch_declines_gracefully_when_no_table_mates():
     # Lightweight real pack stand-in: the branch only reads pack.rules
     # (find_confrontation_def over confrontations, plus ruleset on the happy
     # path which this no-mates case never reaches).
-    pack = SimpleNamespace(rules=RulesConfig(ruleset="native", confrontations=[cdef]))
+    pack = SimpleNamespace(rules=RulesConfig(ruleset="dial", confrontations=[cdef]))
 
     snap = GameSnapshot(genre="spaghetti_western")
     snap.genre_slug = "spaghetti_western"
@@ -151,6 +153,7 @@ def test_seat_seeds_applied_before_deal_and_not_clobbered():
         stake_kind="money",
         stake_descriptor="the pot",
         seed=42,
+        ruleset_slug="dial",
         seat_seeds={
             "Doc": {"perception": 3, "concealment": 1},
             "Ringo": {"ocean": {"neuroticism": 0.8}, "disposition": "larcenous"},
@@ -279,7 +282,7 @@ def test_trigger_branch_seeds_from_real_snapshot():
     NPC disposition 0 (neutral) → "neutral".
     """
     cdef = _poker_cdef()
-    pack = SimpleNamespace(rules=RulesConfig(ruleset="native", confrontations=[cdef]))
+    pack = SimpleNamespace(rules=RulesConfig(ruleset="dial", confrontations=[cdef]))
 
     pc = _make_pc("Doc", wis=16, dex=12)
     npc = _make_npc("Ringo", ocean={"neuroticism": 0.4}, disposition_value=0)

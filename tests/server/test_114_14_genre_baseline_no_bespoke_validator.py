@@ -128,15 +128,15 @@ def test_wn_family_world_tier_bespoke_is_allowed(tmp_path: Path) -> None:
     )
 
 
-def test_native_pack_genre_tier_bespoke_is_exempt(tmp_path: Path) -> None:
-    """Boundary guard: a NATIVE-ruleset pack's genre inventory is authored content
+def test_dial_pack_genre_tier_bespoke_is_exempt(tmp_path: Path) -> None:
+    """Boundary guard: a DIAL-ruleset pack's genre inventory is authored content
     (no SRD to be verbatim from); genre-tier bespoke there is legitimate homebrew.
-    The validator is gated to the WN family and must NOT fire for native packs —
-    otherwise it breaks native-pack / homebrew authoring."""
+    The validator is gated to the WN family and must NOT fire for dial packs —
+    otherwise it breaks dial-pack / homebrew authoring."""
     pack_dir = _copy_fixture(_NATIVE_FIXTURE, tmp_path)
     _append_catalog_item(pack_dir / "inventory.yaml", _bespoke_item("homebrew_trinket_114_14"))
 
-    pack = load_genre_pack(pack_dir)  # must NOT raise — native is exempt
-    assert pack.rules.ruleset == "native"
+    pack = load_genre_pack(pack_dir)  # must NOT raise — dial is exempt
+    assert pack.rules.ruleset == "dial"
     assert pack.inventory is not None
     assert any(i.id == "homebrew_trinket_114_14" for i in pack.inventory.item_catalog)

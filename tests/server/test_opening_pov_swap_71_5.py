@@ -196,9 +196,7 @@ async def _fire_opening(
             else []
         )
         author = sd.player_id if len(connected) > 1 else None  # type: ignore[attr-defined]
-        return [
-            h._emit_event("NARRATION", m.payload, author_player_id=author) for m in factory()
-        ]
+        return [h._emit_event("NARRATION", m.payload, author_player_id=author) for m in factory()]
 
     monkeypatch.setattr(h, "_run_opening_turn_narration", _emitting_opening)
     out = await h.handle_message(
@@ -217,7 +215,8 @@ async def _fire_opening(
 
 @pytest.mark.asyncio
 async def test_opening_does_not_use_room_broadcast(
-    handler: WebSocketSessionHandler, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+    handler: WebSocketSessionHandler,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """AC1 (wiring) — the opening NARRATION must NOT use room.broadcast.
 
@@ -237,9 +236,7 @@ async def test_opening_does_not_use_room_broadcast(
         await _fire_opening(handler, monkeypatch)
 
     narration_broadcast_calls = [
-        c
-        for c in mock_broadcast.call_args_list
-        if getattr(c.args[0], "type", None) == "NARRATION"
+        c for c in mock_broadcast.call_args_list if getattr(c.args[0], "type", None) == "NARRATION"
     ]
     assert narration_broadcast_calls == [], (
         "Opening NARRATION must NOT use room.broadcast after 71-13 — it must route "
@@ -252,7 +249,8 @@ async def test_opening_does_not_use_room_broadcast(
 
 @pytest.mark.asyncio
 async def test_broadcast_to_peers_watcher_event_retired(
-    handler: WebSocketSessionHandler, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+    handler: WebSocketSessionHandler,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """AC7 (OTEL retire) — RED: opening.broadcast_to_peers IS emitted now; must vanish after fix.
 
@@ -274,8 +272,13 @@ async def test_broadcast_to_peers_watcher_event_retired(
     _make_mp(handler)
     await _fire_opening(handler, monkeypatch)
 
-    broadcast_events = [f for (_, f) in events if isinstance(f, dict) and f.get("field") == "opening.broadcast_to_peers" or  # noqa: E501
-                        (isinstance(f, dict) and "opening.broadcast_to_peers" in str(f))]
+    broadcast_events = [
+        f
+        for (_, f) in events
+        if isinstance(f, dict)
+        and f.get("field") == "opening.broadcast_to_peers"  # noqa: E501
+        or (isinstance(f, dict) and "opening.broadcast_to_peers" in str(f))
+    ]
     # The watcher_publish for this event uses a positional event_type arg of
     # "opening.broadcast_to_peers" (not a nested "field" key).
     raw_broadcast = [et for (et, _) in events if et == "opening.broadcast_to_peers"]
@@ -289,7 +292,8 @@ async def test_broadcast_to_peers_watcher_event_retired(
 
 @pytest.mark.asyncio
 async def test_pov_swap_helper_watcher_event_retired(
-    handler: WebSocketSessionHandler, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+    handler: WebSocketSessionHandler,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """AC7 (OTEL retire) — RED: opening.narration_pov_swapped IS emitted now; must vanish.
 

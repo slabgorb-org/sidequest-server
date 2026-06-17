@@ -83,7 +83,7 @@ def _tier_from_shift(shift: int) -> RollOutcome:
 def _ability_modifier(score: int) -> int:
     """D&D-style modifier: ``floor((score - 10) / 2)``.
 
-    Mirrors ``sidequest.game.ruleset.native.NativeRulesetModule.stat_modifier``
+    Mirrors ``sidequest.game.ruleset.dial.DialRulesetModule.stat_modifier``
     so a stat score sourced from a character sheet and one sourced from the
     genre pack's ``opponent_default_stats`` produce the same modifier.
     """

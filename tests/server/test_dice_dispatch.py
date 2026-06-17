@@ -92,7 +92,7 @@ def _pack_with_combat() -> object:
     )
     rules = MagicMock(spec=RulesConfig)
     rules.confrontations = [cdef]
-    rules.ruleset = "native"
+    rules.ruleset = "dial"
     pack = MagicMock()
     pack.rules = rules
     return pack
@@ -494,7 +494,7 @@ def test_dice_throw_critfail_strike_zero_metric(dual_dial_test_setup):
     assert setup.encounter.player_metric.current == 0
 
 
-def test_native_dispatch_attack_params_unchanged():
+def test_dial_dispatch_attack_params_unchanged():
     outcome = dispatch_dice_throw(
         payload=_throw(face=13),
         rolling_player_id="p1",
@@ -502,8 +502,11 @@ def test_native_dispatch_attack_params_unchanged():
         character_stats={"STRENGTH": 16},  # +3
         encounter=_make_encounter(),
         pack=_pack_with_combat(),  # type: ignore[arg-type]
-        genre_slug="test", session_id="s1", round_number=1,
-        room_broadcast=None, snapshot=_make_snapshot(),
+        genre_slug="test",
+        session_id="s1",
+        round_number=1,
+        room_broadcast=None,
+        snapshot=_make_snapshot(),
     )
     # Identical to the pre-generalization expectation: 13 + 3 = 16 >= DC 14 -> Success.
     assert outcome.outcome is RollOutcome.Success

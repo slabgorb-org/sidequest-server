@@ -1,41 +1,38 @@
-"""Story 73-2: the ``trial`` confrontation (tea_and_murder) must gain a voluntary
-withdraw/concede exit — the same soft-lock fix 73-1 applied to negotiation/scandal
-and 59-8 applied to social_duel, now for the courtroom.
+"""Story 73-2 → repurposed as the Westley major M1 WIRING TEST (ADR-144 REPLACE).
 
-Two playtest-grounded failures motivate this (67-10, 2026-05-31, Glenross):
+The ``trial`` confrontation (tea_and_murder) is a **Fate Contest**
+(``resolution_mode: contest``). M1's doctrinal finding: a contest that still
+advertises dial beats lets the narrator select one and run the legacy dial
+``apply_beat`` engine IN PARALLEL to the 4dF Contest engine — the layering ADR-144
+forbids. The fix is two-fold:
 
-  1. A committed "resolution beat" (Concede Gracefully) did NOT flip
-     ``encounter.resolved`` — no ``encounter.resolved`` span fired, the panel
-     never tore down, and the action input stayed locked (soft-lock).
-  2. The gap is structural for ``trial`` specifically: unlike its three siblings,
-     ``trial`` is still ``beat_selection`` (a frozen opponent) and has NO terminal
-     resolution beat at all — only ``yield`` (``kind: angle``), which advances the
-     opponent, it does not end the trial.
+  (a) server: ``narration_apply`` now has an explicit ``contest`` branch that drops
+      any stray ``beat_selection`` on a contest encounter (loudly) and NEVER runs
+      the dial ``apply_beat`` engine; ``_gate_applies_to_encounter`` excludes
+      contest mode.
+  (b) content: the dial beats are stripped from the contest defs.
 
-RED before the fix:
-  - ``trial`` has no ``resolution_mode: opposed_check``      → AC-2 fails
-  - ``trial`` has no beat carrying ``resolution: true``      → AC-1 fails
-  - applying that (absent) beat cannot resolve on any tier   → AC-3 fails
-  - driving a concede through the opposed branch emits no
-    ``encounter.resolved`` span                              → AC-3 (OTEL) fails
+This file is the missing wiring test for the contest path (the reviewer's M1 ask):
+it dispatches a contest encounter through ``narration_apply`` WITH a beat_selection
+and asserts the dial ``apply_beat`` is NEVER reached, the encounter is NOT resolved
+by the dial, and the contest still resolves via the 4dF FATE_ACTION path.
 
-The resolution beat is discovered structurally (``b.resolution is True``) rather
-than by a hard-coded id, so Dev is free to name the courtroom withdraw beat
-(``rest_case`` / ``withdraw_charge`` / ``concede`` — author's choice) without
-breaking these tests. NB: ``trial`` must NOT borrow ``auction``'s ``withdraw``
-beat id semantics — auction's ``withdraw`` is a table_resolution beat with no
-``resolution: true`` flag.
+History: this file once pinned a terminal ``push``/``concede`` beat that resolved a
+trial via ``apply_beat`` on any tier (the 59-8/67-10 soft-lock fix). Those dial
+beats were exactly the M1 bleed and have been stripped — see the Delivery Finding
+on contest voluntary-exit for the follow-up that question raises.
 """
 
 from __future__ import annotations
 
+import random
 from pathlib import Path
 
 import pytest
 
 from sidequest.agents.orchestrator import BeatSelection, NarrationTurnResult
-from sidequest.game.beat_kinds import apply_beat
 from sidequest.game.encounter import (
+    ContestState,
     EncounterActor,
     EncounterMetric,
     EncounterPhase,
@@ -47,7 +44,6 @@ from sidequest.genre.models.rules import ResolutionMode
 from sidequest.protocol.dice import RollOutcome
 from sidequest.server.dispatch.confrontation import find_confrontation_def
 from sidequest.server.narration_apply import _apply_narration_result_to_snapshot
-from sidequest.telemetry.spans.encounter import SPAN_ENCOUNTER_RESOLVED
 from tests._helpers.session_room import room_for
 
 CONTENT_GENRE_PACKS = (
@@ -59,18 +55,7 @@ pytestmark = pytest.mark.skipif(
     reason="tea_and_murder content pack not available",
 )
 
-# Every outcome tier a d20 can land — INCLUDING CritSuccess, the one tier with
-# distinct push semantics (DEFAULT_DELTAS grants a "Clean Exit" fleeting tag on
-# a CritSuccess push). A voluntary withdraw must resolve on ALL of them.
-_ALL_TIERS = [
-    RollOutcome.Fail,
-    RollOutcome.CritFail,
-    RollOutcome.Tie,
-    RollOutcome.Success,
-    RollOutcome.CritSuccess,
-]
-# The four social confrontations that must each offer a voluntary exit (AC-3).
-_SOCIAL_CONFRONTATIONS = ["trial", "social_duel", "negotiation", "scandal"]
+_CONTEST_CONFRONTATIONS = ["trial", "social_duel", "negotiation", "scandal"]
 
 
 def _pack():
@@ -83,210 +68,154 @@ def _cdef(ctype: str):
     return cdef
 
 
-def _resolution_beat(ctype: str):
-    """The voluntary-exit beat: any beat the author flagged ``resolution: true``.
+_DIAL_FIELDS = ("kind", "stat_check", "deltas", "target_tag", "resolution")
 
-    Discovered structurally so the test does not couple to the beat's id.
-    """
+
+@pytest.mark.parametrize("ctype", _CONTEST_CONFRONTATIONS)
+def test_social_confrontation_is_a_contest_with_no_armed_dial_beats(ctype: str):
+    """All four tea_and_murder social confrontations are Fate Contests; any beat they
+    carry is a display-only stub (no dial-resolution field) — the content half of the
+    M1 REPLACE fix (ADR-144). The stub ids feed the world-tier class Abilities tab."""
     cdef = _cdef(ctype)
-    beat = next((b for b in cdef.beats if b.resolution is True), None)
-    assert beat is not None, (
-        f"{ctype} must define a voluntary withdraw/concede beat carrying "
-        f"resolution: true (a declarative resolver) — none found among "
-        f"{[b.id for b in cdef.beats]}"
-    )
-    return beat
+    assert cdef.resolution_mode == ResolutionMode.contest
+    for beat in cdef.beats:
+        armed = [f for f in _DIAL_FIELDS if getattr(beat, f, None) is not None]
+        if beat.base != 1:
+            armed.append("base")
+        assert not armed, (
+            f"{ctype} contest beat {beat.id!r} carries dial-resolution field(s) "
+            f"{armed}; a contest beat must be a display-only stub (ADR-144 REPLACE)"
+        )
 
 
-def _trial_encounter() -> StructuredEncounter:
-    """A deadlocked trial — both conviction dials at 0, both sides seated. The
-    voluntary withdraw must break this deadlock the way the playtest never could.
-
-    Thresholds are 7 to match the shipped opposed_check calibration (ADR-093,
-    enforced by tests/genre/test_confrontation_calibration.py)."""
-    return StructuredEncounter(
+def _trial_contest_encounter() -> StructuredEncounter:
+    enc = StructuredEncounter(
         encounter_type="trial",
         win_condition="dial_threshold",
-        player_metric=EncounterMetric(name="conviction", current=0, starting=0, threshold=7),
-        opponent_metric=EncounterMetric(name="conviction", current=0, starting=0, threshold=7),
+        category="social",
+        player_metric=EncounterMetric(name="conviction", current=0, starting=0, threshold=3),
+        opponent_metric=EncounterMetric(name="conviction", current=0, starting=0, threshold=3),
+        structured_phase=EncounterPhase.Setup,
         actors=[
             EncounterActor(name="Inspector Pryce", role="participant", side="player"),
             EncounterActor(name="Crown Prosecutor", role="participant", side="opponent"),
         ],
     )
+    enc.contest = ContestState(target=3)
+    return enc
 
 
-# ── AC-2: trial routes through opposed_check (not a frozen opponent) ──────────
+def test_contest_beat_selection_never_reaches_the_dial_engine(monkeypatch):
+    """M1 WIRING TEST (the reviewer's core ask): a stray ``beat_selection`` arriving
+    on a contest encounter must be dropped — the legacy dial ``apply_beat`` engine
+    must NEVER run on a contest. We tripwire ``apply_beat`` (raises if reached) and
+    drive a player beat-selection through the REAL narration-apply path. The dial
+    must not fire, and the encounter must NOT be resolved by the dial (it persists
+    for the 4dF FATE_ACTION exchange)."""
+    import sidequest.game.beat_kinds as beat_kinds_pkg
 
+    def _dial_tripwire(*_a, **_kw):
+        raise AssertionError(
+            "apply_beat (the dial engine) was reached on a Fate Contest path — the "
+            "exact ADR-144 REPLACE violation M1 closes (the dial must never resolve "
+            "a contest; FATE_ACTION's 4dF exchange does)"
+        )
 
-def test_trial_uses_opposed_check():
-    """AC-2: trial's resolution_mode is opposed_check, like its three siblings.
-
-    RED: trial declares no resolution_mode, so it defaults to
-    ``ResolutionMode.beat_selection`` — the frozen-opponent path 73-1 retired.
-    """
-    assert _cdef("trial").resolution_mode == ResolutionMode.opposed_check
-
-
-# ── AC-1: trial has an authored voluntary-exit resolution beat ───────────────
-
-
-def test_trial_has_withdraw_resolution_beat():
-    """AC-1: trial offers an author-committed withdraw/concede beat that carries
-    ``resolution: true``. RED: trial's only non-strike beat is ``yield``
-    (``kind: angle``), which advances the opponent rather than ending the trial."""
-    beat = _resolution_beat("trial")
-    assert beat.resolution is True
-
-
-# ── AC-3: a committed resolution beat ends the trial on ANY outcome tier ──────
-
-
-@pytest.mark.parametrize("outcome", _ALL_TIERS)
-def test_trial_withdraw_resolves_on_every_outcome_tier(outcome: RollOutcome):
-    """AC-3 (+ compounds with 73-4): a voluntary withdraw ends the trial
-    regardless of the d20 result. A concede that only resolves on Success is the
-    exact soft-lock from the playtest — a Fail/CritFail/Tie concede must still
-    flip ``encounter.resolved``."""
-    enc = _trial_encounter()
-    beat = _resolution_beat("trial")
-    result = apply_beat(enc, enc.actors[0], beat, outcome, turn=1)
-    assert result.resolved is True, f"trial withdraw must resolve on {outcome}"
-    assert enc.resolved is True
-    assert enc.outcome == f"resolution_beat:{beat.id}"
-
-
-@pytest.mark.parametrize("ctype", _SOCIAL_CONFRONTATIONS)
-def test_every_social_confrontation_offers_a_voluntary_exit(ctype: str):
-    """AC-3 (cross-confrontation invariant): trial, social_duel, negotiation, and
-    scandal must each expose a ``resolution: true`` beat so no player is ever
-    soft-locked. RED: only ``trial`` is missing one — the other three were fixed
-    by 73-1 / 59-8 and this guards against regressing them.
-
-    `_resolution_beat` raises if no `resolution: true` beat exists (the soft-lock
-    condition). The assertion below is NOT a re-check of that flag — it pins the
-    *shape* of the resolver: a voluntary exit is a ``push`` beat (the declarative
-    forfeit pattern shared by withdraw_case/concede/walk_away/weather_it), not an
-    incidental angle/strike beat that happened to carry the flag."""
-    beat = _resolution_beat(ctype)
-    assert beat.kind == "push", (
-        f"{ctype}'s voluntary-exit beat {beat.id!r} should be a push-kind forfeit, "
-        f"got kind={beat.kind!r}"
-    )
-
-
-# ── AC-4: a voluntary withdraw is neutral, not a punitive defeat ──────────────
-
-
-def test_trial_withdraw_outcome_is_neutral_resolution_not_a_victory():
-    """AC-4: the loser's voluntary exit is recorded as a resolution_beat outcome,
-    NOT ``opponent_victory`` — so downstream lethality/harm (which keys on a
-    combat victory) is absorbed by the choice, not applied punitively. The player
-    withdraws while BEHIND on the dials (0 vs opponent ahead) and still exits
-    cleanly."""
-    enc = _trial_encounter()
-    enc.opponent_metric.current = 6  # opponent is winning; player concedes anyway
-    beat = _resolution_beat("trial")
-    result = apply_beat(enc, enc.actors[0], beat, RollOutcome.Fail, turn=3)
-    assert result.resolved is True
-    # The exact-string pin IS the not-a-victory guarantee: an outcome of
-    # opponent_victory/player_victory would fail this equality. (No separate
-    # `not in (victory tuple)` check — it would be vacuous once this passes.)
-    assert enc.outcome == f"resolution_beat:{beat.id}"
-    assert enc.structured_phase == EncounterPhase.Resolution
-
-
-# ── AC-3 (OTEL): conceding through the real opposed branch fires the span ─────
-
-
-def test_trial_concede_emits_encounter_resolved_span(monkeypatch, otel_capture):
-    """AC-3 (lie-detector): committing the trial withdraw beat through the real
-    narration-apply path flips ``encounter.resolved`` AND fires the
-    ``encounter.resolved`` OTEL span. The ABSENCE of that span was the playtest
-    signal that the panel never tore down.
-
-    RED: trial is ``beat_selection``, so the opposed branch never runs, the player's
-    concede never resolves, and no ``encounter.resolved`` span is emitted.
-    """
-    beat = _resolution_beat("trial")  # RED: fails here today (no such beat)
+    monkeypatch.setattr(beat_kinds_pkg, "apply_beat", _dial_tripwire)
 
     snap = GameSnapshot(genre_slug="tea_and_murder", world_slug="glenross")
-    snap.encounter = StructuredEncounter(
-        encounter_type="trial",
-        win_condition="dial_threshold",
-        player_metric=EncounterMetric(name="conviction", current=0, starting=0, threshold=7),
-        opponent_metric=EncounterMetric(name="conviction", current=0, starting=0, threshold=7),
-        structured_phase=EncounterPhase.Setup,
-        # Both actors carry Nerve (the withdraw_case stat_check) so the opposed
-        # modifier resolves from each character's own sheet, not a fallthrough to
-        # the cdef default — the test stays self-contained.
-        actors=[
-            EncounterActor(
-                name="Inspector Pryce",
-                role="participant",
-                side="player",
-                per_actor_state={"stats": {"Cunning": 12, "Passion": 12, "Nerve": 12}},
-            ),
-            EncounterActor(
-                name="Crown Prosecutor",
-                role="participant",
-                side="opponent",
-                per_actor_state={"stats": {"Cunning": 12, "Passion": 12, "Nerve": 12}},
-            ),
-        ],
-    )
+    snap.encounter = _trial_contest_encounter()
 
-    from sidequest.server import narration_apply as _na
-
-    # Opponent rolls high; the player rolls low (Fail) and concedes anyway — the
-    # withdraw must resolve REGARDLESS of the dice (73-4 compound).
-    monkeypatch.setattr(_na, "_roll_d20_server_side", lambda: 18)
+    # A stray narrator beat-selection against the contest encounter. (The narrator is
+    # an LLM and could hallucinate one even though the def now carries no beats.)
     result = NarrationTurnResult(
         narration="",
         beat_selections=[
             BeatSelection(
-                actor="Crown Prosecutor", beat_id="cross_examine", outcome=RollOutcome.Success
+                actor="Inspector Pryce",
+                beat_id="cross_examine",  # a former dial beat id, now stripped
+                outcome=RollOutcome.Success,
             ),
         ],
     )
+
+    # No exception => the dial tripwire was never tripped.
     _apply_narration_result_to_snapshot(
         snap,
         result,
         player_name="Inspector Pryce",
         pack=_pack(),
-        opposed_player_d20=3,
-        opposed_player_beat_id=beat.id,
-        opposed_player_actor="Inspector Pryce",
-        from_explicit_action=True,
+        from_explicit_action=False,
         room=room_for(snap),
     )
 
-    # Pin the span to THIS trial concede — a bare "some encounter.resolved span
-    # fired" assertion could green on a span leaked from a fixture teardown or a
-    # different encounter. Require encounter_type == "trial".
-    trial_resolved_spans = [
-        s
-        for s in otel_capture.get_finished_spans()
-        if s.name == SPAN_ENCOUNTER_RESOLVED
-        and (s.attributes or {}).get("encounter_type") == "trial"
-    ]
-    assert trial_resolved_spans, (
-        "conceding the trial must fire the encounter.resolved lie-detector span FOR "
-        "the trial encounter — its absence is the soft-lock signature from the "
-        "67-10 playtest"
+    assert snap.encounter is not None, "the contest encounter must persist, not be dropped"
+    assert snap.encounter.resolved is False, (
+        "the dial must NOT resolve a contest — the stray beat is dropped and the "
+        "encounter stays live for the 4dF FATE_ACTION exchange (ADR-144 REPLACE)"
+    )
+    # The dial tally is untouched (the dropped beat advanced nothing).
+    assert snap.encounter.contest is not None
+    assert snap.encounter.contest.player_victories == 0
+    assert snap.encounter.contest.opponent_victories == 0
+
+
+def test_contest_resolves_through_the_fate_action_4df_path():
+    """The other half of the M1 ask: with the dial blocked, the contest STILL
+    resolves — via the 4dF exchange engine reached through FATE_ACTION. Drive a
+    one-PC overcome that closes the barrier and crosses the (pre-seeded) target."""
+    from sidequest.game.character import Character
+    from sidequest.game.creature_core import CreatureCore
+    from sidequest.game.fate_sheet import FateSheet
+    from sidequest.game.ruleset import get_ruleset_module
+    from sidequest.game.session import Npc
+    from sidequest.protocol.fate import FateActionPayload
+    from sidequest.server.dispatch.fate_conflict import dispatch_fate_action
+    from sidequest.server.dispatch.fate_contest import FateContestResult
+
+    enc = _trial_contest_encounter()
+    enc.actors[0].name = "Lady Ash"
+    enc.actors[1].name = "The Vicar"
+    enc.contest = ContestState(target=3, player_victories=2)  # one PC win ends it
+
+    snap = GameSnapshot(
+        genre_slug="tea_and_murder",
+        characters=[
+            Character(
+                core=CreatureCore(
+                    name="Lady Ash",
+                    description="d",
+                    personality="p",
+                    fate_sheet=FateSheet(skills={"Rapport": 4}),
+                ),
+                char_class="Agent",
+                race="Human",
+                backstory="b",
+            )
+        ],
+        npcs=[
+            Npc(
+                core=CreatureCore(
+                    name="The Vicar",
+                    description="d",
+                    personality="p",
+                    fate_sheet=FateSheet(skills={"Rapport": 1}),
+                )
+            )
+        ],
+        encounter=enc,
     )
 
-    # Panel-teardown proxy: the encounter must be RESOLVED in state (not merely
-    # present-and-unresolved, and not silently dropped). No `is None` escape arm —
-    # narration-apply mutates the encounter in place, so `is None` would only mask
-    # a future regression that clears the encounter without resolving it (exactly
-    # the soft-lock this story closes).
-    assert snap.encounter is not None, "the trial encounter must not be dropped from state"
-    assert snap.encounter.resolved is True, (
-        "after a committed concede the confrontation must be resolved so the panel "
-        "tears down and the input unlocks"
+    res = dispatch_fate_action(
+        payload=FateActionPayload(request_id="r1", action="overcome", skill="Rapport", difficulty=0),
+        actor_name="Lady Ash",
+        encounter=enc,
+        ruleset=get_ruleset_module("fate"),
+        snapshot=snap,
+        rng=random.Random(0),
     )
-    assert snap.encounter.outcome == f"resolution_beat:{beat.id}", (
-        "the concede must record a voluntary resolution_beat outcome, not a "
-        f"victory/defeat; got {snap.encounter.outcome!r}"
-    )
+    assert res.commitment_pending is False
+    assert isinstance(res.exchange, FateContestResult)
+    assert res.exchange.resolved is True, "the contest must resolve via the 4dF path"
+    assert enc.resolved is True
+    assert enc.outcome == "player_victory"

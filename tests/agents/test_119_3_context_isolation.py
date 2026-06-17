@@ -109,8 +109,7 @@ async def test_narrator_options_pin_isolation(monkeypatch: pytest.MonkeyPatch) -
         f"Claude-Code scaffolding); got {type(system_prompt).__name__}"
     )
     assert "SOUL+RULES+TONE" in system_prompt, (
-        "the assembled narrator system text must be the system_prompt — "
-        f"got {system_prompt!r}"
+        f"the assembled narrator system text must be the system_prompt — got {system_prompt!r}"
     )
 
 

@@ -50,7 +50,7 @@ from sidequest.genre.error import GenreError, PackError
 from sidequest.genre.loader import _validate_class_filter_refs, load_genre_pack
 from tests._helpers.fixture_packs import WWN_TEST_PACK, fixture_pack_path, load_fixture_pack
 
-NATIVE_TEST_PACK = "test_genre"  # ruleset defaults to "native"; ships a combat def, no classes.yaml
+DIAL_TEST_PACK = "test_genre"  # ruleset defaults to "dial"; ships a combat def, no classes.yaml
 
 
 # ---------------------------------------------------------------------------
@@ -155,12 +155,12 @@ def test_denativized_wn_pack_loads(tmp_path: Path) -> None:
     assert combat[0].beats == [], "combat def must have loaded with zero beats"
 
 
-def test_beatless_native_combat_def_still_raises(tmp_path: Path) -> None:
-    """A NATIVE pack (ruleset defaults to 'native') with a zero-beat combat def
+def test_beatless_dial_combat_def_still_raises(tmp_path: Path) -> None:
+    """A DIAL pack (ruleset defaults to 'dial') with a zero-beat combat def
     must STILL fail loud — the relaxation is gated on the WN binding, not open
     to everyone. test_genre ships no classes.yaml, so this isolates the
     beat-count gate from the encounter_beat_choices coupling."""
-    pack_dir = _clone_pack(NATIVE_TEST_PACK, tmp_path)
+    pack_dir = _clone_pack(DIAL_TEST_PACK, tmp_path)
     _strip_def_beats(pack_dir, "combat")
 
     with pytest.raises(GenreError, match="at least one beat"):
@@ -213,19 +213,19 @@ def test_wn_class_empty_encounter_beat_choices_loads(tmp_path: Path) -> None:
     assert "Warrior" in pack.rules.allowed_classes
 
 
-def test_validate_class_filter_refs_native_still_raises_on_empty() -> None:
-    """Native mirror for relaxation 2 (no native fixture ships classes.yaml, so
-    we drive the validator directly with real WN objects re-tagged native via
-    model_copy — model_copy skips re-validation, so the native tag sticks)."""
+def test_validate_class_filter_refs_dial_still_raises_on_empty() -> None:
+    """Dial mirror for relaxation 2 (no dial fixture ships classes.yaml, so
+    we drive the validator directly with real WN objects re-tagged dial via
+    model_copy — model_copy skips re-validation, so the dial tag sticks)."""
     pack = load_fixture_pack(WWN_TEST_PACK)
-    native_rules = pack.rules.model_copy(update={"ruleset": "native"})
+    dial_rules = pack.rules.model_copy(update={"ruleset": "dial"})
     classes = [
         c.model_copy(update={"encounter_beat_choices": []}) if c.display_name == "Warrior" else c
         for c in pack.classes
     ]
 
     with pytest.raises(PackError, match="encounter_beat_choices is empty"):
-        _validate_class_filter_refs(native_rules, classes)
+        _validate_class_filter_refs(dial_rules, classes)
 
 
 def test_validate_class_filter_refs_wn_allows_empty() -> None:

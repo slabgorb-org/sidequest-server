@@ -93,7 +93,9 @@ def _make_client() -> ClaudeClient:
         async def communicate(self) -> tuple[bytes, bytes]:
             return self.stdout.encode(), b""
 
-    async def spawn_fn(command: str, *args: str, env: object = None, **kwargs: object) -> _FakeProcess:
+    async def spawn_fn(
+        command: str, *args: str, env: object = None, **kwargs: object
+    ) -> _FakeProcess:
         return _FakeProcess(stdout=payload)
 
     return ClaudeClient(spawn_fn=spawn_fn)
@@ -253,7 +255,9 @@ def test_build_turn_context_emits_active_settings_span(_loader, otel_capture) ->
     """
     from sidequest.server.session_handler import _build_turn_context
 
-    sd = _make_sd(_loader, verbosity=NarratorVerbosity.concise, vocabulary=NarratorVocabulary.accessible)
+    sd = _make_sd(
+        _loader, verbosity=NarratorVerbosity.concise, vocabulary=NarratorVocabulary.accessible
+    )
     _build_turn_context(sd)
 
     spans = otel_capture.get_finished_spans()

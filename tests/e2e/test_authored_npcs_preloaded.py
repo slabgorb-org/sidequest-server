@@ -60,7 +60,9 @@ def test_coyote_star_authored_npcs_preload_into_state() -> None:
     assert len(state.npcs) >= 5
 
     # Crew are firmly friendly per spec §3.2 (initial_disposition 50–60).
-    crew_dispositions = sorted(npc.disposition.value for npc in state.npcs if npc.disposition.value >= 50)
+    crew_dispositions = sorted(
+        npc.disposition.value for npc in state.npcs if npc.disposition.value >= 50
+    )
     assert len(crew_dispositions) >= 4, (
         f"All 4 Kestrel crew should ship at disposition ≥ 50 — got {crew_dispositions!r}"
     )

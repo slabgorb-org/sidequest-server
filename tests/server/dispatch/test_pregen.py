@@ -189,9 +189,12 @@ def _stub_pack(cultures: list[str], *, constraints: ArchetypeConstraints | None 
     from types import SimpleNamespace
 
     culture_objs = [SimpleNamespace(name=name) for name in cultures]
+    from types import SimpleNamespace as _SN
+
     pack = SimpleNamespace(
         cultures=culture_objs,
         archetype_constraints=constraints,
+        rules=_SN(combat_encounters=True, ruleset="dial"),
     )
     # seed_manual resolves cultures via ``pack.effective_cultures(world)``
     # (world-over-genre replacement — ADR-121 / story 72-11), which returns a

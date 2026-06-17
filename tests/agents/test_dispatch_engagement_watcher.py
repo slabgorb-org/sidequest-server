@@ -966,7 +966,9 @@ def test_improvised_combat_detected_when_no_encounter_and_no_confrontation() -> 
     )
     spans = exporter.get_finished_spans()
     suspected = [s for s in spans if s.name == "narration.improvised_combat.suspected"]
-    assert len(suspected) == 1, f"expected one improvised-combat span; got {[s.name for s in spans]}"
+    assert len(suspected) == 1, (
+        f"expected one improvised-combat span; got {[s.name for s in spans]}"
+    )
 
 
 def test_improvised_combat_fires_on_none_package() -> None:

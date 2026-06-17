@@ -32,6 +32,6 @@ def test_ruleset_config_returns_swn_block_for_swn():
     assert not isinstance(cfg, CwnConfig)
 
 
-def test_ruleset_config_returns_none_for_native():
-    rules = RulesConfig(ruleset="native")
+def test_ruleset_config_returns_none_for_dial():
+    rules = RulesConfig(ruleset="dial")
     assert rules.ruleset_config() is None

@@ -108,7 +108,9 @@ def test_session_data_has_repository_fields():
 
     field_names = {f.name for f in dataclasses.fields(_SessionData)}
     assert "repository" in field_names, "_SessionData must have a 'repository' field"
-    assert "dungeon_repository" in field_names, "_SessionData must have a 'dungeon_repository' field"
+    assert "dungeon_repository" in field_names, (
+        "_SessionData must have a 'dungeon_repository' field"
+    )
     assert "telemetry_sink" in field_names, "_SessionData must have a 'telemetry_sink' field"
     assert "store" not in field_names, (
         "_SessionData must NOT have a 'store' field after D1 — "

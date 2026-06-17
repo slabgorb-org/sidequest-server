@@ -692,12 +692,12 @@ def session_fixture():
     # realistic "pack ships no pacing.yaml" value, e.g. caverns_and_claudes) so
     # the ``or`` falls through to real defaults — same pattern as progression.
     #
-    # sq-playtest 2026-06-13 wired the native per-turn XP gate into the same turn
+    # sq-playtest 2026-06-13 wired the dial per-turn XP gate into the same turn
     # path: it reads ``get_ruleset_module(genre_pack.rules.ruleset)``. A bare
     # MagicMock's ``rules.ruleset`` is an auto-mock, not a registered slug, so
     # the resolver fails loud (UnknownRulesetError — correct in production, where
     # the slug is always real). Hand it a real default ``RulesConfig`` so
-    # ``rules.ruleset`` is ``"native"`` (the native tick applies — fixture
+    # ``rules.ruleset`` is ``"dial"`` (the dial tick applies — fixture
     # behavior unchanged) — same real-defaults pattern as progression above.
     from sidequest.genre.models.progression import ProgressionConfig
     from sidequest.genre.models.rules import RulesConfig

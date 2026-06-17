@@ -237,8 +237,7 @@ async def _run_sdk_and_capture_ctx(
 
     await orch.run_narration_turn("look around", context)
     assert "ctx" in captured, (
-        "_run_narration_turn_sdk never constructed a ToolContext — cannot "
-        "assert the Phase-E wiring"
+        "_run_narration_turn_sdk never constructed a ToolContext — cannot assert the Phase-E wiring"
     )
     return captured["ctx"]
 

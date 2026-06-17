@@ -75,8 +75,7 @@ class TestSyncProjectsRelationshipCard:
 
         rel_ids = {c.id for c in store.query_by_type(EntityType.RELATIONSHIP)}
         assert "rel:borin" in rel_ids, (
-            "the per-turn sync must project a relationship card for an NPC with "
-            "disposition history"
+            "the per-turn sync must project a relationship card for an NPC with disposition history"
         )
         # The NPC card is still projected too (the two coexist, distinct ids).
         npc_ids = {c.id for c in store.query_by_type(EntityType.NPC)}

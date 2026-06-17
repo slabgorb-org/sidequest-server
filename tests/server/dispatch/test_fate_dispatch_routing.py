@@ -95,14 +95,14 @@ def test_fate_bound_ruleset_routes_to_the_exchange():
 
 def test_non_fate_ruleset_is_rejected_loud():
     snap, enc = _solo_combat()
-    native = get_ruleset_module("native")  # NOT a FateRulesetModule
+    dial = get_ruleset_module("dial")  # NOT a FateRulesetModule
     payload = FateActionPayload(request_id="r1", action="attack", skill="Fight", target="Thug")
     with pytest.raises(FateConflictError):
         dispatch_fate_action(
             payload=payload,
             actor_name="Hero",
             encounter=enc,
-            ruleset=native,
+            ruleset=dial,
             snapshot=snap,
             rng=_FixedRng(0),
         )

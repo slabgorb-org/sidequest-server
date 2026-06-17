@@ -1,4 +1,5 @@
 """standard_array_arrange seeds the arrange pool from the standard array (ADR-143)."""
+
 from __future__ import annotations
 
 import random
@@ -71,22 +72,24 @@ def _arrange_scenes() -> list[CharCreationScene]:
 
 
 def _rules(array: list[int] | None = None) -> RulesConfig:
-    return RulesConfig.model_validate({
-        "ruleset": "wwn",
-        "stat_generation": "standard_array_arrange",
-        "standard_array": array if array is not None else [14, 12, 11, 10, 9, 7],
-        "ability_score_names": ["STR", "DEX", "CON", "INT", "WIS", "CHA"],
-        "wwn": {
-            "attribute_map": {
-                "STRENGTH": "STR",
-                "DEXTERITY": "DEX",
-                "CONSTITUTION": "CON",
-                "INTELLIGENCE": "INT",
-                "WISDOM": "WIS",
-                "CHARISMA": "CHA",
-            }
-        },
-    })
+    return RulesConfig.model_validate(
+        {
+            "ruleset": "wwn",
+            "stat_generation": "standard_array_arrange",
+            "standard_array": array if array is not None else [14, 12, 11, 10, 9, 7],
+            "ability_score_names": ["STR", "DEX", "CON", "INT", "WIS", "CHA"],
+            "wwn": {
+                "attribute_map": {
+                    "STRENGTH": "STR",
+                    "DEXTERITY": "DEX",
+                    "CONSTITUTION": "CON",
+                    "INTELLIGENCE": "INT",
+                    "WISDOM": "WIS",
+                    "CHARISMA": "CHA",
+                }
+            },
+        }
+    )
 
 
 def test_pool_seeded_from_standard_array():
@@ -98,21 +101,23 @@ def test_pool_seeded_from_standard_array():
 
 def test_pool_uses_fallback_when_standard_array_unset():
     """When standard_array is None, the engine default [15,14,13,12,10,8] is used."""
-    rules = RulesConfig.model_validate({
-        "ruleset": "wwn",
-        "stat_generation": "standard_array_arrange",
-        "ability_score_names": ["STR", "DEX", "CON", "INT", "WIS", "CHA"],
-        "wwn": {
-            "attribute_map": {
-                "STRENGTH": "STR",
-                "DEXTERITY": "DEX",
-                "CONSTITUTION": "CON",
-                "INTELLIGENCE": "INT",
-                "WISDOM": "WIS",
-                "CHARISMA": "CHA",
-            }
-        },
-    })
+    rules = RulesConfig.model_validate(
+        {
+            "ruleset": "wwn",
+            "stat_generation": "standard_array_arrange",
+            "ability_score_names": ["STR", "DEX", "CON", "INT", "WIS", "CHA"],
+            "wwn": {
+                "attribute_map": {
+                    "STRENGTH": "STR",
+                    "DEXTERITY": "DEX",
+                    "CONSTITUTION": "CON",
+                    "INTELLIGENCE": "INT",
+                    "WISDOM": "WIS",
+                    "CHARISMA": "CHA",
+                }
+            },
+        }
+    )
     builder = CharacterBuilder(scenes=_arrange_scenes(), rules=rules, rng=random.Random(1))
     assert sorted(builder.arrangement_pool()) == sorted([15, 14, 13, 12, 10, 8])
 

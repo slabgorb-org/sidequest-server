@@ -34,7 +34,7 @@ def _stub_pack(archetypes: list[Any], cultures: list[str]) -> Any:
     culture_objs = [SimpleNamespace(name=name) for name in cultures]
     return SimpleNamespace(
         archetype_constraints=None,
-        rules=SimpleNamespace(combat_encounters=False),
+        rules=SimpleNamespace(combat_encounters=False, ruleset="dial"),
         effective_cultures=lambda _world: (culture_objs, "world"),
         effective_archetypes=lambda _world: (archetypes, "world"),
     )

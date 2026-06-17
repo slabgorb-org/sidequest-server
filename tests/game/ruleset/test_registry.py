@@ -1,15 +1,15 @@
 import pytest
 
 from sidequest.game.ruleset import UnknownRulesetError, get_ruleset_module
-from sidequest.game.ruleset.native import NativeRulesetModule
+from sidequest.game.ruleset.dial import DialRulesetModule
 
 
-def test_native_resolves():
-    assert isinstance(get_ruleset_module("native"), NativeRulesetModule)
+def test_dial_resolves():
+    assert isinstance(get_ruleset_module("dial"), DialRulesetModule)
 
 
-def test_native_is_singleton():
-    assert get_ruleset_module("native") is get_ruleset_module("native")
+def test_dial_is_singleton():
+    assert get_ruleset_module("dial") is get_ruleset_module("dial")
 
 
 def test_unknown_ruleset_fails_loud():
@@ -100,3 +100,27 @@ def test_unknown_ruleset_still_fails_loud_after_fate():
     with pytest.raises(UnknownRulesetError) as exc:
         get_ruleset_module("fudge")  # close to "fate" but not registered
     assert "fudge" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# spec 2026-06-17 §1 — dial engine rename (native → dial)
+# ---------------------------------------------------------------------------
+
+
+def test_dial_slug_resolves_and_native_is_gone():
+    from sidequest.game.ruleset.dial import DialRulesetModule
+
+    module = get_ruleset_module("dial")
+    assert isinstance(module, DialRulesetModule)
+    assert module.slug == "dial"
+    with pytest.raises(UnknownRulesetError):
+        get_ruleset_module("native")
+
+
+def test_dial_compute_dc_formula_unchanged():
+    # The rename must not move the formula. base=5 -> 10 + 10 = 20.
+    from sidequest.genre.models.rules import BeatDef
+
+    module = get_ruleset_module("dial")
+    beat = BeatDef(id="b", label="b", kind="strike", base=5, stat_check="Cunning")
+    assert module.compute_dc(beat) == 20

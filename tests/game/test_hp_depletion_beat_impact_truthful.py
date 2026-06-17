@@ -56,11 +56,15 @@ def _enc(win_condition: str) -> StructuredEncounter:
 def _cores(pirate_hp: int, hero_hp: int = 10) -> tuple[object, dict[str, CreatureCore]]:
     cores = {
         "Hero": CreatureCore(
-            name="Hero", description="a hero", personality="brave",
+            name="Hero",
+            description="a hero",
+            personality="brave",
             hp=HpPool(current=hero_hp, max=10, base_max=10),
         ),
         "Pirate": CreatureCore(
-            name="Pirate", description="a pirate", personality="greedy",
+            name="Pirate",
+            description="a pirate",
+            personality="greedy",
             hp=HpPool(current=pirate_hp, max=10, base_max=10),
         ),
     }
@@ -98,8 +102,13 @@ def test_hp_depletion_strike_success_reads_the_hp_channel():
     enc = _enc("hp_depletion")
     resolver, cores = _cores(pirate_hp=7)
     apply_beat(
-        enc, enc.actors[0], _StrikeBeat(), RollOutcome.Success,
-        turn=1, edge_resolver=resolver, damage_resolver=lambda: 3,
+        enc,
+        enc.actors[0],
+        _StrikeBeat(),
+        RollOutcome.Success,
+        turn=1,
+        edge_resolver=resolver,
+        damage_resolver=lambda: 3,
     )
     impact = enc.last_beat_impacts["player"]
 
@@ -124,8 +133,13 @@ def test_hp_depletion_strike_critsuccess_leads_with_hp_keeps_tag():
     enc = _enc("hp_depletion")
     resolver, _ = _cores(pirate_hp=7)
     apply_beat(
-        enc, enc.actors[0], _StrikeBeat(), RollOutcome.CritSuccess,
-        turn=1, edge_resolver=resolver, damage_resolver=lambda: 3,
+        enc,
+        enc.actors[0],
+        _StrikeBeat(),
+        RollOutcome.CritSuccess,
+        turn=1,
+        edge_resolver=resolver,
+        damage_resolver=lambda: 3,
     )
     impact = enc.last_beat_impacts["player"]
 
@@ -145,8 +159,13 @@ def test_hp_depletion_strike_fail_is_inert():
     enc = _enc("hp_depletion")
     resolver, _ = _cores(pirate_hp=7)
     apply_beat(
-        enc, enc.actors[0], _StrikeBeat(), RollOutcome.Fail,
-        turn=1, edge_resolver=resolver, damage_resolver=lambda: 0,
+        enc,
+        enc.actors[0],
+        _StrikeBeat(),
+        RollOutcome.Fail,
+        turn=1,
+        edge_resolver=resolver,
+        damage_resolver=lambda: 0,
     )
     impact = enc.last_beat_impacts["player"]
     assert impact["dial_moved"] is False
@@ -160,8 +179,13 @@ def test_hp_depletion_suppressed_summary_does_not_claim_total_inertness():
     enc = _enc("hp_depletion")
     resolver, _ = _cores(pirate_hp=7)
     apply_beat(
-        enc, enc.actors[0], _StrikeBeat(), RollOutcome.Success,
-        turn=1, edge_resolver=resolver, damage_resolver=lambda: 3,
+        enc,
+        enc.actors[0],
+        _StrikeBeat(),
+        RollOutcome.Success,
+        turn=1,
+        edge_resolver=resolver,
+        damage_resolver=lambda: 3,
     )
     summary = enc.last_beat_impacts["player"]["summary"].lower()
     assert "moved nothing" not in summary
@@ -175,8 +199,13 @@ def test_hp_depletion_resolution_beat_still_resolves():
     enc = _enc("hp_depletion")
     resolver, _ = _cores(pirate_hp=7)
     apply_beat(
-        enc, enc.actors[0], _PushResolutionBeat(), RollOutcome.Success,
-        turn=1, edge_resolver=resolver, damage_resolver=None,
+        enc,
+        enc.actors[0],
+        _PushResolutionBeat(),
+        RollOutcome.Success,
+        turn=1,
+        edge_resolver=resolver,
+        damage_resolver=None,
     )
     impact = enc.last_beat_impacts["player"]
     assert impact["effect"] == "resolution"
@@ -193,8 +222,13 @@ def test_dial_threshold_strike_success_still_advances():
     enc.player_metric.threshold = 99  # avoid resolving so we can read the dial
     resolver, _ = _cores(pirate_hp=7)
     apply_beat(
-        enc, enc.actors[0], _StrikeBeat(), RollOutcome.Success,
-        turn=1, edge_resolver=resolver, damage_resolver=lambda: 0,
+        enc,
+        enc.actors[0],
+        _StrikeBeat(),
+        RollOutcome.Success,
+        turn=1,
+        edge_resolver=resolver,
+        damage_resolver=lambda: 0,
     )
     impact = enc.last_beat_impacts["player"]
     assert impact["effect"] == "advance"

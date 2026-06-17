@@ -806,6 +806,12 @@ def _gate_applies_to_encounter(encounter, pack) -> bool:
     return cdef.resolution_mode not in (
         ResolutionMode.sealed_letter_lookup,
         ResolutionMode.table_resolution,
+        # spec 2026-06-17 §2 (Westley major M1): a Fate Contest resolves ONLY via
+        # FATE_ACTION (the 4dF exchange engine), never the legacy apply_beat dial.
+        # Excluding it here keeps _filter_inferred_pc_beats from touching contest
+        # selections; the contest branch below short-circuits them before the dial
+        # engine can run (REPLACE, not layer — ADR-144).
+        ResolutionMode.contest,
     )
 
 
@@ -5747,6 +5753,45 @@ def _apply_narration_result_to_snapshot(
                     if outcome_obj.encounter_resolved:
                         snapshot.pending_resolution_signal = _build_resolution_signal(enc)
                 _legacy_beat_path = False
+            elif cdef.resolution_mode == ResolutionMode.contest:
+                # ---- Fate Contest branch (Westley major M1, spec 2026-06-17 §2) ----
+                # A Contest resolves EXCLUSIVELY through FATE_ACTION (the 4dF
+                # exchange engine in fate_contest.run_fate_contest_exchange). The
+                # legacy apply_beat dial engine MUST NEVER resolve a contest, or it
+                # would run in PARALLEL to the Contest engine — layering the dial on
+                # top of the SRD binding, the exact failure ADR-144 forbids (REPLACE,
+                # not layer). Content fix (b) strips the dial-beat scaffolding from
+                # the converted contest defs so the narrator can't legitimately
+                # select a contest beat — but the narrator is an LLM and could still
+                # hallucinate a stray ``beat_selection`` against a live contest.
+                # Drop those selections and surface the block LOUDLY on the GM panel
+                # (No Silent Fallbacks: the dial engine was actively prevented from
+                # resolving a contest, and we record that decision). The player's
+                # turn does not error — the Contest still resolves via FATE_ACTION.
+                if gated_selections:
+                    for sel in gated_selections:
+                        _watcher_publish(
+                            "state_transition",
+                            {
+                                "field": "encounter",
+                                "op": "contest_beat_dropped_dial_blocked",
+                                "actor": sel.actor,
+                                "beat_id": sel.beat_id,
+                                "encounter_type": enc.encounter_type,
+                                "reason": "contest resolves only via FATE_ACTION (4dF)",
+                            },
+                            component="confrontation",
+                            severity="warning",
+                        )
+                    logger.warning(
+                        "encounter.contest_beat_dropped_dial_blocked "
+                        "encounter=%r dropped %d stray beat selection(s) — a Fate "
+                        "Contest resolves only via FATE_ACTION; the legacy dial "
+                        "apply_beat engine was blocked (ADR-144 REPLACE)",
+                        enc.encounter_type,
+                        len(gated_selections),
+                    )
+                _legacy_beat_path = False
             else:
                 _legacy_beat_path = True
                 beat_by_id = {b.id: b for b in cdef.beats}
@@ -6637,11 +6682,24 @@ def _build_resolution_signal(enc: object) -> object:
     # factory cannot mislabel a surrender/rout/opponent_yielded resolution. None
     # for non-yield resolutions (dial wins, abandonment, etc.).
     yield_side = yield_side_for(outcome)
+    # spec 2026-06-17 §2/§5 (Westley major M3): on the Fate Contest path the dial
+    # metrics are seeded then NEVER advanced — the contest engine only touches
+    # ``enc.contest.player_victories``/``opponent_victories``. Reading the frozen
+    # ``*_metric.current`` would report the start value to the narrator + GM panel
+    # (the lie detector would lie). Source the final metrics from the live victory
+    # tally on the contest path; dial/opposed encounters keep reading the metric.
+    contest = getattr(enc, "contest", None)
+    if contest is not None:
+        final_player_metric = contest.player_victories
+        final_opponent_metric = contest.opponent_victories
+    else:
+        final_player_metric = enc.player_metric.current
+        final_opponent_metric = enc.opponent_metric.current
     signal = ResolutionSignal(
         encounter_type=enc.encounter_type,
         outcome=outcome,
-        final_player_metric=enc.player_metric.current,
-        final_opponent_metric=enc.opponent_metric.current,
+        final_player_metric=final_player_metric,
+        final_opponent_metric=final_opponent_metric,
         yielded_actors=tuple(),
         edge_refreshed=0,
         yield_side=yield_side,
@@ -6651,8 +6709,8 @@ def _build_resolution_signal(enc: object) -> object:
     # confirm which side yielded at every factory-built (dial/threshold) resolution.
     with encounter_resolution_signal_emitted_span(
         outcome=outcome,
-        final_player_metric=enc.player_metric.current,
-        final_opponent_metric=enc.opponent_metric.current,
+        final_player_metric=final_player_metric,
+        final_opponent_metric=final_opponent_metric,
         yield_side=yield_side,
     ):
         pass
@@ -6959,7 +7017,7 @@ def _resolve_dogfight_shot_phase(
 def _opposed_dc(beat: Any) -> int:
     """Per-side DC derived from beat ``base`` magnitude, clamped 10..=30.
 
-    Mirrors ``sidequest.game.ruleset.native.NativeRulesetModule.compute_dc``
+    Mirrors ``sidequest.game.ruleset.dial.DialRulesetModule.compute_dc``
     so a player using the dispatch path and an opponent using this resolver
     land on the same DC for the same beat.
     """

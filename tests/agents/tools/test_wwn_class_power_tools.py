@@ -97,7 +97,7 @@ class _FakePack:
 
 @dataclass
 class _NonWwnRules:
-    ruleset: str = "native"
+    ruleset: str = "dial"
 
     def ruleset_config(self) -> None:
         return None

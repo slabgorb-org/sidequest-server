@@ -42,7 +42,9 @@ def _full_payload():
                 refresh=3,
                 skills=[FateSkillEntry(name="Fight", rating=3, ladder="Good")],
                 aspects=[
-                    FateAspectEntry(text="Last Honest Cop in Vega", kind="high_concept", free_invokes=0)
+                    FateAspectEntry(
+                        text="Last Honest Cop in Vega", kind="high_concept", free_invokes=0
+                    )
                 ],
                 stress={"physical": [FateStressBox(value=1, checked=False)]},
                 consequences=[FateConsequenceEntry(level="mild", value=2, filled=False, text="")],
@@ -131,11 +133,16 @@ def test_full_payload_round_trips_through_json():
     # Spot-check the load-bearing nested fields the UI consumes (Sebastien/Jade math).
     pc = restored.characters[0]
     assert pc.fate_points == 3 and pc.refresh == 3
-    assert pc.skills[0].name == "Fight" and pc.skills[0].rating == 3 and pc.skills[0].ladder == "Good"
+    assert (
+        pc.skills[0].name == "Fight" and pc.skills[0].rating == 3 and pc.skills[0].ladder == "Good"
+    )
     assert pc.aspects[0].kind == "high_concept"
     assert pc.stress["physical"][0].value == 1 and pc.stress["physical"][0].checked is False
     assert pc.consequences[0].level == "mild" and pc.consequences[0].filled is False
-    assert restored.scene_aspects[0].kind == "situation" and restored.scene_aspects[0].free_invokes == 1
+    assert (
+        restored.scene_aspects[0].kind == "situation"
+        and restored.scene_aspects[0].free_invokes == 1
+    )
     assert restored.conflict is not None
     assert restored.conflict.participants[0].side == "player"
 

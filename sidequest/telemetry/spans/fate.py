@@ -393,6 +393,43 @@ SPAN_ROUTES["fate.conceded"] = SpanRoute(
         "fate_points_earned": (span.attributes or {}).get("fate_points_earned", 0),
     },
 )
+# --- Fate Contest spans (spec 2026-06-17 §2; GM panel = lie detector) ---------
+# The contest engine resolved an exchange — the GM-panel evidence that the
+# Contest's 4dF-vs-4dF math ran, not the narrator improvising a social outcome.
+# Literal keys (no SPAN_* constant) — the routing-completeness lint only inspects
+# SPAN_* module constants (the F1c/F2a precedent).
+SPAN_ROUTES["fate.contest.seeded"] = SpanRoute(
+    event_type="state_transition",
+    component="fate",
+    extract=lambda span: {
+        "field": "contest_seeded",
+        "encounter_type": (span.attributes or {}).get("encounter_type", ""),
+        "target": (span.attributes or {}).get("target", 0),
+        "player_seats": (span.attributes or {}).get("player_seats", 0),
+    },
+)
+SPAN_ROUTES["fate.contest.exchange"] = SpanRoute(
+    event_type="state_transition",
+    component="fate",
+    extract=lambda span: {
+        "field": "contest_exchange",
+        "winner_side": (span.attributes or {}).get("winner_side", ""),
+        "victory_delta": (span.attributes or {}).get("victory_delta", 0),
+        "player_victories": (span.attributes or {}).get("player_victories", 0),
+        "opponent_victories": (span.attributes or {}).get("opponent_victories", 0),
+        "round_number": (span.attributes or {}).get("round_number", 0),
+    },
+)
+SPAN_ROUTES["fate.contest.resolved"] = SpanRoute(
+    event_type="state_transition",
+    component="fate",
+    extract=lambda span: {
+        "field": "contest_resolved",
+        "winner_side": (span.attributes or {}).get("winner_side", ""),
+        "player_victories": (span.attributes or {}).get("player_victories", 0),
+        "opponent_victories": (span.attributes or {}).get("opponent_victories", 0),
+    },
+)
 # --- F2a: classification span (GM panel = lie detector) ----------------------
 # The router classified a freeform action into one of the four Fate actions and
 # the bank engaged dispatch_fate_action. Literal key (no SPAN_* constant) — the
@@ -644,6 +681,75 @@ def fate_conceded_span(
         **attrs,
     }
     with Span.open("fate.conceded", attributes, tracer_override=_tracer):
+        pass
+
+
+def fate_contest_seeded_span(
+    *,
+    encounter_type: str,
+    target: int,
+    player_seats: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``fate.contest.seeded`` — a Fate Contest was seated (first-to-``target``
+    victory tally). The GM-panel evidence the engine instantiated a Contest, not a
+    dial confrontation, for a Fate-bound pack (spec 2026-06-17 §2)."""
+    attributes: dict[str, Any] = {
+        "field": "contest_seeded",
+        "encounter_type": encounter_type,
+        "target": target,
+        "player_seats": player_seats,
+        **attrs,
+    }
+    with Span.open("fate.contest.seeded", attributes, tracer_override=_tracer):
+        pass
+
+
+def fate_contest_exchange_span(
+    *,
+    winner_side: str,
+    victory_delta: int,
+    player_victories: int,
+    opponent_victories: int,
+    round_number: int = 0,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``fate.contest.exchange`` — one resolved contest exchange. ``winner_side``
+    is ``player`` / ``opponent`` / ``""`` (a tie); ``victory_delta`` is 0/1/2. The
+    running tally lets the GM panel confirm the victory math, not narrator fiat."""
+    attributes: dict[str, Any] = {
+        "field": "contest_exchange",
+        "winner_side": winner_side,
+        "victory_delta": victory_delta,
+        "player_victories": player_victories,
+        "opponent_victories": opponent_victories,
+        "round_number": round_number,
+        **attrs,
+    }
+    with Span.open("fate.contest.exchange", attributes, tracer_override=_tracer):
+        pass
+
+
+def fate_contest_resolved_span(
+    *,
+    winner_side: str,
+    player_victories: int,
+    opponent_victories: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``fate.contest.resolved`` — a Contest reached its victory target. The
+    GM-panel record of who won and the final tally (spec 2026-06-17 §2)."""
+    attributes: dict[str, Any] = {
+        "field": "contest_resolved",
+        "winner_side": winner_side,
+        "player_victories": player_victories,
+        "opponent_victories": opponent_victories,
+        **attrs,
+    }
+    with Span.open("fate.contest.resolved", attributes, tracer_override=_tracer):
         pass
 
 
@@ -918,6 +1024,9 @@ __all__ = [
     "fate_compel_offered_span",
     "fate_compel_refused_span",
     "fate_conceded_span",
+    "fate_contest_exchange_span",
+    "fate_contest_resolved_span",
+    "fate_contest_seeded_span",
     "fate_flavor_rider_span",
     "fate_consequence_taken_span",
     "fate_exchange_committed_span",

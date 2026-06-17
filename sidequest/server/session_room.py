@@ -296,7 +296,7 @@ class SessionRoom:
             # ``<pack>/worlds/<world_slug>``, so the pack source dir and world
             # slug derive directly from it. The import is function-local to
             # avoid a startup-order hazard: session_room is imported very early,
-            # while magic_init transitively reaches sidequest.game.ruleset.native
+            # while magic_init transitively reaches sidequest.game.ruleset.dial
             # → sidequest.server.dispatch (a cross-layer chain). It is NOT a
             # strict module cycle (magic_init does not import session_room), so
             # if startup import order is later proven safe this can move to the

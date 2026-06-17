@@ -227,9 +227,7 @@ class TestCoreFields:
             class_label="Calling",
         )
         scenes = [
-            make_scene(
-                "origins", choices=[make_choice("The Village Itself", race_hint="Servant")]
-            ),
+            make_scene("origins", choices=[make_choice("The Village Itself", race_hint="Servant")]),
             make_scene(
                 "vocation",
                 choices=[make_choice("Country Veterinary Surgeon", class_hint="Doctor")],

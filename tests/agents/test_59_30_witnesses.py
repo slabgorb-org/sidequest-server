@@ -540,9 +540,7 @@ def test_cross_player_movement_dispatch_surfaces_as_mismatch_via_public_path() -
 
     tracer, exporter = _fresh_tracer_and_exporter()
     package = _cross_player_package(
-        _make_dispatch(
-            subsystem="movement", params={"direction": "deeper"}, idempotency_key="cx1"
-        )
+        _make_dispatch(subsystem="movement", params={"direction": "deeper"}, idempotency_key="cx1")
     )
     snap = _snapshot(interaction=7, player_seats={"p1": "Rux"})
 

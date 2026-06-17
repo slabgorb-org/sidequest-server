@@ -88,7 +88,7 @@ class _FakePack:
 
 @dataclass
 class _NonCwnRules:
-    ruleset: str = "native"
+    ruleset: str = "dial"
 
     def ruleset_config(self) -> None:
         return None
@@ -150,13 +150,15 @@ def _cwn_character(name: str, *, mortal: bool = True) -> Character:
     )
     if mortal:
         # Story 108-6: dying window status (stabilizable + incapacitating)
-        core.statuses.append(Status(
-            text=_MORTAL_TEXT,
-            severity=StatusSeverity.Scar,
-            incapacitating=True,
-            stabilizable=True,
-            created_turn=0,  # engine-owned clock: rounds_elapsed derived from created_turn
-        ))
+        core.statuses.append(
+            Status(
+                text=_MORTAL_TEXT,
+                severity=StatusSeverity.Scar,
+                incapacitating=True,
+                stabilizable=True,
+                created_turn=0,  # engine-owned clock: rounds_elapsed derived from created_turn
+            )
+        )
     return Character(
         core=core,
         backstory="Street samurai for hire.",
@@ -165,7 +167,9 @@ def _cwn_character(name: str, *, mortal: bool = True) -> Character:
     )
 
 
-def _build_snapshot(characters: list[Character] | None = None, interaction: int = 1) -> GameSnapshot:
+def _build_snapshot(
+    characters: list[Character] | None = None, interaction: int = 1
+) -> GameSnapshot:
     return GameSnapshot(
         genre_slug="neon_dystopia",
         world_slug="franchise_nations",

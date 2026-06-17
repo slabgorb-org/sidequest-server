@@ -1,6 +1,6 @@
 """The RulesetModule seam — a genre pack binds one module that owns turn resolution.
 
-Spec 0 surface only: the five resolution operations the native turn already performs.
+Spec 0 surface only: the five resolution operations the dial turn already performs.
 Character-shape / advancement / narrator-contract surfaces are added when the SWN
 module plan needs them (YAGNI).
 """
@@ -160,7 +160,7 @@ class RulesetModule(ABC):
         attacker_core: object | None,
         target_core: object | None,
     ) -> AttackRollParams:
-        """Modifier + target number for one attack. native: stat mod vs beat DC.
+        """Modifier + target number for one attack. dial: stat mod vs beat DC.
         SWN: attack_bonus + skill + attr-mod vs target AC."""
 
     def offer_difficulty(self, *, beat: BeatDef, target_core: object | None) -> int:
@@ -223,7 +223,7 @@ class RulesetModule(ABC):
     ):
         """The enemy turn for hp_depletion combat: opponent rolls vs player AC.
         Ruleset-specific (SWN); rulesets whose combat is dial/opposed_check (e.g.
-        native) resolve the opponent through the opposed-check branch instead and
+        dial) resolve the opponent through the opposed-check branch instead and
         never call this."""
         raise NotImplementedError(f"{self.slug} ruleset has no server-driven enemy-attack turn")
 
@@ -264,6 +264,7 @@ class RulesetModule(ABC):
         Returns ChargenResources. Imported lazily to keep lean rulesets free of
         the wwn_magic/system_strain import at module load."""
         from sidequest.game.chargen_contribution import ChargenResources
+
         return ChargenResources()
 
     def contribute_background_skills(self, *, background_def, rng: random.Random) -> dict[str, int]:
@@ -273,6 +274,7 @@ class RulesetModule(ABC):
     def contribute_foci(self, *, focus_defs):
         """Foci → skills + abilities. Default: none. WN-core reads the defs."""
         from sidequest.game.chargen_contribution import FociContribution
+
         return FociContribution()
 
     def _generate_attribute_values(
@@ -354,11 +356,11 @@ class RulesetModule(ABC):
         plus the standard-array hint-derivation heuristic when acc is provided.
 
         WN-core overrides with prime-aware placement (ADR-143 DD-4: heuristic
-        stays native-only; the WN override supersedes it entirely).
+        stays dial-only; the WN override supersedes it entirely).
 
         NOTE: acc is needed here ONLY for the hint-derivation heuristic that gates
         on ``not acc.stat_bonuses`` and ``method == "standard_array"``. Since this
-        default runs on all non-WN rulesets (native), the heuristic is preserved
+        default runs on all non-WN rulesets (dial), the heuristic is preserved
         verbatim. The WN override ignores acc — prime placement is unconditional
         when class_def is provided.
 
@@ -374,11 +376,7 @@ class RulesetModule(ABC):
         # spread using accumulated hints.
         # This block is NATIVE/DEFAULT only — WN overrides assign_attributes
         # entirely and never reaches this branch.
-        if (
-            acc is not None
-            and not acc.stat_bonuses
-            and len(ability_names) >= 3
-        ):
+        if acc is not None and not acc.stat_bonuses and len(ability_names) >= 3:
             names = ability_names
             # Origin/race → boost first stat
             if acc.race_hint is not None:

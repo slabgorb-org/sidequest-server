@@ -97,16 +97,16 @@ def test_end_scene_emits_swn_namespaced_reclaim_span(otel_capture):
     assert spans[0].attributes["trigger"] == "scene"
 
 
-def test_native_session_does_not_reclaim_psionic_effort():
-    """Regression guard: a native session leaves the psionic pool untouched —
+def test_dial_session_does_not_reclaim_psionic_effort():
+    """Regression guard: a dial session leaves the psionic pool untouched —
     broadening the gate to swn must not loosen it to every ruleset."""
     pc = _psychic_pc()
-    session = Session(_swn_snapshot(pc), ruleset="native")
+    session = Session(_swn_snapshot(pc), ruleset="dial")
 
     session.end_scene("scene_end", turn=1)
 
     pool = pc.core.effort[_PSIONIC_SOURCE]
-    assert pool.available == 1, "native session must not reclaim"
+    assert pool.available == 1, "dial session must not reclaim"
     assert len(pool.commitments) == 2
 
 

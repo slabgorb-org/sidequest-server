@@ -1,17 +1,14 @@
-"""Regression: tea_and_murder ``social_duel`` resolves as an opposed check, and
-its Other is seated as a metric-bearing ``opponent`` actor.
+"""Regression (re-authored 2026-06-17, Fate Contest binding): tea_and_murder
+``social_duel`` is now a **Fate Contest** (``resolution_mode: contest``, ADR-144)
+— not the ``opposed_check`` dial duel this file originally pinned. The Fate Core
+binding owns the Duel of Wits: opposed 4dF, first to N victories.
 
-Playtest 59-8 (Glenross): the Duel of Wits ran in the default ``beat_selection``
-mode (only the PLAYER rolled); the Other (Sir Iain) was seated ``neutral`` by the
-location fallback (``social`` is not in ``_ADVERSARIAL_CATEGORIES``), so the
-opponent dial had no dice-driven advance path and froze at 0 — the duel could
-never resolve on his side. Keith's call: make it dice-driven (``opposed_check``),
-which requires the Other to be ``opponent``-side so ``_resolve_opposed_check_branch``
-can roll it.
-
-The engine fix is ``_requires_opponent(cdef)``: an ``opposed_check`` confrontation
-of ANY category seats its location-fallback Other as ``opponent`` (and fails loud
-if none is available). This test pins both the content shape and the seating.
+What survives the conversion (and what this file still pins): the lifecycle
+seating contract. ``_requires_opponent(cdef)`` now seats a ``contest``-mode (as
+well as an ``opposed_check``) confrontation's location-fallback Other as
+``opponent`` (and fails loud if none is available — a contest rolls BOTH sides
+each exchange, so the Other is mandatory). This test pins the seating + the
+``encounter.contest`` stamp, plus the no-Other fail-loud (ADR-116).
 """
 
 from __future__ import annotations
@@ -22,6 +19,7 @@ import pytest
 
 from sidequest.agents.orchestrator import BeatSelection, NarrationTurnResult
 from sidequest.game.encounter import (
+    ContestState,
     EncounterActor,
     EncounterMetric,
     EncounterPhase,
@@ -29,9 +27,7 @@ from sidequest.game.encounter import (
 )
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.loader import load_genre_pack
-from sidequest.genre.models.rules import ResolutionMode
 from sidequest.protocol.dice import RollOutcome
-from sidequest.server.dispatch.confrontation import find_confrontation_def
 from sidequest.server.dispatch.encounter_lifecycle import (
     NoOpponentAvailableError,
     instantiate_encounter_from_trigger,
@@ -39,7 +35,9 @@ from sidequest.server.dispatch.encounter_lifecycle import (
 from sidequest.server.narration_apply import _apply_narration_result_to_snapshot
 from tests._helpers.session_room import room_for
 
-CONTENT_GENRE_PACKS = Path(__file__).resolve().parents[2].parent / "sidequest-content" / "genre_packs"
+CONTENT_GENRE_PACKS = (
+    Path(__file__).resolve().parents[2].parent / "sidequest-content" / "genre_packs"
+)
 
 pytestmark = pytest.mark.skipif(
     not (CONTENT_GENRE_PACKS / "tea_and_murder").exists(),
@@ -69,26 +67,11 @@ def _make_npc(name: str, location: str):
     )
 
 
-def test_social_duel_is_opposed_check_with_opponent_stats():
-    """Content invariant: opposed_check + opponent_default_stats covering every
-    stat the beats roll (Cunning/Nerve/Humour). Without the stats,
-    resolve_opponent_modifier fails loud on the opponent's roll."""
-    cdef = find_confrontation_def(_pack().rules.confrontations, "social_duel")
-    assert cdef is not None
-    assert cdef.resolution_mode == ResolutionMode.opposed_check
-    stats = cdef.opponent_default_stats or {}
-    beat_stats = {b.stat_check for b in cdef.beats}
-    missing = beat_stats - set(stats)
-    assert not missing, (
-        f"opponent_default_stats missing {missing} — the opponent rolls these "
-        f"and resolve_opponent_modifier fails loud without them"
-    )
-
-
 def test_social_duel_seats_other_as_opponent_via_location_fallback():
     """The router dispatches social_duel with npcs_present=[]; the Other is
-    sourced from the location roster and MUST be seated side='opponent'
-    (pre-fix it was 'neutral' and its dial could never advance)."""
+    sourced from the location roster and MUST be seated side='opponent' AND
+    ``encounter.contest`` must be stamped (proof the Fate Contest path was taken
+    — a contest rolls BOTH sides each exchange, so the Other is opponent-side)."""
     snap = GameSnapshot(genre_slug="tea_and_murder", world_slug="glenross")
     snap.character_locations["Inspector Pryce"] = "Castle Ross — The Great Hall"
     snap.npcs.append(_make_npc("Sir Iain Ross", "Castle Ross — The Great Hall"))
@@ -105,8 +88,10 @@ def test_social_duel_seats_other_as_opponent_via_location_fallback():
     sides = {a.name: a.side for a in enc.actors}
     assert sides.get("Inspector Pryce") == "player"
     assert sides.get("Sir Iain Ross") == "opponent", (
-        f"opposed_check Other must be seated opponent-side; got {sides}"
+        f"contest Other must be seated opponent-side; got {sides}"
     )
+    assert isinstance(enc.contest, ContestState)
+    assert enc.contest is not None, "the contest path must stamp encounter.contest"
 
 
 def _social_duel_encounter() -> StructuredEncounter:
@@ -139,25 +124,25 @@ def _social_duel_encounter() -> StructuredEncounter:
     )
 
 
-def test_social_duel_opponent_dial_advances_on_dice(monkeypatch):
-    """End-to-end: the real social_duel cdef routes through the opposed_check
-    branch and the OPPONENT's dial advances from HIS OWN roll — no narrator-fiat
-    tool, no frozen 0/5. This is the mechanical inverse of the playtest bug.
+def test_social_duel_contest_does_not_advance_the_dial(monkeypatch):
+    """Westley M1 (ADR-144 REPLACE) — the inverse of the original opposed_check test:
+    social_duel is now a Fate Contest, so a stray beat_selection through the real
+    narration-apply path MUST NOT run the dial apply_beat engine. The dial metrics
+    stay frozen (the 4dF Contest engine, reached via FATE_ACTION, owns resolution).
+    A dial tripwire proves apply_beat is never reached."""
+    import sidequest.game.beat_kinds as beat_kinds_pkg
 
-    Player rolls low (5 + Cunning 12 mod +1 = 6 vs riposte DC 16 → Fail → no
-    player advance). Sir Iain rolls high (18 + Cunning 14 mod +2 = 20 vs DC 16
-    → Success → strike grants own=base=3). Opponent dial: 0 → 3.
-    """
-    from sidequest.server import narration_apply as _na
+    def _dial_tripwire(*_a, **_kw):
+        raise AssertionError("apply_beat (dial) reached on a Fate Contest — ADR-144 REPLACE")
 
-    monkeypatch.setattr(_na, "_roll_d20_server_side", lambda: 18)
+    monkeypatch.setattr(beat_kinds_pkg, "apply_beat", _dial_tripwire)
 
     pack = _pack()
     snap = GameSnapshot(genre_slug="tea_and_murder", world_slug="glenross")
-    snap.encounter = _social_duel_encounter()
+    enc = _social_duel_encounter()
+    enc.contest = ContestState(target=3)  # real social_duel is contest mode
+    snap.encounter = enc
 
-    # Narrator emits ONLY the opponent's beat (the SOUL gate drops PC-side
-    # selections; the player's beat rides the pending DICE_THROW stash).
     result = NarrationTurnResult(
         narration="",
         beat_selections=[
@@ -165,29 +150,32 @@ def test_social_duel_opponent_dial_advances_on_dice(monkeypatch):
         ],
     )
 
+    # No exception => the dial tripwire was never tripped.
     _apply_narration_result_to_snapshot(
         snap,
         result,
         player_name="Inspector Pryce",
         pack=pack,
-        opposed_player_d20=5,
-        opposed_player_beat_id="riposte",
-        opposed_player_actor="Inspector Pryce",
-        from_explicit_action=True,
+        from_explicit_action=False,
         room=room_for(snap),
     )
 
-    assert snap.encounter.player_metric.current == 0, "player rolled Fail — no advance"
-    assert snap.encounter.opponent_metric.current == 3, (
-        "Sir Iain's riposte (strike base 3) landed on his own roll — his dial must "
-        f"advance to 3, not freeze at 0; got {snap.encounter.opponent_metric.current}"
+    assert snap.encounter is not None and snap.encounter.resolved is False
+    assert snap.encounter.player_metric.current == 0
+    assert snap.encounter.opponent_metric.current == 0, (
+        "the dial must NOT advance on a contest — the stray beat is dropped and the "
+        "4dF FATE_ACTION exchange resolves the duel (ADR-144 REPLACE)"
     )
+    assert snap.encounter.contest is not None
+    assert snap.encounter.contest.player_victories == 0
+    assert snap.encounter.contest.opponent_victories == 0
 
 
 def test_social_duel_with_no_other_fails_loud():
-    """An opposed check with nobody on the other side cannot resolve — instantiating
+    """A Fate Contest with nobody on the other side cannot resolve — instantiating
     one with no Other (empty npcs_present, empty location roster) must fail loud
-    rather than seat a one-sided duel (No Silent Fallbacks)."""
+    rather than seat a one-sided duel (No Silent Fallbacks; ``_requires_opponent``
+    now covers the ``contest`` path — a contest rolls BOTH sides each exchange)."""
     snap = GameSnapshot(genre_slug="tea_and_murder", world_slug="glenross")
     snap.character_locations["Inspector Pryce"] = "The Glen Road — Afternoon"
     # No NPCs anywhere → location fallback returns empty.

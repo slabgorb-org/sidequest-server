@@ -2,6 +2,7 @@
 
 Not new global state — small typed bundles the builder applies onto the Character.
 """
+
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
@@ -17,6 +18,7 @@ class ChargenResources(BaseModel):
 
     Each field is populated only by the ruleset module that owns it (WN family →
     effort/spellcasting/system_strain; Fate → fate_sheet, ADR-144 F4a)."""
+
     model_config = {"extra": "forbid"}
     effort: dict[str, EffortPool] = Field(default_factory=dict)
     spellcasting: SpellcastingState | None = None
@@ -34,6 +36,7 @@ class FociContribution(BaseModel):
     builder (Task 10) converts these to ``AbilityDefinition``, stamping
     ``source=AbilitySource.Class`` when seeding onto ``Character.abilities``.
     """
+
     model_config = {"extra": "forbid"}
     skills: dict[str, int] = Field(default_factory=dict)
     abilities: list[ClassAbilityDef] = Field(default_factory=list)

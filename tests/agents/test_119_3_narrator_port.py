@@ -59,7 +59,9 @@ async def _drive(client: Any, *, tools: list[ToolDefinition] | None = None) -> A
     return await client.complete_with_tools(
         [CacheableBlock(text="rules", cache=True)],
         [Message(role="user", content="look around")],
-        tools if tools is not None else [
+        tools
+        if tools is not None
+        else [
             ToolDefinition(name="roll_dice", description="Roll", input_schema={"type": "object"})
         ],
         None,
@@ -149,9 +151,7 @@ async def test_narrator_tool_loop_span_and_usage_event_preserved(
 
     await _drive(_new_client())
 
-    loop_spans = [
-        s for s in otel_capture.get_finished_spans() if s.name == "narrator.tool_loop"
-    ]
+    loop_spans = [s for s in otel_capture.get_finished_spans() if s.name == "narrator.tool_loop"]
     assert loop_spans, "the per-turn narrator.tool_loop summary span must still fire"
     attrs = dict(loop_spans[-1].attributes or {})
     assert attrs.get("caller") == "narrator", "tool_loop span must carry caller=narrator"

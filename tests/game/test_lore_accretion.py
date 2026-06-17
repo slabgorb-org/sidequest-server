@@ -50,9 +50,7 @@ def test_accrete_mints_one_fragment_per_fact() -> None:
     store = LoreStore()
     facts = [_fact("The Sunken Vault floods at the third bell.")]
 
-    result = lore_accretion.accrete_facts_to_lore(
-        store, facts, interaction=7, pc_name="Rux"
-    )
+    result = lore_accretion.accrete_facts_to_lore(store, facts, interaction=7, pc_name="Rux")
 
     assert result.accreted == 1
     assert len(result.fragment_ids) == 1
@@ -68,9 +66,7 @@ def test_accreted_fragment_id_is_deterministic_from_fact_id() -> None:
     store = LoreStore()
     fact = _fact("A deterministic landmark.")
 
-    result = lore_accretion.accrete_facts_to_lore(
-        store, [fact], interaction=1, pc_name="Rux"
-    )
+    result = lore_accretion.accrete_facts_to_lore(store, [fact], interaction=1, pc_name="Rux")
 
     assert result.fragment_ids == [f"lore_kf_{fact.fact_id}"]
 
@@ -94,9 +90,7 @@ def test_fact_metadata_carries_provenance() -> None:
     back to its source fact (GM-panel provenance, dedup)."""
     store = LoreStore()
     fact = _fact("traceable")
-    result = lore_accretion.accrete_facts_to_lore(
-        store, [fact], interaction=3, pc_name="Rux"
-    )
+    result = lore_accretion.accrete_facts_to_lore(store, [fact], interaction=3, pc_name="Rux")
     frag = store.fragments[result.fragment_ids[0]]
     assert frag.metadata["fact_id"] == fact.fact_id
     assert frag.metadata["pc_name"] == "Rux"
@@ -122,10 +116,7 @@ def test_fact_category_maps_to_lore_category(
 ) -> None:
     """Mapping must be total — every FactCategory has a LoreCategory home,
     or retrieval silently drops a class of facts."""
-    assert (
-        lore_accretion.fact_category_to_lore_category(fact_category)
-        == expected_lore_category
-    )
+    assert lore_accretion.fact_category_to_lore_category(fact_category) == expected_lore_category
 
 
 def test_accreted_fragment_uses_mapped_category() -> None:
@@ -152,12 +143,8 @@ def test_accretion_is_idempotent_across_turns() -> None:
     store = LoreStore()
     fact = _fact("Repeated each turn.")
 
-    first = lore_accretion.accrete_facts_to_lore(
-        store, [fact], interaction=1, pc_name="Rux"
-    )
-    second = lore_accretion.accrete_facts_to_lore(
-        store, [fact], interaction=2, pc_name="Rux"
-    )
+    first = lore_accretion.accrete_facts_to_lore(store, [fact], interaction=1, pc_name="Rux")
+    second = lore_accretion.accrete_facts_to_lore(store, [fact], interaction=2, pc_name="Rux")
 
     assert first.accreted == 1
     assert second.accreted == 0
@@ -172,9 +159,7 @@ def test_idempotency_does_not_raise_duplicate_lore_id() -> None:
     fact = _fact("once")
     lore_accretion.accrete_facts_to_lore(store, [fact], interaction=1, pc_name="Rux")
     try:
-        lore_accretion.accrete_facts_to_lore(
-            store, [fact], interaction=2, pc_name="Rux"
-        )
+        lore_accretion.accrete_facts_to_lore(store, [fact], interaction=2, pc_name="Rux")
     except DuplicateLoreId:  # pragma: no cover - asserts the failure mode
         pytest.fail("accretion leaked DuplicateLoreId instead of skipping")
 
@@ -192,9 +177,7 @@ def test_blank_content_fact_is_skipped_explicitly_not_minted() -> None:
     store = LoreStore()
     facts = [_fact("   "), _fact("real content here")]
 
-    result = lore_accretion.accrete_facts_to_lore(
-        store, facts, interaction=1, pc_name="Rux"
-    )
+    result = lore_accretion.accrete_facts_to_lore(store, facts, interaction=1, pc_name="Rux")
 
     assert result.accreted == 1
     assert result.skipped_blank == 1
@@ -208,9 +191,7 @@ def test_empty_fact_list_is_a_clean_no_op() -> None:
     span distinguishes "engaged, nothing to accrete" from "never engaged"
     (mirrors seed_lore_from_arc_promotion's empty-chapters contract)."""
     store = LoreStore()
-    result = lore_accretion.accrete_facts_to_lore(
-        store, [], interaction=1, pc_name="Rux"
-    )
+    result = lore_accretion.accrete_facts_to_lore(store, [], interaction=1, pc_name="Rux")
     assert result.accreted == 0
     assert result.skipped_duplicate == 0
     assert result.skipped_blank == 0

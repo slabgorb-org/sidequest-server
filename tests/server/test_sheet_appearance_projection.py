@@ -1,4 +1,5 @@
 """The sheet projection carries Character.appearance to the wire (Story 126-5)."""
+
 from sidequest.protocol.models import CharacterSheetDetails
 
 
@@ -17,6 +18,10 @@ def test_character_sheet_details_has_appearance_default():
 
 def test_character_sheet_details_appearance_defaults_empty():
     sheet = CharacterSheetDetails(
-        race="Human", stats={}, abilities=[], backstory="x", personality="y",
+        race="Human",
+        stats={},
+        abilities=[],
+        backstory="x",
+        personality="y",
     )
     assert sheet.appearance == ""

@@ -1,5 +1,6 @@
 """Fate aspects reach the player sheet (Deliverable B1). Gated on fate_sheet
 presence, never on ruleset string."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -21,7 +22,11 @@ CONTENT_GENRE_PACKS = Path(__file__).resolve().parents[3] / "sidequest-content" 
 
 def test_sheet_carries_fate_aspects():
     sheet = CharacterSheetDetails(
-        race="Investigator", stats={}, abilities=[], backstory="x", personality="y",
+        race="Investigator",
+        stats={},
+        abilities=[],
+        backstory="x",
+        personality="y",
         fate_aspects=[
             FateAspectEntry(text="Disgraced Pinkerton With a Long Memory", kind="high_concept"),
             FateAspectEntry(text="Can't Leave a Mystery Alone", kind="trouble"),
@@ -32,7 +37,11 @@ def test_sheet_carries_fate_aspects():
 
 def test_sheet_fate_aspects_default_empty():
     sheet = CharacterSheetDetails(
-        race="Human", stats={}, abilities=[], backstory="x", personality="y",
+        race="Human",
+        stats={},
+        abilities=[],
+        backstory="x",
+        personality="y",
     )
     assert sheet.fate_aspects == []
 

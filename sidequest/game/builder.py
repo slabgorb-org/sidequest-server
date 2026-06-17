@@ -3254,9 +3254,14 @@ class CharacterBuilder:
                     )
                 )
             elif isinstance(result.input_type, StoryInput):
-                # the_story folds background + description; pronouns are
-                # mechanical (pronoun_hint), not narrative words. Same join
-                # _apply_story uses for MechanicalEffects.background.
+                # History provenance (Story 93-2): record the player's raw typed
+                # the_story answer for the per-scene Origin block. NOTE: as of
+                # Story 126-5, _apply_story NO LONGER joins these — it routes the
+                # typed background to the backstory channel and the description
+                # to Character.appearance (its own field). This provenance value
+                # still shows both verbatim (raw record of what the player typed);
+                # whether to drop the appearance half here is a tracked follow-up.
+                # Pronouns stay mechanical (pronoun_hint), not narrative words.
                 story_parts = [
                     result.input_type.background.strip(),
                     result.input_type.description.strip(),
@@ -3295,7 +3300,11 @@ class CharacterBuilder:
         # facing description than the generic "A {race} {class}". Gated on
         # non-empty so characters without an appearance input keep the generic.
         generic_description = f"{indefinite_article(race_str).capitalize()} {race_str} {class_str}"
-        core_description = acc.appearance.strip() if (acc.appearance and acc.appearance.strip()) else generic_description
+        core_description = (
+            acc.appearance.strip()
+            if (acc.appearance and acc.appearance.strip())
+            else generic_description
+        )
 
         character = Character(
             core=CreatureCore(

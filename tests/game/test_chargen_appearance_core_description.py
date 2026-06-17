@@ -1,4 +1,5 @@
 """OQ1 (Story 126-5): a typed appearance becomes the narrator-facing core.description."""
+
 from __future__ import annotations
 
 from sidequest.game.builder import (

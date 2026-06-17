@@ -3290,10 +3290,17 @@ class CharacterBuilder:
 
         # Compose the Character. Character / CreatureCore non-blank
         # validators will catch blank name / description / personality.
+
+        # OQ1 (Story 126-5): a player-typed appearance is a better narrator-
+        # facing description than the generic "A {race} {class}". Gated on
+        # non-empty so characters without an appearance input keep the generic.
+        generic_description = f"{indefinite_article(race_str).capitalize()} {race_str} {class_str}"
+        core_description = acc.appearance.strip() if (acc.appearance and acc.appearance.strip()) else generic_description
+
         character = Character(
             core=CreatureCore(
                 name=name,
-                description=(f"{indefinite_article(race_str).capitalize()} {race_str} {class_str}"),
+                description=core_description,
                 personality=acc.personality_trait or "Determined",
                 level=1,
                 xp=0,

@@ -386,9 +386,13 @@ def test_session_id_remains_required_keyword_only_on_local_path(
 def test_cache_floor_guard_not_applied_to_local_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The 4,096-token floor protects an ANTHROPIC cache. With the rung on
-    there is no Anthropic cache to protect — a sub-floor prefix must not
-    refuse the build (this is also what frees 82-10's prompt slimming)."""
+    """The local rung builds on a sub-floor prefix without refusing.
+
+    Story 119-5 deleted the 91-3 Haiku cache-floor guard entirely (the SDK path
+    ships no cache_control marker), so no build path refuses a sub-floor prefix
+    now. The sub-floor monkeypatch below is retained as a regression anchor: the
+    local rung must keep building the ollama adapter regardless of prefix size
+    (this is also what freed 82-10's prompt slimming)."""
     import sidequest.agents.intent_router as ir
     from sidequest.agents.llm_factory import (
         _OllamaIntentRouterLlm,

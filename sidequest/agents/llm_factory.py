@@ -43,7 +43,6 @@ from sidequest.agents.model_routing import (
 )
 from sidequest.agents.ollama_client import DEFAULT_OLLAMA_URL, OllamaClient
 from sidequest.agents.tooling_protocol import ToolingLlmClient
-from sidequest.telemetry.spans.intent_router import intent_router_cache_floor_span
 from sidequest.telemetry.spans.llm_request import llm_request_span
 
 if TYPE_CHECKING:
@@ -337,79 +336,6 @@ def build_aside_llm(*, session_id: str | None) -> _AsideLlm:
 # moves the constant with it.
 _INTENT_ROUTER_MODEL = "claude-haiku-4-5-20251001"
 
-# The marker on the system block caches the whole tools+system prefix (canonical
-# cache order tools → system → messages). For the Intent Router that combined
-# prefix is ~4,730 tokens (DispatchPackage tool schema ~1,970 tok + system prompt
-# ~2,760 tok), which clears Haiku 4.5's 4,096-token cacheable floor. NOTE: the
-# system prompt ALONE is below the floor — the whole margin comes from bundling
-# the tool schema, so the floor guard checks the COMBINED prefix (see
-# test_haiku_cache_control.py), not the system block in isolation. 1h — not 5m —
-# because the submit-and-wait MP turn cadence (a slow typist at the table) can
-# space these Haiku calls minutes apart; a 5m prefix would expire between turns.
-# Matches the stable-prefix TTL the narrator keeps in ``anthropic_sdk_client``.
-_INTENT_ROUTER_CACHE_TTL = "1h"
-
-
-# Story 91-3 (epic 91 "Dark Spend"): Haiku 4.5's minimum cacheable prompt
-# length. Below this floor a ``cache_control`` marker is accepted by the API
-# and *silently never caches* — the request succeeds, the bill re-charges the
-# full prefix every turn, and nothing reports the no-op. The build-time guard
-# below turns that silent trap into a loud build failure.
-HAIKU_CACHEABLE_PREFIX_FLOOR_TOKENS = 4096
-
-# Offline chars→tokens calibration for the floor guard. Measured against the
-# live ``count_tokens`` endpoint on 2026-06-05: the combined tools+system
-# prefix was 15,425 chars / 4,730 tokens = 3.261 chars/token. 3.2 keeps the
-# guard's threshold (~13.1k chars) just BELOW the CI tripwire in
-# ``test_haiku_cache_control.py`` (13,500 chars), so a shrinking prefix fails
-# in CI before this runtime guard would start killing live turns. The
-# authoritative re-measure after any prompt/schema change is the opt-in
-# ``test_intent_router_prefix_token_floor_live`` (count_tokens — exact).
-_PREFIX_CHARS_PER_TOKEN = 3.2
-
-
-class IntentRouterCacheFloorError(LlmClientError):
-    """The Intent Router's combined cacheable prefix is below Haiku's floor.
-
-    Story 91-3: raised at client-build time by :func:`build_intent_router_llm`
-    when the estimated tools+system prefix drops under
-    :data:`HAIKU_CACHEABLE_PREFIX_FLOOR_TOKENS`. Never ship a ``cache_control``
-    marker that silently doesn't cache (No Silent Fallbacks) — the epic-91
-    incident was exactly this trap: 100% uncached Haiku at full price, every
-    turn, invisible until cost forensics.
-    """
-
-
-def _estimate_intent_router_prefix_tokens() -> tuple[int, int]:
-    """Estimate the combined tools+system cacheable prefix, offline.
-
-    Returns ``(prefix_chars, estimated_tokens)``. The prefix is everything the
-    ``cache_control`` marker on the system block covers (canonical cache order
-    tools → system → messages): the system prompt PLUS the DispatchPackage
-    tool name/description/schema. Measuring the system block alone was the
-    original defect — it is sub-floor by itself; the margin comes entirely
-    from bundling the schema.
-
-    Reads the production prompt/schema LATE-BOUND through the
-    ``sidequest.agents.intent_router`` module at call time (same monkeypatch
-    doctrine as the module-level :func:`query` seam). The import is function-level
-    because ``intent_router`` imports this module at module scope.
-
-    Offline by design: the adapter is rebuilt once per turn
-    (``build_intent_router_for_session``), so a ``count_tokens`` network call
-    here would add a per-turn round-trip for a value that only changes when
-    code changes.
-    """
-    import sidequest.agents.intent_router as intent_router
-
-    prefix_chars = (
-        len(intent_router._SYSTEM_PROMPT)
-        + len(json.dumps(intent_router._dispatch_tool_schema()))
-        + len(intent_router._TOOL_NAME)
-        + len(intent_router._TOOL_DESCRIPTION)
-    )
-    return prefix_chars, int(prefix_chars / _PREFIX_CHARS_PER_TOKEN)
-
 
 class IntentRouterEmptyResponse(LlmClientError):
     """Haiku returned a response with no ``tool_use`` block.
@@ -620,20 +546,14 @@ def build_intent_router_llm(*, session_id: str | None) -> _IntentRouterLlm | _Ol
     (explicit config — the default is unchanged Haiku), returns the
     Ollama-backed :class:`_OllamaIntentRouterLlm` instead. An unknown env
     value raises :class:`UnknownBackend` naming the env var (No Silent
-    Fallbacks — a typo must never silently mean Haiku). The 91-3 cache-floor
-    guard below is HAIKU-ONLY: it protects an Anthropic cache, and the local
-    path has none (this is also what frees 82-10's prompt slimming).
+    Fallbacks — a typo must never silently mean Haiku).
 
-    Story 91-3 fail-loud floor guard: validates the combined tools+system
-    cacheable prefix against Haiku 4.5's
-    :data:`HAIKU_CACHEABLE_PREFIX_FLOOR_TOKENS` BEFORE constructing the
-    adapter, and raises :class:`IntentRouterCacheFloorError` if the estimate
-    is sub-floor — below the floor the adapter's ``cache_control`` marker is
-    accepted by the API and silently never caches (the epic-91 dark-spend
-    incident). The decision is emitted as an ``intent_router.cache_floor``
-    span on both paths so the GM panel can verify the guard engaged (OTEL
-    Observability Principle). The guard runs BEFORE the adapter is built so a
-    sub-floor prefix fails loud regardless of ``session_id``.
+    Story 119-5: the 91-3 build-time cache-floor guard was removed. It
+    protected a ``cache_control`` marker on the raw Anthropic messages API;
+    the 119-3 port runs the router over ``claude-agent-sdk`` with
+    ``output_format`` and ships no cache marker, so the sub-floor trap can no
+    longer spring and the SDK exposes no cache surface to re-home the guard
+    onto.
     """
     try:
         backend = classification_backend()
@@ -643,35 +563,6 @@ def build_intent_router_llm(*, session_id: str | None) -> _IntentRouterLlm | _Ol
         raise UnknownBackend(str(exc)) from exc
     if backend == "ollama":
         return _OllamaIntentRouterLlm(session_id=session_id)
-    prefix_chars, estimated_tokens = _estimate_intent_router_prefix_tokens()
-    passed = estimated_tokens >= HAIKU_CACHEABLE_PREFIX_FLOOR_TOKENS
-    with intent_router_cache_floor_span(
-        passed=passed,
-        floor_tokens=HAIKU_CACHEABLE_PREFIX_FLOOR_TOKENS,
-        estimated_tokens=estimated_tokens,
-        prefix_chars=prefix_chars,
-    ):
-        pass
-    if not passed:
-        logger.error(
-            "intent_router.cache_floor REFUSED build: estimated_tokens=%d "
-            "floor_tokens=%d prefix_chars=%d",
-            estimated_tokens,
-            HAIKU_CACHEABLE_PREFIX_FLOOR_TOKENS,
-            prefix_chars,
-        )
-        raise IntentRouterCacheFloorError(
-            f"Intent Router combined tools+system prefix is ~{estimated_tokens} "
-            f"tokens ({prefix_chars} chars at ~{_PREFIX_CHARS_PER_TOKEN} "
-            f"chars/token) — below Haiku 4.5's "
-            f"{HAIKU_CACHEABLE_PREFIX_FLOOR_TOKENS}-token cacheable floor. "
-            "Below the floor the cache_control marker is accepted by the API "
-            "and silently never caches, re-billing the full prefix every turn "
-            "(the epic-91 dark-spend incident). Refusing to build (No Silent "
-            "Fallbacks). Either grow the prompt/schema back above the floor or "
-            "deliberately remove the cache marker; re-verify with "
-            "test_intent_router_prefix_token_floor_live (count_tokens)."
-        )
     return _IntentRouterLlm(session_id=session_id)
 
 

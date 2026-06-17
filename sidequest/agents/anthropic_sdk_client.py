@@ -12,9 +12,11 @@ raw ``anthropic`` Messages SDK over the metered PAYG ledger. ``ANTHROPIC_API_KEY
 
 from __future__ import annotations
 
+import atexit
 import inspect
 import logging
 import os
+import shutil
 import tempfile
 import uuid
 from collections import deque
@@ -170,11 +172,29 @@ _NARRATION_SERVER_NAME = "narration"
 _AGENT_SDK_CWD: str | None = None
 
 
+def _cleanup_agent_sdk_cwd() -> None:
+    """Remove the process-stable neutral cwd at interpreter exit (story 119-5).
+
+    Registered with ``atexit`` the first (and only) time ``_neutral_cwd()``
+    creates the dir, so the lazily-mkdtemp'd ``sidequest-agentsdk-cwd-*`` dir is
+    not leaked one-per-process. Idempotent and best-effort: a missing dir is a
+    no-op (``ignore_errors``), and the global is reset so a later
+    ``_neutral_cwd()`` in the same process recreates and re-registers cleanly.
+    """
+    global _AGENT_SDK_CWD
+    if _AGENT_SDK_CWD is not None:
+        shutil.rmtree(_AGENT_SDK_CWD, ignore_errors=True)
+        _AGENT_SDK_CWD = None
+
+
 def _neutral_cwd() -> str:
     """Return a process-stable empty dir with no ``CLAUDE.md`` / ``.claude``."""
     global _AGENT_SDK_CWD
     if _AGENT_SDK_CWD is None:
         _AGENT_SDK_CWD = tempfile.mkdtemp(prefix="sidequest-agentsdk-cwd-")
+        # Story 119-5: clean the temp dir up at process exit (no per-process
+        # leak). Registered exactly once, when the dir is first created.
+        atexit.register(_cleanup_agent_sdk_cwd)
     return _AGENT_SDK_CWD
 
 

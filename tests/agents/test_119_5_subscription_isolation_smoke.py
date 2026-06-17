@@ -75,9 +75,7 @@ def test_spike_script_refuses_without_live_gate() -> None:
     so this assertion needs no credentials.
     """
     if not _SPIKE_SCRIPT.is_file():
-        pytest.fail(
-            f"{_SPIKE_SCRIPT} does not exist — cannot verify its gate refusal (AC3)"
-        )
+        pytest.fail(f"{_SPIKE_SCRIPT} does not exist — cannot verify its gate refusal (AC3)")
 
     proc = subprocess.run(
         [sys.executable, str(_SPIKE_SCRIPT)],
@@ -91,7 +89,7 @@ def test_spike_script_refuses_without_live_gate() -> None:
         "ungated run must refuse with a non-zero exit — a smoke that exits 0 "
         f"without running the live check is a silent fallback. stdout={proc.stdout!r}"
     )
-    combined = (proc.stdout + proc.stderr)
+    combined = proc.stdout + proc.stderr
     assert _LIVE_GATE_ENV in combined, (
         "the ungated refusal must name the gate env so the operator knows how "
         f"to run it; got stdout={proc.stdout!r} stderr={proc.stderr!r}"

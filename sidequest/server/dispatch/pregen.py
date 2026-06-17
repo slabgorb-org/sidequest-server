@@ -427,11 +427,23 @@ def seed_manual(
     # ── Encounters: tier 1 + tier 2 ───────────────────────────
     # Social, Composure-only packs (combat_encounters=False) have no combat —
     # skip encounter generation entirely so the Manual never holds B/X-style
-    # combat enemies to inject (playtest 2026-06-01, blackthorn_moor). A pack
-    # that failed to load defaults to combat-enabled (the model default), since
-    # the no-culture fallback path is the legacy combat behavior.
-    combat_encounters = getattr(getattr(pack, "rules", None), "combat_encounters", True)
-    ruleset = getattr(getattr(pack, "rules", None), "ruleset", "dial") if pack else "dial"
+    # combat enemies to inject (playtest 2026-06-01, blackthorn_moor).
+    # A pack that failed to load (pack is None) skips encounter seeding entirely —
+    # the no-culture fallback can still mint NPCs (the comment above at line ~322:
+    # "falls back to no-culture branch on failure"), but without a pack we cannot
+    # know the ruleset, so we disable combat encounter seeding for this run.
+    # A pack that loaded but has no ``rules`` block is a configuration error
+    # and fails loud (No Silent Fallbacks principle).
+    if pack is not None and getattr(pack, "rules", None) is None:
+        raise ValueError(
+            "pregen.seed_manual: pack/rules missing — cannot resolve ruleset. A "
+            "missing ruleset is a configuration error, not a silent 'dial' default "
+            "(spec 2026-06-17 §1, No Silent Fallbacks)."
+        )
+    combat_encounters = (
+        getattr(pack.rules, "combat_encounters", True) if pack is not None else False
+    )
+    ruleset = pack.rules.ruleset if pack is not None else None
     # Story 90-5 (item 3): a ruleset-module seeding failure must still be
     # OTEL-visible. Capture the failure message and BREAK instead of raising
     # mid-loop — the ``pregen.seed_manual`` span below fires with this

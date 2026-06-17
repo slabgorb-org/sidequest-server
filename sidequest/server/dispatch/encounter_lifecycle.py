@@ -58,6 +58,14 @@ _log = logging.getLogger(__name__)
 _VALID_SIDES = ("player", "opponent", "neutral")
 
 
+def _raise_missing_ruleset(context: str) -> str:
+    raise ValueError(
+        f"{context}: pack/rules missing — cannot resolve ruleset slug. A missing "
+        f"ruleset is a configuration error, not a silent 'dial' default "
+        f"(spec 2026-06-17 §1, No Silent Fallbacks)."
+    )
+
+
 class NoOpponentAvailableError(ValueError):
     """Raised when a category=combat encounter resolves to zero opponents
     after both the narrator's ``npcs_present`` and the location-scoped
@@ -960,7 +968,7 @@ def instantiate_table_encounter(
     stake_kind: str,
     stake_descriptor: str,
     seed: int,
-    ruleset_slug: str = "dial",
+    ruleset_slug: str,
     seat_seeds: dict[str, dict] | None = None,
 ) -> StructuredEncounter:
     """Build + deal a table_resolution StructuredEncounter.
@@ -1175,7 +1183,11 @@ def instantiate_encounter_from_trigger(
             stake_kind="money",
             stake_descriptor=cdef.label,
             seed=snapshot.turn_manager.interaction,
-            ruleset_slug=pack.rules.ruleset if pack and pack.rules else "dial",
+            ruleset_slug=(
+                pack.rules.ruleset
+                if pack and pack.rules
+                else _raise_missing_ruleset("table_resolution")
+            ),
             seat_seeds=seat_seeds,
         )
         snapshot.encounter = enc

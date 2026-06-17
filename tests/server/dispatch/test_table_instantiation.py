@@ -49,6 +49,7 @@ def test_builds_table_state_with_seats_and_deals():
         stake_kind="money",
         stake_descriptor="the pot",
         seed=7,
+        ruleset_slug="dial",
     )
     assert enc.table_state is not None
     assert enc.win_condition == "table_showdown"
@@ -70,6 +71,7 @@ def test_single_seat_fails_loud():
             stake_kind="money",
             stake_descriptor="the pot",
             seed=7,
+            ruleset_slug="dial",
         )
 
 
@@ -151,6 +153,7 @@ def test_seat_seeds_applied_before_deal_and_not_clobbered():
         stake_kind="money",
         stake_descriptor="the pot",
         seed=42,
+        ruleset_slug="dial",
         seat_seeds={
             "Doc": {"perception": 3, "concealment": 1},
             "Ringo": {"ocean": {"neuroticism": 0.8}, "disposition": "larcenous"},

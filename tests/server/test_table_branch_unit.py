@@ -94,6 +94,7 @@ def _poker_table_snapshot():
         stake_kind="money",
         stake_descriptor="the pot",
         seed=1,
+        ruleset_slug="dial",
     )
     doc = Character(
         core=CreatureCore(

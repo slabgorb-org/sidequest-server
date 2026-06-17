@@ -117,6 +117,7 @@ def _poker_table_snapshot():
         stake_kind="money",
         stake_descriptor="the pot",
         seed=1,
+        ruleset_slug="dial",
     )
     doc = Character(
         core=CreatureCore(
@@ -310,6 +311,7 @@ def test_folded_pc_seat_lowers_barrier_denominator() -> None:
         stake_kind="money",
         stake_descriptor="the pot",
         seed=1,
+        ruleset_slug="dial",
     )
     doc = Character(
         core=CreatureCore(
@@ -447,6 +449,7 @@ def test_fold_mark_fires_before_clear_on_multi_decision_point_hand() -> None:
         stake_kind="money",
         stake_descriptor="the pot",
         seed=2,
+        ruleset_slug="dial",
     )
 
     def _pc(name: str, gold: int) -> Character:

@@ -27,6 +27,7 @@ from sidequest.game.monster_manual import MonsterManual
 from sidequest.genre.models.character import NpcArchetype
 from sidequest.genre.models.culture import Culture
 from sidequest.genre.models.pack import GenrePack, World
+from sidequest.genre.models.rules import RulesConfig
 from sidequest.server.dispatch import pregen
 
 
@@ -41,6 +42,7 @@ def _perseus_like_pack() -> GenrePack:
         archetypes=[NpcArchetype.model_construct(name="Soldier")],
         worlds={"perseus": World.model_construct(cultures=[_culture("Spacer")], archetypes=[])},
         archetype_constraints=None,
+        rules=RulesConfig(ruleset="dial"),
     )
 
 
@@ -157,6 +159,7 @@ def _world_pack(culture_names: list[str], *, world: str) -> GenrePack:
             )
         },
         archetype_constraints=None,
+        rules=RulesConfig(ruleset="dial"),
     )
 
 

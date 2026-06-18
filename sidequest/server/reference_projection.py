@@ -19,6 +19,7 @@ from sidequest.foundation.asset_urls import resolve_asset_url
 from sidequest.foundation.reference_slug import slugify
 from sidequest.genre.models.legends import Legend
 from sidequest.genre.models.world import CartographyConfig
+from sidequest.genre.ruleset_reference import build_ruleset_reference_section
 from sidequest.server.reference_map import _edges_and_dangling, _npc_pins, load_cartography_config
 from sidequest.server.reference_presenters import (
     cast_portrait_slug,
@@ -50,7 +51,6 @@ from sidequest.server.reference_timeline import (
     load_legends,
     load_lore_history,
 )
-from sidequest.genre.ruleset_reference import build_ruleset_reference_section
 from sidequest.server.reference_visibility import Visibility, classify
 from sidequest.server.utils import slugify_player_name
 from sidequest.telemetry.spans.reference import (

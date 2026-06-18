@@ -47,7 +47,9 @@ def load_ruleset_chapters(ruleset: str, *, rulesets_root: Path) -> list[dict]:
 
     Flat for Fate; core + per-game overlay for the WN family (overlay overrides core
     by shared ``anchor``). Raises ``RulesetReferenceError`` on a file missing any
-    required front-matter key.
+    required front-matter key. Note: front-matter keys ``srd`` and ``license`` are
+    validated as present but are intentionally not projected into the returned chapter
+    dict; provenance and labels are added later by the projection layer.
     """
     by_anchor: dict[str, dict] = {}
     for chapter_dir in _chapter_dirs(ruleset, rulesets_root):

@@ -45,3 +45,16 @@ def test_missing_required_frontmatter_key_raises(tmp_path: Path):
     p.write_text("---\ntitle: NoAnchor\norder: 1\n---\nbody\n", encoding="utf-8")
     with pytest.raises(RulesetReferenceError):
         load_ruleset_chapters("fixturefate", rulesets_root=root)
+
+
+def test_wn_overlay_overrides_core_by_anchor(tmp_path: Path):
+    root = tmp_path / "rulesets"
+    _write(root / "without_number" / "core" / "srd" / "combat.md", "combat", "Combat (core)", 1, "Core combat body")
+    _write(root / "without_number" / "core" / "srd" / "magic.md", "magic", "Magic", 2, "Core magic body")
+    _write(root / "without_number" / "wwn" / "srd" / "combat.md", "combat", "Combat (wwn)", 1, "WWN combat body")
+    chapters = load_ruleset_chapters("wwn", rulesets_root=root)
+    by_anchor = {c["anchor"]: c for c in chapters}
+    assert by_anchor["combat"]["title"] == "Combat (wwn)"          # overlay won
+    assert by_anchor["combat"]["body_markdown"].strip() == "WWN combat body"
+    assert by_anchor["magic"]["title"] == "Magic"                  # core-only chapter preserved
+    assert [c["anchor"] for c in chapters] == ["combat", "magic"]  # ordered by `order`

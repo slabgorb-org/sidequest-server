@@ -77,6 +77,28 @@ def build_fate_projection(snapshot: GameSnapshot) -> dict[str, Any]:
     }
 
 
+#: The narrator's live-aspect vocabulary. The router does NOT need it: it
+#: classifies a freeform action into one of the four Fate actions from the PCs'
+#: skills + whether a conflict is live, not from the aspect text. These keys
+#: carry the unbounded aspect strings that bloat the structured Haiku router
+#: prompt and spiked ``intent_router_pass`` to 37-81s on Fate worlds (Story
+#: 126-10), so they are stripped for the router.
+_ROUTER_DROP_KEYS: tuple[str, ...] = ("character_aspects", "scene_aspects")
+
+
+def trim_fate_projection_for_router(full: dict[str, Any]) -> dict[str, Any]:
+    """Trim the full Fate projection to the routing-critical subset (Story 126-10).
+
+    Drops the narrator's live-aspect vocabulary (``character_aspects`` +
+    ``scene_aspects``) while keeping the PCs' skills, fate points, and the
+    ``active_conflict`` flag the router classifies against. The narrator builds
+    its own full projection (``build_fate_projection`` with no trim) and is
+    untouched — ADR-144 F2b's one source of truth, two consumers, now with the
+    router consuming strictly less.
+    """
+    return {k: v for k, v in full.items() if k not in _ROUTER_DROP_KEYS}
+
+
 def build_fate_state_payload(snapshot: GameSnapshot) -> FateStatePayload:
     """The full client Fate projection (ADR-144 F3a / Story 118-1).
 

@@ -384,6 +384,56 @@ def intent_router_witnessed_act_vocabulary_span(
         yield span
 
 
+SPAN_INTENT_ROUTER_FATE_VOCABULARY = "intent_router.fate_vocabulary"
+SPAN_ROUTES[SPAN_INTENT_ROUTER_FATE_VOCABULARY] = SpanRoute(
+    event_type="state_transition",
+    component="intent_router",
+    extract=lambda span: {
+        "field": "intent_router.fate_vocabulary",
+        "skill_count": (span.attributes or {}).get("skill_count", 0),
+        "aspects_dropped": (span.attributes or {}).get("aspects_dropped", 0),
+        "bytes_before": (span.attributes or {}).get("bytes_before", 0),
+        "bytes_after": (span.attributes or {}).get("bytes_after", 0),
+        "genre_slug": (span.attributes or {}).get("genre_slug", ""),
+    },
+)
+
+
+@contextmanager
+def intent_router_fate_vocabulary_span(
+    *,
+    skill_count: int,
+    aspects_dropped: int,
+    bytes_before: int,
+    bytes_after: int,
+    genre_slug: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Fires when the TRIMMED Fate vocabulary is injected into the router's
+    state summary (Fate packs only, Story 126-10).
+
+    The router needs the PCs' skills (to classify a freeform action into one of
+    the four Fate actions) and whether a conflict is live — NOT the narrator's
+    full live-aspect dump. ``bytes_before``/``bytes_after`` are the GM-panel
+    evidence the trim engaged: the full projection vs the trimmed router block.
+    A turn with no live aspects yet shows ``bytes_before == bytes_after``
+    (nothing to trim) — honest, not a regression."""
+    with Span.open(
+        SPAN_INTENT_ROUTER_FATE_VOCABULARY,
+        {
+            "skill_count": skill_count,
+            "aspects_dropped": aspects_dropped,
+            "bytes_before": bytes_before,
+            "bytes_after": bytes_after,
+            "genre_slug": genre_slug,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
 # sq-playtest 2026-06-07 (standoff seat seam): the router had the pack's
 # confrontation vocabulary and the action lexically matched authored
 # intent_verbs, yet no confrontation dispatch was emitted — and NOTHING

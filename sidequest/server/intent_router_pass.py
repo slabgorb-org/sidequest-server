@@ -44,7 +44,10 @@ from sidequest.agents.subsystems import BankResult, get_registered, run_dispatch
 from sidequest.dungeon.region_projection import project_region
 from sidequest.dungeon.seed_bootstrap import ENTRANCE_ID as _DUNGEON_ENTRANCE_ID
 from sidequest.game.npc_scene import is_npc_in_scene
-from sidequest.game.ruleset.fate_projection import build_fate_projection
+from sidequest.game.ruleset.fate_projection import (
+    build_fate_projection,
+    trim_fate_projection_for_router,
+)
 from sidequest.game.seams import seam_route_for, surface_owner_for_entrance
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.pack import GenrePack
@@ -63,6 +66,7 @@ from sidequest.telemetry.spans.intent_router import (
     intent_router_call_budget_breach_span,
     intent_router_confrontation_classified_span,
     intent_router_confrontation_vocabulary_span,
+    intent_router_fate_vocabulary_span,
     intent_router_region_exits_span,
     intent_router_state_summary_slimmed_span,
     intent_router_witnessed_act_classified_span,
@@ -357,12 +361,35 @@ def _build_state_summary(
                 pass
 
     # Fate vocabulary (ADR-144 F2a): when the pack binds the Fate ruleset, the
-    # router needs the PCs' skills + the live aspects to classify a freeform
-    # action into one of the four Fate actions. Gated on the ruleset slug so no
-    # non-Fate pack's router prompt carries this block (same conditional-vocab
-    # discipline as confrontation_types / witnessed_act_vocabulary above).
+    # router needs the PCs' skills (+ whether a conflict is live) to classify a
+    # freeform action into one of the four Fate actions. Gated on the ruleset
+    # slug so no non-Fate pack's router prompt carries this block (same
+    # conditional-vocab discipline as confrontation_types / witnessed_act above).
+    #
+    # Story 126-10: trim the narrator's full live-aspect vocabulary out of the
+    # ROUTER prompt. The full projection (the same one the narrator's fate_state
+    # section builds, independently, in session_helpers) carries every PC + live
+    # aspect; on Fate worlds that bloated this structured Haiku call enough to
+    # spike intent_router_pass to 37-81s. The router classifies from skills, not
+    # aspect text, so we drop character_aspects + scene_aspects here. The
+    # narrator path is untouched.
     if pack is not None and getattr(pack.rules, "ruleset", "") == "fate":
-        summary["fate"] = _build_fate_summary(snapshot)
+        full_fate = _build_fate_summary(snapshot)
+        router_fate = trim_fate_projection_for_router(full_fate)
+        summary["fate"] = router_fate
+        # GM-panel evidence the trim engaged (OTEL Observability Principle):
+        # full-vs-trimmed bytes + the routing-critical skill count.
+        aspects_dropped = sum(
+            len(v) for v in full_fate.get("character_aspects", {}).values()
+        ) + len(full_fate.get("scene_aspects", []))
+        with intent_router_fate_vocabulary_span(
+            skill_count=len(router_fate.get("skills", {})),
+            aspects_dropped=aspects_dropped,
+            bytes_before=len(_serialize_state_summary(full_fate).encode("utf-8")),
+            bytes_after=len(_serialize_state_summary(router_fate).encode("utf-8")),
+            genre_slug=snapshot.genre_slug or "",
+        ):
+            pass
 
     # Witnessed-act vocabulary + witness candidate set (wry_whimsy political
     # substrate, Plan 2b). Double-gated: the pack must declare witnessed-act

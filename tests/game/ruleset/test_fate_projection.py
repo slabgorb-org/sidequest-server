@@ -10,9 +10,11 @@ These tests pin that contract:
     shape (skills / fate_points / character_aspects / scene_aspects / active_conflict).
   * It reflects live state (a fate-point mutation shows through) — i.e. it reads the
     snapshot, it is not a frozen copy.
-  * The router still carries the fate block, and that block is *exactly* what
-    `build_fate_projection` returns — proving the router consumes the relocated projector
-    (no second, drifting copy). This is the "one source of truth" guarantee.
+  * The router still carries the fate block, derived from the relocated projector
+    (no second, drifting copy) — the "one source of truth" guarantee. Story 126-10
+    amended this: the router consumes a *trimmed* view (the narrator's live-aspect
+    vocabulary is dropped from the router prompt), still derived from
+    `build_fate_projection` via `trim_fate_projection_for_router`, never re-derived.
 
 All FAIL today: `sidequest.game.ruleset.fate_projection` does not exist yet (RED).
 The F2a regression guard (router gates the fate block on `ruleset == "fate"`) is pinned
@@ -124,14 +126,30 @@ def test_pc_without_fate_sheet_is_omitted():
 # ---------------------------------------------------------------------------
 
 
-def test_router_fate_block_equals_relocated_projector_output():
-    from sidequest.game.ruleset.fate_projection import build_fate_projection
+def test_router_fate_block_is_the_trimmed_relocated_projector_output():
+    # Story 126-10: the router consumes a TRIMMED view of the one canonical
+    # projection — the narrator's live-aspect vocabulary (character_aspects +
+    # scene_aspects) is dropped from the router prompt (it bloated the structured
+    # Haiku call and spiked intent_router_pass to 37-81s on Fate worlds), while
+    # skills / fate_points / active_conflict stay. Still ONE source of truth: the
+    # router does not re-derive Fate state, it trims build_fate_projection's output.
+    from sidequest.game.ruleset.fate_projection import (
+        build_fate_projection,
+        trim_fate_projection_for_router,
+    )
 
     snap = _conflict_snapshot()
     router_block = _build_state_summary(snap, pack=_fate_pack())["fate"]
-    assert router_block == build_fate_projection(snap), (
-        "router fate block diverged from build_fate_projection — not one source of truth"
+    full = build_fate_projection(snap)
+
+    assert router_block == trim_fate_projection_for_router(full), (
+        "router fate block is not the canonical projection trimmed — drift / re-derivation"
     )
+    # The trim really dropped the live-aspect bloat and kept the routing signal.
+    assert "character_aspects" not in router_block
+    assert "scene_aspects" not in router_block
+    assert router_block["skills"] == full["skills"]
+    assert router_block["active_conflict"] == full["active_conflict"]
 
 
 def test_router_omits_fate_block_for_non_fate_pack():

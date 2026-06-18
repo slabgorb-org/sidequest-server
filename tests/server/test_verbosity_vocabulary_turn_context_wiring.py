@@ -58,7 +58,10 @@ from sidequest.protocol.enums import NarratorVerbosity, NarratorVocabulary
 # Rendered-section discriminators (from orchestrator._build_*_section). These
 # are the exact, distinguishing fragments each setting emits — picked so the
 # concise/accessible markers can never coincide with the standard/literary ones.
-_CONCISE_MARKER = "Maximum 4 sentences"  # verbosity == concise
+# Story 126-11 made the concise CAP drama-scaled (concise@quiet renders
+# "Maximum 3 sentences", not a fixed 4), so the concise discriminator is now the
+# template's drama-invariant style line rather than a sentence count.
+_CONCISE_MARKER = "Action and consequence only"  # verbosity == concise (style line)
 _STANDARD_MARKER = "maximum 8 sentences"  # verbosity == standard (develop default)
 _ACCESSIBLE_MARKER = "8th-grade reading level"  # vocabulary == accessible
 _LITERARY_MARKER = "rich but clear prose"  # vocabulary == literary (develop default)

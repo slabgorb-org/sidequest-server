@@ -47,6 +47,7 @@ from sidequest.telemetry.spans.llm_request import llm_request_span
 
 if TYPE_CHECKING:
     from sidequest.agents.post_narration_classifier import ObjectiveClassifierLLM
+    from sidequest.agents.sidecar_extractor import SidecarExtractorLLM
     from sidequest.genre.models.archetype_axes import BaseArchetypes
     from sidequest.genre.models.archetype_constraints import ArchetypeConstraints
 
@@ -688,6 +689,71 @@ def build_unseeded_objective_classifier_llm(*, session_id: str | None) -> Object
     and feeds the per-session ceiling, same discipline as the Intent Router.
     """
     return _UnseededObjectiveClassifierLlm(session_id=session_id)
+
+
+# ---------------------------------------------------------------------------
+# Post-narration sidecar extractor (Story 151-2, ADR-150 step 2)
+# ---------------------------------------------------------------------------
+
+_SIDECAR_EXTRACTOR_MODEL = _INTENT_ROUTER_MODEL  # Haiku 4.5 (CallType.CLASSIFICATION rung)
+
+
+class _SidecarExtractorLlm:
+    """Single-shot Haiku adapter for the post-narration sidecar extractor (151-2).
+
+    Satisfies ``sidecar_extractor.SidecarExtractorLLM`` — the same ``emit_tool``
+    contract as :class:`_IntentRouterLlm` / :class:`_UnseededObjectiveClassifierLlm`.
+    Runs on the live ``CallType.CLASSIFICATION → claude-haiku-4-5`` rung; no new
+    model-routing, transport, or protocol infrastructure (ADR-150 §Decision). It
+    fires once per turn in SHADOW mode, so cost is recorded under caller
+    ``sidecar_extraction`` to attribute it distinctly from the every-turn router
+    spend in the [COST-1] forensics.
+    """
+
+    def __init__(self, *, session_id: str | None) -> None:
+        self._session_id = session_id
+        self._session_cost_ceiling_usd = cost_safety.parse_session_cost_ceiling_usd()
+
+    async def emit_tool(
+        self,
+        *,
+        system: str,
+        user: str,
+        tool_name: str,
+        tool_description: str,
+        tool_schema: dict[str, Any],
+    ) -> dict[str, Any]:
+        # Forced extraction via ``output_format`` (Path A, §6.4.2) — the Agent SDK
+        # has no ``tool_choice``; read the schema-valid dict from
+        # ``ResultMessage.structured_output`` at ``max_turns=2``. The dict/raise
+        # contract is preserved; the extractor's retry/failure taxonomy owns the
+        # raise (it catches the transport boundary, retries once, then surfaces
+        # SidecarExtractionFailure).
+        result_msg = await _call_haiku_sdk(
+            user=user,
+            model=_SIDECAR_EXTRACTOR_MODEL,
+            system_prompt=_compose_structured_system(system, tool_name, tool_description),
+            caller="sidecar_extraction",
+            session_id=self._session_id,
+            ceiling_usd=self._session_cost_ceiling_usd,
+            output_format={"type": "json_schema", "schema": tool_schema},
+        )
+        return _extract_structured_output_or_raise(
+            result_msg, error_cls=LlmClientError, label="sidecar extractor"
+        )
+
+
+def build_sidecar_extractor_llm(*, session_id: str | None) -> SidecarExtractorLLM:
+    """Build the Haiku adapter for the post-narration sidecar extractor (151-2).
+
+    Returns the public ``SidecarExtractorLLM`` Protocol the extractor consumes —
+    callers depend on the contract, not the private adapter class. ``session_id``
+    is required keyword-only (supply the room slug or opt out with ``None``) so
+    the per-turn shadow-extraction spend runs the ADR-134 detector and feeds the
+    per-session ceiling, the same discipline as the Intent Router and the
+    un-seeded objective classifier.
+    """
+    return _SidecarExtractorLlm(session_id=session_id)
 
 
 # ---------------------------------------------------------------------------

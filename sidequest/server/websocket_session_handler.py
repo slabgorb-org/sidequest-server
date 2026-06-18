@@ -37,12 +37,14 @@ from sidequest.agents.intent_router import IntentRouterFailure
 from sidequest.agents.llm_factory import (
     _INTENT_ROUTER_MODEL,
     build_llm_client,
+    build_sidecar_extractor_llm,
     build_unseeded_objective_classifier_llm,
 )
 from sidequest.agents.orchestrator import TurnContext
 from sidequest.agents.post_narration_classifier import (
     run_unseeded_objective_classifier_watcher,
 )
+from sidequest.agents.sidecar_extractor import run_sidecar_extraction_watcher
 from sidequest.daemon_client import (
     DaemonClient,
     DaemonRequestError,
@@ -1208,6 +1210,20 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         narration=getattr(result, "narration", "") or "",
                         package=turn_context.dispatch_package,
                         snapshot=snapshot,
+                    )
+
+                    # Sidecar extractor SHADOW pass (Story 151-2, ADR-150 step 2):
+                    # a post-narration Haiku emit_tool pass reads the prose and
+                    # derives the eleven bucket-B sidecar fields, emitting
+                    # sidecar_extraction.* OTEL (run / per-field / mismatch) so the
+                    # lie-detector watches from day one. It APPLIES NOTHING this
+                    # story — field cutover is 151-4 / 151-5. Non-fatal by contract:
+                    # the runner never raises into turn delivery (catch-loops are
+                    # the net), exactly like the sibling watchers above.
+                    await run_sidecar_extraction_watcher(
+                        narration=getattr(result, "narration", "") or "",
+                        snapshot=snapshot,
+                        llm=build_sidecar_extractor_llm(session_id=seed_session_id),
                     )
 
                     encounter_resolved_this_turn = encounter_unresolved_before and (

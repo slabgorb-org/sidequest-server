@@ -1751,6 +1751,32 @@ class ConnectHandler:
                         )
                     except Exception as exc:  # noqa: BLE001
                         logger.warning("session.resume_party_status_failed error=%s", exc)
+                # FATE_STATE — hydrate the player-facing Fate sheet on
+                # connect/resume (sq-playtest 2026-06-17, wry_whimsy/oz, DRIVER
+                # session 2026-06-17-oz-f9d7524d). The reactive emitter rides
+                # only the per-turn cadence (_execute_narration_turn), so a
+                # reloaded Fate session showed "No stats available" in
+                # Character → Stats until the first action. The full sheet is
+                # already persisted, so project it straight from the saved
+                # snapshot — connect → read DB → project, no narrator turn
+                # (Keith: "the data is in the database, we don't need a narrator
+                # loop to hydrate it"). Internally ruleset=='fate'-gated (no-op
+                # off a Fate pack, so it never co-renders with the WN/native
+                # overlay) and empty-state-gated (no Fate-sheet PC → silent
+                # no-op); it also seeds the per-turn change-gate signature on
+                # the handler so the first turn won't re-emit an identical
+                # frame. Mirrors the LOCATION_DESCRIPTION / MAP_UPDATE resume
+                # re-emits above.
+                from sidequest.server.websocket_handlers.fate_state_emit import (
+                    _maybe_emit_fate_state,
+                )
+
+                _maybe_emit_fate_state(
+                    session,
+                    sd=session._session_data,
+                    snapshot=snapshot,
+                    emit_fn=lambda msg, _label: bootstrap_msgs.append(msg),
+                )
                 # CHAPTER_MARKER — restore the running-header chapter title
                 # on resume so the saved location shows up immediately
                 # (not only after the next narration turn). Pingpong

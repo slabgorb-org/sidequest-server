@@ -369,10 +369,13 @@ def test_narrator_output_format_does_not_contain_references_location():
     )
 
 
-def test_narrator_output_format_keeps_action_rewrite():
-    """action_rewrite is live — must remain in prompt."""
-    assert "action_rewrite" in NARRATOR_OUTPUT_ONLY, (
-        "NARRATOR_OUTPUT_ONLY must still contain 'action_rewrite' (it's live)"
+def test_narrator_output_format_retires_action_rewrite():
+    """Story 151-3 (ADR-150 step 3): action_rewrite is retired from the narrator
+    output contract — produced by the pre-narrator IntentRouter now, not the
+    narrator game_patch. It must NOT remain in the prompt."""
+    assert "action_rewrite" not in NARRATOR_OUTPUT_ONLY, (
+        "NARRATOR_OUTPUT_ONLY must no longer contain 'action_rewrite' — retired "
+        "to the IntentRouter pre-pass in 151-3"
     )
 
 

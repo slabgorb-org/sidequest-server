@@ -1347,7 +1347,10 @@ def extract_structured_from_response(raw: str) -> dict[str, Any]:
         "visual_scene": patch.get("visual_scene"),
         "scene_mood": patch.get("scene_mood", patch.get("mood")),
         "sfx_triggers": patch.get("sfx_triggers", []),
-        "action_rewrite": patch.get("action_rewrite"),
+        # Story 151-3 (ADR-150 step 3): action_rewrite is RETIRED from the
+        # narrator game_patch — it is produced by the pre-narrator IntentRouter
+        # now (sourced onto the result from context.dispatch_package). Do NOT
+        # surface it here even if a (non-compliant) narrator still emits it.
         "private_segments": _private_segments,
         "beat_selections": patch.get("beat_selections", []),
         "confrontation": patch.get("confrontation"),
@@ -3557,12 +3560,16 @@ class Orchestrator:
 
         Covers the fields that are sidecar-sourced on every path:
         presentation/signal fields with no successor tool (scene_mood,
-        visual_scene, npcs_present, footnotes, sfx_triggers, action_rewrite),
+        visual_scene, npcs_present, footnotes, sfx_triggers),
         the no-successor-tool state lanes (items_*,
         gold_change, lore_established, companions_*), and the
-        agent/token/prompt/raw/secret telemetry tail. Also performs the two
-        shared side effects: the canonical-prose leak audit and the
-        action_rewrite-absent warning.
+        agent/token/prompt/raw/secret telemetry tail. Performs the
+        canonical-prose leak audit when a dispatch package is present.
+
+        Story 151-3 (ADR-150 step 3): ``action_rewrite`` is the one field here
+        that is NOT sidecar-sourced — it is read from the pre-narrator
+        ``context.dispatch_package`` (the IntentRouter's rewrite), retiring the
+        narrator game_patch field and its absent-warning.
 
         It deliberately does NOT include any key in
         :data:`_SDK_TOOL_OWNED_FIELDS` — that omission is structural (a
@@ -3581,18 +3588,26 @@ class Orchestrator:
                 entity_tokens_by_id=self._entity_tokens_for_registry(context),
             )
 
-        if extraction["action_rewrite"] is None:
-            logger.warning("action_rewrite absent from extraction — using default (empty rewrite)")
-
         npc_mentions = [NpcMention.from_value(v) for v in extraction["npcs_present"]]
 
         visual_scene: VisualScene | None = None
         if extraction["visual_scene"] and isinstance(extraction["visual_scene"], dict):
             visual_scene = VisualScene.from_dict(extraction["visual_scene"])
 
+        # Story 151-3 (ADR-150 step 3): action_rewrite is sourced from the
+        # pre-narrator IntentRouter (``context.dispatch_package.action_rewrite``),
+        # NOT the retired narrator game_patch. This provenance flip closes the
+        # ordering hazard for EVERY post-narrator consumer at once
+        # (visibility_classifier, confrontation_intent_validator, narration_apply
+        # all read ``result.action_rewrite``). None when the pre-pass produced no
+        # rewrite — the omitted→default loud net is the pre-pass
+        # ``intent_router.action_rewrite`` span (emitted=False), not a sidecar warn.
         action_rewrite: ActionRewrite | None = None
-        if isinstance(extraction["action_rewrite"], dict):
-            action_rewrite = ActionRewrite.from_dict(extraction["action_rewrite"])
+        pre_pass = context.dispatch_package.action_rewrite if context.dispatch_package else None
+        if pre_pass is not None:
+            action_rewrite = ActionRewrite(
+                you=pre_pass.you, named=pre_pass.named, intent=pre_pass.intent
+            )
 
         return {
             "narration": prose,

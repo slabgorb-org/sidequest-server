@@ -40,6 +40,7 @@ from sidequest.agents.llm_factory import (
 from sidequest.agents.narrator_guardrails import CONFRONTATION_TRIGGER_CORE
 from sidequest.protocol.dispatch import DispatchPackage
 from sidequest.telemetry.spans.intent_router import (
+    intent_router_action_rewrite_span,
     intent_router_decompose_span,
     intent_router_failed_span,
 )
@@ -300,6 +301,13 @@ For each player action:
      distinctive_detail_hint DISPATCH in step 2 — a different mechanism; do not
      carry it into narrator_instructions.)
   4. Set confidence_global to your overall confidence across the turn.
+  5. Emit action_rewrite — rewrite the player's raw action into three
+     perspectives: {"you": "<second-person>", "named": "<third-person with the
+     acting character's name>", "intent": "<neutral distilled intent, no
+     pronouns>"}. "I draw my sword" → {"you": "You draw your sword", "named":
+     "Kael draws their sword", "intent": "draw sword"}. Derive it from the raw
+     action ALONE — no prose is needed. Emit it on every turn a character acts;
+     omit only for pure atmosphere with no actor.
 
 Every dispatch carries a visibility tag. Default visible_to="all" with empty
 perception_fidelity unless the state clearly names asymmetric visibility.
@@ -525,6 +533,19 @@ class IntentRouter:
                 # from the caller. Setting it explicitly here keeps the attribute
                 # present on every decompose span so the GM panel can filter.
                 span.set_attribute("degraded", False)
+
+            # Story 151-3 (ADR-150 step 3): the pre-pass now PRODUCES the
+            # player-action rewrite (you/named/intent). Emit the GM-panel
+            # lie-detector span on every successful decompose — emitted=False is
+            # the loud net when the producer omitted it (the omitted→default
+            # fallback is the transition safety, never a silent skip).
+            ar = pkg.action_rewrite
+            ar_emitted = bool(ar and (ar.you or ar.named or ar.intent))
+            with intent_router_action_rewrite_span(
+                emitted=ar_emitted,
+                intent=(ar.intent if ar is not None else ""),
+            ):
+                pass
             return pkg
 
         assert last_failure is not None  # _MAX_TOTAL_ATTEMPTS >= 1

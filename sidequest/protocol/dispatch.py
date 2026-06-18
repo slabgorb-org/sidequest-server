@@ -246,6 +246,37 @@ class CrossAction(ProtocolBase):
 
 
 # ---------------------------------------------------------------------------
+# Action rewrite (Story 151-3 / ADR-150 step 3)
+# ---------------------------------------------------------------------------
+
+
+class ActionRewrite(ProtocolBase):
+    """The player's own action rewritten into three perspectives.
+
+    A mechanical transform of the submitted action — needs nothing from the
+    narrator's prose. ADR-150 §1 moves this OFF the narrator's post-narration
+    game_patch sidecar and ONTO the pre-narrator IntentRouter (this package),
+    closing the ordering hazard where the field was emitted by the very turn
+    whose visibility (``visibility_classifier``) and confrontation-intent it
+    gates. ``you`` = second-person, ``named`` = third-person with the acting
+    character's name, ``intent`` = neutral distilled intent (no pronouns).
+    """
+
+    you: str = Field(
+        default="", description="The action in second person, e.g. 'You draw your sword'."
+    )
+    named: str = Field(
+        default="",
+        description="The action in third person with the acting character's name, "
+        "e.g. 'Kael draws their sword'.",
+    )
+    intent: str = Field(
+        default="",
+        description="The neutral distilled intent, no pronouns, e.g. 'draw sword'.",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Top-level package
 # ---------------------------------------------------------------------------
 
@@ -255,6 +286,19 @@ class DispatchPackage(ProtocolBase):
     per_player: list[PlayerDispatch] = Field(default_factory=list)
     cross_player: list[CrossAction] = Field(default_factory=list)
     confidence_global: float = Field(ge=0.0, le=1.0)
+    # Story 151-3 (ADR-150 step 3): the pre-pass IntentRouter produces the
+    # player-action rewrite here, replacing the retired narrator game_patch
+    # sidecar field. None when the producer emitted no rewrite (the loud net is
+    # the ``intent_router.action_rewrite`` span with ``emitted=False``).
+    action_rewrite: ActionRewrite | None = Field(
+        default=None,
+        description=(
+            "Rewrite of the player's OWN submitted action into three perspectives "
+            "(you/named/intent). Produce this on EVERY turn from the raw action "
+            "alone — it feeds visibility classification and the confrontation-intent "
+            "check. Omit only when no character acts (pure atmosphere)."
+        ),
+    )
 
     # Note: the historical ``degraded`` / ``degraded_reason`` fields and the
     # ``_degraded_requires_reason`` validator were removed by Story 59-2

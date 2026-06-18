@@ -534,8 +534,14 @@ REQUIRED_TOKENS: tuple[str, ...] = (
     "scene_illustration",
     "apply_status",
     "Boon",
-    # test_narrator — sidecar action_rewrite contract
-    "action_rewrite",
+    # Story 151-3 (ADR-150 step 3): "action_rewrite" REMOVED from this list —
+    # retired from the narrator output contract, produced by the pre-narrator
+    # IntentRouter now (same migration shape as the 61-14 confrontation-type
+    # token removal above). New home covered by
+    # tests/agents/test_action_rewrite_intent_router_prepass.py +
+    # tests/agents/test_narrator.py::test_narrator_output_format_retires_action_rewrite.
+    # Design Deviation logged in the 151-3 session — silent omission is forbidden,
+    # hence this banner.
     # test_narrator — sidecar npc-adversary rule
     "CRITICAL ADVERSARY RULE",
     # test_57_4_recency_guardrails_migration — load-bearing fingerprint

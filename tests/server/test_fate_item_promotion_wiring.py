@@ -97,3 +97,35 @@ def test_non_fate_pc_is_untouched(snapshot_with_pack, character_named_sam):
     )
     assert bauble is not None
     assert "promoted" not in bauble
+
+
+def test_narrator_grants_aspect_on_invented_item(snapshot_with_pack, character_named_sam):
+    """A Fate PC gains an item the narrator invented (no catalog gear), annotated
+    with grants_aspect → one capped invokable aspect lands on the sheet."""
+    snap, base_pack = snapshot_with_pack
+    sam = character_named_sam
+    sam.core.fate_sheet = FateSheet(skills={"Will": 2}, fate_points=3)
+    snap.characters.append(sam)
+    snap.turn_manager.record_interaction()
+
+    pack = copy.deepcopy(base_pack)
+    pack.worlds = {}
+    pack.rules.fate = FateConfig(gear_catalog=[])  # no authored gear
+
+    result = NarrationTurnResult(
+        narration="A locket, warm to the touch, hums as you pocket it.",
+        items_gained=[
+            {
+                "name": "Mysterious Locket",
+                "id": "narrator:mysterious_locket",
+                "grants_aspect": "The Locket That Hums Near Magic",
+            }
+        ],
+    )
+    _apply_narration_result_to_snapshot(snap, result, sam.core.name, pack=pack, room=room_for(snap))
+
+    sheet = sam.core.fate_sheet
+    aspect = next((a for a in sheet.aspects if a.text == "The Locket That Hums Near Magic"), None)
+    assert aspect is not None
+    assert aspect.kind == "character" and aspect.free_invokes == 0
+    assert aspect.source_gear == "narrator:mysterious_locket"

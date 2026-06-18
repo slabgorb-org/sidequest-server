@@ -4837,6 +4837,7 @@ def _apply_narration_result_to_snapshot(
                     item_name=str(item_dict["name"]),
                     gear_defs=_gear_defs,
                     actor=recipient_char.core.name,
+                    narrator_aspect=(str(entry.get("grants_aspect", "") or "").strip() or None),
                 )
                 if _promo.promoted:
                     item_dict["promoted"] = True

@@ -65,14 +65,21 @@ def promote_gained_item(
     item_name: str,
     gear_defs: list[GearDef],
     actor: str = "",
+    narrator_aspect: str | None = None,
     _tracer: trace.Tracer | None = None,
 ) -> ItemPromotionResult:
-    """Promote a just-gained item to aspect(s) on ``sheet`` (Phase 1: catalog).
+    """Promote a just-gained item to aspect(s) on ``sheet`` (Phase 1: catalog;
+    Phase 2: narrator on-the-fly).
 
     Dedup first: a second grant of an already-promoted item is a logged no-op.
     Then match against ``gear_defs`` and append each ``grants_aspects`` entry as a
     character/permission Aspect (free_invokes 0, source_gear=item_id). Stunts on
-    the matched gear are counted (``stunts_deferred``) but NOT applied."""
+    the matched gear are counted (``stunts_deferred``) but NOT applied.
+
+    Phase 2: when no catalog gear matched AND ``narrator_aspect`` is a non-empty
+    string, mint exactly ONE Aspect(kind="character", free_invokes=0) — the game
+    can make a found thing TRUE, only an author can make it STRONG (Rule of Cool).
+    Catalog match WINS over the narrator hint."""
     # Dedup — never re-promote the same inventory item; log it (No Silent Fallbacks).
     if any(a.source_gear == item_id for a in sheet.aspects):
         fate_item_promoted_span(
@@ -92,8 +99,28 @@ def promote_gained_item(
 
     gear = match_gained_gear(item_id, item_name, gear_defs)
     if gear is None:
+        # Phase 2: no authored gear → the narrator may promote ONE capped aspect.
+        # free_invokes 0, kind character, no stunt possible — the game can make a
+        # found thing TRUE, only an author can make it STRONG (Rule of Cool).
+        text = (narrator_aspect or "").strip()
+        if not text:
+            return ItemPromotionResult(
+                promoted=False, aspects_added=0, source="", stunts_deferred=0, deduped=False
+            )
+        sheet.aspects.append(Aspect(text=text, kind="character", source_gear=item_id))
+        fate_item_promoted_span(
+            actor=actor,
+            item_id=item_id,
+            item_name=item_name,
+            aspect_text=text,
+            source="narrator",
+            aspects_added=1,
+            stunts_deferred=0,
+            deduped=False,
+            _tracer=_tracer,
+        )
         return ItemPromotionResult(
-            promoted=False, aspects_added=0, source="", stunts_deferred=0, deduped=False
+            promoted=True, aspects_added=1, source="narrator", stunts_deferred=0, deduped=False
         )
 
     added = 0

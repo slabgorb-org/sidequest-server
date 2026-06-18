@@ -218,3 +218,50 @@ def test_stunt_only_gear_defers_without_promoting():
     assert [s.name for s in spans] == ["fate.item_promoted"]
     assert spans[0].attributes["aspects_added"] == 0
     assert spans[0].attributes["stunts_deferred"] == 1
+
+
+def test_narrator_aspect_mints_one_capped_character_aspect():
+    sheet = FateSheet(fate_points=3)
+    res = promote_gained_item(
+        sheet=sheet,
+        item_id="narrator:locket",
+        item_name="Mysterious Locket",
+        gear_defs=[],
+        actor="Dorothy",
+        narrator_aspect="The Locket That Hums Near Magic",
+    )
+    assert res.source == "narrator"
+    assert res.aspects_added == 1
+    aspect = sheet.aspects[0]
+    assert aspect.kind == "character"
+    assert aspect.free_invokes == 0  # narrator can make it TRUE, never STRONG
+    assert aspect.source_gear == "narrator:locket"
+
+
+def test_catalog_match_wins_over_narrator_hint():
+    sheet = FateSheet()
+    res = promote_gained_item(
+        sheet=sheet,
+        item_id="narrator:silver_shoes",
+        item_name="Silver Shoes",
+        gear_defs=[_slippers()],
+        actor="X",
+        narrator_aspect="Some Improvised Aspect",
+    )
+    assert res.source == "catalog"
+    assert [a.text for a in sheet.aspects] == ["The Silver Shoes of the Dead Witch"]
+
+
+def test_blank_narrator_aspect_is_no_promotion():
+    sheet = FateSheet()
+    for blank in ("", "   ", None):
+        res = promote_gained_item(
+            sheet=sheet,
+            item_id="narrator:rock",
+            item_name="Rock",
+            gear_defs=[],
+            actor="X",
+            narrator_aspect=blank,
+        )
+        assert res.promoted is False
+    assert sheet.aspects == []

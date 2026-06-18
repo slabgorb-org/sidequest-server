@@ -270,9 +270,7 @@ def test_fate_vocabulary_span_fires_with_trim_evidence(otel_capture):
     _build_state_summary(snap, pack=_fate_pack())
 
     spans = [
-        s
-        for s in otel_capture.get_finished_spans()
-        if s.name == "intent_router.fate_vocabulary"
+        s for s in otel_capture.get_finished_spans() if s.name == "intent_router.fate_vocabulary"
     ]
     assert len(spans) == 1
     attrs = spans[0].attributes
@@ -290,9 +288,7 @@ def test_no_fate_vocabulary_span_for_non_fate_pack(otel_capture):
 
     assert "fate" not in summary
     spans = [
-        s
-        for s in otel_capture.get_finished_spans()
-        if s.name == "intent_router.fate_vocabulary"
+        s for s in otel_capture.get_finished_spans() if s.name == "intent_router.fate_vocabulary"
     ]
     assert spans == []
 

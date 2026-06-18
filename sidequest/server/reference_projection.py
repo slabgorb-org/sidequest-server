@@ -50,6 +50,7 @@ from sidequest.server.reference_timeline import (
     load_legends,
     load_lore_history,
 )
+from sidequest.genre.ruleset_reference import build_ruleset_reference_section
 from sidequest.server.reference_visibility import Visibility, classify
 from sidequest.server.utils import slugify_player_name
 from sidequest.telemetry.spans.reference import (
@@ -663,6 +664,15 @@ def build_lore_projection(pack: str, world: str, *, pack_dir: Path, world_dir: P
     return {"schema_version": 1, "pack": pack, "world": world, "sections": sections}
 
 
+def _read_ruleset(pack_dir: Path) -> str:
+    """Read the bound ruleset slug from a pack's rules.yaml (default 'dial')."""
+    rules_path = pack_dir / "rules.yaml"
+    if not rules_path.exists():
+        return "dial"
+    data = yaml.safe_load(rules_path.read_text(encoding="utf-8")) or {}
+    return str(data.get("ruleset", "dial")) if isinstance(data, dict) else "dial"
+
+
 def build_rules_projection(pack: str, *, pack_dir: Path) -> dict:
     """Assemble the public-projected rules document (Story 100-6).
 
@@ -693,5 +703,11 @@ def build_rules_projection(pack: str, *, pack_dir: Path) -> dict:
         section = build_generic_yaml_section(data, file_stem=path.stem, pack=pack, world="")
         if section is not None:
             sections.append(section)
+
+    ruleset_section = build_ruleset_reference_section(
+        _read_ruleset(pack_dir), rulesets_root=pack_dir.parent.parent / "rulesets"
+    )
+    if ruleset_section is not None:
+        sections.insert(0, ruleset_section)
 
     return {"schema_version": 1, "pack": pack, "sections": sections}

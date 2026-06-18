@@ -216,6 +216,34 @@ async def test_extract_passes_narration_prose_into_the_user_prompt() -> None:
     assert prose in kwargs.get("user", ""), "narration prose must be in the extractor's user prompt"
 
 
+
+async def test_extract_truncates_overlong_narration_before_the_sdk_call() -> None:
+    """Reviewer RT1 [HIGH] / python.md #11 (CWE-400): the per-turn live call must
+    bound the player-influenced prose. A narration past `_MAX_NARRATION_CHARS` is
+    truncated before reaching the prompt — the tail must NOT be transmitted — yet
+    the call still fires on the head (truncate, never reject)."""
+    from sidequest.agents.sidecar_extractor import _MAX_NARRATION_CHARS, SidecarExtractor
+
+    llm = _make_mock_llm(_empty_emit())
+    overlong = "A" * (_MAX_NARRATION_CHARS + 50) + "UNIQUE_TAIL_MARKER"
+    await SidecarExtractor(llm=llm).extract(narration=overlong, snapshot=_snapshot())
+
+    user = llm.emit_tool.await_args.kwargs.get("user", "")
+    assert "UNIQUE_TAIL_MARKER" not in user, (
+        "narration past the cap must be truncated off the prompt"
+    )
+    # Extract just the narration portion (strip preamble and footer).
+    narration_start = user.find("\n") + 1
+    narration_end = user.rfind("\n\nEmit")
+    narration_portion = user[narration_start:narration_end]
+    assert narration_portion.count("A") <= _MAX_NARRATION_CHARS, (
+        "transmitted narration must not exceed the cap"
+    )
+    assert llm.emit_tool.await_count == 1, (
+        "truncation must not reject the turn — the head still runs"
+    )
+
+
 def test_bucket_b_field_set_is_the_eleven_canonical_fields() -> None:
     """The module exposes the canonical bucket-B field set so the 151-4/151-5
     cutover stories reference ONE source of truth, not drifting string lists."""
@@ -445,6 +473,43 @@ async def test_run_watcher_surfaces_failure_as_span_without_crashing(otel_captur
 
 
 # ===========================================================================
+
+async def test_run_watcher_emits_crashed_span_on_unexpected_error(otel_capture, monkeypatch) -> None:
+    """Reviewer RT1 [MEDIUM] / OTEL Observability: when the shadow runner itself
+    crashes on an UNEXPECTED error (not the extractor's own loud
+    SidecarExtractionFailure), a sidecar_extraction.watcher_crashed span emits
+    loudly so the GM panel shows "the lie detector itself is broken" — never a
+    silent continue. Mirrors dispatch_engagement_watcher's crashed-span (ADR-031
+    Observability Principle: every subsystem decision, including a broken
+    observability pass, emits a span)."""
+    from sidequest.agents.sidecar_extractor import run_sidecar_extraction_watcher
+    from sidequest.agents import sidecar_extractor as mod
+
+    # Break the mismatch detection (which runs AFTER extraction succeeds) so the
+    # runner crashes in the outer exception handler, emitting the watcher_crashed
+    # span. This tests the "the lie detector itself is broken" path.
+    def broken_detect(*args, **kwargs):
+        raise RuntimeError("mismatch witness bug: snapshot corruption")
+
+    monkeypatch.setattr(mod, "detect_sidecar_extraction_mismatch", broken_detect)
+
+    # MUST NOT raise — the turn pipeline continues; the span is the loud signal.
+    await run_sidecar_extraction_watcher(
+        narration="You meet the mysterious stranger.",
+        snapshot=_snapshot(),
+        llm=_make_mock_llm(_full_emit()),
+    )
+
+    crashed = [
+        s
+        for s in otel_capture.get_finished_spans()
+        if s.name == "sidecar_extraction.watcher_crashed"
+    ]
+    assert crashed, "runner must emit watcher_crashed span on unexpected error"
+    assert crashed[0].attributes.get("error_type") == "RuntimeError"
+    assert "snapshot corruption" in crashed[0].attributes.get("error", "")
+
+
 # AC6 — Wiring: reachable through the real post-narration pipeline
 # ===========================================================================
 

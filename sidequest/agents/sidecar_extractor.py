@@ -35,6 +35,7 @@ from sidequest.telemetry.spans.sidecar_extraction import (
     sidecar_extraction_field_span,
     sidecar_extraction_mismatch_span,
     sidecar_extraction_run_span,
+    sidecar_extraction_watcher_crashed_span,
 )
 
 logger = logging.getLogger(__name__)
@@ -62,6 +63,14 @@ BUCKET_B_FIELDS: tuple[str, ...] = (
 # the IntentRouter producer).
 _MAX_TOTAL_ATTEMPTS = 2
 _RAW_PREVIEW_LIMIT = 200
+
+# Bound the player-influenced prose before the per-turn live SDK call so a
+# runaway-long narration cannot grind unbounded input-token cost (CWE-400,
+# python.md #11). The bucket-B signal (items, NPCs, mood) is in the opening
+# prose, not the ten-thousandth char. Mirrors
+# post_narration_classifier._MAX_NARRATION_CHARS; truncation is logged LOUD,
+# never silent (No Silent Fallbacks).
+_MAX_NARRATION_CHARS = 4_000
 
 _TOOL_NAME = "emit_sidecar_fields"
 _TOOL_DESCRIPTION = (
@@ -166,6 +175,13 @@ class SidecarExtractor:
         grounding; the shadow skeleton derives fields from prose alone and
         deliberately mutates nothing.
         """
+        if len(narration) > _MAX_NARRATION_CHARS:
+            logger.warning(
+                "sidecar_extraction narration truncated from %d to %d chars",
+                len(narration),
+                _MAX_NARRATION_CHARS,
+            )
+            narration = narration[:_MAX_NARRATION_CHARS]
         tool_schema = _extraction_tool_schema()
         user_prompt = _build_user_prompt(narration)
         start_ns = time.perf_counter_ns()
@@ -192,16 +208,15 @@ class SidecarExtractor:
             try:
                 extraction = SidecarExtraction.model_validate(tool_input)
             except ValidationError as exc:
-                last_failure = ("schema_invalid", type(exc).__name__)
+                # Keep the full pydantic field detail in last_failure so the raised
+                # SidecarExtractionFailure carries it (parity with timeout/transport,
+                # which keep str(exc)). _emit_failed already logs+spans this attempt,
+                # so no second log line here.
+                last_failure = ("schema_invalid", str(exc))
                 self._emit_failed(
                     reason="schema_invalid",
                     preview=str(tool_input),
                     retry_count=retry_count,
-                )
-                logger.warning(
-                    "sidecar_extraction.failed reason=schema_invalid attempt=%d exc=%s",
-                    retry_count,
-                    exc,
                 )
                 continue
 
@@ -307,8 +322,10 @@ async def run_sidecar_extraction_watcher(
     """
     # Cost Scales with Drama: a turn with no prose has nothing to read — skip the
     # live Haiku call rather than extract from nothing (matches the sibling
-    # post-narration classifier's non-empty-narration gating).
+    # post-narration classifier's non-empty-narration gating). Logged at debug so
+    # "skipped (cost gate)" is distinguishable from "runner never reached".
     if not narration.strip():
+        logger.debug("sidecar_extraction: skipping empty narration (cost gate)")
         return None
     try:
         try:
@@ -338,6 +355,10 @@ async def run_sidecar_extraction_watcher(
             exc,
             exc_info=True,
         )
+        # Loud span so the GM panel shows a crashed lie-detector, not a clean turn
+        # (mirrors run_dispatch_engagement_watcher's crashed-span; OTEL principle).
+        with sidecar_extraction_watcher_crashed_span(error_type=type(exc).__name__, error=str(exc)):
+            pass
         return None
 
 

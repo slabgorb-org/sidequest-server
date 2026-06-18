@@ -66,6 +66,23 @@ SPAN_ROUTES[SPAN_SIDECAR_EXTRACTION_FAILED] = SpanRoute(
     },
 )
 
+# The shadow runner itself crashed on an UNEXPECTED error (not the extractor's
+# own loud SidecarExtractionFailure, which is handled separately) — e.g. a bug in
+# the mismatch witness. Like the sibling dispatch_engagement watcher, a
+# pure-observability post-narration pass must NEVER abort the turn; the runner
+# catches, logs, and emits THIS span so the GM panel shows "the lie detector
+# itself is broken" loudly instead of a silently-skipped turn.
+SPAN_SIDECAR_EXTRACTION_WATCHER_CRASHED = "sidecar_extraction.watcher_crashed"
+SPAN_ROUTES[SPAN_SIDECAR_EXTRACTION_WATCHER_CRASHED] = SpanRoute(
+    event_type="state_transition",
+    component="sidecar_extraction",
+    extract=lambda span: {
+        "field": "sidecar_extraction.watcher_crashed",
+        "error_type": (span.attributes or {}).get("error_type", ""),
+        "error": (span.attributes or {}).get("error", ""),
+    },
+)
+
 # Per-field spans are dynamically named ``sidecar_extraction.{field}`` (the field
 # rides the name, mirroring ``dispatch_engagement.{subsystem}``). They have no
 # ``SPAN_`` constant by design — eleven per-field typed routes would be noise on
@@ -156,4 +173,24 @@ def sidecar_extraction_failed_span(
         tracer_override=_tracer,
     ) as span:
         span.set_status(StatusCode.ERROR, description=reason)
+        yield span
+
+
+@contextmanager
+def sidecar_extraction_watcher_crashed_span(
+    *,
+    error_type: str,
+    error: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Runner-crashed span (ERROR-level) — the observability pass itself broke on
+    an unexpected error. Loud so the GM panel never reads a crashed lie-detector
+    as a clean turn (mirrors ``dispatch_engagement_watcher_crashed_span``)."""
+    with Span.open(
+        SPAN_SIDECAR_EXTRACTION_WATCHER_CRASHED,
+        {"error_type": error_type, "error": error, **attrs},
+        tracer_override=_tracer,
+    ) as span:
+        span.set_status(StatusCode.ERROR, description=error)
         yield span

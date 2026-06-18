@@ -255,8 +255,13 @@ def build_agent_sdk_options(
     deterministic at mt=2, ~3x faster, and ~6x cheaper in output tokens — and a
     mechanical classifier reasons through its (heavily prescriptive) prompt, not
     a scratchpad. Callers that need thinking with structured output can still
-    pass ``thinking`` explicitly to override. Non-structured callers (narrator
-    tool-loop, aside) are untouched — ``thinking`` stays ``None`` for them.
+    pass ``thinking`` explicitly to override. This builder does not *auto*-set
+    ``thinking`` for non-``output_format`` callers — it stays ``None`` unless the
+    caller passes it. Story 126-9: the narrator tool-loop and narrator-aside
+    (``complete_with_tools``) now pass ``thinking={"type":"disabled"}`` explicitly
+    to restore the pre-119-3 thinking-off baseline (the agent-SDK CLI defaults
+    thinking ON/"adaptive", which was tripling narrator latency), so those callers
+    are no longer ``None`` — the explicit kwarg is load-bearing, not redundant.
     """
     assert_subscription_auth()
     if output_format is not None and thinking is None:
@@ -441,6 +446,21 @@ class AnthropicSdkClient:
             max_turns=max_iterations,
             allowed_tools=allowed_tools,
             mcp_servers=mcp_servers,
+            # Story 126-9: the narrator tool-loop runs with extended thinking
+            # DISABLED. The 119-3 agent-sdk port (f970091e) moved this call from
+            # the ``anthropic`` Messages SDK (thinking OFF unless a budget is
+            # passed) onto the ``claude-agent-sdk`` ``query()`` loop, whose CLI
+            # defaults thinking ON ("adaptive"). Left unset, sonnet-4.6 then ran
+            # an adaptive thinking pass before EACH of up to ``max_iterations``
+            # tool-loop iterations, tripling agent_duration_ms (~16s -> ~50-57s;
+            # same-world proof wry_whimsy/oz 15.9 -> 56.7). Passing it explicitly
+            # here (the builder only auto-disables for ``output_format`` calls,
+            # lines 262-263) restores the pre-119-3 baseline — a behaviour
+            # restore, NOT a quality cut. One call site, so this also covers the
+            # narrator-aside (aside_resolver.py: ``caller="aside"``). If thinking
+            # is ever wanted it must be a deliberate, bounded opt-in, never an
+            # adaptive default firing once per iteration.
+            thinking={"type": "disabled"},
         )
 
         last_text = ""

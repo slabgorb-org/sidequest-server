@@ -161,6 +161,14 @@ async def test_orchestrator_routes_narration_through_sdk(
     #    tool_use → end_turn re-call), so one query() call per turn.
     assert len(fake.calls) == 1
 
+    # 1b. Story 126-9 — the orchestrator's narrator tool-loop runs with extended
+    #     thinking DISABLED end-to-end. This closes the orchestrator→thinking
+    #     chain (the focused guard lives in test_126_9_narrator_thinking_disabled);
+    #     here it rides the REAL complete_with_tools with a non-None tool_dispatch,
+    #     so it also covers the MCP-present path. If the f970091e regression
+    #     returns (thinking left None → CLI adaptive default ON), this fails.
+    assert fake.last_options.thinking == {"type": "disabled"}
+
     # 2. The full tool catalog was advertised — Story 119-3 surfaces it as the
     #    SDK-MCP allowed_tools (mcp__narration__<name>), one per registry tool.
     #    Story 54-6 added resolve_location_entity (27th tool); ADR-109 §5.3.

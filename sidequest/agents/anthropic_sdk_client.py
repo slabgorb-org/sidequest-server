@@ -441,6 +441,21 @@ class AnthropicSdkClient:
             max_turns=max_iterations,
             allowed_tools=allowed_tools,
             mcp_servers=mcp_servers,
+            # Story 126-9: the narrator tool-loop runs with extended thinking
+            # DISABLED. The 119-3 agent-sdk port (f970091e) moved this call from
+            # the ``anthropic`` Messages SDK (thinking OFF unless a budget is
+            # passed) onto the ``claude-agent-sdk`` ``query()`` loop, whose CLI
+            # defaults thinking ON ("adaptive"). Left unset, sonnet-4.6 then ran
+            # an adaptive thinking pass before EACH of up to ``max_iterations``
+            # tool-loop iterations, tripling agent_duration_ms (~16s -> ~50-57s;
+            # same-world proof wry_whimsy/oz 15.9 -> 56.7). Passing it explicitly
+            # here (the builder only auto-disables for ``output_format`` calls,
+            # lines 262-263) restores the pre-119-3 baseline — a behaviour
+            # restore, NOT a quality cut. One call site, so this also covers the
+            # narrator-aside (aside_resolver.py: ``caller="aside"``). If thinking
+            # is ever wanted it must be a deliberate, bounded opt-in, never an
+            # adaptive default firing once per iteration.
+            thinking={"type": "disabled"},
         )
 
         last_text = ""

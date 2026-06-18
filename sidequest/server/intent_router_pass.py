@@ -837,7 +837,15 @@ async def execute_intent_router_pre_narrator_pass(
             ):
                 pass
             if verb_hits and not conf_types:
-                logger.warning(
+                # Story 126-6: a verb-hit-without-dispatch is a CORRECT
+                # suppression — the router lexically matched an authored
+                # intent_verb and deliberately declined to seat a
+                # confrontation (expected behavior, not an error). The
+                # ``intent_router.confrontation_classified`` span above already
+                # records this decline (emitted=0 + verb_hits) for the GM
+                # panel, so this log line is redundant signal; emit it at DEBUG
+                # so it stops diluting genuine WARNINGs in the server log.
+                logger.debug(
                     "intent_router.confrontation_verb_unrouted verb_hits=%s "
                     "action_preview=%r — the action lexically matched authored "
                     "intent_verbs but the router emitted no confrontation dispatch",

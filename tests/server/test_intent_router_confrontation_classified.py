@@ -7,7 +7,9 @@ indistinguishable from "feature doesn't exist". The pass now emits
 ``intent_router.confrontation_classified`` whenever the action lexically
 matches an authored intent_verb OR a confrontation dispatch was emitted;
 ``emitted=0`` with non-empty ``verb_hits`` is the unrouted shape (plus a
-WARNING log). Quiet turns (no hit, no dispatch) stay span-free.
+DEBUG log — Story 126-6 downgraded it from WARNING; a correct suppression
+is not a warning, and the span already carries the GM-panel signal). Quiet
+turns (no hit, no dispatch) stay span-free.
 
 Twin of ``test_intent_router_witnessed_act_classified.py`` — same harness.
 """
@@ -145,12 +147,13 @@ async def test_span_fires_with_emitted_type_when_router_dispatches(otel_capture)
 
 
 @pytest.mark.asyncio
-async def test_verb_hit_with_no_dispatch_is_the_loud_unrouted_shape(otel_capture, caplog):
+async def test_verb_hit_with_no_dispatch_logs_at_debug_not_warning(otel_capture, caplog):
     """The turn-5 decline: action matches authored verbs, router emits no
-    confrontation dispatch → span fires with emitted=0 + verb_hits, and a
-    WARNING names the unrouted verbs."""
+    confrontation dispatch → span fires with emitted=0 + verb_hits, and the
+    unrouted-verb log names the verbs at DEBUG (Story 126-6: a correct
+    suppression is not a WARNING — the span carries the GM-panel signal)."""
     router = _StubRouter(_empty_package())
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.DEBUG):
         await execute_intent_router_pre_narrator_pass(
             intent_router=router,
             snapshot=_snapshot(),
@@ -163,8 +166,11 @@ async def test_verb_hit_with_no_dispatch_is_the_loud_unrouted_shape(otel_capture
     attrs = spans[0].attributes or {}
     assert attrs["emitted"] == 0
     assert "standoff:intimidate" in attrs["verb_hits"]
-    warned = [r for r in caplog.records if "confrontation_verb_unrouted" in r.getMessage()]
-    assert warned, "the decline must log a WARNING naming the unrouted verbs"
+    unrouted = [r for r in caplog.records if "confrontation_verb_unrouted" in r.getMessage()]
+    assert unrouted, "the decline must still log, naming the unrouted verbs"
+    assert all(r.levelno == logging.DEBUG for r in unrouted), (
+        "a correct suppression must log at DEBUG, not WARNING (Story 126-6)"
+    )
 
 
 @pytest.mark.asyncio

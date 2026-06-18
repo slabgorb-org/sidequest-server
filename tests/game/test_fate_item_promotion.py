@@ -154,3 +154,67 @@ def test_emits_item_promoted_span():
     assert [s.name for s in spans] == ["fate.item_promoted"]
     assert spans[0].attributes["source"] == "catalog"
     assert spans[0].attributes["aspects_added"] == 1
+
+
+def test_dedup_noop_is_logged_not_silent():
+    """No-Silent-Fallbacks contract: a re-grant of an already-promoted item
+    emits a fate.item_promoted span with deduped=True (source="" by design),
+    rather than silently returning the no-op."""
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer("t")
+    sheet = FateSheet()
+    promote_gained_item(
+        sheet=sheet,
+        item_id="narrator:silver_shoes",
+        item_name="Silver Shoes",
+        gear_defs=[_slippers()],
+        actor="Dorothy",
+        _tracer=tracer,
+    )
+    promote_gained_item(
+        sheet=sheet,
+        item_id="narrator:silver_shoes",
+        item_name="Silver Shoes",
+        gear_defs=[_slippers()],
+        actor="Dorothy",
+        _tracer=tracer,
+    )
+    spans = exporter.get_finished_spans()
+    assert [s.name for s in spans] == ["fate.item_promoted", "fate.item_promoted"]
+    assert spans[1].attributes["deduped"] is True
+    assert spans[1].attributes["aspects_added"] == 0
+
+
+def test_stunt_only_gear_defers_without_promoting():
+    """Matched gear with stunts but no aspects: nothing is appended (promoted
+    False), the stunt is counted/deferred, and a span still fires so the GM panel
+    sees the deferral."""
+    gear = GearDef(
+        id="ruby_charm",
+        name="Ruby Charm",
+        grants_aspects=[],
+        grants_stunts=[GearGrantStunt(name="Click Three Times", description="Teleport home")],
+    )
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    sheet = FateSheet()
+    res = promote_gained_item(
+        sheet=sheet,
+        item_id="ruby_charm",
+        item_name="Ruby Charm",
+        gear_defs=[gear],
+        actor="X",
+        _tracer=provider.get_tracer("t"),
+    )
+    assert res.promoted is False
+    assert res.stunts_deferred == 1
+    assert res.source == "catalog"
+    assert sheet.aspects == []
+    assert sheet.stunts == []
+    spans = exporter.get_finished_spans()
+    assert [s.name for s in spans] == ["fate.item_promoted"]
+    assert spans[0].attributes["aspects_added"] == 0
+    assert spans[0].attributes["stunts_deferred"] == 1

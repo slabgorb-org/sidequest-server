@@ -68,3 +68,69 @@ def load_ruleset_chapters(ruleset: str, *, rulesets_root: Path) -> list[dict]:
                 "body_markdown": body,
             }
     return sorted(by_anchor.values(), key=lambda c: c["order"])
+
+
+RULESET_LABEL: dict[str, str] = {
+    "fate": "The Rules of Fate Core",
+    "wwn": "Worlds Without Number — Player Reference",
+    "cwn": "Cities Without Number — Player Reference",
+    "swn": "Stars Without Number — Player Reference",
+    "awn": "Ashes Without Number — Player Reference",
+}
+
+_WN_ATTRIB = (
+    "Reproduced from the {name} System Reference Document under its free-use terms. "
+    "Not affiliated with, endorsed by, or reviewed by Sine Nomine Publishing."
+)
+
+RULESET_PROVENANCE: dict[str, dict] = {
+    "fate": {
+        "source": "Fate Core System (Evil Hat Productions)",
+        "license": "ccby",
+        "attribution": (
+            "This work is based on Fate Core System (found at http://www.faterpg.com/), "
+            "a product of Evil Hat Productions, LLC, developed, authored, and edited by "
+            "Leonard Balsera, Brian Engard, Jeremy Keller, Ryan Macklin, Mike Olson, "
+            "Clark Valentine, Amanda Valentine, Fred Hicks, and Rob Donoghue, and licensed "
+            "for our use under the Creative Commons Attribution 3.0 Unported license "
+            "(http://creativecommons.org/licenses/by/3.0/)."
+        ),
+    },
+    "wwn": {
+        "source": "Worlds Without Number SRD",
+        "license": "wn-free",
+        "attribution": _WN_ATTRIB.format(name="Worlds Without Number"),
+    },
+    "cwn": {
+        "source": "Cities Without Number SRD",
+        "license": "wn-free",
+        "attribution": _WN_ATTRIB.format(name="Cities Without Number"),
+    },
+    "swn": {
+        "source": "Stars Without Number SRD",
+        "license": "wn-free",
+        "attribution": _WN_ATTRIB.format(name="Stars Without Number"),
+    },
+    "awn": {
+        "source": "Ashes Without Number SRD",
+        "license": "wn-free",
+        "attribution": _WN_ATTRIB.format(name="Ashes Without Number"),
+    },
+}
+
+
+def build_ruleset_reference_section(ruleset: str, *, rulesets_root: Path) -> dict | None:
+    """Build the ``rules_document`` section for ``ruleset``, or ``None`` if not applicable."""
+    if ruleset not in BOUND_RULESET_SLUGS:
+        return None
+    chapters = load_ruleset_chapters(ruleset, rulesets_root=rulesets_root)
+    if not chapters:
+        return None
+    return {
+        "id": "ruleset_reference",
+        "type": "rules_document",
+        "label": RULESET_LABEL[ruleset],
+        "ruleset": ruleset,
+        "chapters": chapters,
+        "provenance": RULESET_PROVENANCE[ruleset],
+    }

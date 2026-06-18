@@ -58,3 +58,32 @@ def test_wn_overlay_overrides_core_by_anchor(tmp_path: Path):
     assert by_anchor["combat"]["body_markdown"].strip() == "WWN combat body"
     assert by_anchor["magic"]["title"] == "Magic"                  # core-only chapter preserved
     assert [c["anchor"] for c in chapters] == ["combat", "magic"]  # ordered by `order`
+
+
+def test_build_section_none_for_native_ruleset(tmp_path: Path):
+    from sidequest.genre.ruleset_reference import build_ruleset_reference_section
+
+    assert build_ruleset_reference_section("dial", rulesets_root=tmp_path / "rulesets") is None
+
+
+def test_build_section_none_when_unauthored(tmp_path: Path):
+    from sidequest.genre.ruleset_reference import build_ruleset_reference_section
+
+    # 'fate' is bound but no content on disk -> None (gate, not builder, enforces presence)
+    assert build_ruleset_reference_section("fate", rulesets_root=tmp_path / "rulesets") is None
+
+
+def test_build_section_shape_and_provenance(tmp_path: Path):
+    from sidequest.genre.ruleset_reference import build_ruleset_reference_section
+
+    root = tmp_path / "rulesets"
+    _write(root / "fate" / "srd" / "01.md", "fate-basics", "The Basics", 1, "How play works.")
+    section = build_ruleset_reference_section("fate", rulesets_root=root)
+    assert section is not None
+    assert section["id"] == "ruleset_reference"
+    assert section["type"] == "rules_document"
+    assert section["ruleset"] == "fate"
+    assert section["label"] == "The Rules of Fate Core"
+    assert section["chapters"][0]["anchor"] == "fate-basics"
+    assert section["provenance"]["license"] == "ccby"
+    assert "Creative Commons" in section["provenance"]["attribution"]

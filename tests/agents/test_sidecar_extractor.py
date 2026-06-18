@@ -216,7 +216,6 @@ async def test_extract_passes_narration_prose_into_the_user_prompt() -> None:
     assert prose in kwargs.get("user", ""), "narration prose must be in the extractor's user prompt"
 
 
-
 async def test_extract_truncates_overlong_narration_before_the_sdk_call() -> None:
     """Reviewer RT1 [HIGH] / python.md #11 (CWE-400): the per-turn live call must
     bound the player-influenced prose. A narration past `_MAX_NARRATION_CHARS` is
@@ -474,7 +473,10 @@ async def test_run_watcher_surfaces_failure_as_span_without_crashing(otel_captur
 
 # ===========================================================================
 
-async def test_run_watcher_emits_crashed_span_on_unexpected_error(otel_capture, monkeypatch) -> None:
+
+async def test_run_watcher_emits_crashed_span_on_unexpected_error(
+    otel_capture, monkeypatch
+) -> None:
     """Reviewer RT1 [MEDIUM] / OTEL Observability: when the shadow runner itself
     crashes on an UNEXPECTED error (not the extractor's own loud
     SidecarExtractionFailure), a sidecar_extraction.watcher_crashed span emits
@@ -482,8 +484,8 @@ async def test_run_watcher_emits_crashed_span_on_unexpected_error(otel_capture, 
     silent continue. Mirrors dispatch_engagement_watcher's crashed-span (ADR-031
     Observability Principle: every subsystem decision, including a broken
     observability pass, emits a span)."""
-    from sidequest.agents.sidecar_extractor import run_sidecar_extraction_watcher
     from sidequest.agents import sidecar_extractor as mod
+    from sidequest.agents.sidecar_extractor import run_sidecar_extraction_watcher
 
     # Break the mismatch detection (which runs AFTER extraction succeeds) so the
     # runner crashes in the outer exception handler, emitting the watcher_crashed

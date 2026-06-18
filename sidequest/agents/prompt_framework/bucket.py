@@ -74,6 +74,22 @@ STABLE_SECTION_NAMES: frozenset[str] = frozenset(
         "narrator_pov_rules",
         "narrator_referral_rule",
         "narrator_output_style",
+        # Story 151-1 (ADR-150 §Companion quick-win / Alternative A) — the
+        # game_patch output contract ``narrator_output_only`` (built by
+        # ``NarratorAgent.build_output_format`` at narrator.py:290 from the
+        # static ``NARRATOR_OUTPUT_ONLY = _load("output_only.md")`` constant,
+        # no runtime interpolation -> byte-identical per session). Already
+        # registered in ``AttentionZone.Primacy``; the missing half was the
+        # System bucket. Promoting it moves ~15k codepoints (~3.8k tok) off the
+        # per-turn user message onto the stable, CLI-cached ``system_prompt``
+        # prefix. NOTE (post-119-3): the per-block ``cache=True`` markers are
+        # dead (the agent-SDK flattens system_blocks into one system_prompt and
+        # the CLI owns caching) — the win is System->system_prompt (stable,
+        # cached across turns) vs User->per-turn message (uncached), NOT the
+        # legacy 1h-breakpoint mechanism. The spec's named landmine
+        # ``test_60_6_stable_prefix_live_drift`` was deleted in 119-3; nothing
+        # breaks on this promotion.
+        "narrator_output_only",
         # Story 61-20 (ADR-112 zone-promotion) — session-static content lifted
         # out of the volatile Valley tail into the cache-marked system prefix so
         # it is written once and read every subsequent turn (closes 61-19

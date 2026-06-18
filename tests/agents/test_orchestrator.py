@@ -206,10 +206,18 @@ def test_extract_structured_extracts_gold_change():
     assert result["gold_change"] == -10
 
 
-def test_extract_structured_extracts_action_rewrite():
+def test_extract_structured_no_longer_surfaces_action_rewrite():
+    """Story 151-3 / ADR-150 step 3 (AC4): action_rewrite is retired from the
+    narrator's game_patch — it is produced PRE-narrator by the IntentRouter now.
+    ``extract_structured_from_response`` must no longer surface it even when a
+    (non-compliant) narrator still emits the block. Inverts the pre-151-3
+    ``test_extract_structured_extracts_action_rewrite``."""
     raw = '```game_patch\n{"action_rewrite": {"you": "You look around", "named": "Kael looks around", "intent": "look around"}}\n```'
     result = extract_structured_from_response(raw)
-    assert result["action_rewrite"]["you"] == "You look around"
+    assert result.get("action_rewrite") is None, (
+        "game_patch action_rewrite must no longer be extracted — the narrator "
+        "sidecar parse is retired in 151-3 (pre-pass IntentRouter owns it)"
+    )
 
 
 def test_extract_structured_extracts_affinity_progress():
@@ -665,7 +673,12 @@ async def test_run_narration_turn_records_otel_fields():
 
 
 @pytest.mark.asyncio
-async def test_run_narration_turn_warns_missing_action_rewrite(caplog):
+async def test_run_narration_turn_no_longer_warns_action_rewrite_absent_from_extraction(caplog):
+    """Story 151-3 / ADR-150 step 3 (AC4): action_rewrite is no longer a
+    narrator-emitted game_patch field, so an empty game_patch is EXPECTED and
+    must NOT trip the legacy 'action_rewrite absent from extraction' warning.
+    The absence loud-net moves to the pre-pass ``intent_router.action_rewrite``
+    span (emitted=False). Inverts the pre-151-3 warns-missing test."""
     import logging
 
     narration_text = "**The Tavern**\n\nProse.\n\n```game_patch\n{}\n```"
@@ -674,7 +687,10 @@ async def test_run_narration_turn_warns_missing_action_rewrite(caplog):
     context = TurnContext(character_name="Kael")
     with caplog.at_level(logging.WARNING, logger="sidequest.agents.orchestrator"):
         await orch.run_narration_turn("look around", context)
-    assert "action_rewrite absent" in caplog.text
+    assert "absent from extraction" not in caplog.text, (
+        "the narrator no longer owns action_rewrite — the extraction-absent "
+        "warning is retired (loud net is the pre-pass span)"
+    )
 
 
 @pytest.mark.asyncio
@@ -762,7 +778,12 @@ def test_action_flags_not_exported_from_agents_package():
 
 
 def test_action_rewrite_still_present():
-    """Guard: ActionRewrite is LIVE — must not be touched."""
+    """Guard: ActionRewrite is LIVE — must not be touched.
+
+    Story 151-3 retires only the game_patch *parse* of action_rewrite, not the
+    field: NarrationTurnResult.action_rewrite stays (now sourced pre-pass) so
+    visibility_classifier + confrontation_intent_validator + narration_apply
+    keep reading it (ordering hazard closed for all)."""
     from dataclasses import fields
 
     from sidequest.agents.orchestrator import ActionRewrite
@@ -772,6 +793,72 @@ def test_action_rewrite_still_present():
     assert "action_rewrite" in field_names, (
         "action_rewrite must remain on NarrationTurnResult — not in scope for removal"
     )
+
+
+# ---------------------------------------------------------------------------
+# Story 151-3 / ADR-150 step 3 — action_rewrite migrates to the IntentRouter
+# pre-pass. The narrator game_patch no longer feeds it; the result sources it
+# from TurnContext.dispatch_package.action_rewrite (the pre-pass value).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_narration_turn_ignores_game_patch_action_rewrite_when_no_pre_pass():
+    """AC4 retirement guard (result level): the narrator's game_patch
+    action_rewrite is no longer parsed onto the result. With NO pre-pass package
+    present, ``result.action_rewrite`` is None — the narrator can no longer drive
+    the field, which is the root of the ordering hazard ADR-150 §1 closes."""
+    narration_text = (
+        "**Scene**\n\nKael moves.\n\n"
+        '```game_patch\n{"action_rewrite": '
+        '{"you": "You move", "named": "Kael moves", "intent": "move"}}\n```'
+    )
+    client = make_canned_client(narration_text)
+    orch = Orchestrator(client=client)
+    ctx = TurnContext(character_name="Kael", dispatch_package=None)
+    result = await orch.run_narration_turn("move", ctx)
+    assert result.action_rewrite is None, (
+        "game_patch action_rewrite must NOT populate the result — ADR-150 step 3 "
+        "retires the narrator sidecar parse; with no pre-pass it stays unset"
+    )
+
+
+@pytest.mark.asyncio
+async def test_result_action_rewrite_sourced_from_pre_pass_not_game_patch():
+    """AC2 (the wiring test): ``result.action_rewrite`` is the PRE-PASS
+    IntentRouter value carried on ``TurnContext.dispatch_package``, NOT the
+    narrator's game_patch. When both are present, the pre-pass WINS — proving the
+    field's provenance flipped pre-narrator and every post-narrator consumer
+    (visibility_classifier, confrontation_intent_validator, narration_apply) now
+    reads the pre-pass value. Closes the ordering hazard for all at once."""
+    # Narrator still (non-compliantly) emits an action_rewrite "lie" in game_patch.
+    narration_text = (
+        "**Scene**\n\nKael steps forward.\n\n"
+        '```game_patch\n{"action_rewrite": '
+        '{"you": "GAME_PATCH", "named": "GAME_PATCH", "intent": "game_patch"}}\n```'
+    )
+    client = make_canned_client(narration_text)
+    orch = Orchestrator(client=client)
+    pkg = DispatchPackage(
+        turn_id="t1",
+        per_player=[],
+        cross_player=[],
+        confidence_global=1.0,
+        action_rewrite={
+            "you": "You step forward",
+            "named": "Kael steps forward",
+            "intent": "advance",
+        },
+    )
+    ctx = TurnContext(character_name="Kael", dispatch_package=pkg)
+    result = await orch.run_narration_turn("step forward", ctx)
+
+    assert result.action_rewrite is not None
+    assert result.action_rewrite.named == "Kael steps forward", (
+        "result.action_rewrite must come from the pre-pass DispatchPackage, not "
+        "the narrator's retired game_patch sidecar"
+    )
+    assert result.action_rewrite.intent == "advance"
 
 
 def test_narration_turn_result_has_no_classified_intent():

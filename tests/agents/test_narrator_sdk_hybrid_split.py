@@ -262,9 +262,17 @@ async def test_sdk_path_zeros_tool_owned_state(
 async def test_sdk_path_keeps_presentation_fields(
     monkeypatch: pytest.MonkeyPatch, otel_capture: InMemorySpanExporter
 ) -> None:
-    """scene_mood / visual_scene / npcs_present / footnotes / sfx_triggers /
-    action_rewrite have NO successor tool, so they MUST still be parsed off
-    the sidecar — images/audio/footnotes/perception depend on them.
+    """scene_mood / visual_scene / npcs_present / footnotes / sfx_triggers have
+    NO successor tool, so they MUST still be parsed off the sidecar —
+    images/audio/footnotes/perception depend on them.
+
+    Story 151-3 / ADR-150 step 3: ``action_rewrite`` is NO LONGER a
+    game_patch-sourced presentation field — it is produced by the pre-narrator
+    IntentRouter and carried on ``TurnContext.dispatch_package``. With no
+    dispatch_package on this SDK fixture turn, the result carries no rewrite; the
+    pre-pass sourcing is covered by
+    ``test_result_action_rewrite_sourced_from_pre_pass_not_game_patch`` in
+    test_orchestrator.py. The other presentation fields move in 151-4/5, not here.
     """
     result = await _run_sdk_turn(monkeypatch, "Phosphor moss glows green.")
 
@@ -275,8 +283,8 @@ async def test_sdk_path_keeps_presentation_fields(
     assert len(result.footnotes) == 1
     assert result.footnotes[0]["summary"] == "The vault key is iron, not brass."
     assert [m.name for m in result.npcs_present] == ["The Drowned Warden"]
-    assert result.action_rewrite is not None
-    assert result.action_rewrite.intent == "explore"
+    # action_rewrite intentionally NOT asserted here — retired from the sidecar
+    # presentation bucket (now pre-pass-sourced; see 151-3 note above).
 
 
 # ---------------------------------------------------------------------------

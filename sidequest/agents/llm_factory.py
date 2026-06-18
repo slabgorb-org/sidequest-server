@@ -198,6 +198,96 @@ def _record_usage_telemetry(
     )
 
 
+async def _call_haiku_sdk(
+    *,
+    user: str,
+    model: str,
+    system_prompt: str,
+    caller: str,
+    session_id: str | None,
+    ceiling_usd: float,
+    output_format: dict[str, Any] | None = None,
+) -> Any:
+    """Drive one single-shot Haiku call through the shared cost-safety +
+    telemetry choke point and return its terminal ``ResultMessage``.
+
+    Story 119-6: the skeleton every single-shot Haiku site shares (extracted
+    verbatim from the four 119-3 sites — aside, Intent Router, unseeded-objective
+    classifier, archetype inference): pre-flight ADR-134 ceiling refusal (guarded
+    by ``session_id``) → :func:`build_agent_sdk_options` at the mandatory
+    ``max_turns=2`` with ``allowed_tools=[]`` → ``llm_request_span`` +
+    :func:`_consume_to_result` + :func:`_record_usage_telemetry` → post-call
+    ledger ``record_call`` (the same ``session_id`` guard).
+
+    Each caller supplies its OWN ``model``, ``caller`` tag, ``system_prompt`` and
+    — for the three forced-extraction sites — ``output_format`` (the aside passes
+    ``None`` for a plain prose completion, which leaves ``thinking`` unset; an
+    ``output_format`` call auto-disables thinking in the builder). The refactor
+    parameterizes these, it does not flatten them. The result-shape handling
+    (``structured_output`` dict-or-raise via :func:`_extract_structured_output_or_raise`,
+    or the aside's prose/``is_error`` check) stays at the call site.
+
+    ``session_id=None`` is the explicit ADR-134 hard bypass — a sessionless
+    caller opts out of the books deliberately, never by omission (No Silent
+    Fallbacks). The guard lives HERE so every single-shot site bypasses
+    identically.
+    """
+    # Pre-flight terminal refusal (ADR-134, story 91-4): a session killed by ANY
+    # call site (narrator included) must not bill another token.
+    if session_id is not None:
+        cost_safety.ledger().check_ceiling(session_id, ceiling_usd=ceiling_usd)
+    options = build_agent_sdk_options(
+        model=model,
+        system_prompt=system_prompt,
+        max_turns=2,
+        allowed_tools=[],
+        output_format=output_format,
+    )
+    with llm_request_span(model=model) as span:
+        result_msg = await _consume_to_result(user, options)
+        usage = _record_usage_telemetry(span, result_msg, caller=caller, request_model=model)
+    # Post-call safety pass — detector against the (session, caller) rolling
+    # baselines + cumulative ceiling.
+    if session_id is not None:
+        cost_safety.ledger().record_call(
+            session_id=session_id,
+            caller=caller,
+            model=usage.model,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cost_usd=usage.cost_usd,
+            ceiling_usd=ceiling_usd,
+        )
+    return result_msg
+
+
+def _extract_structured_output_or_raise(
+    result_msg: Any, *, error_cls: type[LlmClientError], label: str
+) -> dict[str, Any]:
+    """Read the forced-extraction ``structured_output`` dict off a ResultMessage,
+    raising ``error_cls`` loudly when it is absent.
+
+    Story 119-6: the dict-or-raise contract shared by the three ``output_format``
+    sites (Path A, spec §6.4.2). Each site keeps its OWN loud error type via
+    ``error_cls`` (:class:`IntentRouterEmptyResponse` for the router,
+    :class:`LlmClientError` for the classifier/archetype) and names itself via
+    ``label`` so the failure mode stays identifiable in logs / OTEL — the refactor
+    parameterizes the error type, it does not collapse it to a single class. A
+    ``None`` ``structured_output`` is a real condition to surface (refusal /
+    pause-turn / the ``max_turns=1`` fail-closed shape), never a silently
+    substituted empty dict (No Silent Fallbacks).
+    """
+    structured = getattr(result_msg, "structured_output", None)
+    if structured is None:
+        raise error_cls(
+            f"{label} returned no structured_output "
+            f"(subtype={getattr(result_msg, 'subtype', None)!r}, "
+            f"is_error={getattr(result_msg, 'is_error', None)!r}, "
+            f"num_turns={getattr(result_msg, 'num_turns', None)!r})"
+        )
+    return dict(structured)
+
+
 def build_llm_client(
     *, purpose: Literal["narrator", "tool"] = "narrator"
 ) -> LlmClient | ToolingLlmClient:
@@ -282,31 +372,19 @@ class _AsideLlm:
         # Story 91-4: pre-flight ceiling refusal (a killed session must not
         # bill another Haiku token) + post-call safety pass. ``session_id=None``
         # bypasses both, never the books.
-        if self._session_id is not None:
-            cost_safety.ledger().check_ceiling(
-                self._session_id, ceiling_usd=self._session_cost_ceiling_usd
-            )
-        options = build_agent_sdk_options(
+        # Story 119-6: the cost-safety + telemetry skeleton (caller=aside) runs
+        # through the shared ``_call_haiku_sdk`` choke point. No ``output_format``
+        # — the aside returns prose, so the builder leaves thinking unset — and
+        # the aside keeps its OWN is_error/prose handling below (it returns text,
+        # not a structured dict).
+        result_msg = await _call_haiku_sdk(
+            user=user,
             model=_ASIDE_MODEL,
             system_prompt=system,
-            max_turns=2,
-            allowed_tools=[],
+            caller="aside",
+            session_id=self._session_id,
+            ceiling_usd=self._session_cost_ceiling_usd,
         )
-        with llm_request_span(model=_ASIDE_MODEL) as span:
-            result_msg = await _consume_to_result(user, options)
-            usage = _record_usage_telemetry(
-                span, result_msg, caller="aside", request_model=_ASIDE_MODEL
-            )
-        if self._session_id is not None:
-            cost_safety.ledger().record_call(
-                session_id=self._session_id,
-                caller="aside",
-                model=usage.model,
-                input_tokens=usage.input_tokens,
-                output_tokens=usage.output_tokens,
-                cost_usd=usage.cost_usd,
-                ceiling_usd=self._session_cost_ceiling_usd,
-            )
         if getattr(result_msg, "is_error", False):
             # A failed query (auth absent / max_turns / transport) must raise —
             # never return an empty string a caller could mistake for a real
@@ -390,45 +468,22 @@ class _IntentRouterLlm:
         tool's ``.input`` went, raises :class:`IntentRouterEmptyResponse` on
         absent ``structured_output`` (the loud-raise contract).
         """
-        # Story 91-4: pre-flight ceiling refusal — a session killed by ANY
-        # call site (narrator included) must not bill another router token.
-        if self._session_id is not None:
-            cost_safety.ledger().check_ceiling(
-                self._session_id, ceiling_usd=self._session_cost_ceiling_usd
-            )
-        options = build_agent_sdk_options(
+        # Story 119-6: the cost-safety + telemetry skeleton (caller=intent_router
+        # — the #1 dark spender in the [COST-1] forensics) runs through the shared
+        # ``_call_haiku_sdk`` choke point; the router keeps its OWN loud error type
+        # (:class:`IntentRouterEmptyResponse`) for the dict-or-raise contract.
+        result_msg = await _call_haiku_sdk(
+            user=user,
             model=_INTENT_ROUTER_MODEL,
             system_prompt=_compose_structured_system(system, tool_name, tool_description),
-            max_turns=2,
-            allowed_tools=[],
+            caller="intent_router",
+            session_id=self._session_id,
+            ceiling_usd=self._session_cost_ceiling_usd,
             output_format={"type": "json_schema", "schema": tool_schema},
         )
-        with llm_request_span(model=_INTENT_ROUTER_MODEL) as span:
-            result_msg = await _consume_to_result(user, options)
-            usage = _record_usage_telemetry(
-                span, result_msg, caller="intent_router", request_model=_INTENT_ROUTER_MODEL
-            )
-        # Story 91-4: post-call safety pass — detector against the
-        # (session, intent_router) rolling baselines + cumulative ceiling.
-        if self._session_id is not None:
-            cost_safety.ledger().record_call(
-                session_id=self._session_id,
-                caller="intent_router",
-                model=usage.model,
-                input_tokens=usage.input_tokens,
-                output_tokens=usage.output_tokens,
-                cost_usd=usage.cost_usd,
-                ceiling_usd=self._session_cost_ceiling_usd,
-            )
-        structured = getattr(result_msg, "structured_output", None)
-        if structured is None:
-            raise IntentRouterEmptyResponse(
-                "agent-sdk returned no structured_output "
-                f"(subtype={getattr(result_msg, 'subtype', None)!r}, "
-                f"is_error={getattr(result_msg, 'is_error', None)!r}, "
-                f"num_turns={getattr(result_msg, 'num_turns', None)!r})"
-            )
-        return dict(structured)
+        return _extract_structured_output_or_raise(
+            result_msg, error_cls=IntentRouterEmptyResponse, label="agent-sdk"
+        )
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
@@ -604,45 +659,22 @@ class _UnseededObjectiveClassifierLlm:
         # the Agent SDK has no ``tool_choice``; read the schema-valid dict from
         # ``ResultMessage.structured_output`` at ``max_turns=2``. The ``dict``/
         # raise contract is preserved.
-        # Pre-flight ceiling refusal (ADR-134): a session killed by ANY call site
-        # must not bill another classification token.
-        if self._session_id is not None:
-            cost_safety.ledger().check_ceiling(
-                self._session_id, ceiling_usd=self._session_cost_ceiling_usd
-            )
-        options = build_agent_sdk_options(
+        # Story 119-6: the cost-safety + telemetry skeleton
+        # (caller=unseeded_objective_classifier) runs through the shared
+        # ``_call_haiku_sdk`` choke point; the classifier keeps its OWN loud
+        # error type (:class:`LlmClientError`) for the dict-or-raise contract.
+        result_msg = await _call_haiku_sdk(
+            user=user,
             model=_UNSEEDED_OBJECTIVE_CLASSIFIER_MODEL,
             system_prompt=_compose_structured_system(system, tool_name, tool_description),
-            max_turns=2,
-            allowed_tools=[],
+            caller="unseeded_objective_classifier",
+            session_id=self._session_id,
+            ceiling_usd=self._session_cost_ceiling_usd,
             output_format={"type": "json_schema", "schema": tool_schema},
         )
-        with llm_request_span(model=_UNSEEDED_OBJECTIVE_CLASSIFIER_MODEL) as span:
-            result_msg = await _consume_to_result(user, options)
-            usage = _record_usage_telemetry(
-                span,
-                result_msg,
-                caller="unseeded_objective_classifier",
-                request_model=_UNSEEDED_OBJECTIVE_CLASSIFIER_MODEL,
-            )
-        if self._session_id is not None:
-            cost_safety.ledger().record_call(
-                session_id=self._session_id,
-                caller="unseeded_objective_classifier",
-                model=usage.model,
-                input_tokens=usage.input_tokens,
-                output_tokens=usage.output_tokens,
-                cost_usd=usage.cost_usd,
-                ceiling_usd=self._session_cost_ceiling_usd,
-            )
-        structured = getattr(result_msg, "structured_output", None)
-        if structured is None:
-            raise LlmClientError(
-                "unseeded objective classifier returned no structured_output "
-                f"(subtype={getattr(result_msg, 'subtype', None)!r}, "
-                f"is_error={getattr(result_msg, 'is_error', None)!r})"
-            )
-        return dict(structured)
+        return _extract_structured_output_or_raise(
+            result_msg, error_cls=LlmClientError, label="unseeded objective classifier"
+        )
 
 
 def build_unseeded_objective_classifier_llm(*, session_id: str | None) -> ObjectiveClassifierLLM:
@@ -751,11 +783,11 @@ async def infer_archetype_from_freeform(
         )
         freeform_text = freeform_text[:_ARCHETYPE_INFERENCE_MAX_FODDER_CHARS]
 
+    # Story 119-6: the pre-flight ADR-134 ceiling refusal (a killed session must
+    # not bill another inference token) now lives inside ``_call_haiku_sdk`` —
+    # parsed here, enforced there before the SDK query fires. The empty-freeform
+    # short-circuit above already guarantees no spend for the no-fodder case.
     ceiling_usd = cost_safety.parse_session_cost_ceiling_usd()
-    if session_id is not None:
-        # Pre-flight terminal refusal (ADR-134): a session killed by ANY
-        # call site must not bill another inference token.
-        cost_safety.ledger().check_ceiling(session_id, ceiling_usd=ceiling_usd)
 
     missing_axis_names = [axis for axis, _ in missing]
     tool_schema: dict[str, Any] = {
@@ -790,8 +822,12 @@ async def infer_archetype_from_freeform(
     # the Agent SDK has no ``tool_choice``; read the enum-constrained dict from
     # ``ResultMessage.structured_output`` at ``max_turns=2``. The tool's
     # name/description fold into the system prompt; the schema (with its per-axis
-    # ``enum``) rides ``output_format``. ``query`` is the module-level seam.
-    options = build_agent_sdk_options(
+    # ``enum``) rides ``output_format``.
+    # Story 119-6: the cost-safety + telemetry skeleton (caller=archetype_inference)
+    # runs through the shared ``_call_haiku_sdk`` choke point; the archetype keeps
+    # its OWN loud error type (:class:`LlmClientError`) + the enum validation below.
+    result_msg = await _call_haiku_sdk(
+        user=user,
         model=_ARCHETYPE_INFERENCE_MODEL,
         system_prompt=_compose_structured_system(
             _ARCHETYPE_INFERENCE_SYSTEM,
@@ -799,37 +835,14 @@ async def infer_archetype_from_freeform(
             "Report the inferred archetype axis value(s). Omit any axis you "
             "cannot infer from the player's answers.",
         ),
-        max_turns=2,
-        allowed_tools=[],
+        caller="archetype_inference",
+        session_id=session_id,
+        ceiling_usd=ceiling_usd,
         output_format={"type": "json_schema", "schema": tool_schema},
     )
-    with llm_request_span(model=_ARCHETYPE_INFERENCE_MODEL) as span:
-        result_msg = await _consume_to_result(user, options)
-        usage = _record_usage_telemetry(
-            span,
-            result_msg,
-            caller="archetype_inference",
-            request_model=_ARCHETYPE_INFERENCE_MODEL,
-        )
-    if session_id is not None:
-        cost_safety.ledger().record_call(
-            session_id=session_id,
-            caller="archetype_inference",
-            model=usage.model,
-            input_tokens=usage.input_tokens,
-            output_tokens=usage.output_tokens,
-            cost_usd=usage.cost_usd,
-            ceiling_usd=ceiling_usd,
-        )
-
-    structured = getattr(result_msg, "structured_output", None)
-    if structured is None:
-        raise LlmClientError(
-            "archetype inference returned no structured_output "
-            f"(subtype={getattr(result_msg, 'subtype', None)!r}, "
-            f"is_error={getattr(result_msg, 'is_error', None)!r})"
-        )
-    parsed: dict[str, Any] = dict(structured)
+    parsed: dict[str, Any] = _extract_structured_output_or_raise(
+        result_msg, error_cls=LlmClientError, label="archetype inference"
+    )
 
     inferred: dict[str, str] = {}
     for axis, enum in missing:

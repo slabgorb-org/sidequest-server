@@ -4820,6 +4820,26 @@ def _apply_narration_result_to_snapshot(
             )
             recipient_char.core.inventory.items.append(item_dict)
             added_names.append(str(item_dict["name"]))
+            # ADR-144 / spec 2026-06-18: on a Fate-bound PC, a significant item
+            # gained in play promotes to an invokable aspect on the FateSheet.
+            # Gate on the recipient HAVING a fate sheet — the same per-character
+            # signal the projection uses; a non-Fate PC is untouched. Aspects +
+            # permissions only; matched-gear stunts are deferred (counted in the
+            # span, not applied). The promoter never touches refresh/fate_points.
+            if recipient_char.core.fate_sheet is not None:
+                from sidequest.game.ruleset.fate_item_promotion import promote_gained_item
+
+                _fate_cfg = pack.rules.fate if pack is not None else None
+                _gear_defs = list(_fate_cfg.gear_catalog) if _fate_cfg is not None else []
+                _promo = promote_gained_item(
+                    sheet=recipient_char.core.fate_sheet,
+                    item_id=str(item_dict["id"]),
+                    item_name=str(item_dict["name"]),
+                    gear_defs=_gear_defs,
+                    actor=recipient_char.core.name,
+                )
+                if _promo.promoted:
+                    item_dict["promoted"] = True
 
         for entry in result.items_lost or []:
             lost_name = str(entry.get("name", "") or "").strip().lower()

@@ -20,7 +20,6 @@ from sidequest.game.disposition import (
 )
 from sidequest.genre.cache import GenreCache
 from sidequest.genre.error import GenreLoadError, GenreNotFoundError, PackError
-from sidequest.genre.ruleset_reference import validate_ruleset_reference
 from sidequest.genre.genre_code import GenreCode
 from sidequest.genre.models.archetype_axes import BaseArchetypes
 from sidequest.genre.models.archetype_constraints import ArchetypeConstraints
@@ -77,6 +76,7 @@ from sidequest.genre.models.world import CartographyConfig, NavigationMode, Worl
 from sidequest.genre.models.wwn_spell import WwnSpellCatalog
 from sidequest.genre.premise_validate import validate_premises
 from sidequest.genre.resolve import resolve_trope_inheritance
+from sidequest.genre.ruleset_reference import validate_ruleset_reference
 from sidequest.mutation.catalog import load_mutation_catalog
 from sidequest.mutation.models import MutationCatalog
 from sidequest.mutation.saints import SaintRegistry, load_saint_registry

@@ -76,6 +76,7 @@ from sidequest.genre.models.world import CartographyConfig, NavigationMode, Worl
 from sidequest.genre.models.wwn_spell import WwnSpellCatalog
 from sidequest.genre.premise_validate import validate_premises
 from sidequest.genre.resolve import resolve_trope_inheritance
+from sidequest.genre.ruleset_reference import validate_ruleset_reference
 from sidequest.mutation.catalog import load_mutation_catalog
 from sidequest.mutation.models import MutationCatalog
 from sidequest.mutation.saints import SaintRegistry, load_saint_registry
@@ -2223,6 +2224,14 @@ def load_genre_pack(path: Path | str) -> GenrePack:
     # rulebook — a genre-tier item_catalog entry with provenance.mode == "bespoke"
     # is a hard error. Native packs are exempt. Fail loud (No Silent Fallbacks).
     _validate_genre_baseline_no_bespoke(rules.ruleset, inventory)
+
+    # ADR-135/ADR-144 (Phase 1): Fate requires reference content under
+    # rulesets/fate/srd/. Fail loud if it's missing (No Silent Fallbacks).
+    validate_ruleset_reference(
+        rules.ruleset,
+        rulesets_root=path.parent.parent / "rulesets",
+        pack_name=path.name,
+    )
 
     # Cross-reference validation: class_filter / encounter_beat_choices consistency.
     # Only enforced when a classes.yaml is present (classes_list is non-empty).

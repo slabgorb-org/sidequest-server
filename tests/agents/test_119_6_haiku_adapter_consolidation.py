@@ -121,9 +121,7 @@ class _SpyLedger:
         cost_usd: float,
         ceiling_usd: float,
     ) -> None:
-        self.recorded.append(
-            SimpleNamespace(session_id=session_id, caller=caller, model=model)
-        )
+        self.recorded.append(SimpleNamespace(session_id=session_id, caller=caller, model=model))
 
 
 def _install_spy_ledger(monkeypatch: pytest.MonkeyPatch) -> _SpyLedger:
@@ -244,8 +242,7 @@ async def test_archetype_inference_uses_output_format_at_max_turns_two_no_thinki
     # per-axis enum — the security/validity boundary that must survive the refactor.
     props = schema.get("properties", {})
     assert set(props) == {"jungian_hint", "rpg_role_hint"}, (
-        "the archetype schema must carry one property per MISSING axis; "
-        f"got {sorted(props)!r}"
+        f"the archetype schema must carry one property per MISSING axis; got {sorted(props)!r}"
     )
     assert _VALID_JUNGIAN in props["jungian_hint"]["enum"], (
         "the jungian_hint property must constrain to the pack's valid jungian ids"

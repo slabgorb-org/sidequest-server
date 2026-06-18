@@ -667,6 +667,28 @@ SPAN_ROUTES["fate.gear_compiled"] = SpanRoute(
         "refresh_debited": (span.attributes or {}).get("refresh_debited", 0),
     },
 )
+# --- Significant-item promotion span (spec 2026-06-18; GM panel = lie detector) -
+# A gained item was promoted to an invokable aspect on the FateSheet (or a logged
+# dedup no-op). The GM-panel evidence that "the silver shoes are magic" is real
+# mechanical backing (an aspect that adds +2), not narrator improvisation.
+# ``source`` ∈ {"catalog", "narrator", ""}; ``stunts_deferred`` records any matched
+# gear stunts NOT applied mid-game (the refresh-economy deferral). Literal key (no
+# SPAN_* constant) — the routing-completeness lint only inspects SPAN_* constants.
+SPAN_ROUTES["fate.item_promoted"] = SpanRoute(
+    event_type="state_transition",
+    component="fate",
+    extract=lambda span: {
+        "field": "item_promoted",
+        "actor": (span.attributes or {}).get("actor", ""),
+        "item_id": (span.attributes or {}).get("item_id", ""),
+        "item_name": (span.attributes or {}).get("item_name", ""),
+        "aspect_text": (span.attributes or {}).get("aspect_text", ""),
+        "source": (span.attributes or {}).get("source", ""),
+        "aspects_added": (span.attributes or {}).get("aspects_added", 0),
+        "stunts_deferred": (span.attributes or {}).get("stunts_deferred", 0),
+        "deduped": bool((span.attributes or {}).get("deduped", False)),
+    },
+)
 
 
 def fate_exchange_committed_span(
@@ -1134,6 +1156,42 @@ def fate_gear_compiled_span(
         pass
 
 
+def fate_item_promoted_span(
+    *,
+    actor: str,
+    item_id: str,
+    item_name: str,
+    aspect_text: str,
+    source: str,
+    aspects_added: int,
+    stunts_deferred: int,
+    deduped: bool,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``fate.item_promoted`` — a significant item gained in play became an
+    invokable aspect on the FateSheet (spec 2026-06-18). ``source`` is "catalog"
+    (matched authored gear) or "narrator" (on-the-fly promotion); ``deduped`` is
+    True for a re-grant of an already-promoted item (a logged no-op, never a
+    silent skip); ``stunts_deferred`` counts matched-gear stunts NOT applied
+    mid-game. The GM-panel lie-detector that found loot has real mechanical
+    backing, not just narrator flavor."""
+    attributes: dict[str, Any] = {
+        "field": "item_promoted",
+        "actor": actor,
+        "item_id": item_id,
+        "item_name": item_name,
+        "aspect_text": aspect_text,
+        "source": source,
+        "aspects_added": aspects_added,
+        "stunts_deferred": stunts_deferred,
+        "deduped": deduped,
+        **attrs,
+    }
+    with Span.open("fate.item_promoted", attributes, tracer_override=_tracer):
+        pass
+
+
 __all__ = [
     "SPAN_FATE_PROJECTION_EMITTED",
     "fate_action_classified_span",
@@ -1157,6 +1215,7 @@ __all__ = [
     "fate_flavor_rider_span",
     "fate_consequence_taken_span",
     "fate_harm_routed_span",
+    "fate_item_promoted_span",
     "fate_exchange_committed_span",
     "fate_exchange_order_span",
     "fate_exchange_resolved_span",

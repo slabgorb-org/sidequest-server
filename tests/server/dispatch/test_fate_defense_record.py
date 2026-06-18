@@ -85,6 +85,32 @@ def test_already_filled_request_id_fails_loud():
         )
 
 
+def test_defend_throw_from_non_defender_is_rejected():
+    # ADR-119 authorization: a seated player may only answer THEIR OWN defend
+    # request. ``request_id`` is client-supplied AND derivable, so without this guard
+    # player Mallory could fill (and grief) Rux's defense with Mallory's own
+    # dice/skill and lock Rux out ("already recorded"). The throw must fail loud and
+    # leave Rux's entry UNFILLED so the real defender can still answer.
+    snap, encounter = parked_conflict(
+        defender="Rux", attacker="Bandit", request_id="d1", attack_total=4, defend_skill_rating=2
+    )
+    ruleset = get_ruleset_module("fate")
+    with pytest.raises(FateConflictError):
+        dispatch_fate_defense(
+            encounter=encounter,
+            snapshot=snap,
+            ruleset=ruleset,
+            actor_name="Mallory",  # NOT the defender (Rux) — a different seat
+            request_id="d1",
+            skill="Athletics",
+            thrown_faces=(-1, -1, -1, -1),  # a griefing throw
+        )
+
+    entry = next(p for p in encounter.pending_defenses if p.request_id == "d1")
+    assert entry.defense_total is None  # untouched — Mallory cannot fill Rux's defense
+    assert entry.conceded is False
+
+
 def test_concede_marks_entry_and_fills_ledger():
     snap, encounter = parked_conflict(
         defender="Rux", attacker="Bandit", request_id="d1", attack_total=4, defend_skill_rating=2

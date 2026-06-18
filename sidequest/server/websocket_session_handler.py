@@ -3475,9 +3475,11 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
         We reuse the REAL narration seam rather than hand-rolling a NarrationMessage:
         ``suppress_intent_router=True`` skips the pre-narrator pass (the outcome is
         already applied — re-classifying would be the [COST-1] driver), and
-        :meth:`_execute_narration_turn` owns persistence, husk-reaping, the per-peer
-        NARRATION fan-out, and double-narration prevention. The narrator fires
-        exactly once — the RESOLVE floor of one narration call per round.
+        :meth:`_execute_narration_turn` owns persistence, husk-reaping, and the
+        per-peer NARRATION fan-out. The narrator fires exactly once because the
+        caller (``FateThrowHandler._finish_defense``) reaches this method only when
+        ``defense.ledger_full`` first flips True — the RESOLVE floor is the caller's
+        ledger gate, not a double-invocation guard inside this seam.
         """
         lore_context = await self._retrieve_lore_for_turn(sd, action)
         turn_context = _build_turn_context(sd, lore_context=lore_context, room=self._room)

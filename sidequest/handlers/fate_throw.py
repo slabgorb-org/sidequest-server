@@ -273,6 +273,7 @@ class FateThrowHandler:
         return await self._finish_defense(
             session=session,
             sd=sd,
+            ruleset=ruleset,
             character=character,
             payload=payload,
             defense=defense,
@@ -284,6 +285,7 @@ class FateThrowHandler:
         *,
         session: WebSocketSessionHandler,
         sd,
+        ruleset,
         character,
         payload,
         defense,
@@ -320,17 +322,18 @@ class FateThrowHandler:
                 room.save()
             return []
 
-        # RESUME → RESOLVE → NARRATE ONCE (the floor: one narrator call per round).
-        # Resolve the woven exchange mechanically, then narrate it through the SAME
-        # server-resolved-replay seam the dice handler uses
-        # (``_narrate_resolved_fate_exchange`` → ``_execute_narration_turn`` with
-        # ``suppress_intent_router=True``). That seam owns persistence, husk-reaping,
-        # the per-peer NARRATION fan-out, and double-narration prevention — so we do
-        # NOT hand-roll a NarrationMessage or a second ``room.save()`` here.
-        from sidequest.game.ruleset import get_ruleset_module
+        # RESUME → RESOLVE → NARRATE ONCE. This branch is reached only when
+        # ``defense.ledger_full`` first flips True, so the narrator fires exactly once
+        # per resolved exchange — the RESOLVE floor is THIS ledger gate, not a guard
+        # inside the narration seam. Resolve the woven exchange mechanically, then
+        # narrate it through the SAME server-resolved-replay seam the dice handler
+        # uses (``_narrate_resolved_fate_exchange`` → ``_execute_narration_turn`` with
+        # ``suppress_intent_router=True``); that seam owns persistence, husk-reaping,
+        # and the per-peer NARRATION fan-out — so we do NOT hand-roll a
+        # NarrationMessage or a second ``room.save()`` here. The ``ruleset`` resolved
+        # in ``_handle_defend`` is threaded in (no redundant registry lookup).
         from sidequest.server.dispatch.fate_conflict import resume_fate_exchange
 
-        ruleset = get_ruleset_module(sd.genre_pack.rules.ruleset)
         resume_fate_exchange(
             encounter=sd.snapshot.encounter,
             snapshot=sd.snapshot,

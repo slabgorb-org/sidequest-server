@@ -204,10 +204,17 @@ class FateRulesetModule(RulesetModule):
         rng: random.Random,
         invoke_bonus: int = 0,
         actor: str = "",
+        role: str = "action",
         _tracer: trace.Tracer | None = None,
     ) -> FateOutcome:
         """NPC path: roll 4dF server-side and emit the lie-detector span tagged
-        ``source=server_rolled`` (ADR-148)."""
+        ``source=server_rolled`` (ADR-148).
+
+        ``role`` (ADR-148/149, Story 126-8, AC-8) tags the span: ``"action"`` for a
+        proactive NPC action, ``"defense"`` when an NPC server-rolls a reactive
+        defense (``_roll_defense``) so the GM panel can tell an NPC defense from an
+        NPC action — the same distinction ``resolve_action_from_faces`` makes on the
+        player path."""
         outcome = resolve_action(
             skill_rating=skill_rating,
             opposition=opposition,
@@ -223,7 +230,7 @@ class FateRulesetModule(RulesetModule):
             opposition_kind=opposition.kind,
             shifts=outcome.shifts,
             tier=outcome.tier.value,
-            role="action",
+            role=role,
             source="server_rolled",
             _tracer=_tracer,
         )

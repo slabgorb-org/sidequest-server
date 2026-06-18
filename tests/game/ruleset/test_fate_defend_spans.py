@@ -71,6 +71,68 @@ def test_action_resolved_role_defense():
     assert span.attributes["source"] == "player_thrown"
 
 
+def test_npc_server_defense_tags_role_defense():
+    # AC-8: an NPC's SERVER-rolled reactive defense must be role="defense"
+    # (source="server_rolled"), not role="action" — so the GM panel can tell an NPC
+    # defense from an NPC proactive action. `_roll_defense` is the production caller
+    # that threads role="defense" through the server `resolve_action` path.
+    import random
+
+    from sidequest.game.creature_core import CreatureCore
+    from sidequest.game.fate_sheet import FateSheet
+    from sidequest.game.ruleset import get_ruleset_module
+    from sidequest.game.session import GameSnapshot, Npc
+    from sidequest.server.dispatch.fate_conflict import _roll_defense
+
+    snap = GameSnapshot(genre_slug="fate_test")
+    snap.npcs.append(
+        Npc(
+            core=CreatureCore(
+                name="Bandit",
+                description="d",
+                personality="p",
+                fate_sheet=FateSheet(skills={"Athletics": 2}),
+            )
+        )
+    )
+    exporter, tracer = _exporter()
+    _roll_defense(
+        ruleset=get_ruleset_module("fate"),
+        snapshot=snap,
+        defender="Bandit",
+        mental=False,
+        rng=random.Random(0),
+        _tracer=tracer,
+    )
+    span = next(s for s in exporter.get_finished_spans() if s.name == "fate.action_resolved")
+    assert span.attributes["role"] == "defense"
+    assert span.attributes["source"] == "server_rolled"
+
+
+def test_npc_server_action_defaults_role_action():
+    # The default (no role) stays "action" so NPC PROACTIVE server actions are
+    # unchanged — the role tag only flips for the reactive defense path.
+    import random
+
+    from sidequest.game.ruleset import get_ruleset_module
+    from sidequest.game.ruleset.fate import FateRulesetModule
+    from sidequest.game.ruleset.fate_resolution import Opposition
+
+    module = get_ruleset_module("fate")
+    assert isinstance(module, FateRulesetModule)
+    exporter, tracer = _exporter()
+    module.resolve_action(
+        skill_rating=2,
+        opposition=Opposition(value=0, kind="active"),
+        rng=random.Random(0),
+        actor="Bandit",
+        _tracer=tracer,
+    )
+    span = next(s for s in exporter.get_finished_spans() if s.name == "fate.action_resolved")
+    assert span.attributes["role"] == "action"
+    assert span.attributes["source"] == "server_rolled"
+
+
 def test_defend_phase_route_registered():
     route = SPAN_ROUTES["fate.defend_phase"]
     assert route.component == "fate"

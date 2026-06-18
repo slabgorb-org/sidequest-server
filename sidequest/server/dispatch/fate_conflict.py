@@ -272,6 +272,7 @@ def _roll_defense(
         opposition=Opposition(value=0, kind="active"),
         rng=rng,
         actor=defender,
+        role="defense",  # AC-8: an NPC's reactive defense is role=defense, not action
         _tracer=_tracer,
     )
     return outcome.ladder_total
@@ -618,8 +619,18 @@ def _resolve_attack(
         return
     if recorded is not None and recorded.defense_total is not None:
         defense_total = recorded.defense_total  # PC defense from the client (ADR-148)
+    elif recorded is not None:
+        # A PC defender's entry reached RESOLVE unfilled (no defense_total, not
+        # conceded). The ledger_full gate in _finish_defense makes this unreachable
+        # in production; if it ever happens, FAIL LOUD rather than server-roll a
+        # player's defense — that is exactly the no-roll_4df-on-the-player-path
+        # backdoor 126-8 closes (No Silent Fallbacks).
+        raise FateConflictError(
+            f"resolve reached an unfilled PC defense for {commit.target!r} — refusing "
+            "to server-roll a player's defense (No Silent Fallbacks)"
+        )
     else:
-        defense_total = _roll_defense(  # NPC defender — server-rolled
+        defense_total = _roll_defense(  # NPC defender (no ledger entry) — server-rolled
             ruleset=ruleset,
             snapshot=snapshot,
             defender=commit.target,
@@ -1165,13 +1176,28 @@ def dispatch_fate_defense(
     ``resolve_action_from_faces`` (``role="defense"``), NEVER ``roll_4df``. The
     chosen ``skill`` is free-pick (the Zork Problem). On concede, the entry is
     flagged and no roll is recorded. Fails loud on an unknown / already-filled
-    ``request_id`` (No Silent Fallbacks). Returns ``ledger_full`` so the caller
-    knows when to RESUME."""
+    ``request_id``, or when the throw comes from a PC who is NOT the request's
+    defender (No Silent Fallbacks). Returns ``ledger_full`` so the caller knows
+    when to RESUME."""
     entry = next((p for p in encounter.pending_defenses if p.request_id == request_id), None)
     if entry is None:
         raise FateConflictError(
             f"FATE_THROW(defend) for unknown request_id {request_id!r} — "
             "no pending defense awaits it (No Silent Fallbacks)"
+        )
+    # ADR-119 authorization: the throw must come from the PC who was actually
+    # attacked. ``request_id`` is client-supplied AND derivable
+    # (``def:{round}:{attacker}->{target}``, broadcast to the whole table), so
+    # without this guard a seated player could answer ANOTHER PC's defense with
+    # their own dice + skill, filling and locking the real defender's entry. The
+    # sibling FATE_THROW handler already rejects player_id spoofing; the defend
+    # path must enforce the same per-PC authorization (fail loud, never silently
+    # record a defense for the wrong actor).
+    if entry.defender != actor_name:
+        raise FateConflictError(
+            f"FATE_THROW(defend) for {request_id!r} from {actor_name!r}, but that "
+            f"defense belongs to {entry.defender!r} — a player may only answer their "
+            "own defend request (authorization)"
         )
     if entry.defense_total is not None or entry.conceded:
         raise FateConflictError(

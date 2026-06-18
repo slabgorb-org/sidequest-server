@@ -99,6 +99,7 @@ from sidequest.telemetry.spans import (
     orchestrator_process_action_span,
     recent_narrative_context_injected_span,
     turn_agent_llm_inference_span,
+    verbosity_tier_span,
 )
 
 logger = logging.getLogger(__name__)
@@ -1555,16 +1556,67 @@ def _build_fate_state_section(projection: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _build_verbosity_section(verbosity: str) -> str:
-    """Build the narrator verbosity constraint text for the given setting.
+# Story 126-11 (SOUL "Cost Scales with Drama"): the player's verbosity mode sets
+# the BASE length cap; the turn's drama weight scales quiet<->climax AROUND that
+# base, for every mode. The ``normal`` tier IS the base (the develop literal an
+# underivable-drama turn renders). Mode ordering concise < standard < verbose is
+# preserved at every tier. ``(cap_sentences, cap_chars)`` per (mode, tier).
+_VERBOSITY_CAP_TABLE: dict[str, dict[str, tuple[int, int]]] = {
+    "concise": {"quiet": (3, 300), "normal": (4, 400), "climax": (6, 600)},
+    "standard": {"quiet": (6, 600), "normal": (8, 800), "climax": (12, 1200)},
+    "verbose": {"quiet": (8, 800), "normal": (10, 1000), "climax": (14, 1400)},
+}
 
-    Port of the verbosity match block in build_narrator_prompt_tiered().
+# Drama-weight band -> tier. Low drama (a quiet walk) tightens the cap; high
+# drama (a climactic reveal) widens it; the middle band holds the base.
+_DRAMA_QUIET_MAX = 0.34
+_DRAMA_CLIMAX_MIN = 0.67
+
+
+def _drama_tier(drama_weight: float) -> str:
+    """Map a drama weight (0.0–1.0) to a verbosity tier name."""
+    if drama_weight >= _DRAMA_CLIMAX_MIN:
+        return "climax"
+    if drama_weight < _DRAMA_QUIET_MAX:
+        return "quiet"
+    return "normal"
+
+
+def _resolve_verbosity_cap(verbosity: str, drama_weight: float | None) -> tuple[str, int, int]:
+    """Resolve ``(tier, cap_sentences, cap_chars)`` for a verbosity mode + drama.
+
+    ``drama_weight is None`` means the drama signal could not be derived (a
+    legacy / bare ``TurnContext`` with no ``pacing_hint``) — fall back to the
+    mode's exact base cap under the explicit ``baseline`` tier (No Silent
+    Fallbacks: the baseline is a documented decision, recorded on the span, not
+    a hidden snap). Unknown modes resolve to ``standard``.
+    """
+    mode = str(verbosity)
+    if mode not in _VERBOSITY_CAP_TABLE:
+        mode = "standard"
+    if drama_weight is None:
+        sentences, chars = _VERBOSITY_CAP_TABLE[mode]["normal"]
+        return "baseline", sentences, chars
+    tier = _drama_tier(drama_weight)
+    sentences, chars = _VERBOSITY_CAP_TABLE[mode][tier]
+    return tier, sentences, chars
+
+
+def _build_verbosity_section(verbosity: str, cap_sentences: int, cap_chars: int) -> str:
+    """Build the narrator verbosity constraint text for the given mode, with the
+    drama-scaled hard cap (``cap_sentences`` / ``cap_chars``) injected.
+
+    The cap is resolved by :func:`_resolve_verbosity_cap` (mode base scaled by
+    drama weight); this function only renders the mode-appropriate template with
+    those numbers. Port of the verbosity match block in
+    build_narrator_prompt_tiered(), extended for Story 126-11.
     """
     if verbosity == "concise":
         return (
             "<critical>\n"
             "<length-limit>\n"
-            "HARD LIMIT: Maximum 4 sentences of prose. DO NOT EXCEED 400 characters of narrative text.\n"
+            f"HARD LIMIT: Maximum {cap_sentences} sentences of prose. "
+            f"DO NOT EXCEED {cap_chars} characters of narrative text.\n"
             "This overrides all other length guidance. If a trope beat or genre instruction "
             "would push you past this limit, cut description — never cut the limit.\n"
             "Action and consequence only. No atmosphere. No sensory detail.\n"
@@ -1576,7 +1628,8 @@ def _build_verbosity_section(verbosity: str) -> str:
         return (
             "<critical>\n"
             "<length-limit>\n"
-            "HARD LIMIT: Maximum 10 sentences of prose. DO NOT EXCEED 1000 characters of narrative text.\n"
+            f"HARD LIMIT: Maximum {cap_sentences} sentences of prose. "
+            f"DO NOT EXCEED {cap_chars} characters of narrative text.\n"
             "This overrides all other length guidance. If a trope beat or genre instruction "
             "would push you past this limit, cut description — never cut the limit.\n"
             "Rich atmosphere for arrivals and reveals. Shorter for simple actions.\n"
@@ -1588,16 +1641,18 @@ def _build_verbosity_section(verbosity: str) -> str:
     return (
         "<critical>\n"
         "<length-limit>\n"
-        "HARD LIMIT, per acting PC this turn: maximum 8 sentences and 800 characters of prose.\n"
+        f"HARD LIMIT, per acting PC this turn: maximum {cap_sentences} sentences and "
+        f"{cap_chars} characters of prose.\n"
         "If no PCs are acting (scene anchor, transition, or pure narrator beat), the same\n"
-        "limit applies to the whole response: 8 sentences / 800 characters total.\n"
+        f"limit applies to the whole response: {cap_sentences} sentences / {cap_chars} characters total.\n"
         "This overrides all other length guidance. If a trope beat, genre voice instruction, "
         "or MUST-weave directive would push you past this limit, cut description — never cut the limit.\n"
         "Each acting PC gets one short paragraph for simple actions, "
         "or two short paragraphs for arrivals or reveals. Give every PC their own beat — "
         "do not collapse two PCs' actions into a single sentence to save room.\n"
         "The game_patch JSON block does not count toward this limit.\n"
-        "Count sentences per PC before responding. If any PC has more than 8, cut that PC's beat.\n"
+        f"Count sentences per PC before responding. If any PC has more than {cap_sentences}, "
+        "cut that PC's beat.\n"
         "</length-limit>\n"
         "</critical>"
     )
@@ -2559,12 +2614,32 @@ class Orchestrator:
 
         # Phase 1 slice: RollOutcome injection deferred to Story 41-6 (dice protocol, Phase 2)
 
-        # Narrator verbosity (Recency zone — every turn)
+        # Narrator verbosity (Recency zone — every turn). Story 126-11: the hard
+        # <length-limit> cap rides the turn's drama weight (already computed on
+        # pacing_hint) — the player's mode sets the base, drama scales it
+        # quiet<->climax. The verbosity_tier span is the GM-panel lie detector:
+        # it records the tier + cap so the dev can confirm the cap tracks drama
+        # rather than the narrator improvising a length. drama_weight is None
+        # when no pacing_hint was derived (legacy/bare ctx) -> baseline cap.
+        verbosity_drama = (
+            context.pacing_hint.drama_weight if context.pacing_hint is not None else None
+        )
+        verbosity_tier, cap_sentences, cap_chars = _resolve_verbosity_cap(
+            context.narrator_verbosity, verbosity_drama
+        )
+        with verbosity_tier_span(
+            tier=verbosity_tier,
+            weight=verbosity_drama if verbosity_drama is not None else 0.0,
+            cap_sentences=cap_sentences,
+            cap_chars=cap_chars,
+            verbosity=str(context.narrator_verbosity),
+        ):
+            pass
         registry.register_section(
             agent_name,
             PromptSection.new(
                 "narrator_verbosity",
-                _build_verbosity_section(context.narrator_verbosity),
+                _build_verbosity_section(context.narrator_verbosity, cap_sentences, cap_chars),
                 AttentionZone.Recency,
                 SectionCategory.Guardrail,
             ),

@@ -119,7 +119,7 @@ fields that changed.
 
 Items — four arrays, same entry shape, picked by transaction kind:
   {"name": "<short>", "description": "<one-sentence>", "category": "weapon|armor|tool|consumable|quest|treasure|misc", "recipient": "<exact PC name>",
-   "grants_aspect": "<optional — see below>"}
+   "grants_aspect": "<items_gained only, optional — see below>"}
 - items_gained — acquired, picked up, found, looted, received, given.
   `grants_aspect` (optional): for a **genuinely significant** found item only (a named
   magic item, a relic, a thing the story will lean on), a short Fate aspect phrase the

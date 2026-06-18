@@ -11,6 +11,8 @@ from pathlib import Path
 
 import yaml
 
+from sidequest.genre.error import GenreLoadError
+
 BOUND_RULESET_SLUGS = frozenset({"fate", "wwn", "cwn", "swn", "awn"})
 WN_FAMILY = frozenset({"wwn", "cwn", "swn", "awn"})
 REQUIRED_FRONTMATTER = ("srd", "srd_ref", "license", "anchor", "title", "order")
@@ -135,8 +137,6 @@ def build_ruleset_reference_section(ruleset: str, *, rulesets_root: Path) -> dic
         "provenance": RULESET_PROVENANCE[ruleset],
     }
 
-
-from sidequest.genre.error import GenreLoadError  # noqa: E402
 
 # Rulesets whose reference content MUST be present + complete (fail-loud).
 # Phase 1 ships Fate only; Plan B (WN family) extends this set.

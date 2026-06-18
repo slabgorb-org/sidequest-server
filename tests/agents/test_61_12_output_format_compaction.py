@@ -241,27 +241,39 @@ def test_output_only_prose_under_byte_budget() -> None:
     """``NARRATOR_OUTPUT_ONLY`` stays within the prompt token ceiling.
 
     Story 61-12 compacted the file to 13,156 (from a pre-compaction
-    24,784). Three later commits each appended a load-bearing narrator
+    24,784). Four later commits each appended a load-bearing narrator
     rule — the ANTI-FABRICATION guard (playtest #431, +557), the
-    ``is_creature`` routing field (npc #74, +625), and the ``disengaged``
+    ``is_creature`` routing field (npc #74, +625), the ``disengaged``
     opponent-departure field (sq-playtest 2026-06-10 long_foundry zombie
-    negotiation, +~400 after compaction) — which pushed it to 14,813.
-    Each rule is intentional and kept as terse as the instruction allows,
-    so the ceiling was lifted in deliberate steps (13,800 → 14,600 on
-    2026-06-05, then 14,600 → 14,900 on 2026-06-10) rather than
+    negotiation, +~400 after compaction), and the ``grants_aspect``
+    significant-item field (spec 2026-06-18 invokable-Fate-aspects, +~550)
+    — which pushed it to 15,291. Each rule is intentional and kept as
+    terse as the instruction allows, so the ceiling was lifted in
+    deliberate steps (13,800 → 14,600 on 2026-06-05, 14,600 → 14,900 on
+    2026-06-10, then 14,900 → 15,400 on 2026-06-18) rather than
     re-compacting prose at the risk of narrator-quality loss. The
     ``disengaged`` field is the narrator-facing half of the ADR-116 §4
     social end-on-no-Other fix — without it the narrator never emits the
-    departure signal and the engine half is dead in production. The
-    prompt is primacy-cached (ADR-112), so the marginal per-turn cost of
-    the extra tokens is amortized. The budget still guards against
-    unbounded growth — a future addition that crosses 14,900 must either
-    compact or make a fresh ceiling decision.
+    departure signal and the engine half is dead in production.
+
+    CAVEAT (2026-06-18 narrator-prompt deep-dive): the earlier rationale
+    that this prose is "primacy-cached (ADR-112), so the marginal per-turn
+    cost is amortized" is STALE. ``narrator_output_only`` is NOT in
+    STABLE_SECTION_NAMES (it routes to the uncached User bucket), and story
+    119-3 collapsed the cacheable blocks to one plain string so the
+    agent-SDK owns caching now — this section is paid ~in full each turn.
+    The real cost/latency lever is story 126-9 (thinking-ON regression) +
+    the 119-3 caching cleanup, NOT this ceiling. The budget still earns its
+    keep as a GROWTH-DISCIPLINE gate (keep the prompt from ballooning,
+    independent of caching). ``grants_aspect`` is Fate-only guidance that
+    ideally belongs in a Fate-conditional section (story 126-11) rather
+    than this always-on file. A future addition that crosses 15,400 must
+    either compact or make a fresh ceiling decision.
     """
     actual = len(NARRATOR_OUTPUT_ONLY)
-    assert actual <= 14_900, (
+    assert actual <= 15_400, (
         f"NARRATOR_OUTPUT_ONLY is {actual} codepoints, exceeds the "
-        f"14,900 budget (~ 2,200 tok ceiling). The narrator prompt grew "
+        f"15,400 budget (~ 2,300 tok ceiling). The narrator prompt grew "
         f"past its growth-discipline ceiling — compact the prose "
         f"(preservation-by-rewrite, keep every rule) or make a fresh "
         f"ceiling decision. Pre-61-12 baseline was 24,784."

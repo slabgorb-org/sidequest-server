@@ -118,8 +118,14 @@ on this path. Emit ONLY these in PART 2; never as tool calls. Only include
 fields that changed.
 
 Items — four arrays, same entry shape, picked by transaction kind:
-  {"name": "<short>", "description": "<one-sentence>", "category": "weapon|armor|tool|consumable|quest|treasure|misc", "recipient": "<exact PC name>"}
+  {"name": "<short>", "description": "<one-sentence>", "category": "weapon|armor|tool|consumable|quest|treasure|misc", "recipient": "<exact PC name>",
+   "grants_aspect": "<items_gained only, optional — see below>"}
 - items_gained — acquired, picked up, found, looted, received, given.
+  `grants_aspect` (optional): for a **genuinely significant** found item only (a named
+  magic item, a relic, a thing the story will lean on), a short Fate aspect phrase the
+  player can invoke — e.g. `"The Silver Shoes of the Dead Witch"`. Leave it OFF for
+  mundane gear (a rope, a banjo, a torch). This grants narrative weight, never a free
+  mechanical bonus: invoking it still costs the player a fate point.
 - items_lost — given away, traded, stolen, destroyed; the item is GONE.
 - items_discarded — dropped, abandoned, set down; stays in the world
   (recoverable). Prefer discarded when unsure — recoverability is safer.

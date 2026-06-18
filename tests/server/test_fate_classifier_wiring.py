@@ -20,6 +20,7 @@ from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore
 from sidequest.game.encounter import EncounterActor, EncounterMetric, StructuredEncounter
 from sidequest.game.fate_sheet import Aspect, FateSheet
+from sidequest.game.ruleset import get_ruleset_module
 from sidequest.game.session import GameSnapshot, Npc
 from sidequest.protocol.dispatch import (
     DispatchPackage,
@@ -27,6 +28,7 @@ from sidequest.protocol.dispatch import (
     SubsystemDispatch,
     VisibilityTag,
 )
+from tests._helpers.fate_fixtures import resolve_parked_defenses
 
 
 class _FixedRng:
@@ -121,6 +123,12 @@ def test_freeform_fate_action_engages_the_exchange_through_the_bank(otel_capture
 
     # Bank engaged the engine (confidence 0.95 ≥ 0.6 default), not degraded.
     assert result.decisions[0]["decision"] == "engaged"
+    # Story 126-8: the bank routed to dispatch_fate_action → parks at the DEFEND
+    # barrier; the PC defends and RESUME takes the depleted foe out.
+    assert enc.pending_defenses
+    resolve_parked_defenses(
+        encounter=enc, snapshot=snap, ruleset=get_ruleset_module("fate"), rng=_FixedRng(0)
+    )
     assert enc.find_actor("Thug").withdrawn is True
     assert enc.resolved is True
     names = [s.name for s in exporter.get_finished_spans()]

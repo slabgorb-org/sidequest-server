@@ -38,6 +38,7 @@ from sidequest.game.ruleset import get_ruleset_module
 from sidequest.game.session import GameSnapshot, Npc
 from sidequest.protocol.fate import FateActionPayload
 from sidequest.server.dispatch.fate_conflict import dispatch_fate_action
+from tests._helpers.fate_fixtures import resolve_parked_defenses
 
 _RIDER = "I swing from the chandelier and fire"
 # sanitize_player_text strips <system> tags and rewrites "ignore previous
@@ -103,7 +104,14 @@ def test_player_action_rides_into_narrator_hints():
         rng=_FixedRng(),
     )
 
-    assert result.exchange is not None, "solo barrier closes → the exchange must resolve"
+    # Story 126-8: the solo barrier closes → REVEAL seats the depleted foe's
+    # counter-swing, so the round PARKS. Drive the PC defense + RESUME; the rider
+    # rides the resolved exchange's hints.
+    assert result.awaiting_defense is True
+    exchange = resolve_parked_defenses(
+        encounter=enc, snapshot=snap, ruleset=get_ruleset_module("fate"), rng=_FixedRng()
+    )
+    assert exchange is not None, "resumed exchange must resolve"
     blob = " ".join(enc.narrator_hints).lower()
     assert "chandelier" in blob, (
         "the freeform player_action rider never reached the narrator's hints "
@@ -130,7 +138,13 @@ def test_player_action_is_sanitized_at_the_narrator_seam():
         rng=_FixedRng(),
     )
 
-    assert result.exchange is not None
+    # Story 126-8: parks at the DEFEND barrier; the PC defends and RESUME resolves,
+    # threading the (sanitized) rider into the narrator-bound hints.
+    assert result.awaiting_defense is True
+    exchange = resolve_parked_defenses(
+        encounter=enc, snapshot=snap, ruleset=get_ruleset_module("fate"), rng=_FixedRng()
+    )
+    assert exchange is not None
     blob = " ".join(enc.narrator_hints)
     assert "chandelier" in blob.lower(), (
         "precondition: the rider must reach the hints (the feature) before we can "

@@ -21,15 +21,19 @@ def fate_action_resolved_span(
     opposition_kind: str,
     shifts: int,
     tier: str,
+    role: str = "action",
     source: str = "server_rolled",
     _tracer: trace.Tracer | None = None,
     **attrs: Any,
 ) -> None:
-    """Emit ``fate.action_resolved`` — one Fate roll resolved. ``source`` ∈
-    {``"player_thrown"``, ``"server_rolled"``} (ADR-148, Story 126-7): the GM-panel
-    lie detector reads it to confirm a player's dice really came from the client
-    and an NPC's really came from the server RNG. Defaults to ``"server_rolled"``
-    so every existing NPC/defense caller is tagged without a change."""
+    """Emit ``fate.action_resolved`` — one Fate roll resolved. ``role`` ∈
+    {``"action"``, ``"defense"``} (ADR-148/149, Story 126-8): ``"defense"`` tags a
+    reactive defense roll so the GM panel can tell a proactive roll from a defense.
+    ``source`` ∈ {``"player_thrown"``, ``"server_rolled"``} (ADR-148, Story 126-7):
+    the lie detector reads it to confirm a player's dice really came from the client
+    and an NPC's really came from the server RNG. ``role`` defaults to ``"action"``
+    and ``source`` to ``"server_rolled"`` so every existing caller is tagged with no
+    change."""
     attributes: dict[str, Any] = {
         "field": "action_resolved",
         "actor": actor,
@@ -40,6 +44,7 @@ def fate_action_resolved_span(
         "opposition_kind": opposition_kind,
         "shifts": shifts,
         "tier": tier,
+        "role": role,
         "source": source,
         **attrs,
     }
@@ -690,6 +695,21 @@ SPAN_ROUTES["fate.item_promoted"] = SpanRoute(
     },
 )
 
+# ADR-148/149 (Story 126-8 §9): the DEFEND-barrier lie detector. Literal-key route
+# (exempt from the SPAN_* routing-completeness lint, matching fate.item_promoted).
+SPAN_ROUTES["fate.defend_phase"] = SpanRoute(
+    event_type="state_transition",
+    component="fate",
+    extract=lambda span: {
+        "field": "defend_phase",
+        "defender": (span.attributes or {}).get("defender", ""),
+        "attacker": (span.attributes or {}).get("attacker", ""),
+        "request_id": (span.attributes or {}).get("request_id", ""),
+        "responded": bool((span.attributes or {}).get("responded", False)),
+        "conceded": bool((span.attributes or {}).get("conceded", False)),
+    },
+)
+
 
 def fate_exchange_committed_span(
     *, committed_actors: str, _tracer: trace.Tracer | None = None, **attrs: Any
@@ -1192,10 +1212,40 @@ def fate_item_promoted_span(
         pass
 
 
+def fate_defend_phase_span(
+    *,
+    defender: str,
+    attacker: str,
+    request_id: str,
+    responded: bool,
+    conceded: bool = False,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``fate.defend_phase`` — the GM-panel lie detector that the interactive
+    DEFEND barrier actually fired (ADR-148/149, Story 126-8 §9). ``responded`` is
+    False at request time (we asked ``defender`` to answer ``attacker``'s attack)
+    and True when their FATE_THROW(defend) lands; ``conceded`` marks a fold at
+    defend. It proves the defender's number came from the client, not narrator
+    improvisation."""
+    attributes: dict[str, Any] = {
+        "field": "defend_phase",
+        "defender": defender,
+        "attacker": attacker,
+        "request_id": request_id,
+        "responded": responded,
+        "conceded": conceded,
+        **attrs,
+    }
+    with Span.open("fate.defend_phase", attributes, tracer_override=_tracer):
+        pass
+
+
 __all__ = [
     "SPAN_FATE_PROJECTION_EMITTED",
     "fate_action_classified_span",
     "fate_action_resolved_span",
+    "fate_defend_phase_span",
     "fate_chargen_archetype_selected_span",
     "fate_chargen_aspects_authored_span",
     "fate_chargen_completed_span",

@@ -16,6 +16,7 @@ from sidequest.server.dispatch.fate_conflict import (
     FateConflictError,
     dispatch_fate_action,
 )
+from tests._helpers.fate_fixtures import resolve_parked_defenses
 
 
 class _FixedRng:
@@ -83,9 +84,15 @@ def test_fate_bound_ruleset_routes_to_the_exchange():
         _tracer=tracer,
     )
 
-    # Solo barrier closes immediately → the exchange ran (routed to fate_conflict).
+    # Story 126-8: the solo barrier closes → REVEAL seats the (depleted) opponent's
+    # doomed counter-swing at the PC, so the round PARKS at the DEFEND barrier. The
+    # PC throws a defense; on RESUME the PC's attack takes the depleted target out.
     assert result.commitment_pending is False
-    assert result.exchange is not None
+    assert result.awaiting_defense is True
+    assert result.exchange is None
+    resolve_parked_defenses(
+        encounter=enc, snapshot=snap, ruleset=ruleset, rng=_FixedRng(0), _tracer=tracer
+    )
     names = [s.name for s in exporter.get_finished_spans()]
     assert "fate.action_resolved" in names  # the attacker's roll fired through dispatch
     assert "fate.exchange.resolved" in names

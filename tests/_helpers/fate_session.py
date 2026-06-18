@@ -45,6 +45,19 @@ class FakeOrchestrator:
         return SimpleNamespace(narration="(woven exchange)", is_degraded=False, agent_duration_ms=0)
 
 
+async def _fake_narrate_resolved_fate_exchange(sd, action):  # noqa: ANN001, ARG001
+    """Stand-in for ``WebSocketSessionHandler._narrate_resolved_fate_exchange`` on
+    the SimpleNamespace session double.
+
+    The real method runs ``_build_turn_context`` + ``_execute_narration_turn``, which
+    invokes the orchestrator exactly once. The double drives the SAME counting
+    ``FakeOrchestrator`` so the RESOLVE-floor assertion (exactly-one narrator call per
+    resumed round) stays faithful — without standing up the heavy narration-emit
+    pipeline that a lightweight session double can't drive."""
+    await sd.orchestrator.run_narration_turn(action, None)
+    return []
+
+
 def _throw_params() -> ThrowParams:
     return ThrowParams(velocity=(0.0, 4.0, -1.0), angular=(0.5, 0.5, 0.5), position=(0.5, 0.5))
 
@@ -64,6 +77,10 @@ def _healthy_npc(name: str, skills: dict[str, int]) -> Npc:
 
 
 def _room_with_seat(player_id: str):
+    # Unbound room (no bind_world): the narrate-at-RESOLVE step is delegated to the
+    # session's _narrate_resolved_fate_exchange (faked on the double), so
+    # _build_turn_context never runs here and room.save() is a safe no-op while
+    # unbound. Mirrors the canonical 126-7 harness _room_with_seat.
     room = SessionRoom(slug="slug-fate-defend-wire", mode=GameMode.MULTIPLAYER)
     q: asyncio.Queue = asyncio.Queue()
     room.connect(player_id, socket_id="sock-1")
@@ -102,16 +119,25 @@ def playing_session_with_fate_conflict(
     snap.player_seats[player_id] = actor
 
     room, q = _room_with_seat(player_id)
+    # Minimal sd — mirrors the canonical 126-7 Fate handler-wiring harness. The
+    # narrate-at-RESOLVE step is delegated to the session double's faked
+    # _narrate_resolved_fate_exchange, so the heavy _build_turn_context session state
+    # isn't needed here; only the mechanical Fate path reads these fields.
     sd = SimpleNamespace(
         snapshot=snap,
-        genre_pack=SimpleNamespace(rules=SimpleNamespace(ruleset="fate", confrontations=[])),
+        genre_pack=SimpleNamespace(rules=SimpleNamespace(ruleset="fate")),
         genre_slug="fate_test",
         world_slug="test_world",
         player_id=player_id,
         orchestrator=FakeOrchestrator(),
         _room=room,
     )
-    session = SimpleNamespace(_state=_State.Playing, _session_data=sd, _room=room)
+    session = SimpleNamespace(
+        _state=_State.Playing,
+        _session_data=sd,
+        _room=room,
+        _narrate_resolved_fate_exchange=_fake_narrate_resolved_fate_exchange,
+    )
 
     throw_msg = FateThrowMessage(
         payload=FateThrowPayload(

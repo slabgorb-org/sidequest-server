@@ -184,3 +184,77 @@ def parked_conflict_filled(
         )
     )
     return snap, enc
+
+
+def _faces_for_sum(total: int) -> tuple[int, int, int, int]:
+    """Build a 4dF face tuple summing to ``total`` (each face in {-1, 0, 1}). Fails
+    loud if ``total`` is outside the [-4, 4] a single 4dF throw can express — a test
+    asking for an impossible defense should break, not silently clamp."""
+    if not -4 <= total <= 4:
+        raise ValueError(f"4dF cannot sum to {total} (range is [-4, 4])")
+    faces = [0, 0, 0, 0]
+    step = 1 if total >= 0 else -1
+    for i in range(abs(total)):
+        faces[i] = step
+    return (faces[0], faces[1], faces[2], faces[3])
+
+
+def resolve_parked_defenses(
+    *,
+    encounter,
+    snapshot,
+    ruleset,
+    round_number: int = 0,
+    defense_skill: str = "Athletics",
+    target_shift: int | None = None,
+    rng=None,
+    _tracer=None,
+):
+    """Drive a PARKED Fate exchange (story 126-8) through to RESOLVE: record one
+    thrown PC defense per unfilled ``encounter.pending_defenses`` entry, then RESUME.
+
+    Mirrors what the live handler does when the ledger fills, so a pre-126-8 test
+    that used to resolve in a single ``dispatch_fate_action`` call can reach the
+    SAME resolved state through the new two-phase (COMMIT → DEFEND → RESOLVE) flow.
+    Reads the ledger off the encounter (not a ``FateDispatchResult``) so it works
+    whether the round was parked via ``dispatch_fate_action`` or the subsystem bank.
+
+    ``target_shift=None`` throws a maximal defense — used where the PC's own
+    proactive action decides the outcome (e.g. a depleted opponent the PC takes out
+    regardless of its doomed counter-swing). An int throws faces calibrated so each
+    incoming attack lands with EXACTLY that many shifts
+    (``defense_total = attack_total - target_shift``), reproducing the old
+    server-rolled-defense calibration deterministically now that the PC defense is
+    physics-is-the-roll (ADR-148/149). Returns the ``FateExchangeResult``."""
+    from sidequest.server.dispatch.fate_conflict import (
+        dispatch_fate_defense,
+        resume_fate_exchange,
+    )
+
+    for entry in list(encounter.pending_defenses):
+        if entry.defense_total is not None or entry.conceded:
+            continue
+        if target_shift is None:
+            faces = (1, 1, 1, 1)
+        else:
+            core = snapshot.find_creature_core(entry.defender)
+            rating = core.fate_sheet.skills.get(defense_skill, 0) if core and core.fate_sheet else 0
+            faces = _faces_for_sum(entry.attack_total - target_shift - rating)
+        dispatch_fate_defense(
+            encounter=encounter,
+            snapshot=snapshot,
+            ruleset=ruleset,
+            actor_name=entry.defender,
+            request_id=entry.request_id,
+            skill=defense_skill,
+            thrown_faces=faces,
+            _tracer=_tracer,
+        )
+    return resume_fate_exchange(
+        encounter=encounter,
+        snapshot=snapshot,
+        ruleset=ruleset,
+        round_number=round_number,
+        rng=rng,
+        _tracer=_tracer,
+    )

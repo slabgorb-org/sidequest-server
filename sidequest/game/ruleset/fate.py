@@ -223,6 +223,7 @@ class FateRulesetModule(RulesetModule):
             opposition_kind=opposition.kind,
             shifts=outcome.shifts,
             tier=outcome.tier.value,
+            role="action",
             source="server_rolled",
             _tracer=_tracer,
         )
@@ -236,12 +237,16 @@ class FateRulesetModule(RulesetModule):
         faces: tuple[int, int, int, int],
         invoke_bonus: int = 0,
         actor: str = "",
+        role: str = "action",
         _tracer: trace.Tracer | None = None,
     ) -> FateOutcome:
         """Player path (ADR-148): resolve from the client's thrown dF faces — the
         faces ARE the roll, never an rng — and emit the same lie-detector span
         tagged ``source=player_thrown`` so the GM panel can confirm the dice came
-        from the client. The Fate ladder math is identical to the NPC path."""
+        from the client. The Fate ladder math is identical to the NPC path.
+
+        ``role`` (ADR-148/149, Story 126-8) tags the span: ``"action"`` for a
+        proactive throw, ``"defense"`` when a seated PC throws to defend."""
         outcome = resolve_action_from_faces(
             skill_rating=skill_rating,
             opposition=opposition,
@@ -257,6 +262,7 @@ class FateRulesetModule(RulesetModule):
             opposition_kind=opposition.kind,
             shifts=outcome.shifts,
             tier=outcome.tier.value,
+            role=role,
             source="player_thrown",
             _tracer=_tracer,
         )

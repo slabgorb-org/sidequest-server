@@ -29,6 +29,7 @@ from sidequest.server.dispatch.fate_conflict import (
     run_fate_exchange,
     seal_fate_commit,
 )
+from tests._helpers.fate_fixtures import resolve_parked_defenses
 
 
 def _fate_module() -> FateRulesetModule:
@@ -122,13 +123,28 @@ def test_seated_opponent_attack_lands_on_the_pc():
         _tracer=tracer,
     )
 
-    # The PC's action closed the barrier → the exchange fired.
+    # Story 126-8: the PC's action closed the barrier → REVEAL seated the opponent
+    # attacking the PC, so the round PARKS at the DEFEND barrier — the inline
+    # server-rolled PC defense is gone (ADR-148/149). Resolution is now two-phase.
     assert result.commitment_pending is False
-    assert result.exchange is not None
+    assert result.awaiting_defense is True
+    assert result.exchange is None
+    assert len(result.defend_requests) == 1
+
+    # The PC throws a defense just under the incoming attack (exactly one shift
+    # lands), then the exchange RESUMEs and resolves.
+    resolve_parked_defenses(
+        encounter=enc,
+        snapshot=snap,
+        ruleset=module,
+        target_shift=1,
+        rng=random.Random(_HIT_SEED),
+        _tracer=tracer,
+    )
 
     spans = exporter.get_finished_spans()
     names = [s.name for s in spans]
-    # (i) the opponent's decision span fired.
+    # (i) the opponent's decision span fired (at REVEAL).
     assert "fate.opponent.decided" in names
     # (ii) the opponent appears in the committed span's committed_actors.
     committed = next(s for s in spans if s.name == "fate.exchange.committed")
@@ -168,8 +184,24 @@ def test_two_seated_opponents_both_threaten_the_pc():
         rng=random.Random(_DOUBLE_HIT_SEED),
         _tracer=tracer,
     )
+    # Story 126-8: both opponents are seated attacking the PC at REVEAL, so the
+    # round PARKS with one pending defense per incoming attack (the explicit proof
+    # both threaten the PC) before any inline resolution.
     assert result.commitment_pending is False
-    assert result.exchange is not None
+    assert result.awaiting_defense is True
+    assert result.exchange is None
+    assert len(result.defend_requests) == 2
+
+    # The PC defends BOTH incoming attacks (each landing exactly one shift), then
+    # the exchange RESUMEs and the full walk lands both on the PC.
+    resolve_parked_defenses(
+        encounter=enc,
+        snapshot=snap,
+        ruleset=module,
+        target_shift=1,
+        rng=random.Random(_DOUBLE_HIT_SEED),
+        _tracer=tracer,
+    )
 
     spans = exporter.get_finished_spans()
     # BOTH opponents emitted a decision span.

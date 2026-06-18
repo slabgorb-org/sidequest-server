@@ -30,7 +30,11 @@ from sidequest.protocol.dice import (
     DiceThrowPayload,
 )
 from sidequest.protocol.enums import MessageType, NarratorVerbosity, NarratorVocabulary
-from sidequest.protocol.fate import FateActionPayload, FateThrowPayload
+from sidequest.protocol.fate import (
+    FateActionPayload,
+    FateDefendRequestPayload,
+    FateThrowPayload,
+)
 from sidequest.protocol.models import (
     ClassRequirement,
     CompanionMember,
@@ -1382,6 +1386,16 @@ class FateThrowMessage(ProtocolBase):
     player_id: str = ""
 
 
+class FateDefendRequestMessage(ProtocolBase):
+    """GameMessage::FateDefendRequest — server -> client at the DEFEND barrier
+    (ADR-148/149, Story 126-8). One per incoming attack on a seated PC; the
+    client filters by ``defender`` and answers with FATE_THROW(action="defend")."""
+
+    type: Literal[MessageType.FATE_DEFEND_REQUEST] = MessageType.FATE_DEFEND_REQUEST
+    payload: FateDefendRequestPayload
+    player_id: str = ""
+
+
 class CheckThrowPayload(ProtocolBase):
     """Client -> server: initiate a non-beat SWN skill check or save.
 
@@ -1797,6 +1811,7 @@ _Phase1Variant = Annotated[
     | DiceThrowMessage
     | FateActionMessage
     | FateThrowMessage
+    | FateDefendRequestMessage
     | CheckThrowMessage
     | DiceResultMessage
     | OrbitalIntentMessage

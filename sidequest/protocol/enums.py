@@ -154,6 +154,11 @@ class MessageType(StrEnum):
     # ladder rating, the shift total, the outcome tier, and the succeed-with-
     # style flag. The dice tuple previously lived only on the OTEL span.
     FATE_ROLL = "FATE_ROLL"
+    # Server -> client at the DEFEND barrier (ADR-148/149, Story 126-8): "you are
+    # attacked by X — defend." One per incoming attack on a seated PC when the
+    # round parks; carries the committed attack total so the defender is informed
+    # before they throw their own 4dF (physics-is-the-roll for the defense too).
+    FATE_DEFEND_REQUEST = "FATE_DEFEND_REQUEST"
     # sq-playtest 2026-06-07 (heavy_metal/barsoom-3, blocking): a PC the genre
     # lethality policy ruled dead kept full agency for four rounds with no
     # death surface. Emitted at the moment a PC is taken OUT of play (LETHAL

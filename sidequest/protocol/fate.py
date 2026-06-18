@@ -72,14 +72,17 @@ class FateThrowPayload(ProtocolBase):
     keeps the player-thrown contract unforgeable: an empty/absent faces field
     cannot re-open the server-rolls-for-players backdoor (No Silent Fallbacks).
 
-    ``action`` is restricted to the three ROLL verbs; the non-roll verbs
-    (``concede`` / ``compel_*``) never throw and stay on ``FateActionPayload``.
-    The remaining fields mirror ``FateActionPayload``'s intent surface so the
-    handler can build the dispatch from a throw 1:1.
+    ``action`` is the three proactive ROLL verbs plus ``defend`` (ADR-148/149,
+    Story 126-8): a defend throw answers a ``FATE_DEFEND_REQUEST``, echoing its
+    ``request_id``, with the defender's four settled faces — the player defense
+    is physics-is-the-roll exactly like the proactive throw (NEVER ``roll_4df``).
+    The non-roll verbs (``concede`` / ``compel_*``) never throw and stay on
+    ``FateActionPayload``. The remaining fields mirror ``FateActionPayload``'s
+    intent surface so the handler can build the dispatch from a throw 1:1.
     """
 
     request_id: str
-    action: Literal["overcome", "create_advantage", "attack"]
+    action: Literal["overcome", "create_advantage", "attack", "defend"]
     skill: str = ""
     target: str | None = None
     difficulty: int = 0
@@ -99,3 +102,22 @@ class FateThrowPayload(ProtocolBase):
             if f not in (-1, 0, 1):
                 raise ValueError("each dF face must be -1, 0, or +1")
         return self
+
+
+class FateDefendRequestPayload(ProtocolBase):
+    """Server -> client: "you are attacked by ``attacker`` with ``attack_skill`` at
+    total ``attack_total`` — defend" (ADR-148/149, Story 126-8 §6).
+
+    One per incoming attack on a seated PC, emitted when the round PARKS at the
+    DEFEND barrier. The defender is *informed* — they see the committed attack
+    total before they throw — then answer with a ``FATE_THROW(action="defend")``
+    that echoes ``request_id``. ``mental`` is True for a social conflict (the
+    defense skill / stress track is mental rather than physical).
+    """
+
+    request_id: str
+    defender: str
+    attacker: str
+    attack_skill: str
+    attack_total: int
+    mental: bool = False

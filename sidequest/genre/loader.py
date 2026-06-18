@@ -20,6 +20,7 @@ from sidequest.game.disposition import (
 )
 from sidequest.genre.cache import GenreCache
 from sidequest.genre.error import GenreLoadError, GenreNotFoundError, PackError
+from sidequest.genre.ruleset_reference import validate_ruleset_reference
 from sidequest.genre.genre_code import GenreCode
 from sidequest.genre.models.archetype_axes import BaseArchetypes
 from sidequest.genre.models.archetype_constraints import ArchetypeConstraints
@@ -2223,6 +2224,14 @@ def load_genre_pack(path: Path | str) -> GenrePack:
     # rulebook — a genre-tier item_catalog entry with provenance.mode == "bespoke"
     # is a hard error. Native packs are exempt. Fail loud (No Silent Fallbacks).
     _validate_genre_baseline_no_bespoke(rules.ruleset, inventory)
+
+    # ADR-135/ADR-144 (Phase 1): Fate requires reference content under
+    # rulesets/fate/srd/. Fail loud if it's missing (No Silent Fallbacks).
+    validate_ruleset_reference(
+        rules.ruleset,
+        rulesets_root=path.parent.parent / "rulesets",
+        pack_name=path.name,
+    )
 
     # Cross-reference validation: class_filter / encounter_beat_choices consistency.
     # Only enforced when a classes.yaml is present (classes_list is non-empty).

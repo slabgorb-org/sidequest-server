@@ -134,3 +134,37 @@ def build_ruleset_reference_section(ruleset: str, *, rulesets_root: Path) -> dic
         "chapters": chapters,
         "provenance": RULESET_PROVENANCE[ruleset],
     }
+
+
+from sidequest.genre.error import GenreLoadError  # noqa: E402
+
+# Rulesets whose reference content MUST be present + complete (fail-loud).
+# Phase 1 ships Fate only; Plan B (WN family) extends this set.
+RULESETS_WITH_REFERENCE = frozenset({"fate"})
+
+
+def validate_ruleset_reference(
+    ruleset: str,
+    *,
+    rulesets_root: Path,
+    pack_name: str,
+    required: frozenset[str] = RULESETS_WITH_REFERENCE,
+) -> None:
+    """Fail loud if a required ruleset has missing/unstamped reference content."""
+    if ruleset not in required:
+        return
+    try:
+        chapters = load_ruleset_chapters(ruleset, rulesets_root=rulesets_root)
+    except RulesetReferenceError as exc:
+        raise GenreLoadError(
+            path=rulesets_root / ruleset,
+            detail=f"pack '{pack_name}': malformed {ruleset} reference content — {exc}",
+        ) from exc
+    if not chapters:
+        raise GenreLoadError(
+            path=rulesets_root / ruleset / "srd",
+            detail=(
+                f"pack '{pack_name}': ruleset '{ruleset}' requires reference content under "
+                f"rulesets/{ruleset}/srd/ but none was found (No Silent Fallbacks)"
+            ),
+        )

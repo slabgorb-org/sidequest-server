@@ -116,9 +116,7 @@ async def test_decompose_emits_action_rewrite_span_when_present(otel_capture) ->
     from sidequest.agents.intent_router import IntentRouter
 
     llm = _mock_router_llm(
-        _package_dict(
-            action_rewrite={"you": "You wait", "named": "Kael waits", "intent": "wait"}
-        )
+        _package_dict(action_rewrite={"you": "You wait", "named": "Kael waits", "intent": "wait"})
     )
     router = IntentRouter(llm=llm)
     await router.decompose(action="I wait", state_summary={})

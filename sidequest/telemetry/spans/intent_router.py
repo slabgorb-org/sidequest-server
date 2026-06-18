@@ -79,6 +79,21 @@ SPAN_ROUTES[SPAN_INTENT_ROUTER_DECOMPOSE] = SpanRoute(
     },
 )
 
+SPAN_INTENT_ROUTER_ACTION_REWRITE = "intent_router.action_rewrite"
+SPAN_ROUTES[SPAN_INTENT_ROUTER_ACTION_REWRITE] = SpanRoute(
+    event_type="state_transition",
+    component="intent_router",
+    extract=lambda span: {
+        "field": "intent_router.action_rewrite",
+        # Story 151-3 (ADR-150 step 3): the pre-pass producer's player-action
+        # rewrite. ``emitted`` is the GM-panel lie-detector — False is the loud
+        # net when the producer omitted the rewrite (never a silent skip). The
+        # ``intent`` carries the distilled classification the panel can audit.
+        "emitted": (span.attributes or {}).get("emitted", False),
+        "intent": (span.attributes or {}).get("intent", ""),
+    },
+)
+
 SPAN_INTENT_ROUTER_FAILED = "intent_router.failed"
 SPAN_ROUTES[SPAN_INTENT_ROUTER_FAILED] = SpanRoute(
     event_type="state_transition",
@@ -611,6 +626,30 @@ def intent_router_witnessed_act_classified_span(
     with Span.open(
         SPAN_INTENT_ROUTER_WITNESSED_ACT_CLASSIFIED,
         {"emitted": emitted, "act_ids": act_ids, "genre_slug": genre_slug, **attrs},
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def intent_router_action_rewrite_span(
+    *,
+    emitted: bool,
+    intent: str = "",
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Fires once per successful ``decompose`` (Story 151-3, ADR-150 step 3).
+
+    The pre-narrator IntentRouter now PRODUCES ``action_rewrite`` (the player's
+    own action rewritten into you/named/intent), replacing the retired narrator
+    game_patch sidecar field. ``emitted`` is the GM-panel lie-detector — the loud
+    net during transition: ``False`` records that the producer omitted the
+    rewrite (and the omitted→default fallback engaged) rather than a silent skip
+    (CLAUDE.md OTEL Observability Principle / No Silent Fallbacks)."""
+    with Span.open(
+        SPAN_INTENT_ROUTER_ACTION_REWRITE,
+        {"emitted": emitted, "intent": intent, **attrs},
         tracer_override=_tracer,
     ) as span:
         yield span

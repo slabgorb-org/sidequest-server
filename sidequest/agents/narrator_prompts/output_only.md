@@ -220,12 +220,6 @@ the player's journal feed, distinct from `commit_known_fact` (which durably
 commits the fact to party knowledge); emit footnotes here AND call
 `commit_known_fact` when the fact should be durably known.
 
-action_rewrite: Object. Include on every turn (omitted → default fallback
-substituted with warning). Rewrite the player's raw input into three
-perspectives:
-  {"you": "<second-person>", "named": "<third-person with character name>", "intent": "<neutral distilled intent, no pronouns>"}
-"I draw my sword" → {"you": "You draw your sword", "named": "Kael draws their sword", "intent": "draw sword"}
-
 private_segments: Array. DEFAULT empty — most turns are fully public. Emit
 ONLY when this turn's prose would contain perception NOT observable by
 every PC physically present. Each entry:

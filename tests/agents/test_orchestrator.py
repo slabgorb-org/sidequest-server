@@ -850,7 +850,14 @@ async def test_result_action_rewrite_sourced_from_pre_pass_not_game_patch():
             "intent": "advance",
         },
     )
-    ctx = TurnContext(character_name="Kael", dispatch_package=pkg)
+    # A present dispatch_package implies the pre-narrator pass ran and stashed
+    # its BankResult (build_narrator_prompt fails loud otherwise) — mirror that
+    # production-valid state, as the narrator_directives test above does.
+    ctx = TurnContext(
+        character_name="Kael",
+        dispatch_package=pkg,
+        bank_result=await run_dispatch_bank(pkg),
+    )
     result = await orch.run_narration_turn("step forward", ctx)
 
     assert result.action_rewrite is not None

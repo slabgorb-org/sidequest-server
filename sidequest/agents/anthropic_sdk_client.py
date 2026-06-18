@@ -255,8 +255,13 @@ def build_agent_sdk_options(
     deterministic at mt=2, ~3x faster, and ~6x cheaper in output tokens — and a
     mechanical classifier reasons through its (heavily prescriptive) prompt, not
     a scratchpad. Callers that need thinking with structured output can still
-    pass ``thinking`` explicitly to override. Non-structured callers (narrator
-    tool-loop, aside) are untouched — ``thinking`` stays ``None`` for them.
+    pass ``thinking`` explicitly to override. This builder does not *auto*-set
+    ``thinking`` for non-``output_format`` callers — it stays ``None`` unless the
+    caller passes it. Story 126-9: the narrator tool-loop and narrator-aside
+    (``complete_with_tools``) now pass ``thinking={"type":"disabled"}`` explicitly
+    to restore the pre-119-3 thinking-off baseline (the agent-SDK CLI defaults
+    thinking ON/"adaptive", which was tripling narrator latency), so those callers
+    are no longer ``None`` — the explicit kwarg is load-bearing, not redundant.
     """
     assert_subscription_auth()
     if output_format is not None and thinking is None:

@@ -21,7 +21,7 @@ site, never a source-text grep (CLAUDE.md "No Source-Text Wiring Tests").
 Wiring: that a production narration turn reaches ``complete_with_tools`` is held by
 ``test_narrator_uses_sdk_client.py::test_orchestrator_routes_narration_through_sdk``.
 
-Scope. The narrator-aside (``aside_resolver.py:301`` — ``caller="aside"``,
+Scope. The narrator-aside (``aside_resolver.py:302`` — ``caller="aside"``,
 ``tool_choice={"type": "none"}``, no ``tool_dispatch``) shares this exact call
 site, so it is covered here too (AC #2 parenthetical). The *Haiku* aside adapter
 (``llm_factory.build_aside_llm`` -> ``.complete()``, a different call site and a
@@ -89,7 +89,7 @@ async def test_narrator_tool_loop_disables_thinking(monkeypatch: pytest.MonkeyPa
 
 async def test_narrator_aside_caller_disables_thinking(monkeypatch: pytest.MonkeyPatch) -> None:
     """The narrator-aside (caller='aside', tool_choice none, no dispatch —
-    aside_resolver.py:301) shares the ``complete_with_tools`` call site and so MUST
+    aside_resolver.py:302) shares the ``complete_with_tools`` call site and so MUST
     also run with thinking disabled (AC #2 parenthetical). This guards against a
     future 'exclude the aside' branch silently re-enabling thinking on that path.
     """

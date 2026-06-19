@@ -157,21 +157,28 @@ def test_build_output_format_content_contains_game_patch():
     assert "game_patch" in section.content
 
 
-def test_narrator_output_format_requires_adversaries_in_npcs_present():
-    """CRITICAL ADVERSARY RULE must be present in the narrator prompt.
+def test_narrator_output_format_retires_npcs_present_contract():
+    """Story 151-5 / ADR-150 step 4 (cutover II): ``npcs_present`` is RETIRED from
+    the narrator output contract. The post-narration extractor reads NPCs from prose
+    and the engine seats combatant ``side`` (the IntentRouter seats opponents
+    pre-narrator); the per-turn catch-loops (``_detect_missed_recurring_npcs`` /
+    ``_auto_mint_prose_only_npcs``) remain the loud net for the old
+    "confrontation panel has no combatants" regression. The narrator no longer emits
+    ``npcs_present``, so its CRITICAL ADVERSARY RULE is gone from the contract.
 
-    Regression for pingpong 2026-04-24 "Confrontation panel has no enemy
-    combatants" — the narrator emitted confrontation without populating
-    npcs_present, so the encounter instantiated with only the player. This
-    rule instructs the narrator that every adversary referenced in prose on
-    a confrontation turn MUST appear in npcs_present with name + role.
-    Story 61-12 corrected the field-drift in the prose (npcs_met →
-    npcs_present, the codebase-canonical name).
-    """
-    assert "CRITICAL ADVERSARY RULE" in NARRATOR_OUTPUT_ONLY
-    assert "npcs_present" in NARRATOR_OUTPUT_ONLY
-    # The wording should reference the contract explicitly.
-    assert "name AND role" in NARRATOR_OUTPUT_ONLY
+    Forward regression guard: it must NOT come back here — a future "optimization"
+    sweeping ``npcs_present`` back onto the narrator would reintroduce the Opus
+    attention cost ADR-150 removed. Inverts the pre-151-5
+    ``test_narrator_output_format_requires_adversaries_in_npcs_present`` (the 151-3
+    ``retires_action_rewrite`` pattern)."""
+    assert "npcs_present" not in NARRATOR_OUTPUT_ONLY, (
+        "npcs_present is retired from the narrator contract in 151-5 — the "
+        "post-narration extractor owns it; it must not be re-instructed here"
+    )
+    assert "CRITICAL ADVERSARY RULE" not in NARRATOR_OUTPUT_ONLY, (
+        "the CRITICAL ADVERSARY RULE was the npcs_present emission guardrail — "
+        "retired with the field in 151-5"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -395,73 +402,29 @@ def test_narrator_output_format_retires_action_rewrite():
 # ---------------------------------------------------------------------------
 
 
-def test_narrator_prompt_requires_npcs_met_emission_every_turn_npc_is_onstage():
-    """AC1 — Every turn a named, persistent NPC is described onstage, the
-    narrator MUST re-emit them in npcs_met (regardless of is_new). The
-    prompt must state this rule explicitly so the narrator does not treat
-    npcs_met as a one-shot introduction list.
-    """
+def test_narrator_output_format_retires_recurring_presence_guardrails():
+    """Story 151-5 / ADR-150 step 4 (cutover II): the npcs_present recurring-presence
+    guardrails (the 'every turn' / 'onstage' / 'passing mention' / RECURRING-block
+    rules added for the James+Sebastien continuity gap) are RETIRED with the field.
+    The narrator no longer emits ``npcs_present``; the post-narration extractor reads
+    NPCs from prose and the catch-loops (``_detect_missed_recurring_npcs`` /
+    ``_auto_mint_prose_only_npcs``) are the loud net for recurring-NPC continuity.
+
+    Forward regression guard: these guardrails must NOT return to the narrator
+    contract. Inverts the three pre-151-5 recurring-presence guardrail tests (the
+    151-3 ``retires_action_rewrite`` pattern)."""
     text = NARRATOR_OUTPUT_ONLY.lower()
-    assert "every turn" in text, (
-        "NARRATOR_OUTPUT_ONLY must contain the phrase 'every turn' to make "
-        "the recurring-emission rule unambiguous. Without it, the narrator "
-        "treats npcs_met as a one-shot introduction list and recurring NPCs "
-        "vanish from game state (Playtest 3 pattern)."
+    assert "passing mention" not in text, (
+        "the 'passing mention' recurring-presence guardrail was an npcs_present "
+        "emission rule — retired with the field in 151-5"
     )
-    assert "onstage" in text, (
-        "NARRATOR_OUTPUT_ONLY must use the word 'onstage' (or equivalent "
-        "explicit term) to define the trigger for npcs_met emission. The "
-        "prompt currently says 'encounters' which is ambiguous between "
-        "first-encounter and ongoing-presence."
+    assert "onstage" not in text, (
+        "the 'onstage' recurring-presence guardrail was an npcs_present emission "
+        "rule — retired with the field in 151-5"
     )
-
-
-def test_narrator_prompt_distinguishes_named_onstage_from_passing_mention():
-    """AC4 sub-point — the prompt must distinguish 'named and onstage'
-    (must emit) from 'passing mention' (optional). Without that line the
-    narrator may collapse the rule into "emit everything ever named" and
-    over-emit, or under-emit and treat every onstage NPC as a passing
-    mention.
-    """
-    text = NARRATOR_OUTPUT_ONLY.lower()
-    assert "passing mention" in text, (
-        "NARRATOR_OUTPUT_ONLY must contain the phrase 'passing mention' to "
-        "define the negative case (NPC named in dialogue but not present). "
-        "Without it, narrator can't tell which mentions require emission."
-    )
-    # The rule must explicitly contrast the two — the prompt should say one
-    # is required and the other is optional.
-    assert "named and onstage" in text or "named & onstage" in text, (
-        "NARRATOR_OUTPUT_ONLY must contain the phrase 'named and onstage' "
-        "(or 'named & onstage') as the positive case for the every-turn "
-        "emission rule. The 'named and onstage' vs 'passing mention' "
-        "distinction is the operational definition for AC2/AC4."
-    )
-
-
-def test_narrator_prompt_introduces_dedicated_recurring_rule_block():
-    """AC4 sub-point — the recurring-presence rule must be its own labeled
-    block, paralleling the CRITICAL ADVERSARY RULE label. A discoverable
-    uppercase marker (e.g. 'RECURRING PRESENCE RULE' or
-    'RECURRING NPC RULE') makes the rule easy to find in the prompt and
-    prevents it from being collapsed into the existing free-form
-    npcs_met paragraph where the playtest pattern hid for weeks.
-
-    The CRITICAL ADVERSARY RULE must coexist (the recurring rule extends,
-    does not replace it).
-    """
-    assert "CRITICAL ADVERSARY RULE" in NARRATOR_OUTPUT_ONLY, (
-        "CRITICAL ADVERSARY RULE must remain — the recurring-presence rule "
-        "extends it, does not replace it (Playtest 2026-04-24 regression "
-        "guard)."
-    )
-    assert "RECURRING" in NARRATOR_OUTPUT_ONLY, (
-        "NARRATOR_OUTPUT_ONLY must contain the uppercase token 'RECURRING' "
-        "as the marker for the new rule block (parallel to "
-        "'CRITICAL ADVERSARY RULE'). Without a dedicated label the rule "
-        "lives inside the free-form npcs_met paragraph and the narrator "
-        "treats it as advisory rather than mandatory — the exact failure "
-        "mode that produced the Playtest 3 vanishing-NPC pattern."
+    assert "RECURRING" not in NARRATOR_OUTPUT_ONLY, (
+        "the RECURRING PRESENCE RULE block was the npcs_present emission guardrail — "
+        "retired with the field in 151-5"
     )
     # The recurring rule must contain the word 'MANDATORY' to mirror the
     # CRITICAL ADVERSARY RULE's strength (it currently uses MANDATORY too).

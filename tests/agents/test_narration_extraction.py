@@ -77,7 +77,11 @@ def test_narration_result_parses_status_changes():
     )
     result = extract_structured_from_response(raw)
     assert result["beat_selections"][0]["outcome"] == "Success"
-    assert result["npcs_present"][0]["side"] == "opponent"
+    # Story 151-5 (ADR-150 step 4, cutover II): npcs_present is retired from the
+    # game_patch (extractor-sourced now) — it no longer surfaces here even when the
+    # narrator emits it. status_changes (tool-owned) and beat_selections are
+    # unaffected.
+    assert result["npcs_present"] == []
     assert result["status_changes"] == [
         {"actor": "Sam", "status": {"text": "Bruised Ribs", "severity": "Wound"}},
     ]

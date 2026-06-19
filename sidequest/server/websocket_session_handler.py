@@ -101,6 +101,8 @@ from sidequest.server.intent_router_pass import execute_intent_router_pre_narrat
 from sidequest.server.narration_apply import (
     _apply_narration_result_to_snapshot,
     _handshake_resolved_tropes,
+    merge_sidecar_extraction_cosmetic,
+    merge_sidecar_extraction_npcs_present,
     merge_sidecar_extraction_transactional,
 )
 from sidequest.server.session_helpers import (
@@ -1163,6 +1165,15 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     )
                     if sidecar_extraction is not None:
                         merge_sidecar_extraction_transactional(result, sidecar_extraction)
+                        # Sidecar cutover II (Story 151-5, ADR-150 step 4): the last
+                        # four bucket-B fields are now extractor-sourced too.
+                        # npcs_present enrichment merges with the engine-owned
+                        # ``side`` (read from snapshot.encounter — the IntentRouter
+                        # seated it pre-narrator), and the cosmetic fields
+                        # (scene_mood/visual_scene/footnotes) are sourced verbatim.
+                        # Both are the SOLE source; the apply machinery is unchanged.
+                        merge_sidecar_extraction_npcs_present(result, sidecar_extraction, snapshot)
+                        merge_sidecar_extraction_cosmetic(result, sidecar_extraction)
                     applied_outcome = _apply_narration_result_to_snapshot(
                         snapshot,
                         result,

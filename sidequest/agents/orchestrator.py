@@ -1338,7 +1338,9 @@ def extract_structured_from_response(raw: str) -> dict[str, Any]:
 
     return {
         "prose": prose,
-        "footnotes": patch.get("footnotes", []),
+        # Story 151-5 (ADR-150 step 4): footnotes retired from game_patch
+        # (extractor-sourced now — see the bucket-B comment below).
+        "footnotes": [],
         # Story 151-4 (ADR-150 step 4): the seven TRANSACTIONAL fields (items×4,
         # gold_change, companions×2) are RETIRED from the narrator game_patch.
         # The post-narration sidecar extractor produces them and
@@ -1347,14 +1349,23 @@ def extract_structured_from_response(raw: str) -> dict[str, Any]:
         # game_patch even if a (non-compliant) narrator still emits them (the
         # extraction is the sole source; mirrors action_rewrite retirement, 151-3).
         # Keys stay present (empty) so the shared assembler's subscript access is
-        # safe. npcs_present + the cosmetic fields below are 151-5 — still sourced.
+        # safe.
+        #
+        # Story 151-5 (ADR-150 step 4, cutover II) extends the retirement to the
+        # last four bucket-B fields — npcs_present + the cosmetic fields
+        # (visual_scene, scene_mood, footnotes above): they are produced by the
+        # post-narration extractor and sourced onto the result by
+        # ``narration_apply.merge_sidecar_extraction_npcs_present`` (with
+        # engine-owned ``side``) and ``merge_sidecar_extraction_cosmetic``. After
+        # 151-5 the WHOLE of bucket-B is extractor-sourced; only ``private_segments``
+        # stays narrator-owned (the irreducible ADR-105 firewall field).
         "items_gained": [],
         "items_lost": [],
         "items_discarded": [],
         "items_consumed": [],
-        "npcs_present": patch.get("npcs_present", []),
-        "visual_scene": patch.get("visual_scene"),
-        "scene_mood": patch.get("scene_mood", patch.get("mood")),
+        "npcs_present": [],
+        "visual_scene": None,
+        "scene_mood": None,
         "sfx_triggers": patch.get("sfx_triggers", []),
         # Story 151-3 (ADR-150 step 3): action_rewrite is RETIRED from the
         # narrator game_patch — it is produced by the pre-narrator IntentRouter

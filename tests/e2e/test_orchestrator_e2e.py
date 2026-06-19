@@ -186,14 +186,15 @@ async def test_narrator_turn_end_to_end_with_caverns_claudes():
     )
     assert not result.is_degraded
 
-    # game_patch extraction assertions
+    # game_patch extraction assertions. location is tool-owned and still flows.
     assert result.location == "The Entrance Hall"
-    assert len(result.footnotes) == 1
-    assert result.footnotes[0]["summary"] == "The dungeon entrance is cold and damp"
-    assert result.visual_scene is not None
-    assert result.visual_scene.subject == "Stone corridor lit by torchlight"
-    assert result.visual_scene.tier == "landscape"
-    assert result.visual_scene.mood == "ominous"
+    # Story 151-5 (ADR-150 step 4, cutover II): footnotes + visual_scene (with
+    # npcs_present + scene_mood) are RETIRED from the narrator game_patch — the
+    # post-narration extractor produces them now and the WS handler's merge seams
+    # source them onto the result, AFTER this orchestrator turn. They surface empty
+    # at the orchestrator level.
+    assert result.footnotes == []
+    assert result.visual_scene is None
 
     # OTEL / telemetry fields
     assert result.agent_name == "narrator"

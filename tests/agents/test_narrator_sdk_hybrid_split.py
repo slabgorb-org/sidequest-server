@@ -262,29 +262,28 @@ async def test_sdk_path_zeros_tool_owned_state(
 async def test_sdk_path_keeps_presentation_fields(
     monkeypatch: pytest.MonkeyPatch, otel_capture: InMemorySpanExporter
 ) -> None:
-    """scene_mood / visual_scene / npcs_present / footnotes / sfx_triggers have
-    NO successor tool, so they MUST still be parsed off the sidecar —
-    images/audio/footnotes/perception depend on them.
+    """After the bucket-B cutover, ``sfx_triggers`` is the ONLY presentation field
+    with no successor producer — it still rides the sidecar parse.
 
-    Story 151-3 / ADR-150 step 3: ``action_rewrite`` is NO LONGER a
+    Story 151-5 / ADR-150 step 4 (cutover II): ``scene_mood`` / ``visual_scene`` /
+    ``npcs_present`` / ``footnotes`` are RETIRED from the sidecar — the post-narration
+    extractor produces them and the WS handler's merge seams source them onto the
+    result (npcs_present with engine-owned ``side``). The SDK assembler therefore
+    surfaces them empty; ``sfx_triggers`` (NOT a bucket-B field) survives.
+
+    Story 151-3 / ADR-150 step 3: ``action_rewrite`` is likewise no longer a
     game_patch-sourced presentation field — it is produced by the pre-narrator
-    IntentRouter and carried on ``TurnContext.dispatch_package``. With no
-    dispatch_package on this SDK fixture turn, the result carries no rewrite; the
-    pre-pass sourcing is covered by
-    ``test_result_action_rewrite_sourced_from_pre_pass_not_game_patch`` in
-    test_orchestrator.py. The other presentation fields move in 151-4/5, not here.
+    IntentRouter and carried on ``TurnContext.dispatch_package``.
     """
     result = await _run_sdk_turn(monkeypatch, "Phosphor moss glows green.")
 
-    assert result.scene_mood == "claustrophobic dread"
-    assert result.visual_scene is not None
-    assert "flooded stone vault" in (result.visual_scene.subject or "")
+    # Retired in 151-5 — extractor-sourced now, so the assembler surfaces them empty.
+    assert result.scene_mood is None
+    assert result.visual_scene is None
+    assert result.footnotes == []
+    assert result.npcs_present == []
+    # The one surviving sidecar-parsed presentation field (no successor producer).
     assert result.sfx_triggers == ["water_drip", "distant_groan"]
-    assert len(result.footnotes) == 1
-    assert result.footnotes[0]["summary"] == "The vault key is iron, not brass."
-    assert [m.name for m in result.npcs_present] == ["The Drowned Warden"]
-    # action_rewrite intentionally NOT asserted here — retired from the sidecar
-    # presentation bucket (now pre-pass-sourced; see 151-3 note above).
 
 
 # ---------------------------------------------------------------------------
@@ -441,9 +440,12 @@ def test_assemble_turn_result_still_applies_sidecar_on_non_sdk_path() -> None:
     # non-retired sidecar fields above still flow (the regression guard's point).
     assert result.gold_change is None
     assert result.game_patch_dict != {}
-    # Presentation also present (parity — proves the SDK split didn't
-    # regress the shared parse).
-    assert result.scene_mood == "claustrophobic dread"
+    # Story 151-5 (ADR-150 step 4, cutover II): scene_mood (with npcs_present /
+    # visual_scene / footnotes) is RETIRED from the game_patch — extractor-sourced
+    # now, so the assembler surfaces None here. sfx_triggers (NOT a bucket-B field)
+    # still flows — the surviving presentation parity check.
+    assert result.scene_mood is None
+    assert result.sfx_triggers == ["water_drip", "distant_groan"]
     # tool_calls ledger is empty on the non-SDK path.
     assert result.tool_calls == []
 
@@ -466,11 +468,14 @@ async def test_sdk_assembler_is_wired_into_run_narration_turn(
     produces. This is the "every test suite needs a wiring test" gate.
     """
     result = await _run_sdk_turn(monkeypatch, "Reachability proof.")
-    # Tool-owned zeroed AND presentation kept in the same result == the
-    # SDK assembler ran (not _assemble_turn_result, which keeps both).
+    # Tool-owned zeroed AND the surviving presentation field (sfx_triggers) kept in
+    # the same result == the SDK assembler ran (not _assemble_turn_result, which
+    # keeps both). Story 151-5 retired scene_mood / npcs_present / visual_scene /
+    # footnotes (extractor-sourced now), so sfx_triggers is the field that still
+    # proves the split.
     assert result.location is None
     assert result.status_changes == []
-    assert result.scene_mood == "claustrophobic dread"
+    assert result.sfx_triggers == ["water_drip", "distant_groan"]
     assert result.narration == "Reachability proof."
 
 

@@ -171,14 +171,17 @@ def test_output_only_prose_has_zero_npcs_met_references() -> None:
     )
 
 
-def test_output_only_prose_documents_npcs_present_field() -> None:
-    """The npcs_present sidecar-field rule must remain expressible after
-    the drift fix. (Negative-only assertions are weaker — pin the positive
-    so a future regression that deletes both fields fails loudly.)"""
-    assert "npcs_present" in NARRATOR_OUTPUT_ONLY, (
-        "NARRATOR_OUTPUT_ONLY must continue to document the ``npcs_present`` "
-        "sidecar field. The drift fix renames ``npcs_met`` → ``npcs_present`` "
-        "in-place; it does not delete the rule."
+def test_output_only_prose_retires_npcs_present_field() -> None:
+    """Story 151-5 / ADR-150 step 4 (cutover II): ``npcs_present`` is RETIRED from the
+    narrator contract — the post-narration extractor owns it now. The 61-12 drift fix
+    (npcs_met → npcs_present) is moot once the field leaves the narrator's hands.
+    Forward regression guard — neither spelling may return. Inverts the pre-151-5
+    ``test_output_only_prose_documents_npcs_present_field``."""
+    assert "npcs_present" not in NARRATOR_OUTPUT_ONLY, (
+        "npcs_present is retired from the narrator contract in 151-5 (extractor-owned)"
+    )
+    assert "npcs_met" not in NARRATOR_OUTPUT_ONLY, (
+        "the deprecated npcs_met spelling must stay gone too (61-12 drift fix)"
     )
 
 
@@ -496,14 +499,8 @@ REQUIRED_TOKENS: tuple[str, ...] = (
     # names are CONTENT, correctly not hard-asserted in engine tests per
     # feedback_tests_not_point_at_content). Design Deviation logged in the
     # 61-14 session. Silent omission is forbidden — hence this banner.
-    # test_narrator_prompt — sidecar fields + side enum + tiers
-    "side",
-    "player",
-    "opponent",
-    "neutral",
-    "landscape",
-    "portrait",
-    "scene_illustration",
+    # test_narrator_prompt — apply_status (a tool name) + Boon (a beat tier) survive;
+    # these are NOT bucket-B sidecar fields and stay in the contract.
     "apply_status",
     "Boon",
     # Story 151-3 (ADR-150 step 3): "action_rewrite" REMOVED from this list —
@@ -514,11 +511,14 @@ REQUIRED_TOKENS: tuple[str, ...] = (
     # tests/agents/test_narrator.py::test_narrator_output_format_retires_action_rewrite.
     # Design Deviation logged in the 151-3 session — silent omission is forbidden,
     # hence this banner.
-    # test_narrator — sidecar npc-adversary rule
-    "CRITICAL ADVERSARY RULE",
-    # test_57_4_recency_guardrails_migration — load-bearing fingerprint
-    "Recurring NPCs",
-    "Patients on a sickbed count",
+    # Story 151-5 (ADR-150 step 4, cutover II): the npcs_present + cosmetic-field
+    # cutover RETIRED these tokens from NARRATOR_OUTPUT_ONLY — the npc side enum
+    # ("side"/"player"/"opponent"/"neutral"), the visual_scene tiers ("landscape"/
+    # "portrait"/"scene_illustration"), the "CRITICAL ADVERSARY RULE", and the
+    # recurring-presence fingerprints ("Recurring NPCs" / "Patients on a sickbed
+    # count"). Their source tests are inverted to retirement assertions
+    # (test_narrator / test_narrator_prompt / test_57_4). Silent omission forbidden —
+    # hence this banner.
 )
 
 

@@ -3628,6 +3628,97 @@ def merge_sidecar_extraction_transactional(
     return result
 
 
+def _engine_actor_sides(snapshot: GameSnapshot) -> dict[str, str]:
+    """The engine-owned membership map: each seated actor's ``side`` keyed by name.
+
+    This is the confrontation the IntentRouter already seated pre-narrator
+    (ADR-150). Empty when no confrontation is engaged — every extracted mention
+    then defaults to ``neutral``, so a prose-only "opponent" cannot spoof
+    combatant membership.
+    """
+    encounter = getattr(snapshot, "encounter", None)
+    if encounter is None:
+        return {}
+    return {actor.name: actor.side for actor in encounter.actors}
+
+
+def merge_sidecar_extraction_npcs_present(
+    result: NarrationTurnResult,
+    extraction: SidecarExtraction,
+    snapshot: GameSnapshot,
+) -> NarrationTurnResult:
+    """Source ``npcs_present`` from the post-narration extractor, with ENGINE-OWNED
+    ``side`` (ADR-150 step 4, Story 151-5 cutover II).
+
+    The extractor ENRICHES (name / pronouns / role / appearance, read from prose);
+    the ENGINE ADJUDICATES membership: each mention's ``side`` is resolved from the
+    confrontation the IntentRouter already seated pre-narrator
+    (``snapshot.encounter.actors``), NOT from the extractor's prose-read claim. An
+    actor the engine never seated defaults to ``neutral`` — closing the
+    "wrong side breaks momentum routing" bug class (ADR-150 §Decision).
+
+    When the extractor's CLAIMED side disagrees with the engine-resolved side, a
+    ``sidecar_extraction.mismatch`` span fires (the relocated lie-detector — the GM
+    panel sees the override). The extraction is the SOLE source: a stale
+    ``result.npcs_present`` (a non-compliant narrator's retired game_patch leak) is
+    OVERWRITTEN, never merged (No Silent Fallbacks).
+
+    Called by the WS turn handler between the (pre-apply) extractor and
+    ``_apply_narration_result_to_snapshot``; the downstream ``_apply_npc_mentions``
+    machinery is UNCHANGED.
+    """
+    from sidequest.agents.orchestrator import NpcMention
+    from sidequest.telemetry.spans.sidecar_extraction import sidecar_extraction_mismatch_span
+
+    engine_sides = _engine_actor_sides(snapshot)
+    mentions: list[NpcMention] = []
+    for raw in extraction.npcs_present:
+        # ``from_value`` parses the extractor's enrichment dict (name/pronouns/role/
+        # appearance/is_new/is_creature/disengaged) AND its claimed side.
+        mention = NpcMention.from_value(raw)
+        claimed_side = mention.side
+        engine_side = engine_sides.get(mention.name, "neutral")
+        if claimed_side != engine_side:
+            with sidecar_extraction_mismatch_span(
+                field="npcs_present",
+                evidence=(
+                    f"extractor claimed side={claimed_side!r} for {mention.name!r}; "
+                    f"engine seated side={engine_side!r}"
+                ),
+            ):
+                pass
+        # Engine adjudicates membership — overwrite the prose-read claim.
+        mention.side = engine_side
+        mentions.append(mention)
+    result.npcs_present = mentions
+    return result
+
+
+def merge_sidecar_extraction_cosmetic(
+    result: NarrationTurnResult, extraction: SidecarExtraction
+) -> NarrationTurnResult:
+    """Source the cosmetic bucket-B fields (``scene_mood`` / ``visual_scene`` /
+    ``footnotes``) from the post-narration extractor (ADR-150 step 4, Story 151-5).
+
+    These are presentation / feed fields with no engine ownership — copied from the
+    extraction, the ``visual_scene`` dict rebuilt into the ``VisualScene`` model the
+    result holds (the same conversion the result assembler does). A SEPARATE seam
+    from the npcs merge so the cosmetic fields can be scheduled off the critical path
+    (ADR-150 §Ordering). The extraction is the SOLE source: stale result values are
+    OVERWRITTEN (No Silent Fallbacks).
+    """
+    from sidequest.agents.orchestrator import VisualScene
+
+    result.scene_mood = extraction.scene_mood
+    result.visual_scene = (
+        VisualScene.from_dict(extraction.visual_scene)
+        if isinstance(extraction.visual_scene, dict)
+        else None
+    )
+    result.footnotes = list(extraction.footnotes)
+    return result
+
+
 def _apply_narration_result_to_snapshot(
     snapshot: GameSnapshot,
     result: object,

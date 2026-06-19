@@ -250,30 +250,28 @@ async def test_sdk_prompt_text_does_not_contain_any_guardrail_section_marker(
         "npc_extraction_constraint",
     ],
 )
-def test_sidecar_targets_carry_their_guardrail_prose(name: str) -> None:
-    """AC1: the two sidecar-owned guardrails migrate into
-    ``NARRATOR_OUTPUT_ONLY`` (the slimmed-sidecar prose at
-    ``narrator_prompts/output_only.md``, renamed from
-    ``output_only_sdk.md`` in story 61-9). Per ADR-111 §Decision
-    routing rule: sidecar-field guardrails go to the sidecar SDK prose
-    in the Primacy/Stable cached zone.
+def test_sidecar_targets_guardrail_prose_retired_with_their_fields(name: str) -> None:
+    """Story 151-5 / ADR-150 step 4 (cutover II) SUPERSEDES the ADR-111 placement of
+    these two guardrails. ADR-111 migrated the ``npc_intro_visual_constraint`` /
+    ``npc_extraction_constraint`` prose INTO ``NARRATOR_OUTPUT_ONLY`` because they
+    govern the sidecar fields ``visual_scene`` / ``npcs_present``. ADR-150 RETIRES
+    those fields from the narrator contract (extractor-sourced now), so their
+    guardrail prose is retired with them.
 
-    The check uses the load-bearing fingerprint phrase rather than the
-    full constant body so the implementer has latitude to introduce a
-    new subsection header / restructure the prose for the new home.
-    The fingerprint itself is the regression detector (see
-    ``test_each_constant_carries_its_load_bearing_fingerprint``).
-    """
+    The guardrail CONSTANTS still exist (dormant) — ``test_each_constant_carries_its
+    _load_bearing_fingerprint`` still pins them — but they are no longer injected into
+    output_only.md. Forward regression guard: the fingerprint must NOT reappear in the
+    narrator contract. Inverts the pre-151-5 ``test_sidecar_targets_carry_their
+    _guardrail_prose``."""
     fingerprints = {
         "npc_intro_visual_constraint": "Recurring NPCs",
         "npc_extraction_constraint": "Patients on a sickbed count",
     }
     fp = fingerprints[name]
-    assert fp in NARRATOR_OUTPUT_ONLY, (
-        f"NARRATOR_OUTPUT_ONLY is missing the migrated fingerprint "
-        f"{fp!r} from {name!r}. ADR-111 routing rule: this guardrail "
-        "governs a sidecar field (visual_scene / npcs_present) and "
-        "must move into the slimmed-sidecar Primacy-cached prose."
+    assert fp not in NARRATOR_OUTPUT_ONLY, (
+        f"NARRATOR_OUTPUT_ONLY still carries the {fp!r} guardrail from {name!r}; "
+        f"151-5 retired the npcs_present / visual_scene fields it governs (ADR-150 "
+        "supersedes the ADR-111 placement — the extractor owns these fields now)."
     )
 
 

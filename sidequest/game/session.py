@@ -754,7 +754,8 @@ class RoomState(BaseModel):
 
     Sibling to ``GameSnapshot.discovered_rooms`` (which answers "have we
     been here?") — this answers "what mechanical lifecycle state lives
-    here?". Currently holds container retrieval state; trap / lock /
+    here?". Holds container retrieval state and (Story 126-18) the
+    interactable inanimate props an opening scene established; trap / lock /
     stochastic-descriptor state are out of scope per the story.
     """
 
@@ -762,6 +763,14 @@ class RoomState(BaseModel):
 
     room_id: str
     containers: dict[str, ContainerState] = Field(default_factory=dict)
+    props: list[str] = Field(default_factory=list)
+    """Interactable inanimate props persisted into this room (Story 126-18).
+
+    Opening-scene props (envelope/Pernod/ashtray) are written here at scene
+    setup so the next stateless turn's router/narrator sees them in the
+    projected snapshot — without this, narrated-but-unpersisted props trip the
+    ``must_not_narrate`` guard and an established hook is retracted (SOUL
+    Yes-And / Diamonds-and-Coal)."""
 
 
 # ResourcePool lives in sidequest.game.resource_pool (ADR-033).

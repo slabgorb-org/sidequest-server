@@ -218,6 +218,12 @@ class OpeningSetting(BaseModel):
     region_id: str | None = None
     situation: str = ""
     present_npcs: list[str] = Field(default_factory=list)
+    present_props: list[str] = Field(default_factory=list)
+    """Interactable inanimate props the opening establishes (e.g. an envelope on
+    the table). Story 126-18: persisted to ``room_states`` at scene setup so the
+    next stateless per-turn narrator/router (ADR-098/-113) sees them and the
+    ``must_not_narrate`` guard never retracts an opening-established hook. The
+    object-world twin of ``present_npcs``; allowed on either anchor kind."""
 
     @model_validator(mode="after")
     def _exactly_one_anchor(self) -> Self:

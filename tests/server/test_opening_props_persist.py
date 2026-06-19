@@ -47,8 +47,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore, Inventory
 from sidequest.game.session import GameSnapshot
@@ -120,9 +118,7 @@ def test_opening_with_present_props_constructs() -> None:
             location_label="Café Le Dôme",
             present_props=[ENVELOPE, PERNOD, ASHTRAY],  # type: ignore[call-arg]
         ),
-        establishing_narration=(
-            "The envelope is on the marble between the glass and the ashtray."
-        ),
+        establishing_narration=("The envelope is on the marble between the glass and the ashtray."),
         first_turn_invitation="Smoke curls toward the tin ceiling.",
     )
     assert list(opening.setting.present_props) == [ENVELOPE, PERNOD, ASHTRAY]  # type: ignore[attr-defined]
@@ -184,7 +180,9 @@ def test_persist_opening_props_empty_is_noop() -> None:
     assert ROOM_ID not in snap.room_states, (
         "Empty props must not fabricate a room_states entry (no phantom scene state)."
     )
-    persisted = [c for c in span_open.call_args_list if c.args and c.args[0] == PROPS_PERSISTED_SPAN]
+    persisted = [
+        c for c in span_open.call_args_list if c.args and c.args[0] == PROPS_PERSISTED_SPAN
+    ]
     assert not persisted, (
         f"Empty props must not emit '{PROPS_PERSISTED_SPAN}' — there is nothing to observe."
     )
@@ -206,7 +204,9 @@ def test_persist_opening_props_emits_span_with_count_and_ids() -> None:
     with patch.object(Span, "open", wraps=Span.open) as span_open:
         persist_opening_props(snap, props, room_id=ROOM_ID)
 
-    persisted = [c for c in span_open.call_args_list if c.args and c.args[0] == PROPS_PERSISTED_SPAN]
+    persisted = [
+        c for c in span_open.call_args_list if c.args and c.args[0] == PROPS_PERSISTED_SPAN
+    ]
     assert len(persisted) == 1, (
         f"expected exactly one '{PROPS_PERSISTED_SPAN}' span; got {len(persisted)}. "
         f"All spans: {[c.args[0] for c in span_open.call_args_list if c.args]!r}"
@@ -330,9 +330,7 @@ def test_opening_resolution_seam_persists_present_props() -> None:
             location_label="Café Le Dôme",
             present_props=[ENVELOPE, PERNOD, ASHTRAY],  # type: ignore[call-arg]
         ),
-        establishing_narration=(
-            "The envelope is on the marble between the glass and the ashtray."
-        ),
+        establishing_narration=("The envelope is on the marble between the glass and the ashtray."),
         first_turn_invitation="Smoke curls toward the tin ceiling.",
     )
 
@@ -344,9 +342,10 @@ def test_opening_resolution_seam_persists_present_props() -> None:
         world_slug=world_slug,
     )
 
-    with patch.object(
-        opening_helpers, "_resolve_opening_post_chargen", return_value=prop_opening
-    ), patch.object(Span, "open", wraps=Span.open) as span_open:
+    with (
+        patch.object(opening_helpers, "_resolve_opening_post_chargen", return_value=prop_opening),
+        patch.object(Span, "open", wraps=Span.open) as span_open,
+    ):
         opening_helpers._populate_opening_directive_on_chargen_complete(
             session_data=session_data,  # type: ignore[arg-type]
             snapshot=snap,
@@ -355,7 +354,9 @@ def test_opening_resolution_seam_persists_present_props() -> None:
             mode="solo",
         )
 
-    persisted = [c for c in span_open.call_args_list if c.args and c.args[0] == PROPS_PERSISTED_SPAN]
+    persisted = [
+        c for c in span_open.call_args_list if c.args and c.args[0] == PROPS_PERSISTED_SPAN
+    ]
     assert persisted, (
         f"the opening-resolution seam must persist present_props and fire "
         f"'{PROPS_PERSISTED_SPAN}'. Spans seen: "

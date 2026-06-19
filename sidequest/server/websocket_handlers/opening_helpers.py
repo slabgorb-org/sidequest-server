@@ -233,7 +233,77 @@ def _populate_opening_directive_on_chargen_complete(
     # explicit ``setting.region_id`` (an authored binding to a real cartography
     # node); bind ``current_region`` to it here so the region-mode
     # LOCATION_DESCRIPTION + Map + OTEL State all agree with the prose.
-    return _bind_current_region_from_opening(snapshot, pack, world_slug, opening)
+    rebound_region = _bind_current_region_from_opening(snapshot, pack, world_slug, opening)
+
+    # Story 126-18: persist the opening's interactable inanimate props
+    # (envelope/Pernod/ashtray) into room_states so the next stateless per-turn
+    # narrator/router (ADR-098/-113) sees them. Keyed to the same room string
+    # the party resolves to (``setting.location_label``, written to
+    # ``character_locations`` by the bootstrap above; ``interior_room`` for a
+    # chassis anchor) so snapshot slimming projects the props into the per-turn
+    # state. Without this, narrated-but-unpersisted props trip the
+    # ``must_not_narrate`` guard and an opening-established hook is retracted
+    # (SOUL Yes-And / Diamonds-and-Coal). The object-world twin of the authored-
+    # NPC preload.
+    present_props = list(getattr(opening.setting, "present_props", []) or [])
+    if present_props:
+        room_id = opening.setting.location_label or opening.setting.interior_room
+        if room_id:
+            persist_opening_props(snapshot, present_props, room_id=room_id)
+        else:
+            # Anchor invariant (OpeningSetting._exactly_one_anchor) guarantees
+            # exactly one of location_label / (chassis + interior_room), so this
+            # is unreachable — but never drop props silently (No Silent Fallbacks).
+            _emit_skip("props_no_resolvable_room", present_props=len(present_props))
+
+    return rebound_region
+
+
+def persist_opening_props(
+    snapshot: GameSnapshot,
+    props: list[str],
+    *,
+    room_id: str,
+) -> None:
+    """Persist opening-scene interactable props into ``room_states[room_id]``.
+
+    Story 126-18 — the object-world twin of ``preload_authored_npcs``. Writes
+    the props into the room's ``RoomState.props`` (creating the entry if absent,
+    preserving any existing container state) so the next stateless per-turn
+    narrator/router (ADR-098/-113) sees them in the projected snapshot and the
+    ``must_not_narrate`` guard never retracts an opening-established hook.
+
+    Emits one flat-only ``opening.props_persisted`` span carrying the count and
+    the prop ids (GM-panel lie-detector for the inverted failure mode: good
+    narration, empty state — CLAUDE.md OTEL Observability Principle). Empty
+    ``props`` is a hard no-op: nothing to persist, nothing to observe (no
+    phantom room state, no empty span).
+    """
+    if not props:
+        return
+
+    from sidequest.game.session import RoomState
+    from sidequest.telemetry.spans import SPAN_OPENING_PROPS_PERSISTED, Span
+
+    room_state = snapshot.room_states.get(room_id)
+    if room_state is None:
+        room_state = RoomState(room_id=room_id)
+        snapshot.room_states[room_id] = room_state
+    for prop in props:
+        if prop not in room_state.props:
+            room_state.props.append(prop)
+
+    with Span.open(
+        SPAN_OPENING_PROPS_PERSISTED,
+        {
+            "props_persisted": len(props),
+            "prop_ids": ",".join(props),
+            "room_id": room_id,
+            "genre_slug": getattr(snapshot, "genre_slug", "") or "",
+            "world_slug": getattr(snapshot, "world_slug", "") or "",
+        },
+    ):
+        pass
 
 
 def _bind_current_region_from_opening(

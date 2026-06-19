@@ -224,6 +224,113 @@ def test_no_colocated_bound_creature_seats_router_name():
 
 
 # ---------------------------------------------------------------------------
+# 1b. Non-combat confrontations must NOT conscript an ambient bestiary creature
+#     (150-2 dust_and_lead Defect A: a Fate standoff seated a "Western
+#     Diamondback" rattlesnake as the Other for a human drifter).
+# ---------------------------------------------------------------------------
+
+
+def test_non_combat_confrontation_does_not_conscript_colocated_bestiary_creature():
+    """150-2 / Defect A: the 108-2 roster reconciliation exists to preserve a
+    BOUND creature's COMBAT hp stats (ADR-059). It is creature_id-gated, so the
+    ONLY thing it can conscript is a bestiary monster — never an authored human
+    NPC. For a NON-combat confrontation (a Fate standoff, a social duel, a
+    chase) a bestiary monster is never the right Other. A co-located ambient
+    "Western Diamondback" must NOT be seated against a router-named human
+    threat; the router name is seated instead.
+    """
+    snake = _statted_creature(
+        "Western Diamondback", creature_id="diamondback_rattler", hp=2
+    )
+    snap = _snapshot_with(snake)
+    pack = _load_pack()
+
+    enc = instantiate_encounter_from_trigger(
+        snapshot=snap,
+        pack=pack,
+        # chase → category "movement" in the fixture: a non-combat, adversarial
+        # confrontation (seats an opponent-side actor), exactly the category
+        # class the dust_and_lead "standoff" (pre_combat) belongs to.
+        encounter_type="chase",
+        player_name="Kirk",
+        npcs_present=[],
+        genre_slug=snap.genre_slug,
+        materialized_threat=NpcMention(
+            name="the drifter", role="hostile", side="opponent"
+        ),
+    )
+
+    opponents = [a.name for a in enc.actors if a.side == "opponent"]
+    assert opponents == ["the drifter"], (
+        "a non-combat confrontation must seat the router-named human threat, "
+        f"not conscript the ambient bestiary creature; got {opponents!r}"
+    )
+
+
+def test_combat_confrontation_still_reconciles_same_bestiary_creature():
+    """Regression guard for the 108-2 value: the SAME co-located bestiary
+    creature a non-combat confrontation must decline IS still reconciled for a
+    COMBAT confrontation — combat is exactly where binding the bound creature's
+    statted HP matters (ADR-059). Proves the 150-2 gate keys on the confrontation
+    CATEGORY, not the creature.
+    """
+    snake = _statted_creature(
+        "Western Diamondback", creature_id="diamondback_rattler", hp=2
+    )
+    snap = _snapshot_with(snake)
+    pack = _load_pack()
+
+    enc = instantiate_encounter_from_trigger(
+        snapshot=snap,
+        pack=pack,
+        encounter_type="combat",
+        player_name="Kirk",
+        npcs_present=[],
+        genre_slug=snap.genre_slug,
+        materialized_threat=NpcMention(
+            name="Hold-Dead", role="hostile", side="opponent"
+        ),
+    )
+
+    opponents = [a.name for a in enc.actors if a.side == "opponent"]
+    assert opponents == ["Western Diamondback"], (
+        f"combat reconciliation (108-2) regressed; got {opponents!r}"
+    )
+
+
+def test_non_combat_skip_emits_decision_span(otel_capture):
+    """OTEL principle / CLAUDE.md lie-detector: declining to conscript an ambient
+    bestiary hazard into a non-combat confrontation is a subsystem decision and
+    MUST be observable on the GM panel."""
+    snake = _statted_creature(
+        "Western Diamondback", creature_id="diamondback_rattler", hp=2
+    )
+    snap = _snapshot_with(snake)
+    pack = _load_pack()
+
+    instantiate_encounter_from_trigger(
+        snapshot=snap,
+        pack=pack,
+        encounter_type="chase",
+        player_name="Kirk",
+        npcs_present=[],
+        genre_slug=snap.genre_slug,
+        materialized_threat=NpcMention(
+            name="the drifter", role="hostile", side="opponent"
+        ),
+    )
+
+    spans = {s.name: s for s in otel_capture.get_finished_spans()}
+    assert "encounter.roster_resolution_skipped" in spans, (
+        f"declined-conscription decision span not emitted; saw {sorted(spans)}"
+    )
+    attrs = spans["encounter.roster_resolution_skipped"].attributes or {}
+    assert attrs.get("declined_name") == "Western Diamondback", (
+        f"span must name the declined creature; got {dict(attrs)!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # 2. Statted HP preservation in the hp_depletion seater
 # ---------------------------------------------------------------------------
 

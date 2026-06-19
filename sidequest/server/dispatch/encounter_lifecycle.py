@@ -45,6 +45,7 @@ from sidequest.telemetry.spans import (
     encounter_opponent_resolved_from_roster_span,
     encounter_opponent_toothless_span,
     encounter_resolved_span,
+    encounter_roster_resolution_skipped_span,
     encounter_sealed_letter_arity_rejected_span,
     npc_edge_published_span,
     participant_joined_span,
@@ -846,6 +847,7 @@ def _resolve_opponent_from_roster(
     *,
     threat_name: str,
     acting_character_name: str | None,
+    confrontation_category: str,
 ) -> Npc | None:
     """108-2: reconcile a router-named free-string opponent to a bound, statted
     adversary present in the scene BEFORE the seater fabricates a stub.
@@ -894,6 +896,25 @@ def _resolve_opponent_from_roster(
         key=lambda n: (n.last_seen_turn, n.threat_level or 0, n.core.name),
         reverse=True,
     )
+    # 150-2 (Defect A): every candidate here is a bestiary monster (the filter is
+    # ``creature_id is not None``). The 108-2 reconciliation exists to preserve a
+    # bound creature's COMBAT hp stats (ADR-059) — so it is only correct for a
+    # COMBAT confrontation. For a NON-combat confrontation (a Fate standoff /
+    # social duel / chase) a bestiary monster is never the right Other:
+    # dust_and_lead seated a "Western Diamondback" rattlesnake against a human
+    # drifter because the only co-located adversary was an ambient bestiary
+    # hazard. Decline the conscription and let the seater seat the router-named
+    # threat (a human stub) instead; emit a lie-detector span so the GM panel
+    # sees the engine refused the ambient hazard (No Silent Fallbacks). Combat
+    # keeps the 108-2 behavior untouched.
+    if confrontation_category != "combat":
+        with encounter_roster_resolution_skipped_span(
+            router_name=threat_name,
+            declined_name=candidates[0].core.name,
+            confrontation_category=confrontation_category,
+        ):
+            pass
+        return None
     return candidates[0]
 
 
@@ -1336,6 +1357,7 @@ def instantiate_encounter_from_trigger(
             snapshot,
             threat_name=materialized_threat.name,
             acting_character_name=player_name,
+            confrontation_category=cdef.category,
         )
         if resolved_opponent is not None:
             from sidequest.agents.orchestrator import NpcMention as _NpcMention

@@ -358,6 +358,28 @@ SPAN_ROUTES[SPAN_ENCOUNTER_OPPONENT_MINTED_STUB] = SpanRoute(
     },
 )
 
+# 150-2 (Defect A): the seater DECLINED to reconcile a router-named opponent to a
+# co-located bestiary creature because the confrontation is NON-combat (a Fate
+# standoff / social duel / chase). The 108-2 reconciliation exists to preserve a
+# bound creature's COMBAT hp stats (ADR-059); it is creature_id-gated, so the only
+# thing it can pull is a bestiary monster — never the right Other for a human
+# standoff (dust_and_lead seated a "Western Diamondback" rattlesnake against a
+# drifter). The GM panel reads this to confirm the engine REFUSED to conscript an
+# ambient hazard and seated the router-named threat instead (No Silent Fallbacks).
+SPAN_ENCOUNTER_ROSTER_RESOLUTION_SKIPPED = "encounter.roster_resolution_skipped"
+SPAN_ROUTES[SPAN_ENCOUNTER_ROSTER_RESOLUTION_SKIPPED] = SpanRoute(
+    event_type="state_transition",
+    component="encounter",
+    extract=lambda span: {
+        "field": "encounter.roster_resolution_skipped",
+        "router_name": (span.attributes or {}).get("router_name", ""),
+        "declined_name": (span.attributes or {}).get("declined_name", ""),
+        "confrontation_category": (span.attributes or {}).get(
+            "confrontation_category", ""
+        ),
+    },
+)
+
 # Story 45-3: Mid-turn momentum broadcast lie-detector. Fires whenever the
 # server emits a CONFRONTATION frame carrying post-mutation momentum, so
 # the GM panel can audit "the dial moved on screen because the engine
@@ -1074,6 +1096,34 @@ def encounter_opponent_minted_stub_span(
             "hp": hp,
             "armor_class": armor_class,
             "reason": reason,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def encounter_roster_resolution_skipped_span(
+    *,
+    router_name: str,
+    declined_name: str,
+    confrontation_category: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """150-2 (Defect A): the seater found a co-located bestiary adversary it COULD
+    have reconciled the router-named opponent to, but DECLINED because the
+    confrontation is non-combat (``confrontation_category`` != ``combat``). A
+    bestiary monster is never the right Other for a Fate standoff / social duel /
+    chase; the router-named threat is seated instead. ``declined_name`` is the
+    creature the engine refused to conscript (e.g. ``Western Diamondback``)."""
+    with Span.open(
+        SPAN_ENCOUNTER_ROSTER_RESOLUTION_SKIPPED,
+        {
+            "router_name": router_name,
+            "declined_name": declined_name,
+            "confrontation_category": confrontation_category,
             **attrs,
         },
         tracer_override=_tracer,

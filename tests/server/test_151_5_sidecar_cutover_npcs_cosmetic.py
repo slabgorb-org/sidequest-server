@@ -587,3 +587,126 @@ def test_merge_seams_wired_into_session_handler() -> None:
             f"websocket_session_handler must import {seam} so the post-narration "
             f"extractor's fields reach narration_apply (ADR-150 step 4 cutover II)"
         )
+
+
+# ===========================================================================
+# Review rework (Round-Trip 1) — the npcs merge must TOLERATE an out-of-enum
+# extractor ``side`` (No Silent Fallbacks loud-but-recoverable, NOT a turn crash).
+#
+# Reviewer [HIGH]: the extractor is a Haiku reader handed a free-form
+# ``list[dict]`` schema with NO ``side`` enum guidance, so a plausible output is
+# ``side="hostile"`` (the old ``role`` enum word). ``NpcMention.from_value`` RAISES
+# ``ValueError`` on an out-of-enum side; an unguarded merge would propagate that
+# raise into the WS turn pipeline AFTER the Opus call — violating the epic's
+# NON-FATAL contract (sidecar_extractor.py: "never raises into the WS turn
+# pipeline; the per-field catch-loops are the net"). Since ``side`` is ENGINE-OWNED
+# and immediately overwritten anyway, an unparseable claimed side must NOT crash:
+# the engine adjudicates membership and the mismatch span is the loud signal.
+# ===========================================================================
+
+# Out-of-enum side values a generic prose-reader (Haiku) plausibly emits — none of
+# these are in NpcMention's {player, opponent, neutral} closed set.
+INVALID_EXTRACTOR_SIDES: tuple[str, ...] = ("hostile", "enemy", "ally", "friendly")
+
+
+@pytest.mark.parametrize("bad_side", INVALID_EXTRACTOR_SIDES)
+def test_merge_npcs_present_tolerates_invalid_extractor_side(bad_side: str) -> None:
+    """An out-of-enum extractor ``side`` must NOT raise out of the merge. ``side`` is
+    engine-owned, so an unparseable claim is discarded: the mention is still produced
+    with the engine-resolved side (``neutral`` when unseated) and its enrichment
+    intact. RED today — the merge calls ``NpcMention.from_value`` which raises
+    ``ValueError`` on the bad side before the engine override."""
+    from sidequest.server.narration_apply import merge_sidecar_extraction_npcs_present
+
+    snapshot = GameSnapshot(characters=[_pc("Carl")])  # no encounter → engine neutral
+    result = NarrationTurnResult(narration="A stranger lurks in the doorway.")
+    extraction = SidecarExtraction(
+        npcs_present=[{"name": "Stranger", "side": bad_side, "role": "watcher"}]
+    )
+
+    # Must not raise (NON-FATAL contract).
+    merge_sidecar_extraction_npcs_present(result, extraction, snapshot)
+
+    assert len(result.npcs_present) == 1, (
+        f"an out-of-enum extractor side={bad_side!r} must not drop the mention — the "
+        f"engine adjudicates side; the claim is discarded, not fatal"
+    )
+    mention = result.npcs_present[0]
+    assert mention.side == "neutral", "engine seated no opponent → side resolves neutral"
+    assert mention.name == "Stranger"
+    assert mention.role == "watcher", "enrichment must survive an unparseable claimed side"
+
+
+def test_merge_npcs_present_invalid_side_resolves_to_engine_seated_opponent() -> None:
+    """The engine still wins even when the claimed side is unparseable: an NPC the
+    engine seated as an OPPONENT, whose extractor mention claims the out-of-enum
+    ``side="hostile"``, resolves to ``opponent`` (engine) without raising. RED until
+    the merge stops letting the claimed-side parse crash it."""
+    from sidequest.server.narration_apply import merge_sidecar_extraction_npcs_present
+
+    snapshot = _snapshot_with_encounter(
+        actors=[
+            EncounterActor(name="Carl", role="lead", side="player"),
+            EncounterActor(name="Grix", role="foe", side="opponent"),
+        ]
+    )
+    result = NarrationTurnResult(narration="Grix snarls and raises a blade.")
+    extraction = SidecarExtraction(npcs_present=[{"name": "Grix", "side": "hostile"}])
+
+    merge_sidecar_extraction_npcs_present(result, extraction, snapshot)
+
+    assert result.npcs_present[0].side == "opponent", (
+        "engine seated Grix as opponent — the unparseable 'hostile' claim must not "
+        "crash and must not win; the engine adjudicates membership"
+    )
+
+
+def test_merge_npcs_present_invalid_side_fires_mismatch_span(otel_capture) -> None:
+    """OTEL loud net: an out-of-enum claimed side is a divergence from the engine, so
+    a ``sidecar_extraction.mismatch`` span fires (the GM panel sees the bad claim).
+    Loud-but-recoverable, never a silent swallow. RED until the merge handles the bad
+    side and emits the span instead of raising."""
+    from sidequest.server.narration_apply import merge_sidecar_extraction_npcs_present
+
+    snapshot = GameSnapshot(characters=[_pc("Carl")])
+    result = NarrationTurnResult(narration="A stranger lurks.")
+    extraction = SidecarExtraction(npcs_present=[{"name": "Stranger", "side": "enemy"}])
+
+    merge_sidecar_extraction_npcs_present(result, extraction, snapshot)
+
+    mismatches = [
+        s for s in otel_capture.get_finished_spans() if s.name == "sidecar_extraction.mismatch"
+    ]
+    assert len(mismatches) >= 1, (
+        "an out-of-enum extractor side must fire a sidecar_extraction.mismatch span "
+        "(loud-but-recoverable), not crash the turn"
+    )
+    assert any(dict(s.attributes or {}).get("field") == "npcs_present" for s in mismatches), (
+        "the mismatch span must name field=npcs_present"
+    )
+
+
+def test_merge_npcs_present_one_bad_side_does_not_drop_other_mentions() -> None:
+    """Partial-list integrity (Reviewer): one malformed mention must not abort the
+    whole ``npcs_present`` list. A valid mention AND an out-of-enum one in the same
+    extraction both reach the result. RED today — the first bad side raises and the
+    remaining mentions are lost."""
+    from sidequest.server.narration_apply import merge_sidecar_extraction_npcs_present
+
+    snapshot = GameSnapshot(characters=[_pc("Carl")])
+    result = NarrationTurnResult(narration="Two figures: a guard and a beggar.")
+    extraction = SidecarExtraction(
+        npcs_present=[
+            {"name": "Bad Claim", "side": "hostile"},  # out-of-enum
+            {"name": "Good Claim", "side": "neutral", "role": "beggar"},  # valid
+        ]
+    )
+
+    merge_sidecar_extraction_npcs_present(result, extraction, snapshot)
+
+    names = [m.name for m in result.npcs_present]
+    assert names == ["Bad Claim", "Good Claim"], (
+        "a single malformed claimed side must not drop sibling mentions — both are "
+        "produced, the engine resolves each side"
+    )
+    assert all(m.side == "neutral" for m in result.npcs_present), "engine unseated → all neutral"

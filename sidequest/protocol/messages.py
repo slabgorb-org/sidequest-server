@@ -1388,7 +1388,7 @@ class FateThrowMessage(ProtocolBase):
 
 class FateDefendRequestMessage(ProtocolBase):
     """GameMessage::FateDefendRequest — server -> client at the DEFEND barrier
-    (ADR-148/149, Story 126-8). One per incoming attack on a seated PC; the
+    (ADR-148/151, Story 126-8). One per incoming attack on a seated PC; the
     client filters by ``defender`` and answers with FATE_THROW(action="defend")."""
 
     type: Literal[MessageType.FATE_DEFEND_REQUEST] = MessageType.FATE_DEFEND_REQUEST

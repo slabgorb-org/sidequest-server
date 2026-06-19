@@ -27,7 +27,7 @@ def fate_action_resolved_span(
     **attrs: Any,
 ) -> None:
     """Emit ``fate.action_resolved`` — one Fate roll resolved. ``role`` ∈
-    {``"action"``, ``"defense"``} (ADR-148/149, Story 126-8): ``"defense"`` tags a
+    {``"action"``, ``"defense"``} (ADR-148/151, Story 126-8): ``"defense"`` tags a
     reactive defense roll so the GM panel can tell a proactive roll from a defense.
     ``source`` ∈ {``"player_thrown"``, ``"server_rolled"``} (ADR-148, Story 126-7):
     the lie detector reads it to confirm a player's dice really came from the client
@@ -695,7 +695,7 @@ SPAN_ROUTES["fate.item_promoted"] = SpanRoute(
     },
 )
 
-# ADR-148/149 (Story 126-8 §9): the DEFEND-barrier lie detector. Literal-key route
+# ADR-148/151 (Story 126-8 §9): the DEFEND-barrier lie detector. Literal-key route
 # (exempt from the SPAN_* routing-completeness lint, matching fate.item_promoted).
 SPAN_ROUTES["fate.defend_phase"] = SpanRoute(
     event_type="state_transition",
@@ -1223,7 +1223,7 @@ def fate_defend_phase_span(
     **attrs: Any,
 ) -> None:
     """Emit ``fate.defend_phase`` — the GM-panel lie detector that the interactive
-    DEFEND barrier actually fired (ADR-148/149, Story 126-8 §9). ``responded`` is
+    DEFEND barrier actually fired (ADR-148/151, Story 126-8 §9). ``responded`` is
     False at request time (we asked ``defender`` to answer ``attacker``'s attack)
     and True when their FATE_THROW(defend) lands; ``conceded`` marks a fold at
     defend. It proves the defender's number came from the client, not narrator

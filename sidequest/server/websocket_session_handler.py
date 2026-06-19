@@ -3501,7 +3501,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
 
     async def _narrate_resolved_fate_exchange(self, sd: _SessionData, action: str) -> list[object]:
         """Narrate a server-resolved Fate exchange as one cinematic beat
-        (ADR-148/149, Story 126-8 §3 step 5). The DEFEND barrier has filled and
+        (ADR-148/151, Story 126-8 §3 step 5). The DEFEND barrier has filled and
         ``resume_fate_exchange`` already applied every mechanic, so this is a
         mechanical *replay* with no new player intent — exactly the dice-resolution
         precedent (``DiceThrowHandler`` ``[BEAT_RESOLVED]``/``[DOGFIGHT_SHOT_RESOLVED]``).

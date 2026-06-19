@@ -107,7 +107,7 @@ class FateThrowHandler:
         if character is None:
             return [_error_msg("FATE_THROW: no character to act", code="fate_no_actor")]
 
-        # ADR-148/149 (Story 126-8): a defend throw answers a FATE_DEFEND_REQUEST —
+        # ADR-148/151 (Story 126-8): a defend throw answers a FATE_DEFEND_REQUEST —
         # the defender's faces ARE the roll (never roll_4df). Route it to the defense
         # path BEFORE the proactive-commit build (FateActionPayload has no "defend").
         if payload.action == "defend":
@@ -152,7 +152,7 @@ class FateThrowHandler:
             logger.warning("fate.throw.dispatch_error error=%s", exc)
             return [_error_msg(f"FATE_THROW rejected: {exc}", code="fate_dispatch_error")]
 
-        # PARK at the DEFEND barrier (ADR-148/149, Story 126-8 §5): the proactive
+        # PARK at the DEFEND barrier (ADR-148/151, Story 126-8 §5): the proactive
         # commit closed the barrier and REVEAL seated an NPC attack on a PC. Broadcast
         # one FATE_DEFEND_REQUEST per incoming attack (the client filters by defender)
         # and PERSIST the parked checkpoint — the exchange now waits, resume-safe, on
@@ -247,7 +247,7 @@ class FateThrowHandler:
         payload,
         acting_player_id: str,
     ) -> list[object]:
-        """Record a PC's interactive defense (ADR-148/149, Story 126-8). The faces
+        """Record a PC's interactive defense (ADR-148/151, Story 126-8). The faces
         ARE the roll (never roll_4df); when the ledger fills, resume + narrate once."""
         from sidequest.game.ruleset import get_ruleset_module
         from sidequest.server.dispatch.fate_conflict import (
@@ -294,7 +294,7 @@ class FateThrowHandler:
     ) -> list[object]:
         """Broadcast the defender's own roll, then — once every pending defense is
         filled — RESUME the exchange, resolve it, and invoke the narrator EXACTLY
-        once to render the whole woven exchange (ADR-148/149, Story 126-8 §3 step 5).
+        once to render the whole woven exchange (ADR-148/151, Story 126-8 §3 step 5).
         While still parked, checkpoint and wait (No Silent Fallbacks: no auto-roll)."""
         room = sd._room
 

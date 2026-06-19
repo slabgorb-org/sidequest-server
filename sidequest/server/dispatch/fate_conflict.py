@@ -364,7 +364,7 @@ def _build_pending_defenses(
     _tracer: trace.Tracer | None = None,
 ) -> list[FateDefendRequestPayload]:
     """After REVEAL, park each sealed attack that targets a live seated PC (ADR-148/
-    149, Story 126-8 §5). Writes one ``FatePendingDefense`` per such attack and
+    151, Story 126-8 §5). Writes one ``FatePendingDefense`` per such attack and
     returns the matching defend requests; emits ``fate.defend_phase(responded=False)``
     per request. Returns ``[]`` when no PC is targeted — the caller then resolves
     immediately (today's path). PC = player-side actor with a Fate sheet
@@ -454,7 +454,7 @@ def run_fate_exchange(
     )
 
     commits = {c.actor: c for c in encounter.fate_commits}
-    # ADR-148/149 (Story 126-8 §7): PC defenses recorded at the DEFEND barrier are
+    # ADR-148/151 (Story 126-8 §7): PC defenses recorded at the DEFEND barrier are
     # read here instead of being server-rolled. Empty on the no-park path (today's
     # behavior unchanged); filled on RESUME. Keyed by defender name.
     recorded_defenses = {p.defender: p for p in encounter.pending_defenses}
@@ -545,7 +545,7 @@ def resume_fate_exchange(
     rng: random.Random | None = None,
     _tracer: trace.Tracer | None = None,
 ) -> FateExchangeResult:
-    """RESUME a parked exchange once every pending defense is filled (ADR-148/149,
+    """RESUME a parked exchange once every pending defense is filled (ADR-148/151,
     Story 126-8 §5,§7): walk it (PC defenses read from the ledger via
     ``run_fate_exchange``'s ``recorded_defenses``; NPC defenses server-rolled), then
     clear the ledger. The ``rng`` here only feeds NPC defenses / NPC seating that
@@ -604,7 +604,7 @@ def _resolve_attack(
     target_core = snapshot.find_creature_core(commit.target)
     if target_core is None or target_core.fate_sheet is None:
         raise FateConflictError(f"attack target {commit.target!r} has no Fate sheet to defend with")
-    # ADR-148/149 (Story 126-8 §7): a PC defender's number comes from the DEFEND
+    # ADR-148/151 (Story 126-8 §7): a PC defender's number comes from the DEFEND
     # ledger (the player THREW it — physics-is-the-roll), never a server roll. An
     # NPC defender (no ledger entry) is still server-rolled. A conceded entry folds
     # the defender on their own terms before shift math.
@@ -863,7 +863,7 @@ class FateDispatchResult:
     #: accept, -1 on a compel refuse, 0 otherwise. Lets the player surface show the
     #: mechanical outcome inline (Sebastien/Jade legibility mandate).
     fate_point_delta: int = 0
-    #: ADR-148/149 (Story 126-8 §5): when the round PARKS at the DEFEND barrier, the
+    #: ADR-148/151 (Story 126-8 §5): when the round PARKS at the DEFEND barrier, the
     #: requests to emit — one per incoming attack on a PC. Empty unless awaiting_defense.
     defend_requests: list[FateDefendRequestPayload] = field(default_factory=list)
     #: True when the exchange is PARKED at the DEFEND barrier — the caller emits
@@ -873,7 +873,7 @@ class FateDispatchResult:
 
 @dataclass(frozen=True)
 class FateDefenseResult:
-    """Outcome of recording one PC defense at the DEFEND barrier (ADR-148/149,
+    """Outcome of recording one PC defense at the DEFEND barrier (ADR-148/151,
     Story 126-8 §5). ``ledger_full`` is True when every pending_defenses entry is
     now filled (defense_total set or conceded) — the caller then RESUMEs the
     exchange. ``defense_roll`` is None on a concession (no throw)."""
@@ -1132,7 +1132,7 @@ def dispatch_fate_action(
             _tracer=_tracer,
         )
         if defend_requests:
-            # PARK at the DEFEND barrier (ADR-148/149 §5): a clean persisted
+            # PARK at the DEFEND barrier (ADR-148/151 §5): a clean persisted
             # checkpoint. No walk, no narration yet — the caller emits the requests
             # and waits for the PCs' defenses.
             return FateDispatchResult(
@@ -1169,7 +1169,7 @@ def dispatch_fate_defense(
     conceded: bool = False,
     _tracer: trace.Tracer | None = None,
 ) -> FateDefenseResult:
-    """Record a PC's interactive defense onto the parked exchange (ADR-148/149,
+    """Record a PC's interactive defense onto the parked exchange (ADR-148/151,
     Story 126-8 §5,§7).
 
     Player path: the defender's 4dF faces ARE the roll (ADR-148) — resolved via

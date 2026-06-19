@@ -5,7 +5,7 @@ from the four single-shot Haiku call sites in ``llm_factory.py`` (``_AsideLlm.co
 ``_IntentRouterLlm.emit_tool``, ``_UnseededObjectiveClassifierLlm.emit_tool``,
 ``infer_archetype_from_freeform``). It is **STRUCTURAL-ONLY** — no behavior change. The
 existing 119-3 / 93-1 suites already pin most of each site's behavior (structured-output
-dict-or-raise, the ``max_turns=2`` + ``output_format`` options surface, thinking-disabled,
+dict-or-raise, the ``max_turns=4`` (2-floor + headroom) + ``output_format`` options surface, thinking-disabled,
 the per-site caller-tagged span + cost-safety for router/aside/classifier, and the whole
 archetype enum/empty/truncation taxonomy).
 
@@ -18,7 +18,7 @@ slip through and that nothing currently pins — so the green phase has a comple
   [COST-1] attribution axis with no test failing.
 * **Gap B — archetype options surface.** ``test_forced_extraction_sites_use_output_format_*``
   and ``*_disable_thinking`` parametrize only router/classifier. The archetype site's
-  ``max_turns=2`` / ``allowed_tools=[]`` / ``output_format`` schema round-trip / thinking-disabled
+  ``max_turns=4`` / ``allowed_tools=[]`` / ``output_format`` schema round-trip / thinking-disabled
   is never pinned, yet the helper centralizes options-building.
 * **Gap C — the ``session_id=None`` ceiling BYPASS.** No test asserts that a sessionless call
   does NOT touch the ledger. The refactor centralizes the ``if session_id is not None:`` guard
@@ -196,13 +196,15 @@ async def test_archetype_inference_emits_caller_tagged_span_and_records_cost(
 # ===========================================================================
 
 
-async def test_archetype_inference_uses_output_format_at_max_turns_two_no_thinking(
+async def test_archetype_inference_uses_output_format_at_max_turns_four_no_thinking(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The archetype site is a forced-extraction call: it must build
-    ``max_turns=2`` + ``allowed_tools=[]`` + ``output_format={'type':'json_schema', ...}``
+    ``max_turns=4`` + ``allowed_tools=[]`` + ``output_format={'type':'json_schema', ...}``
     with thinking disabled — the same Path A surface the router/classifier sites pin
-    (but which the 119-3 options parametrize omits for archetype).
+    (but which the 119-3 options parametrize omits for archetype). ``2`` is the
+    mandatory FLOOR; the shared _call_haiku_sdk choke point raises the value to 4
+    for headroom against intermittent error_max_turns at mt=2 (2026-06-19 playtest).
     """
     from sidequest.agents.llm_factory import infer_archetype_from_freeform
 
@@ -224,9 +226,9 @@ async def test_archetype_inference_uses_output_format_at_max_turns_two_no_thinki
     )
 
     opts = fake.last_options
-    assert getattr(opts, "max_turns", None) == 2, (
-        "max_turns MUST be 2 — the SDK spends an internal finalize turn (OQ-16); "
-        f"got {getattr(opts, 'max_turns', None)!r}"
+    assert getattr(opts, "max_turns", None) == 4, (
+        "max_turns is raised to 4 for headroom — 2 is the FLOOR (the SDK spends an "
+        f"internal finalize turn, OQ-16); got {getattr(opts, 'max_turns', None)!r}"
     )
     assert getattr(opts, "allowed_tools", "MISSING") == [], (
         "the structured-output path advertises NO tools (allowed_tools=[])"

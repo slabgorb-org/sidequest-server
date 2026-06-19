@@ -236,25 +236,34 @@ def build_agent_sdk_options(
     ``add_dirs=[]`` so no on-disk config tier (user/project/local) or repo
     ``CLAUDE.md`` is absorbed.
 
-    ``max_turns`` is floored at 2: the SDK spends an internal finalize turn, so
-    a literal ``max_turns=1`` fails closed with ``subtype='error_max_turns'``
-    (the +1 is MANDATORY — spec §3.6 / OQ-16).
+    ``max_turns`` is floored at 2 (the ``max(2, int(max_turns))`` guard below):
+    the SDK spends an internal finalize turn, so a literal ``max_turns=1`` fails
+    closed with ``subtype='error_max_turns'`` (the +1 is MANDATORY — spec §3.6 /
+    OQ-16). 2 is the FLOOR, not a ceiling — callers may pass a HIGHER value for
+    headroom and it only gives the ``tool-call → tool-result → finalize`` sequence
+    more room to complete. The structured-output choke point (:func:`_call_haiku_sdk`)
+    passes ``max_turns=4`` because a 2026-06-19 playtest showed the prompt-heavy
+    router pass intermittently tripping ``error_max_turns`` at mt=2 (see the
+    finalize-turn note below).
 
     Extended thinking is **disabled by default for any ``output_format`` call**
     (the Path-A structured-extraction sites: intent router, unseeded-objective
     classifier, archetype inference). The agent SDK implements ``output_format``
-    as a synthetic ``StructuredOutput`` tool round-trip, which already costs both
-    of the ``max_turns=2`` turns (assistant tool-call → tool-result → finalize).
+    as a synthetic ``StructuredOutput`` tool round-trip, which costs the
+    tool-call → tool-result → finalize sequence (two turns at the mt=2 floor).
     The ``claude`` CLI defaults thinking ON ("adaptive"), so the model spends a
     ~1k-token thinking pass *before* the tool call; when that pass runs long the
     finalize cannot land inside 2 turns and the whole call fails
     ``error_max_turns`` — intermittently, scaling with how much the prompt gives
     it to think about (this is what took the intent-router spine dark on the
     119-3 subscription port: a structured classifier cannot afford a thinking
-    turn at the mandatory mt=2 floor). Disabling thinking makes these calls
-    deterministic at mt=2, ~3x faster, and ~6x cheaper in output tokens — and a
-    mechanical classifier reasons through its (heavily prescriptive) prompt, not
-    a scratchpad. Callers that need thinking with structured output can still
+    turn at the mandatory mt=2 floor). Two mitigations now stack: disabling
+    thinking (here) keeps these calls deterministic, ~3x faster, and ~6x cheaper
+    in output tokens — a mechanical classifier reasons through its (heavily
+    prescriptive) prompt, not a scratchpad — AND :func:`_call_haiku_sdk` raises
+    the value passed to ``max_turns`` from the 2-floor to 4 for comfortable
+    headroom, because a 2026-06-19 playtest showed the router pass *still*
+    intermittently tripping ``error_max_turns`` at mt=2 on prompt-heavy passes. Callers that need thinking with structured output can still
     pass ``thinking`` explicitly to override. This builder does not *auto*-set
     ``thinking`` for non-``output_format`` callers — it stays ``None`` unless the
     caller passes it. Story 126-9: the narrator tool-loop and narrator-aside

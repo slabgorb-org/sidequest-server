@@ -5,8 +5,10 @@ Router, un-seeded objective classifier, archetype inference) port off the raw
 ``anthropic`` Messages SDK onto ``claude-agent-sdk`` over the Max subscription
 pool, through the shared :func:`anthropic_sdk_client.build_agent_sdk_options`
 construction seam. The three forced-extraction sites use ``output_format``
-JSON-schema structured output at ``max_turns=2`` (Path A — the Agent SDK has no
-``tool_choice``; spec §6.4.2); the aside is a plain no-tools completion.
+JSON-schema structured output at ``max_turns=4`` (``2`` is the mandatory FLOOR,
+raised to ``4`` for headroom against intermittent ``error_max_turns`` — see
+:func:`_call_haiku_sdk`; Path A — the Agent SDK has no ``tool_choice``; spec
+§6.4.2); the aside is a plain no-tools completion.
 :func:`_record_usage_telemetry` remains the uniform per-call usage accounting
 (log line + ``llm.request`` span attributes + ``cost_usd`` + caller tag) every
 Haiku call flows through.
@@ -215,8 +217,9 @@ async def _call_haiku_sdk(
     Story 119-6: the skeleton every single-shot Haiku site shares (extracted
     verbatim from the four 119-3 sites — aside, Intent Router, unseeded-objective
     classifier, archetype inference): pre-flight ADR-134 ceiling refusal (guarded
-    by ``session_id``) → :func:`build_agent_sdk_options` at the mandatory
-    ``max_turns=2`` with ``allowed_tools=[]`` → ``llm_request_span`` +
+    by ``session_id``) → :func:`build_agent_sdk_options` at ``max_turns=4``
+    (``2`` is the mandatory FLOOR; raised to ``4`` for headroom — see the
+    call-site comment below) with ``allowed_tools=[]`` → ``llm_request_span`` +
     :func:`_consume_to_result` + :func:`_record_usage_telemetry` → post-call
     ledger ``record_call`` (the same ``session_id`` guard).
 
@@ -237,10 +240,23 @@ async def _call_haiku_sdk(
     # call site (narrator included) must not bill another token.
     if session_id is not None:
         cost_safety.ledger().check_ceiling(session_id, ceiling_usd=ceiling_usd)
+    # ``max_turns=2`` is the MANDATORY FLOOR, not a ceiling: the SDK spends an
+    # internal finalize turn, so ``max_turns=1`` fails closed with
+    # ``error_max_turns`` (the ``max(2, ...)`` guard in build_agent_sdk_options
+    # enforces it). We pass 4 for comfortable headroom — raising the value above
+    # the floor only gives the ``tool-call → tool-result → finalize`` sequence
+    # more room to complete. A 2026-06-19 playtest showed the structured-output
+    # router pass intermittently tripping ``error_max_turns`` at mt=2
+    # (intent_router.failed reason=transport, "Reached maximum number of turns (2)")
+    # — the failure scales with how much the prompt gives the model to chew on, so
+    # 2 is too tight for prompt-heavy router/classifier passes. This is the single
+    # shared structured-output choke point: every forced-extraction caller (intent
+    # router, unseeded-objective classifier, archetype inference, sidecar extractor)
+    # and the prose aside route through here, so all of them gain the headroom.
     options = build_agent_sdk_options(
         model=model,
         system_prompt=system_prompt,
-        max_turns=2,
+        max_turns=4,
         allowed_tools=[],
         output_format=output_format,
     )
@@ -361,9 +377,12 @@ class _AsideLlm:
     async def complete(self, *, system: str, user: str) -> str:
         # Story 119-3: a plain no-tools subscription completion via the agent
         # SDK ``query()`` seam. No ``output_format`` (the aside returns prose,
-        # not a schema). ``max_turns=2`` is MANDATORY — the SDK spends an
-        # internal finalize turn even with zero tools, so ``max_turns=1`` fails
-        # closed with ``subtype='error_max_turns'`` (spec §3.6/OQ-16). No
+        # not a schema). It routes through the shared ``_call_haiku_sdk`` choke
+        # point, which now passes ``max_turns=4``: ``2`` is the mandatory FLOOR —
+        # the SDK spends an internal finalize turn even with zero tools, so
+        # ``max_turns=1`` fails closed with ``subtype='error_max_turns'`` (spec
+        # §3.6/OQ-16) — and the value is raised to ``4`` for headroom against the
+        # intermittent ``error_max_turns`` seen at mt=2 (2026-06-19 playtest). No
         # ANTHROPIC_API_KEY is read; a set key would re-route to PAYG and is
         # rejected loudly in ``build_agent_sdk_options`` (No Silent Fallbacks).
         #
@@ -461,9 +480,11 @@ class _IntentRouterLlm:
         replacement for the raw "force one tool, read its ``.input``" mechanism
         is ``output_format={"type":"json_schema","schema": tool_schema}`` read
         from ``ResultMessage.structured_output`` — API-enforced schema-valid
-        output in one shot, at ``max_turns=2`` (the +1 finalize turn is
-        MANDATORY; ``max_turns=1`` fails closed with ``error_max_turns`` —
-        §3.6/OQ-16). The tool name + description fold into the system prompt as
+        output, at ``max_turns=4`` (``2`` is the mandatory FLOOR — the +1
+        finalize turn means ``max_turns=1`` fails closed with ``error_max_turns``,
+        §3.6/OQ-16 — raised to ``4`` in ``_call_haiku_sdk`` for headroom after a
+        2026-06-19 playtest showed the router pass intermittently tripping
+        ``error_max_turns`` at mt=2). The tool name + description fold into the system prompt as
         guidance (the schema enforces the shape). The consumer's ``dict``/raise
         contract is preserved: returns the structured dict where the forced
         tool's ``.input`` went, raises :class:`IntentRouterEmptyResponse` on
@@ -658,8 +679,9 @@ class _UnseededObjectiveClassifierLlm:
     ) -> dict[str, Any]:
         # Story 119-3: forced extraction via ``output_format`` (Path A, §6.4.2) —
         # the Agent SDK has no ``tool_choice``; read the schema-valid dict from
-        # ``ResultMessage.structured_output`` at ``max_turns=2``. The ``dict``/
-        # raise contract is preserved.
+        # ``ResultMessage.structured_output`` at ``max_turns=4`` (``2`` is the
+        # mandatory FLOOR, raised to ``4`` for headroom in ``_call_haiku_sdk``).
+        # The ``dict``/raise contract is preserved.
         # Story 119-6: the cost-safety + telemetry skeleton
         # (caller=unseeded_objective_classifier) runs through the shared
         # ``_call_haiku_sdk`` choke point; the classifier keeps its OWN loud
@@ -725,8 +747,9 @@ class _SidecarExtractorLlm:
     ) -> dict[str, Any]:
         # Forced extraction via ``output_format`` (Path A, §6.4.2) — the Agent SDK
         # has no ``tool_choice``; read the schema-valid dict from
-        # ``ResultMessage.structured_output`` at ``max_turns=2``. The dict/raise
-        # contract is preserved; the extractor's retry/failure taxonomy owns the
+        # ``ResultMessage.structured_output`` at ``max_turns=4`` (``2`` is the
+        # mandatory FLOOR, raised to ``4`` for headroom in ``_call_haiku_sdk``).
+        # The dict/raise contract is preserved; the extractor's retry/failure taxonomy owns the
         # raise (it catches the transport boundary, retries once, then surfaces
         # SidecarExtractionFailure).
         result_msg = await _call_haiku_sdk(
@@ -886,9 +909,10 @@ async def infer_archetype_from_freeform(
 
     # Story 119-3: forced extraction via ``output_format`` (Path A, §6.4.2) —
     # the Agent SDK has no ``tool_choice``; read the enum-constrained dict from
-    # ``ResultMessage.structured_output`` at ``max_turns=2``. The tool's
-    # name/description fold into the system prompt; the schema (with its per-axis
-    # ``enum``) rides ``output_format``.
+    # ``ResultMessage.structured_output`` at ``max_turns=4`` (``2`` is the
+    # mandatory FLOOR, raised to ``4`` for headroom in ``_call_haiku_sdk``). The
+    # tool's name/description fold into the system prompt; the schema (with its
+    # per-axis ``enum``) rides ``output_format``.
     # Story 119-6: the cost-safety + telemetry skeleton (caller=archetype_inference)
     # runs through the shared ``_call_haiku_sdk`` choke point; the archetype keeps
     # its OWN loud error type (:class:`LlmClientError`) + the enum validation below.

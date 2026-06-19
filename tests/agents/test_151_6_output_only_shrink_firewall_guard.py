@@ -227,9 +227,7 @@ async def test_shrunk_output_contract_rides_cached_system_prefix(
     request = fake.recorded_requests[0]
     cached = request.system_blocks[0].text
     user_msg = "\n".join(
-        m.content
-        for m in request.messages
-        if m.role == "user" and isinstance(m.content, str)
+        m.content for m in request.messages if m.role == "user" and isinstance(m.content, str)
     )
 
     assert "private_segments" in cached, (
@@ -299,9 +297,7 @@ def test_single_pc_perception_appears_only_in_private_segments_never_part1() -> 
         "Willes kneels at the chalk-cross, eyes closed. Narder sets his back to "
         "the wall, blade up, watching the dark.\n\n"
         "```game_patch\n"
-        + json.dumps(
-            {"private_segments": [{"text": private_reading, "anchor_pc": "Willes"}]}
-        )
+        + json.dumps({"private_segments": [{"text": private_reading, "anchor_pc": "Willes"}]})
         + "\n```"
     )
 
@@ -394,9 +390,7 @@ async def test_turn_result_carries_private_prose_segments_with_anchor(
         "**The Vault Door**\n\n"
         "Kael runs gloved fingers along the brass plate, listening.\n\n"
         "```game_patch\n"
-        + json.dumps(
-            {"private_segments": [{"text": private_reading, "anchor_pc": "Kael"}]}
-        )
+        + json.dumps({"private_segments": [{"text": private_reading, "anchor_pc": "Kael"}]})
         + "\n```"
     )
     fake = FakeAnthropicSdkClient(

@@ -70,14 +70,18 @@ class FateThrowPayload(ProtocolBase):
     wire — exactly four, each in {-1, 0, 1}, ``extra='forbid'`` (inherited). A
     distinct, faces-required message (not an optional ``face`` on ``FATE_ACTION``)
     keeps the player-thrown contract unforgeable: an empty/absent faces field
-    cannot re-open the server-rolls-for-players backdoor (No Silent Fallbacks).
+    cannot re-open the server-rolls-for-players backdoor (No Silent Fallbacks) —
+    the sole exception is a defend CONCESSION (``concede=True``), which folds
+    without rolling and so carries no faces (see below).
 
     ``action`` is the three proactive ROLL verbs plus ``defend`` (ADR-148/149,
     Story 126-8): a defend throw answers a ``FATE_DEFEND_REQUEST``, echoing its
     ``request_id``, with the defender's four settled faces — the player defense
     is physics-is-the-roll exactly like the proactive throw (NEVER ``roll_4df``).
-    The non-roll verbs (``concede`` / ``compel_*``) never throw and stay on
-    ``FateActionPayload``. The remaining fields mirror ``FateActionPayload``'s
+    A defend throw may instead CONCEDE (``concede=True``, Story 126-14): the
+    defender folds against this attack and throws no dice, so ``face`` is omitted
+    on that path only — distinct from the pre-roll, whole-conflict ``concede``
+    verb on ``FateActionPayload``. The remaining fields mirror ``FateActionPayload``'s
     intent surface so the handler can build the dispatch from a throw 1:1.
     """
 
@@ -90,14 +94,25 @@ class FateThrowPayload(ProtocolBase):
     invoke_mode: Literal["bonus", "reroll"] = "bonus"
     aspect_text: str = ""
     player_action: str = ""
+    concede: bool = False
     throw_params: ThrowParams
-    face: tuple[int, int, int, int]
+    face: tuple[int, int, int, int] | None = None
 
     @model_validator(mode="after")
     def _validate_faces(self) -> FateThrowPayload:
-        # ``tuple[int, int, int, int]`` already enforces exactly-4 at the pydantic
-        # layer; this adds the value-range check with a clear message (defense in
-        # depth — the engine re-validates in resolve_action_from_faces).
+        # A defend CONCESSION does not roll (ADR-148/149, Story 126-14): the
+        # defender folds, so ``face`` is omitted ON THAT PATH ONLY and ``concede``
+        # is meaningful only for ``action="defend"``. EVERY other throw MUST carry
+        # four valid dF faces — an empty/absent faces field must never re-open the
+        # server-rolls-for-the-player backdoor (No Silent Fallbacks). The
+        # ``tuple[int, int, int, int]`` shape already enforces exactly-4 when faces
+        # are present; this adds the value-range check.
+        if self.concede and self.action != "defend":
+            raise ValueError("concede is only valid on a defend throw")
+        if self.face is None:
+            if not self.concede:
+                raise ValueError("a non-concede throw must carry four dF faces")
+            return self
         for f in self.face:
             if f not in (-1, 0, 1):
                 raise ValueError("each dF face must be -1, 0, or +1")

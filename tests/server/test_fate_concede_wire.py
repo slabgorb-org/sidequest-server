@@ -125,11 +125,16 @@ def test_concede_through_handler_fills_ledger_and_resumes():
     assert not [m for m in after if isinstance(m, FateRollMessage)]
 
 
-def test_concede_through_handler_never_rolls_a_player_defense(monkeypatch):
-    # AC-1/AC-2: the player concede path must NEVER server-roll the defender's 4dF
-    # (the no-roll_4df-on-the-player-path invariant). Count roll_4df during the
-    # concede turn only.
+def test_concede_through_handler_never_resolves_a_player_defense(monkeypatch):
+    # AC-1/AC-2: a concession folds — the PLAYER-defense resolver
+    # (``resolve_action_from_faces``, the physics-is-the-roll path) must NEVER run
+    # for a conceding defender. NB: counting ``roll_4df`` would be WRONG here — at
+    # RESUME the conceding PC's own proactive attack still resolves, so the NPC
+    # legitimately server-rolls ITS defense via ``resolve_action`` (a different
+    # path). We spy the player-faces resolver specifically.
     import asyncio
+
+    from sidequest.game.ruleset.fate import FateRulesetModule
 
     session, proactive, q = playing_session_with_fate_conflict(
         actor="Rux", attacker_npc="Bandit", action="attack", target="Bandit"
@@ -137,18 +142,18 @@ def test_concede_through_handler_never_rolls_a_player_defense(monkeypatch):
     asyncio.run(FATE_THROW_HANDLER.handle(session, proactive))
     req = next(m for m in _drain(q) if isinstance(m, FateDefendRequestMessage))
 
-    calls = {"roll": 0}
-    real = fate_resolution.roll_4df
-    monkeypatch.setattr(
-        fate_resolution,
-        "roll_4df",
-        lambda rng: calls.__setitem__("roll", calls["roll"] + 1) or real(rng),
-    )
+    calls = {"from_faces": 0}
+    real = FateRulesetModule.resolve_action_from_faces
+
+    def _spy(self, *a, **k):  # noqa: ANN001, ANN002, ANN003
+        calls["from_faces"] += 1
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(FateRulesetModule, "resolve_action_from_faces", _spy)
     concede = _make_concede_throw(session, request_id=req.payload.request_id)
     asyncio.run(FATE_THROW_HANDLER.handle(session, concede))
-    # The defender conceded — no 4dF is rolled for them on the concede turn. (The
-    # NPC attack was rolled+locked back at REVEAL, before this turn.)
-    assert calls["roll"] == 0
+    # The conceding player's defense is never resolved from faces (no player roll).
+    assert calls["from_faces"] == 0
 
 
 def test_concede_for_another_defenders_request_is_rejected():

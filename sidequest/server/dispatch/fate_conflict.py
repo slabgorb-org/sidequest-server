@@ -1165,7 +1165,7 @@ def dispatch_fate_defense(
     actor_name: str,
     request_id: str,
     skill: str,
-    thrown_faces: tuple[int, int, int, int],
+    thrown_faces: tuple[int, int, int, int] | None = None,
     conceded: bool = False,
     _tracer: trace.Tracer | None = None,
 ) -> FateDefenseResult:
@@ -1174,11 +1174,12 @@ def dispatch_fate_defense(
 
     Player path: the defender's 4dF faces ARE the roll (ADR-148) — resolved via
     ``resolve_action_from_faces`` (``role="defense"``), NEVER ``roll_4df``. The
-    chosen ``skill`` is free-pick (the Zork Problem). On concede, the entry is
-    flagged and no roll is recorded. Fails loud on an unknown / already-filled
-    ``request_id``, or when the throw comes from a PC who is NOT the request's
-    defender (No Silent Fallbacks). Returns ``ledger_full`` so the caller knows
-    when to RESUME."""
+    chosen ``skill`` is free-pick (the Zork Problem). On concede
+    (``conceded=True``, Story 126-14) the entry is flagged and no roll is recorded
+    — ``thrown_faces`` may be ``None`` on that path; a non-concede defend with no
+    faces fails loud. Also fails loud on an unknown / already-filled ``request_id``,
+    or when the throw comes from a PC who is NOT the request's defender (No Silent
+    Fallbacks). Returns ``ledger_full`` so the caller knows when to RESUME."""
     entry = next((p for p in encounter.pending_defenses if p.request_id == request_id), None)
     if entry is None:
         raise FateConflictError(
@@ -1208,6 +1209,10 @@ def dispatch_fate_defense(
         entry.conceded = True
         outcome = None
     else:
+        if thrown_faces is None:
+            raise FateConflictError(
+                "a non-concede defend throw must carry four dF faces (No Silent Fallbacks)"
+            )
         core = snapshot.find_creature_core(actor_name)
         rating = core.fate_sheet.skills.get(skill, 0) if core and core.fate_sheet else 0
         outcome = ruleset.resolve_action_from_faces(

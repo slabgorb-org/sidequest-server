@@ -12,10 +12,15 @@ may read a genre-tier ``FateConfig`` but the genre tier never imports this.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from pydantic import BaseModel, Field
 
 from sidequest.game.fate_sheet import Aspect, FateSheet, Stunt
-from sidequest.genre.models.rules import FateConfig
+from sidequest.genre.models.rules import FateConfig, FateHintSeed
+
+if TYPE_CHECKING:
+    from sidequest.genre.models.pack import GenrePack
 
 
 class FateChargenError(ValueError):
@@ -105,6 +110,95 @@ def pyramid_violations(allocation: dict[str, int], cfg: FateConfig) -> list[str]
         if name not in cfg.skills:
             violations.append(f"skill {name!r} is not in the pack skill list")
     return violations
+
+
+def select_chargen_seed(
+    seed_table: dict[str, FateHintSeed],
+    *,
+    class_hint: str | None = None,
+    rpg_role_hint: str | None = None,
+    background: str | None = None,
+) -> tuple[str, FateHintSeed] | None:
+    """Pick the narrative-chargen seed for the accumulated hints (story 126-24).
+
+    Precedence ``class_hint`` > ``rpg_role_hint`` > ``background``: the first hint whose
+    VALUE is a key in ``seed_table`` wins. ``seed_table`` is the world-resolved table the
+    builder holds (or the genre-tier ``cfg.chargen_seed_table`` fallback). Returns
+    ``(matched_hint, seed)`` or ``None`` when no hint matches a table key — the builder then
+    presents a blank pyramid for the player to rank by hand (No Silent Fallbacks: never
+    fabricate a seed for an unmapped vocation). Pure; no I/O."""
+    for hint in (class_hint, rpg_role_hint, background):
+        if hint and hint in seed_table:
+            return hint, seed_table[hint]
+    return None
+
+
+def resolve_fate_chargen_seed_table(
+    pack: GenrePack | None, world_slug: str | None
+) -> dict[str, FateHintSeed]:
+    """Resolve the effective narrative-chargen seed table for the active world (story
+    126-24, AC2). The genre-tier ``rules.fate.chargen_seed_table`` UNIONED with the active
+    world's ``chargen_seed_table`` by hint key — world wins on a shared key (ADR-121 layered
+    per-field resolution; the same world-wins by-key rule ``resolve_fate_gear_catalog`` uses
+    for gear). A falsy/unknown world, or a world that authors no seed table, resolves to the
+    pure genre baseline. Emits a merge watcher event carrying ``world_override_applied`` so
+    the GM panel can confirm a world's seed overrides were WIRED, not merely authored."""
+    fate_cfg = pack.rules.fate if pack is not None else None
+    genre_table: dict[str, FateHintSeed] = (
+        dict(fate_cfg.chargen_seed_table) if fate_cfg is not None else {}
+    )
+
+    world = pack.worlds.get(world_slug) if (pack is not None and world_slug) else None
+    world_table: dict[str, FateHintSeed] = (
+        dict(getattr(world, "chargen_seed_table", {}) or {}) if world is not None else {}
+    )
+    if not world_table:
+        # Pure genre baseline (no world, unknown world, or world ships no seed table).
+        return genre_table
+
+    merged: dict[str, FateHintSeed] = dict(genre_table)
+    overridden = sum(1 for k in world_table if k in merged)
+    merged.update(world_table)  # world wins on a shared hint key
+
+    _emit_fate_seed_table_merged(
+        world_slug=world_slug or "",
+        genre_count=len(genre_table),
+        world_hints=list(world_table),
+        overridden=overridden,
+        merged_count=len(merged),
+    )
+    return merged
+
+
+def _emit_fate_seed_table_merged(
+    *,
+    world_slug: str,
+    genre_count: int,
+    world_hints: list[str],
+    overridden: int,
+    merged_count: int,
+) -> None:
+    """Emit a ``state_transition`` watcher event for the world∪genre chargen seed-table
+    merge (OTEL Observability Principle, story 126-24 AC6): the GM panel confirms a world's
+    chargen seed overrides were WIRED into the effective table — ``world_override_applied``
+    is the lie-detector boolean. Mirrors ``fate_gear._emit_fate_gear_merged``."""
+    from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
+
+    _watcher_publish(
+        "state_transition",
+        {
+            "field": "resolved_fate_chargen_seed_table",
+            "op": "merged",
+            "world_slug": world_slug,
+            "tier": "world",
+            "genre_count": genre_count,
+            "world_hints": world_hints,
+            "overridden": overridden,
+            "world_override_applied": overridden > 0,
+            "merged_count": merged_count,
+        },
+        component="genre",
+    )
 
 
 def stunt_catalog_violations(stunts: list[str], cfg: FateConfig) -> list[str]:

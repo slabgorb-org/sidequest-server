@@ -40,7 +40,7 @@ from sidequest.genre.models.character import (
     MechanicalEffects,
     OriginTraitDef,
 )
-from sidequest.genre.models.rules import EdgeConfig, FateConfig, RulesConfig
+from sidequest.genre.models.rules import EdgeConfig, FateConfig, FateHintSeed, RulesConfig
 from sidequest.protocol.messages import (
     CharacterCreationMessage,
     CharacterCreationPayload,
@@ -1069,6 +1069,11 @@ class CharacterBuilder:
         self._fate_free_aspects: list[str] = []
         self._fate_pyramid: dict[str, int] = {}
         self._fate_stunts: list[str] = []
+        # 126-24: world-resolved narrative-chargen seed table, attached per-session via
+        # with_fate_seed_table() (connect.py resolves world-first). None => fall back to
+        # the genre-tier cfg.chargen_seed_table (the unit-test / pack-only path). Never
+        # mutate the shared pack's FateConfig — attach the resolved table to the builder.
+        self._fate_seed_table: dict[str, FateHintSeed] | None = None
 
         # Eager roll at construction — scan scenes for the first
         # `stat_generation: roll_3d6_strict` directive so stat values
@@ -1142,6 +1147,17 @@ class CharacterBuilder:
         """Attach the genre pack's class definitions for qualification loop
         and class_kit equipment selection."""
         self._classes = list(classes)
+        return self
+
+    def with_fate_seed_table(self, table: dict[str, FateHintSeed]) -> CharacterBuilder:
+        """Attach the world-resolved narrative-chargen seed table (story 126-24).
+
+        connect.py resolves it world-first via ``resolve_fate_chargen_seed_table`` (world
+        wins per hint key) and attaches it here — parallel to ``with_classes`` /
+        ``with_equipment_tables``. ``_fate_step_payload`` prefers this over the genre-tier
+        ``cfg.chargen_seed_table`` so a world's per-hint overrides reach chargen without
+        mutating the shared pack. A no-op-shaped empty table is allowed (stays None-like)."""
+        self._fate_seed_table = dict(table)
         return self
 
     def with_chargen_defs(
@@ -1653,15 +1669,27 @@ class CharacterBuilder:
         had_name = "{name}" in text
         had_class = "{class}" in text
         had_race = "{race}" in text
+        # 126-24: under a Fate binding the {race} {class} confirmation template renders the
+        # category-error mash "a Military I Find Things Out". {high_concept} resolves to the
+        # recorded Fate High Concept so the confirmation prose can read the sheet, not the
+        # native hints. Empty (and warn) when no Fate HC was authored (non-Fate packs).
+        had_hc = "{high_concept}" in text
+        high_concept = self._fate_high_concept or ""
 
         span = trace.get_current_span()
 
-        if had_name or had_class or had_race:
+        if had_name or had_class or had_race or had_hc:
             rendered = (
-                text.replace("{name}", name).replace("{class}", class_).replace("{race}", race)
+                text.replace("{name}", name)
+                .replace("{class}", class_)
+                .replace("{race}", race)
+                .replace("{high_concept}", high_concept)
             )
             any_empty = (
-                (had_name and not name) or (had_class and not class_) or (had_race and not race)
+                (had_name and not name)
+                or (had_class and not class_)
+                or (had_race and not race)
+                or (had_hc and not high_concept)
             )
             attrs: dict[str, object] = {
                 "action": "scene_narration_interpolated",
@@ -1673,6 +1701,8 @@ class CharacterBuilder:
                 attrs["class_resolved"] = bool(class_)
             if had_race:
                 attrs["race_resolved"] = bool(race)
+            if had_hc:
+                attrs["high_concept_resolved"] = bool(high_concept)
             span.add_event("chargen.scene_narration_interpolated", attrs)
         else:
             rendered = text
@@ -1827,8 +1857,10 @@ class CharacterBuilder:
         from sidequest.game.ruleset.fate_chargen import (
             pyramid_violations,
             required_refresh,
+            select_chargen_seed,
             stunt_catalog_violations,
         )
+        from sidequest.telemetry.spans.fate import fate_chargen_seed_applied_span
 
         input_type = {
             "aspects": "fate_aspects",
@@ -1854,17 +1886,63 @@ class CharacterBuilder:
             input_type=input_type,
             loading_text=scene.loading_text,
         )
+        # 126-24: narrative-chargen seed — pre-fill the pyramid + free aspects from the
+        # accumulated narrative hints as EDITABLE DEFAULTS (the friendly on-ramp that
+        # retires the blank-Fate-sheet bug). The world-resolved table (with_fate_seed_table)
+        # wins over the genre-tier cfg.chargen_seed_table.
+        seed_table = (
+            self._fate_seed_table if self._fate_seed_table is not None else cfg.chargen_seed_table
+        )
+        seed_match = None
+        if seed_table:
+            acc = self.accumulated()
+            seed_match = select_chargen_seed(
+                seed_table,
+                class_hint=acc.class_hint,
+                rpg_role_hint=acc.rpg_role_hint,
+                background=acc.background,
+            )
+
         if step == "aspects":
-            payload.fate_aspect_slots = self._fate_aspect_slots(cfg)
+            # Seed the FREE aspect slots only when the player has not authored their own
+            # yet — HC/Trouble stay placeholder-only (no-silent-default, handled in
+            # _fate_aspect_slots).
+            seed_aspects = (
+                list(seed_match[1].aspects)
+                if (seed_match is not None and not self._fate_free_aspects)
+                else None
+            )
+            payload.fate_aspect_slots = self._fate_aspect_slots(cfg, seed_aspects=seed_aspects)
+            if seed_aspects:
+                fate_chargen_seed_applied_span(
+                    hint=seed_match[0],
+                    skill_count=len(seed_match[1].pyramid),
+                    aspect_count=len(seed_match[1].aspects),
+                )
         elif step == "pyramid":
-            violations = pyramid_violations(self._fate_pyramid, cfg)
+            # The effective allocation is the player's in-progress one, else the seed (an
+            # editable default the player can accept or override). A seed only applies when
+            # the player has not yet submitted a pyramid.
+            seeded = seed_match is not None and not self._fate_pyramid
+            effective = (
+                dict(self._fate_pyramid)
+                if self._fate_pyramid
+                else (dict(seed_match[1].pyramid) if seed_match is not None else {})
+            )
+            violations = pyramid_violations(effective, cfg)
             payload.fate_available_skills = list(cfg.skills.keys())
             payload.fate_pyramid = list(cfg.chargen_pyramid)
             payload.fate_apex_rating = cfg.chargen_apex_rating
-            payload.fate_current_allocation = dict(self._fate_pyramid)
+            payload.fate_current_allocation = effective
             payload.fate_ladder_labels = self._fate_ladder_labels(cfg)
             payload.fate_legal = not violations
             payload.fate_violations = violations
+            if seeded and seed_match is not None:
+                fate_chargen_seed_applied_span(
+                    hint=seed_match[0],
+                    skill_count=len(seed_match[1].pyramid),
+                    aspect_count=len(seed_match[1].aspects),
+                )
         elif step == "stunts":
             violations = stunt_catalog_violations(self._fate_stunts, cfg)
             payload.fate_available_stunts = [
@@ -1878,11 +1956,18 @@ class CharacterBuilder:
             payload.fate_violations = violations
         return CharacterCreationMessage(payload=payload, player_id=player_id)
 
-    def _fate_aspect_slots(self, cfg: FateConfig) -> list[FateAspectSlot]:
+    def _fate_aspect_slots(
+        self, cfg: FateConfig, *, seed_aspects: list[str] | None = None
+    ) -> list[FateAspectSlot]:
         """The editable aspect slots for the ``fate_aspects`` step: the mandatory
-        High Concept + Trouble (seeded from the pack defaults) then ``free_aspect_count``
-        free slots. ``value`` reflects any prior edit in the accumulator; ``suggestion``
-        is the pack seed the UI pre-fills."""
+        High Concept + Trouble (pack defaults as PLACEHOLDER only) then ``free_aspect_count``
+        free slots. ``value`` reflects any prior edit in the accumulator; ``suggestion`` is
+        the pack seed the UI shows as a placeholder.
+
+        126-24: ``seed_aspects`` pre-fills the FREE slots' ``value`` from the narrative-hint
+        seed as an editable default (the friendly on-ramp). HC/Trouble are NEVER value-seeded
+        — they keep the no-silent-default invariant (an untouched Confirm submits empty, and
+        the server re-prompts) — so the seed only ever touches the free slots."""
         slots = [
             FateAspectSlot(
                 kind="high_concept",
@@ -1900,7 +1985,12 @@ class CharacterBuilder:
             ),
         ]
         for i in range(cfg.free_aspect_count):
-            value = self._fate_free_aspects[i] if i < len(self._fate_free_aspects) else ""
+            if i < len(self._fate_free_aspects):
+                value = self._fate_free_aspects[i]  # player's prior edit wins
+            elif seed_aspects is not None and i < len(seed_aspects):
+                value = seed_aspects[i]  # narrative-hint seed (editable default)
+            else:
+                value = ""
             slots.append(
                 FateAspectSlot(kind="character", label="Aspect", value=value, required=False)
             )
@@ -1916,7 +2006,18 @@ class CharacterBuilder:
     def apply_fate_aspects(
         self, *, high_concept: str, trouble: str, free_aspects: list[str]
     ) -> None:
-        """Record the aspects step and advance (mirrors ``apply_bones_confirm``)."""
+        """Record the aspects step and advance (mirrors ``apply_bones_confirm``).
+
+        126-24 / AC5 (no-silent-default): High Concept and Trouble are mandatory and
+        player-authored — even with the pyramid + free aspects now seeded, an empty/
+        whitespace HC or Trouble fails loud here (the builder tier, defense-in-depth
+        behind the handler's own check) rather than silently recording a blank mandatory
+        aspect. The narrative-hint seed never touches HC/Trouble for exactly this reason."""
+        if not high_concept.strip() or not trouble.strip():
+            raise ValueError(
+                "apply_fate_aspects: High Concept and Trouble are mandatory and cannot be "
+                "empty (no silent default — the player must author both)"
+            )
         self._fate_high_concept = high_concept
         self._fate_trouble = trouble
         self._fate_free_aspects = list(free_aspects)

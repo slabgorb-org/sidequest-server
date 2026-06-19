@@ -3673,10 +3673,22 @@ def merge_sidecar_extraction_npcs_present(
     engine_sides = _engine_actor_sides(snapshot)
     mentions: list[NpcMention] = []
     for raw in extraction.npcs_present:
-        # ``from_value`` parses the extractor's enrichment dict (name/pronouns/role/
-        # appearance/is_new/is_creature/disengaged) AND its claimed side.
-        mention = NpcMention.from_value(raw)
-        claimed_side = mention.side
+        # ``side`` is ENGINE-OWNED and overwritten below, so the extractor's CLAIMED
+        # side must NOT be allowed to crash the merge. The extractor is a Haiku reader
+        # handed a free-form ``list[dict]`` schema with NO side-enum guidance, so an
+        # out-of-enum claim (e.g. ``"hostile"``) is plausible — and
+        # ``NpcMention.from_value`` RAISES ``ValueError`` on it. The post-narration
+        # pass is NON-FATAL by contract (sidecar_extractor.py: "never raises into the
+        # WS turn pipeline; the per-field catch-loops are the net"), so a bad claim is
+        # a mismatch to RECORD, never a turn-killer. Capture the raw claim for the
+        # witness, then parse enrichment with a validator-safe side (it is discarded
+        # immediately by the engine override). Absent/empty claim → "neutral" (parity
+        # with ``from_value``), so an unseated NPC with no claim fires no false mismatch.
+        claimed_side = str((raw.get("side") if isinstance(raw, dict) else None) or "neutral")
+        safe_raw = {**raw, "side": "neutral"} if isinstance(raw, dict) else raw
+        # ``from_value`` parses the enrichment (name/pronouns/role/appearance/is_new/
+        # is_creature/disengaged); the neutral side here is overwritten below.
+        mention = NpcMention.from_value(safe_raw)
         engine_side = engine_sides.get(mention.name, "neutral")
         if claimed_side != engine_side:
             with sidecar_extraction_mismatch_span(

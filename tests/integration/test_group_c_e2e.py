@@ -103,8 +103,8 @@ async def test_zero_edge_pc_in_mutant_wasteland_injects_permadeath_directives():
         ctx,
     )
 
-    assert "must_narrate" in prompt
-    assert "must_not_narrate" in prompt
+    assert "Bring into the scene" in prompt  # must_narrate imperative (no raw token)
+    assert "Keep out of the fiction" in prompt  # must_not_narrate imperative
     # Per-pack must_narrate surfaces:
     assert "wasteland is indifferent" in prompt or "genre-true terms" in prompt
     # Per-pack must_not_narrate surfaces:
@@ -131,8 +131,8 @@ async def test_zero_hp_pc_in_wry_whimsy_injects_recoverable_break_directives():
         "retreat",
         ctx,
     )
-    assert "must_narrate" in prompt
-    assert "must_not_narrate" in prompt
+    assert "Bring into the scene" in prompt  # must_narrate imperative (no raw token)
+    assert "Keep out of the fiction" in prompt  # must_not_narrate imperative
     # Recoverable-break verdict — wry_whimsy's specific must_narrate text
     # surfaces (not just any lethality prose; a vaguer match would mask a
     # policy-routing regression):

@@ -60,6 +60,7 @@ from sidequest.agents.narrator import (
     NarratorAgent,
     resolve_narrator_iteration_cap,
 )
+from sidequest.agents.narrator_directives import render_narrator_directives
 from sidequest.agents.narrator_guardrails import (
     CONFRONTATION_TRIGGER_CONSTRAINT,
     GUARDRAIL_NAMES,
@@ -3063,8 +3064,11 @@ class Orchestrator:
                     if not d.visibility.redact_from_narrator_canonical
                 ]
                 combined_directives = visible_bank_directives + arbiter_directives
-                if combined_directives:
-                    block = "\n".join(f"- [{d.kind}] {d.payload}" for d in combined_directives)
+                # Render via the single player-safe boundary: in-fiction
+                # imperatives + framing, NEVER the raw NarratorDirectiveKind token
+                # (the 2026-06-19 must_not_narrate leak — see narrator_directives).
+                block = render_narrator_directives(combined_directives)
+                if block:
                     registry.register_section(
                         agent_name,
                         PromptSection.new(

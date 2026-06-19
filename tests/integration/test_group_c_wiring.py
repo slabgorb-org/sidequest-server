@@ -94,4 +94,5 @@ async def test_arbiter_is_invoked_on_real_prompt_build_path():
 
     assert len(calls) == 1, "arbiter was not invoked on the real prompt-build path"
     # And the arbiter's output ended up in the prompt — not just called but consumed.
-    assert "must_narrate" in prompt
+    # Rendered as a player-safe imperative, not the raw token (2026-06-19 leak fix).
+    assert "Bring into the scene" in prompt

@@ -39,6 +39,20 @@ logger = logging.getLogger(__name__)
 
 _BUILTINS_HUB_ATTR = "_sidequest_watcher_hub_singleton"
 
+# Replay-buffer retention is PER-SESSION, not a single shared deque (story
+# 126-23). A noisy concurrent session (e.g. a headless test spewing thousands of
+# spans) must not evict a quiet driven session's buffered history before the
+# operator opens the GM panel — that is what produced "TURNS 0 / Waiting for
+# first turn…" under concurrent runs. Each session_slug keeps its own bounded
+# ring; replay merges them back into global publish order via a monotonic
+# sequence number. ~2000 entries ≈ 130 turns of fully-instrumented play.
+_PER_SESSION_MAXLEN = 2000
+# Cap the number of retained session buckets so a long-lived dev server with
+# many ephemeral sessions can't grow the buffer without bound. When exceeded,
+# the least-recently-active slug bucket is dropped — never the session-less
+# ``None`` (infra) bucket, which is global and shown in every session view.
+_MAX_SESSION_BUCKETS = 64
+
 # When set, every ``publish_event`` call also opens-and-closes a tiny OTEL
 # span so the OTLP exporter (e.g. local Jaeger) sees the semantic event
 # stream — not just spans started via ``tracer().start_as_current_span``.
@@ -88,13 +102,16 @@ class WatcherHub:
         # — if the bus is silent, the operator needs to see WHY.
         self._published_count: int = 0
         self._dropped_count: int = 0
-        # Ring buffer of the last N already-serialized events. Replayed to
+        # Per-session ring buffers of already-serialized events, keyed by
+        # session_slug (``None`` = session-less / infra, global). Replayed to
         # any new subscriber on connect so a dashboard refresh mid-session
-        # doesn't reset every panel to zero. Bounded so a long session
-        # can't exhaust memory; oldest events drop on overflow, matching
-        # ADR-090's "lossy by design" stance. 2000 entries ≈ 130 turns of
-        # fully-instrumented multiplayer at observed event volume.
-        self._buffer: deque[dict[str, Any]] = deque(maxlen=2000)
+        # doesn't reset every panel to zero. Bounding is PER SESSION (story
+        # 126-23) so one session's volume can't evict another's history; oldest
+        # events within a session drop on overflow, matching ADR-090's "lossy by
+        # design" stance. ``_seq`` tags each buffered event so replay can restore
+        # global publish order across buckets.
+        self._session_buffers: dict[str | None, deque[tuple[int, dict[str, Any]]]] = {}
+        self._seq: int = 0
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """Remember the FastAPI event loop so background-thread publishers
@@ -138,7 +155,7 @@ class WatcherHub:
             "dropped": self._dropped_count,
             "synthetic_spans": _synthetic_spans_minted,
             "watcher_as_spans": int(_watcher_as_spans_enabled()),
-            "buffered": len(self._buffer),
+            "buffered": sum(len(b) for b in self._session_buffers.values()),
         }
 
     async def _broadcast(self, event: dict[str, Any]) -> None:
@@ -166,9 +183,11 @@ class WatcherHub:
         # same lock so a concurrent ``replay`` sees a consistent view —
         # either the event is in the buffer and visible to replay, or
         # the subscriber list snapshot doesn't yet include the
-        # in-flight subscriber.
+        # in-flight subscriber. The event is bucketed by its session_slug so
+        # per-session retention holds (story 126-23).
+        slug = safe_event.get("session_slug")
         async with self._lock:
-            self._buffer.append(safe_event)
+            self._append_to_session_buffer(slug, safe_event)
             targets = list(self._subscribers)
         if not targets:
             return
@@ -188,20 +207,58 @@ class WatcherHub:
                 len(self._subscribers),
             )
 
-    async def replay(self, ws: _Sendable) -> int:
-        """Send every buffered event to ``ws`` in publish order.
+    def _append_to_session_buffer(self, slug: str | None, safe_event: dict[str, Any]) -> None:
+        """Append a serialized event to its session's ring buffer.
 
-        Best-effort: a per-event ``send_json`` failure aborts replay
-        with the partial count rather than raising. The hub's internal
-        state is never mutated by this call. Used by the watcher
-        endpoint after the hello frame and before subscribing the
-        socket to live broadcasts, so a dashboard refresh mid-session
-        sees prior history before any new event arrives.
+        MUST be called while holding ``self._lock``. Enforces per-session
+        retention (each bucket is a bounded ring) and a cap on the number of
+        retained session buckets. ``_seq`` is a monotonic tag so ``replay`` can
+        restore global publish order across buckets.
+        """
+        bucket = self._session_buffers.get(slug)
+        if bucket is None:
+            self._evict_session_bucket_if_needed()
+            bucket = deque(maxlen=_PER_SESSION_MAXLEN)
+            self._session_buffers[slug] = bucket
+        bucket.append((self._seq, safe_event))
+        self._seq += 1
+
+    def _evict_session_bucket_if_needed(self) -> None:
+        """Drop the least-recently-active slug bucket when adding one more would
+        exceed ``_MAX_SESSION_BUCKETS``. Never evicts the session-less ``None``
+        (infra) bucket — it is global and must stay replayable in every view.
+        MUST be called while holding ``self._lock``.
+        """
+        if len(self._session_buffers) + 1 <= _MAX_SESSION_BUCKETS:
+            return
+        # Least-recently-active = smallest most-recent seq among slug buckets.
+        candidates = [
+            (slug, bucket)
+            for slug, bucket in self._session_buffers.items()
+            if slug is not None and bucket
+        ]
+        if not candidates:
+            return
+        victim = min(candidates, key=lambda kv: kv[1][-1][0])[0]
+        del self._session_buffers[victim]
+
+    async def replay(self, ws: _Sendable) -> int:
+        """Send every buffered event to ``ws`` in global publish order.
+
+        Per-session buckets are merged and re-ordered by the monotonic
+        ``_seq`` tag, so a refresh mid-session sees prior history in the order
+        it was published — across every concurrent session — before any new
+        live event arrives.
+
+        Best-effort: a per-event ``send_json`` failure aborts replay with the
+        partial count rather than raising. The hub's internal state is never
+        mutated by this call.
         """
         async with self._lock:
-            snapshot = list(self._buffer)
+            merged = [pair for bucket in self._session_buffers.values() for pair in bucket]
+        merged.sort(key=lambda pair: pair[0])
         sent = 0
-        for event in snapshot:
+        for _seq, event in merged:
             try:
                 await ws.send_json(event)
             except Exception:  # noqa: BLE001 — replay is best-effort

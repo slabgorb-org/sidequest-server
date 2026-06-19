@@ -523,6 +523,23 @@ SPAN_ROUTES["fate.opponent.decided"] = SpanRoute(
         "ladder_total": (span.attributes or {}).get("ladder_total", 0),
     },
 )
+# --- F2d: opponent FateSheet seeding span (GM panel = lie detector) ------------
+# The Other was given a FateSheet so the conflict/contest engine can resolve
+# against it (no sheetless opponent → decide_opponent_action ValueError). Evidence
+# the seeding bound the ruleset's authored skills, not d20 opponent_default_stats.
+# Literal key (no SPAN_* constant) — the routing-completeness lint only inspects
+# SPAN_* module constants (the F2a/F2d precedent).
+SPAN_ROUTES["fate.opponent.seeded"] = SpanRoute(
+    event_type="state_transition",
+    component="fate",
+    extract=lambda span: {
+        "field": "opponent_seeded",
+        "opponent": (span.attributes or {}).get("opponent", ""),
+        "skill_count": (span.attributes or {}).get("skill_count", 0),
+        "refresh": (span.attributes or {}).get("refresh", 0),
+        "created": (span.attributes or {}).get("created", False),
+    },
+)
 # --- F2c: narration-vs-state honesty span (GM panel = lie detector) -----------
 # The narrator claimed a Fate outcome (an advantage created, a foe taken out) the
 # engine state does not show. The F2 analogue of the dispatch-engagement /
@@ -936,6 +953,34 @@ def fate_opponent_decided_span(
         **attrs,
     }
     with Span.open("fate.opponent.decided", attributes, tracer_override=_tracer):
+        pass
+
+
+def fate_opponent_seeded_span(
+    *,
+    opponent: str,
+    skill_count: int,
+    refresh: int,
+    created: bool,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``fate.opponent.seeded`` — a Fate conflict/contest OPPONENT was given a
+    FateSheet (skill ladder + stress + consequences) so the engine can resolve
+    against it (ADR-144 F2d). The GM-panel evidence that the Other is mechanically
+    capable — no sheetless opponent for ``decide_opponent_action`` / ``_resolve_attack``
+    to fail loud on — and that the seeding used the bound ruleset's authored skills,
+    NOT d20 ``opponent_default_stats``. ``created`` distinguishes a fabricated backing
+    Npc from a sheet ATTACHED to an already-seated native-stat creature."""
+    attributes: dict[str, Any] = {
+        "field": "opponent_seeded",
+        "opponent": opponent,
+        "skill_count": skill_count,
+        "refresh": refresh,
+        "created": created,
+        **attrs,
+    }
+    with Span.open("fate.opponent.seeded", attributes, tracer_override=_tracer):
         pass
 
 

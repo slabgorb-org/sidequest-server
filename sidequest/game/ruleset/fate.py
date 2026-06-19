@@ -214,6 +214,39 @@ class FateRulesetModule(RulesetModule):
             )
         return ChargenResources(fate_sheet=sheet)
 
+    def seed_opponent_fate_sheet(self, *, rules) -> FateSheet:
+        """Build a FateSheet for a Fate conflict/contest OPPONENT (ADR-144 F2d).
+
+        The Other must carry a FateSheet — the engine resolves attacks/defenses
+        against its skill ladder + stress + consequences (``decide_opponent_action``
+        / ``_resolve_attack`` fail loud on a sheetless opponent). There are NO d20
+        ``opponent_default_stats`` under Fate ("Bind the Ruleset, Don't Balance It"):
+        the opponent is seeded from the genre's authored skill ladder (``cfg.skills``)
+        so it is a credible peer adversary using the genre's OWN skills, not invented
+        balance. Default stress/consequence tracks + refresh come from the SRD
+        baseline (``FateSheet`` defaults). The Other carries no character aspects
+        (situation aspects live on the encounter; flavor aspects are the narrator's
+        to mint) and no stunts — the engine consults neither for an engine-driven
+        opponent. Pure builder; the seating site (``_seed_fate_opponents``) emits the
+        ``fate.opponent.seeded`` GM-panel span.
+        """
+        from sidequest.genre.models.rules import FateConfig
+
+        cfg = rules.ruleset_config()
+        if not isinstance(cfg, FateConfig):
+            # A fate-bound pack must author rules.fate (the RulesConfig validator
+            # enforces it); reaching here is a misconfigured binding — fail loud.
+            raise FateEconomyError(
+                "FateRulesetModule.seed_opponent_fate_sheet requires a FateConfig "
+                f"(rules.ruleset_config() returned {type(cfg).__name__}); a 'fate' "
+                "pack must author rules.fate (ADR-144)"
+            )
+        return FateSheet(
+            skills=dict(cfg.skills),
+            refresh=cfg.refresh,
+            fate_points=cfg.refresh,  # SRD: start with fate points == refresh.
+        )
+
     def resolve_action(
         self,
         *,

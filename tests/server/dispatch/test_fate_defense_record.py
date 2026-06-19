@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 import sidequest.game.ruleset.fate_resolution as fate_resolution
+import sidequest.server.dispatch.fate_conflict as fate_conflict
 from sidequest.game.ruleset import get_ruleset_module
 from sidequest.server.dispatch.fate_conflict import (
     FateConflictError,
@@ -109,6 +110,58 @@ def test_defend_throw_from_non_defender_is_rejected():
     entry = next(p for p in encounter.pending_defenses if p.request_id == "d1")
     assert entry.defense_total is None  # untouched — Mallory cannot fill Rux's defense
     assert entry.conceded is False
+
+
+def test_defend_authorization_rejection_emits_watcher_event(monkeypatch):
+    # Story 126-13 (WIRING): the defend-path authorization rejection must reach the
+    # GM-panel lie-detector at parity with the FATE_THROW player_id spoof-rejection
+    # (``fate_throw_player_id_spoof_rejected``). Drive the REAL dispatch through the
+    # non-defender path and assert the PUBLISHED WatcherHub event — behavior, not
+    # source text (CLAUDE.md "No Source-Text Wiring Tests"). The spy on the module's
+    # ``_watcher_publish`` alias is the canonical dispatch-watcher pattern
+    # (cf. test_retrieval_reason_watcher.py).
+    snap, encounter = parked_conflict(
+        defender="Rux", attacker="Bandit", request_id="d1", attack_total=4, defend_skill_rating=2
+    )
+    ruleset = get_ruleset_module("fate")
+
+    captured: list[tuple] = []
+
+    def _spy(event_type, fields, component=None, severity="info", **kwargs):
+        captured.append((event_type, fields, component, severity))
+
+    monkeypatch.setattr(fate_conflict, "_watcher_publish", _spy)
+
+    with pytest.raises(FateConflictError):
+        dispatch_fate_defense(
+            encounter=encounter,
+            snapshot=snap,
+            ruleset=ruleset,
+            actor_name="Mallory",  # NOT the defender (Rux) — the defend-path spoof
+            request_id="d1",
+            skill="Athletics",
+            thrown_faces=(-1, -1, -1, -1),
+        )
+
+    rejects = [
+        (et, f, comp, sev)
+        for (et, f, comp, sev) in captured
+        if f.get("op") == "fate_defend_authorization_rejected"
+    ]
+    assert len(rejects) == 1, (
+        f"exactly one defend-authorization-rejected watcher event; got {len(rejects)}"
+    )
+    event_type, fields, component, severity = rejects[0]
+    assert event_type == "state_transition"
+    assert component == "encounter"
+    assert severity == "warning"  # parity with the player_id spoof-rejection
+    # Parity fields: who threw, whose defense it was, and the attack context — so the
+    # GM panel can name the griefer and the victim, mirroring inbound/authenticated.
+    assert fields["throwing_actor"] == "Mallory"
+    assert fields["request_defender"] == "Rux"
+    assert fields["request_id"] == "d1"
+    assert fields["attacker"] == "Bandit"
+    assert fields["source"] == "fate_defense"
 
 
 def test_concede_marks_entry_and_fills_ledger():

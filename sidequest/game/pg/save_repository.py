@@ -20,6 +20,7 @@ live in the same ``sidequest.game`` tree.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 
@@ -47,6 +48,8 @@ from sidequest.game.projection.cache import CachedDecision
 from sidequest.game.projection_filter import FilterDecision
 from sidequest.game.session import GameSnapshot, NarrativeEntry
 from sidequest.game.world_save import WorldSave
+
+logger = logging.getLogger(__name__)
 
 
 class PgSaveRepository:
@@ -155,10 +158,21 @@ class PgSaveRepository:
         # Story 126-22: bound the save-DB on the routine persistence path
         # (per-turn + on disconnect) so projection_cache / turn_telemetry do
         # not re-bloat. Both prunes are session-scoped and emit OTEL spans.
-        self._events.prune_projection_cache(
-            keep_last_per_player=PROJECTION_CACHE_KEEP_LAST_PER_PLAYER
-        )
-        self._events.prune_turn_telemetry(keep_last_rounds=TURN_TELEMETRY_KEEP_LAST_ROUNDS)
+        #
+        # ISOLATED in its own try/except — the snapshot above is the durable,
+        # load-bearing write; retention pruning is best-effort cleanup that runs
+        # AFTER it. A prune fault must NOT propagate as a save failure: callers
+        # treat a save() exception as "the snapshot was lost" (per-turn skips the
+        # narrative-log write; disconnect sets last_save_failure, which gates
+        # close_store). Mirrors the lore-persist isolation in
+        # websocket_session_handler.cleanup() — log loudly, never block on cleanup.
+        try:
+            self._events.prune_projection_cache(
+                keep_last_per_player=PROJECTION_CACHE_KEEP_LAST_PER_PLAYER
+            )
+            self._events.prune_turn_telemetry(keep_last_rounds=TURN_TELEMETRY_KEEP_LAST_ROUNDS)
+        except Exception:  # noqa: BLE001 — retention prune must not fail the durable save
+            logger.exception("save_db_retention_prune_failed session_id=%s", self._sid)
 
     def load(self) -> SavedSession | None:
         return self._snapshot.load_snapshot()

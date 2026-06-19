@@ -244,3 +244,16 @@ def test_save_applies_turn_telemetry_retention_in_production_path(
         s for s in otel_capture.get_finished_spans() if s.name == SPAN_TURN_TELEMETRY_PRUNE
     ]
     assert prune_spans, "production save path must emit a turn_telemetry.prune span"
+
+
+# ---------------------------------------------------------------------------
+# Review rework (126-22 round 1) — guard the inverted zero-semantics.
+# ---------------------------------------------------------------------------
+
+
+def test_prune_turn_telemetry_rejects_zero_keep(store: PgEventStore) -> None:
+    """keep_last_rounds=0 is a silent no-op (LIMIT 0 -> MIN NULL -> deletes
+    nothing) — the inverse of prune_projection_cache's 0. Reject it loudly so
+    the divergent zero-semantics can't surprise a caller."""
+    with pytest.raises(ValueError, match="keep_last_rounds must be >= 1"):
+        store.prune_turn_telemetry(keep_last_rounds=0)

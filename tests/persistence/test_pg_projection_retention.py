@@ -281,3 +281,41 @@ def test_save_enforces_projection_cache_bound_in_production_path(
         s for s in otel_capture.get_finished_spans() if s.name == SPAN_PROJECTION_CACHE_PRUNE
     ]
     assert prune_spans, "production save path must emit a projection.cache.prune span"
+
+
+# ---------------------------------------------------------------------------
+# Review rework (126-22 round 1) — prune is best-effort; a prune fault must not
+# fail the durable snapshot save, and zero-keep is a guarded error.
+# ---------------------------------------------------------------------------
+
+
+def test_save_isolates_prune_failure_from_the_durable_snapshot(
+    repo: PgSaveRepository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A retention-prune fault must NOT propagate out of ``save()``.
+
+    The snapshot is the durable, load-bearing write; pruning is best-effort
+    cleanup that runs after it. If ``save()`` let a prune exception escape, the
+    per-turn handler would skip its narrative-log write and disconnect would set
+    ``last_save_failure`` (gating ``close_store``). So a prune that raises must be
+    swallowed-with-logging, and the snapshot must remain durably saved.
+    """
+
+    def _boom(**_kwargs: object) -> int:
+        raise RuntimeError("simulated prune DB fault")
+
+    monkeypatch.setattr(repo._events, "prune_projection_cache", _boom)
+
+    # Must NOT raise even though the prune blows up.
+    repo.save(GameSnapshot(genre_slug="test_genre", world_slug="test_world", atmosphere="iso"))
+
+    # The snapshot is durably saved — the prune fault did not roll it back.
+    loaded = repo.load()
+    assert loaded is not None and loaded.snapshot.atmosphere == "iso"
+
+
+def test_prune_projection_cache_rejects_zero_keep(store: PgEventStore) -> None:
+    """keep_last_per_player=0 would delete the ENTIRE session cache (`rn > 0`
+    matches every row) — it must fail loudly, never silently wipe."""
+    with pytest.raises(ValueError, match="keep_last_per_player must be >= 1"):
+        store.prune_projection_cache(keep_last_per_player=0)

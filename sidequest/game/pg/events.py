@@ -176,11 +176,22 @@ class PgEventStore:
         and live resume only reads the head of the window. Emits a
         ``projection.cache.prune`` span (rows_pruned + session_id) for the GM panel.
         """
+        if keep_last_per_player < 1:
+            # Fail loud: 0 deletes the whole session cache (rn > 0 matches every
+            # row); negatives are nonsensical. The production constant is 200.
+            raise ValueError(f"keep_last_per_player must be >= 1 (got {keep_last_per_player})")
         with projection_cache_prune_span(session_id=self._sid) as span:
-            with session_tx(self._pool, self._sid) as conn:
-                cur = conn.execute(_PRUNE_PROJECTION, (self._sid, self._sid, keep_last_per_player))
-                pruned = cur.rowcount
-            span.set_attribute("rows_pruned", pruned)
+            pruned = 0
+            try:
+                with session_tx(self._pool, self._sid) as conn:
+                    cur = conn.execute(
+                        _PRUNE_PROJECTION, (self._sid, self._sid, keep_last_per_player)
+                    )
+                    pruned = cur.rowcount
+            finally:
+                # Emit rows_pruned even if the tx raised, so the GM panel can tell
+                # "pruned 0" from "prune errored" (the span also carries error status).
+                span.set_attribute("rows_pruned", pruned)
         return pruned
 
     def prune_turn_telemetry(self, *, keep_last_rounds: int) -> int:
@@ -191,9 +202,17 @@ class PgEventStore:
         round-based retention must not silently drop them (No Silent Fallbacks).
         Emits a ``turn_telemetry.prune`` span (rows_pruned + session_id).
         """
+        if keep_last_rounds < 1:
+            # Fail loud: 0 is a silent no-op here (LIMIT 0 -> empty -> MIN NULL ->
+            # deletes nothing) — the inverse of prune_projection_cache's 0. Reject
+            # both. The production constant is 100.
+            raise ValueError(f"keep_last_rounds must be >= 1 (got {keep_last_rounds})")
         with turn_telemetry_prune_span(session_id=self._sid) as span:
-            with session_tx(self._pool, self._sid) as conn:
-                cur = conn.execute(_PRUNE_TELEMETRY, (self._sid, self._sid, keep_last_rounds))
-                pruned = cur.rowcount
-            span.set_attribute("rows_pruned", pruned)
+            pruned = 0
+            try:
+                with session_tx(self._pool, self._sid) as conn:
+                    cur = conn.execute(_PRUNE_TELEMETRY, (self._sid, self._sid, keep_last_rounds))
+                    pruned = cur.rowcount
+            finally:
+                span.set_attribute("rows_pruned", pruned)
         return pruned

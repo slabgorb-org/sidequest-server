@@ -1925,12 +1925,22 @@ class ConnectHandler:
                 # (`websocket_session_handler.py:2113-2141`) so the resuming
                 # client paints the overlay from the saved encounter.
                 encounter = snapshot.encounter
+                from sidequest.server.dispatch.confrontation import (
+                    should_emit_native_confrontation,
+                )
+
                 if (
                     encounter is not None
                     and not encounter.resolved
                     and session._session_data is not None
                     and session._session_data.genre_pack is not None
                     and session._session_data.genre_pack.rules is not None
+                    # ADR-144: a Fate pack resumes its conflict via FATE_STATE, never the
+                    # native ConfrontationOverlay — the native frame supplier reaches
+                    # build_confrontation_payload → FateRulesetModule.compute_dc and fails
+                    # loud on the d20 surface (caught below, but logged as a resume
+                    # failure). Skip the native bootstrap for Fate.
+                    and should_emit_native_confrontation(session._session_data.genre_pack.rules)
                 ):
                     from sidequest.server.dispatch.confrontation import (
                         find_confrontation_def,

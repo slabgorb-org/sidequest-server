@@ -2035,7 +2035,21 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     confrontation_payload: ConfrontationPayload | None = None
                     confrontation_event_attrs: dict[str, object] | None = None
                     cdef = None
-                    if now_live and now_encounter is not None:
+                    # ADR-144: a Fate pack's conflict surface is FATE_STATE
+                    # (_maybe_emit_fate_state, below) and must never co-render with
+                    # the native beat/dial ConfrontationOverlay. build_confrontation_payload
+                    # is the d20/beat builder — for a Fate confrontation it reaches
+                    # FateRulesetModule.compute_dc and fails loud (No Silent Fallbacks),
+                    # bricking the turn. Gate the native projection off for Fate; the
+                    # seated standoff is played through the Fate engine + FATE_STATE.
+                    from sidequest.server.dispatch.confrontation import (
+                        should_emit_native_confrontation,
+                    )
+
+                    _emit_native_confrontation = should_emit_native_confrontation(
+                        sd.genre_pack.rules
+                    )
+                    if _emit_native_confrontation and now_live and now_encounter is not None:
                         from sidequest.server.dispatch.confrontation import (
                             build_confrontation_payload,
                             find_confrontation_def,
@@ -2082,7 +2096,11 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                             "encounter_type": now_encounter.encounter_type,
                             "genre_slug": sd.genre_slug,
                         }
-                    elif (prior_live or pending_dice_clear_type is not None) and not now_live:
+                    elif (
+                        _emit_native_confrontation
+                        and (prior_live or pending_dice_clear_type is not None)
+                        and not now_live
+                    ):
                         from sidequest.server.dispatch.confrontation import (
                             build_clear_confrontation_payload,
                         )

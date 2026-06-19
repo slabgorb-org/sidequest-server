@@ -96,6 +96,26 @@ def resolve_recipient_pc(
     return ((class_def, total_slots, prepared), pc_name)
 
 
+def should_emit_native_confrontation(rules: RulesConfig | None) -> bool:
+    """Whether the native beat/dial ConfrontationOverlay should be projected for a
+    pack bound to ``rules`` (ADR-144).
+
+    ``False`` for a **Fate** pack: a Fate conflict's player surface is ``FATE_STATE``
+    (``build_fate_state_payload`` / ``_maybe_emit_fate_state``), which must never
+    co-render with the native overlay — the load-bearing invariant the
+    ``fate_state_emit`` docstring spells out. ``build_confrontation_payload`` is the
+    d20/beat-surface builder; invoking it for a Fate confrontation reaches
+    ``FateRulesetModule.compute_dc``, which raises ``NotImplementedError`` (the
+    ADR-144 No-Silent-Fallbacks guard — correct, but it bricks the turn). Callers
+    gate the native projection on this so a seated Fate standoff is played through
+    the Fate engine (4dF + ladder) instead of crashing on the d20 surface.
+
+    ``True`` when ``rules`` is ``None`` (legacy/bootstrap callers with no pack in
+    hand keep the prior native behavior) or binds any non-Fate ruleset.
+    """
+    return rules is None or rules.ruleset != "fate"
+
+
 def build_confrontation_payload(
     *,
     encounter: StructuredEncounter,

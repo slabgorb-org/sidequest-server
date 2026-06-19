@@ -53,7 +53,7 @@ from sidequest.genre.models.premises import BlocDef, PremiseDef, WitnessedActArc
 from sidequest.genre.models.progression import ProgressionConfig
 from sidequest.genre.models.psionics import PsionicDisciplineCatalog
 from sidequest.genre.models.rigs_world import ChassisInstanceConfig
-from sidequest.genre.models.rules import RulesConfig, SavingThrowsTable
+from sidequest.genre.models.rules import FateHintSeed, RulesConfig, SavingThrowsTable
 from sidequest.genre.models.scenario import ScenarioPack
 from sidequest.genre.models.theme import GenreTheme
 from sidequest.genre.models.tropes import SeedTrope, TropeDefinition
@@ -301,6 +301,15 @@ class World(BaseModel):
     Fate catalog is fate-gated, at resolution time. Consumers read world-first via
     ``game.ruleset.fate_gear.resolve_fate_gear_catalog`` (world wins per id over the
     genre catalog — the ADR-145 §D3 by-id merge, same rule as ``resolve_inventory``)."""
+    chargen_seed_table: dict[str, FateHintSeed] = Field(default_factory=dict)
+    """World-tier narrative-chargen seed override (``worlds/<slug>/chargen_seed_table.yaml``),
+    story 126-24. A ``narrative-hint -> FateHintSeed`` map that overrides/extends the
+    genre-tier ``rules.fate.chargen_seed_table`` per hint key (world wins). Empty when the
+    world authors none — the genre table then serves unchanged (the common case). Loaded
+    UNCONDITIONALLY of ruleset, mirroring ``World.gear``; consumers resolve world-first via
+    ``game.ruleset.fate_chargen.resolve_fate_chargen_seed_table``. TYPED (not the ``extra``
+    bag) so pydantic coerces the authored dict to ``FateHintSeed`` — ``.pyramid`` / ``.aspects``
+    are real attributes, never raw dicts (the crash the Reviewer flagged in rework round 1)."""
     equipment_tables: EquipmentTables | None = None
     """World-tier chargen kit override (``worlds/<slug>/equipment_tables.yaml``),
     story 120-4. The genre tier is the SRD rulebook; a world's dungeon/flavor kit

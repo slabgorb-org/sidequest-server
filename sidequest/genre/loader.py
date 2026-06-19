@@ -1840,6 +1840,15 @@ def _load_single_world(
             )
         }
 
+    # === World-tier gear.yaml — OPTIONAL (story 126-25) ===
+    # The Fate analogue of inventory at the world tier: a world's signature
+    # found-items (the Oz silver shoes). Loaded UNCONDITIONALLY of ruleset,
+    # mirroring the genre-tier gear load (``genre_gear`` is set on every pack at
+    # ``GenrePack(gear=...)``); only the merge into the effective Fate catalog is
+    # fate-gated, at resolution time (``resolve_fate_gear_catalog``). Absent file
+    # → [] (a valid authored choice, the common case — No Silent Fallbacks).
+    world_gear: list[GearDef] = _load_gear(world_path / "gear.yaml")
+
     # Story 104-1 / M-A: single-vs-cluster is a system COUNT, decided at load
     # time and cached on the World so the in-game MAP_UPDATE path (which holds
     # only the World, not its dir) can ship the flag. Emits the decision span.
@@ -1875,6 +1884,7 @@ def _load_single_world(
         magic_register=magic_register,
         items=items,
         inventory=world_inventory,
+        gear=world_gear,
         equipment_tables=world_equipment_tables,
         bestiary=world_bestiary,
         saints=world_saints,

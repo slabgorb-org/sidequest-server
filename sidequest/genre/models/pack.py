@@ -291,6 +291,16 @@ class World(BaseModel):
     are world-owned kit choices). Distinct from ``items``
     (``WorldItemsCatalog``), which is a separate named-artifact flavor list, not
     the chargen loadout/catalog surface."""
+    gear: list[GearDef] = Field(default_factory=list)
+    """World-tier Fate gear CATALOG (``worlds/<slug>/gear.yaml``), story 126-25.
+    The Fate analogue of ``inventory`` at the world tier: a world's signature
+    found-items (the Oz silver shoes) are world-owned CAST/CATALOG, NOT a genre
+    mechanic (ADR-140). Empty list when the world authors none — the common case
+    (most worlds ship no world-distinct gear). Loaded UNCONDITIONALLY of ruleset,
+    mirroring the genre-tier ``GenrePack.gear``; only the merge INTO the effective
+    Fate catalog is fate-gated, at resolution time. Consumers read world-first via
+    ``game.ruleset.fate_gear.resolve_fate_gear_catalog`` (world wins per id over the
+    genre catalog — the ADR-145 §D3 by-id merge, same rule as ``resolve_inventory``)."""
     equipment_tables: EquipmentTables | None = None
     """World-tier chargen kit override (``worlds/<slug>/equipment_tables.yaml``),
     story 120-4. The genre tier is the SRD rulebook; a world's dungeon/flavor kit

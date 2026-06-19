@@ -158,11 +158,19 @@ def test_extract_structured_extracts_location():
     assert result["location"] == "Docks"
 
 
-def test_extract_structured_extracts_footnotes():
+def test_extract_structured_no_longer_surfaces_footnotes():
+    """Story 151-5 / ADR-150 step 4 (cutover II): ``footnotes`` is retired from the
+    narrator game_patch — the post-narration sidecar extractor produces it now and
+    ``narration_apply.merge_sidecar_extraction_cosmetic`` sources it onto the result.
+    ``extract_structured_from_response`` must surface ``[]`` even when a
+    (non-compliant) narrator still emits the block. Inverts the pre-151-5
+    ``test_extract_structured_extracts_footnotes``."""
     raw = '```game_patch\n{"footnotes": [{"summary": "The key is lost", "category": "Lore", "is_new": true}]}\n```'
     result = extract_structured_from_response(raw)
-    assert len(result["footnotes"]) == 1
-    assert result["footnotes"][0]["summary"] == "The key is lost"
+    assert result["footnotes"] == [], (
+        "game_patch footnotes must no longer be extracted — retired in 151-5 "
+        "(the post-narration sidecar extractor owns it)"
+    )
 
 
 def test_extract_structured_no_longer_surfaces_items_gained():
@@ -645,9 +653,14 @@ async def test_run_narration_turn_extracts_confrontation():
 
 
 @pytest.mark.asyncio
-async def test_run_narration_turn_extracts_npcs():
-    # Story 61-12 removed the npcs_met silent fallback; the canonical
-    # sidecar key is npcs_present everywhere.
+async def test_run_narration_turn_no_longer_sources_npcs_from_game_patch():
+    """Story 151-5 / ADR-150 step 4 (cutover II): ``npcs_present`` is retired from
+    the narrator game_patch — the orchestrator pipeline no longer sources it. The
+    post-narration extractor produces it and
+    ``narration_apply.merge_sidecar_extraction_npcs_present`` sources it onto the
+    result (with engine-owned ``side``) in the WS handler, AFTER this turn. So a
+    game_patch ``npcs_present`` does NOT reach ``result.npcs_present`` here. Inverts
+    the pre-151-5 ``test_run_narration_turn_extracts_npcs``."""
     narration_text = (
         "**The Market**\n\nThe vendor smiles.\n\n"
         '```game_patch\n{"npcs_present": ["Nub the Vendor"]}\n```'
@@ -656,8 +669,10 @@ async def test_run_narration_turn_extracts_npcs():
     orch = Orchestrator(client=client)
     context = TurnContext(character_name="Kael")
     result = await orch.run_narration_turn("talk to vendor", context)
-    assert len(result.npcs_present) == 1
-    assert result.npcs_present[0].name == "Nub the Vendor"
+    assert result.npcs_present == [], (
+        "npcs_present must no longer be sourced from the game_patch at the "
+        "orchestrator level — retired in 151-5 (post-narration extractor owns it)"
+    )
 
 
 @pytest.mark.asyncio

@@ -6,12 +6,21 @@ from sidequest.agents.narrator import NARRATOR_OUTPUT_ONLY
 from sidequest.agents.narrator_prompts import NARRATOR_MAGIC_OUTPUT_RULES
 
 
-def test_prompt_documents_npc_side_field():
-    # Closed enum surface — narrator must emit `side`.
-    assert "side" in NARRATOR_OUTPUT_ONLY
-    assert "player" in NARRATOR_OUTPUT_ONLY
-    assert "opponent" in NARRATOR_OUTPUT_ONLY
-    assert "neutral" in NARRATOR_OUTPUT_ONLY
+def test_prompt_retires_npc_side_field():
+    """Story 151-5 / ADR-150 step 4 (cutover II): the npcs_present ``side`` enum is
+    RETIRED from the narrator contract — ``side`` is ENGINE-OWNED now (the engine
+    seats combatant membership from the confrontation the IntentRouter engaged
+    pre-narrator; ``merge_sidecar_extraction_npcs_present`` resolves it). The narrator
+    no longer emits the player/opponent/neutral enum, so the closed-enum surface is
+    gone. Forward regression guard — it must not return. Inverts the pre-151-5
+    ``test_prompt_documents_npc_side_field``."""
+    assert "opponent" not in NARRATOR_OUTPUT_ONLY, (
+        "the npc side enum (player/opponent/neutral) is retired in 151-5 — side is "
+        "engine-owned now; the narrator no longer documents it"
+    )
+    assert "neutral" not in NARRATOR_OUTPUT_ONLY, (
+        "the npc side enum is retired in 151-5 (engine-owned now)"
+    )
 
 
 def test_prompt_documents_beat_outcome_tiers():

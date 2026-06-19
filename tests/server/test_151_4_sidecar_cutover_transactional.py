@@ -225,20 +225,13 @@ def test_extract_structured_retires_transactional_field_from_game_patch(field: s
     )
 
 
-def test_extract_structured_keeps_deferred_bucket_b_fields() -> None:
-    """Scope guard: 151-4 retires ONLY the seven transactional fields. The four
-    deferred bucket-B fields (``npcs_present`` enrichment, ``scene_mood``,
-    ``visual_scene``, ``footnotes``) belong to 151-5 and MUST still flow from the
-    game_patch — over-retiring them here would silently break the un-migrated
-    lanes."""
-    parsed = extract_structured_from_response(_game_patch_raw(_full_transactional_patch()))
-
-    assert parsed.get("npcs_present") == [{"name": "Harlan"}], (
-        "npcs_present is 151-5 — it must still flow from the game_patch in 151-4"
-    )
-    assert parsed.get("scene_mood") == "tense", (
-        "scene_mood is 151-5 — it must still flow from the game_patch in 151-4"
-    )
+# Story 151-5 (ADR-150 step 4, cutover II) RETIRED npcs_present / scene_mood /
+# visual_scene / footnotes from the game_patch AND from output_only.md. The two
+# 151-4 "keeps deferred" scope guards (``test_extract_structured_keeps_deferred_
+# bucket_b_fields`` + ``test_output_only_md_keeps_deferred_field_instructions``)
+# asserted the now-reversed invariant and are superseded by
+# tests/server/test_151_5_sidecar_cutover_npcs_cosmetic.py — removed here (silent
+# omission forbidden, hence this banner).
 
 
 def test_output_only_md_no_longer_instructs_transactional_fields() -> None:
@@ -262,21 +255,8 @@ def test_output_only_md_no_longer_instructs_transactional_fields() -> None:
         )
 
 
-def test_output_only_md_keeps_deferred_field_instructions() -> None:
-    """Scope guard on the artifact side: the deferred bucket-B fields (151-5) are
-    still taught in ``output_only.md`` after 151-4 — the narrator must keep emitting
-    them until their own cutover lands."""
-    from pathlib import Path
-
-    import sidequest.agents as agents_pkg
-
-    output_only = (
-        Path(agents_pkg.__file__).parent / "narrator_prompts" / "output_only.md"
-    ).read_text(encoding="utf-8")
-
-    assert "npcs_present" in output_only, (
-        "npcs_present is 151-5 — output_only.md must still instruct it in 151-4"
-    )
+# (``test_output_only_md_keeps_deferred_field_instructions`` removed — see the
+# 151-5 supersession banner above.)
 
 
 # ===========================================================================

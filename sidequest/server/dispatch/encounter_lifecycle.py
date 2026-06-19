@@ -413,6 +413,84 @@ def _seed_combat_hp_depletion_to_npcs(
                 pass
 
 
+def _seed_fate_opponents(
+    *,
+    snapshot: GameSnapshot,
+    actors: list[EncounterActor],
+    pack: GenrePack,
+    turn: int,
+    acting_character_name: str,
+) -> None:
+    """Ensure every opponent-side actor in a Fate confrontation has a backing
+    CreatureCore carrying a FateSheet (ADR-144 F2d).
+
+    The Fate analogue of ``_seed_combat_hp_depletion_to_npcs``: under a Fate-bound
+    pack the conflict/contest engine resolves attacks + defenses against the Other's
+    FateSheet (skill ladder + stress + consequences), so a seated opponent with no
+    sheet is the impossible state ``decide_opponent_action`` / ``_resolve_attack``
+    fail loud on (playtest 150-2 re-brick at THROW RESOLUTION). For every
+    opponent-side actor we guarantee a backing ``Npc`` whose ``core.fate_sheet`` is
+    populated:
+
+    - a router-named opponent with no backing ``Npc`` is CREATED with a sheet
+      (mirrors the hp_depletion seeder's create branch — marked ``ephemeral`` so it
+      is reaped with its resolved encounter);
+    - a seated native-stat creature (a bestiary mob with ``fate_sheet=None``) has a
+      sheet ATTACHED beside its existing core (the Fate facet rides ALONGSIDE the
+      d20 core — fate_sheet.py: a Fate-bound creature simply ALSO has the facet);
+    - a creature that already carries a sheet (an authored Fate adversary) is left
+      untouched.
+
+    No-op off a Fate pack — the native/WN opponent path owns those. Runs for EVERY
+    Fate confrontation category (pre_combat standoff, combat contest, social), not
+    just ``combat``: any Fate confrontation can seat an Other the engine must
+    resolve against.
+    """
+    if not (pack and pack.rules and pack.rules.ruleset == "fate"):
+        return
+
+    from sidequest.game.creature_core import CreatureCore, Inventory
+    from sidequest.game.ruleset.fate import FateRulesetModule
+    from sidequest.game.session import Npc
+    from sidequest.telemetry.spans.fate import fate_opponent_seeded_span
+
+    module = get_ruleset_module("fate")
+    # The registry returns the FateRulesetModule for 'fate'; assert for the type
+    # checker (a non-Fate module here would be a registry misconfiguration).
+    assert isinstance(module, FateRulesetModule)
+
+    actor_loc = snapshot.party_location(perspective=acting_character_name)
+    by_name = {npc.core.name: npc for npc in snapshot.npcs}
+    for actor in actors:
+        if actor.side != "opponent":
+            continue
+        npc = by_name.get(actor.name)
+        if npc is None:
+            core = CreatureCore(
+                name=actor.name,
+                description="Fate conflict opponent",
+                personality="Adversary",
+                inventory=Inventory(),
+                fate_sheet=module.seed_opponent_fate_sheet(rules=pack.rules),
+            )
+            npc = Npc(core=core, ephemeral=True)
+            snapshot.npcs.append(npc)
+            created = True
+        elif npc.core.fate_sheet is None:
+            npc.core.fate_sheet = module.seed_opponent_fate_sheet(rules=pack.rules)
+            created = False
+        else:
+            continue  # authored Fate adversary already carries a sheet — untouched
+        _stamp_encounter_presence(npc, turn=turn, location=actor_loc)
+        assert npc.core.fate_sheet is not None  # set on both seeded branches above
+        fate_opponent_seeded_span(
+            opponent=actor.name,
+            skill_count=len(npc.core.fate_sheet.skills),
+            refresh=npc.core.fate_sheet.refresh,
+            created=created,
+        )
+
+
 def _roll_and_persist_initiative(
     *,
     snapshot: GameSnapshot,
@@ -1609,7 +1687,9 @@ def instantiate_encounter_from_trigger(
             # (No Silent Fallbacks). opponent_metric is optional in contest mode, so
             # its head-start defaults to 0 when absent.
             player_start = cdef.player_metric.starting
-            opponent_start = cdef.opponent_metric.starting if cdef.opponent_metric is not None else 0
+            opponent_start = (
+                cdef.opponent_metric.starting if cdef.opponent_metric is not None else 0
+            )
             enc.contest = ContestState(
                 target=target,
                 player_victories=player_start,
@@ -1634,6 +1714,18 @@ def instantiate_encounter_from_trigger(
                 "genre_slug": genre_slug or "",
             },
             component="encounter",
+        )
+
+        # ADR-144 F2d (playtest 150-2 re-brick fix): a Fate-bound pack's conflict/
+        # contest engine resolves against the Other's FateSheet, so every seated
+        # opponent must carry one (the Fate sibling of the hp_depletion/edge seeding
+        # below). Runs for EVERY Fate confrontation category; no-op off a Fate pack.
+        _seed_fate_opponents(
+            snapshot=snapshot,
+            actors=actors,
+            pack=pack,
+            turn=snapshot.turn_manager.interaction if hasattr(snapshot, "turn_manager") else 0,
+            acting_character_name=player_name,
         )
 
         # Story 45-21 / 45-52: combat-stats emit → publish dial-derived edge

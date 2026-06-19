@@ -1194,6 +1194,27 @@ def dispatch_fate_defense(
     # path must enforce the same per-PC authorization (fail loud, never silently
     # record a defense for the wrong actor).
     if entry.defender != actor_name:
+        # OTEL watcher parity with the FATE_THROW player_id spoof-rejection
+        # (Story 126-13): a seated PC answering ANOTHER PC's defense IS the
+        # defend-path spoof, so the GM-panel lie-detector must see this rejection
+        # the same way it sees ``fate_throw_player_id_spoof_rejected``. Emit BEFORE
+        # the raise — the handler catches FateConflictError generically and would
+        # otherwise keep the authorization decision off the dashboard.
+        _watcher_publish(
+            "state_transition",
+            {
+                "field": "encounter",
+                "op": "fate_defend_authorization_rejected",
+                "request_id": request_id,
+                "throwing_actor": actor_name,
+                "request_defender": entry.defender,
+                "attacker": entry.attacker,
+                "recovery": "defender_authorization_enforced",
+                "source": "fate_defense",
+            },
+            component="encounter",
+            severity="warning",
+        )
         raise FateConflictError(
             f"FATE_THROW(defend) for {request_id!r} from {actor_name!r}, but that "
             f"defense belongs to {entry.defender!r} — a player may only answer their "

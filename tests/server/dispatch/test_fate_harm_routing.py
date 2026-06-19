@@ -46,6 +46,7 @@ from sidequest.server.dispatch.fate_conflict import (
     run_fate_exchange,
     seal_fate_commit,
 )
+from tests._helpers.fate_fixtures import resolve_parked_defenses
 
 _HARM_SPAN = "fate.harm.routed"
 
@@ -285,9 +286,15 @@ def test_dispatch_fate_action_routes_harm_to_fate_sheet_end_to_end():
         _tracer=tracer,
     )
 
-    # The barrier closed (single PC) and the exchange ran.
+    # Story 126-8: the barrier closed (single PC) → REVEAL seated the Thug's
+    # counter-attack on the PC, so the round PARKS. The PC throws a defense; on
+    # RESUME the PC's sealed attack lands its 3 shifts on the Thug's Fate sheet.
     assert result.commitment_pending is False
-    assert result.exchange is not None
+    assert result.awaiting_defense is True
+    assert result.exchange is None
+    resolve_parked_defenses(
+        encounter=enc, snapshot=snap, ruleset=module, rng=_FixedRng(0), _tracer=tracer
+    )
 
     thug_core = snap.find_creature_core("Thug")
     # Harm landed on the Fate sheet; core.hp untouched.

@@ -289,10 +289,12 @@ def test_message_type_complete_count() -> None:
     authoritative dF faces (physics-is-the-roll, the Fate analog of DICE_THROW).
     Routed to FateThrowHandler → fate_conflict with thrown_faces; distinct from the
     non-roll FATE_ACTION verbs. Intentional addition; bumped 57 → 58.
+    ADR-148/149 (story 126-8) added FATE_DEFEND_REQUEST — the server→client prompt
+    at the DEFEND barrier; intentional addition, bumped 58 → 59.
     When new variants land, update this count and the individual wire-string
     test above so the contract test keeps catching silent drift.
     """
-    assert len(MessageType) == 58
+    assert len(MessageType) == 59
 
 
 # ===========================================================================

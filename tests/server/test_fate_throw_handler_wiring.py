@@ -24,6 +24,7 @@ from sidequest.game.creature_core import CreatureCore
 from sidequest.game.encounter import EncounterActor, EncounterMetric, StructuredEncounter
 from sidequest.game.fate_sheet import Aspect, FateSheet
 from sidequest.game.persistence import GameMode
+from sidequest.game.ruleset import get_ruleset_module
 from sidequest.game.session import GameSnapshot, Npc
 from sidequest.handlers.fate_throw import HANDLER as FATE_THROW_HANDLER
 from sidequest.protocol.dice import ThrowParams
@@ -32,6 +33,7 @@ from sidequest.protocol.messages import FateRollMessage, FateThrowMessage
 from sidequest.server.session_handler import _State
 from sidequest.server.session_room import SessionRoom
 from sidequest.server.websocket_session_handler import WebSocketSessionHandler
+from tests._helpers.fate_fixtures import resolve_parked_defenses
 
 
 def _room_with_seat(player_id: str):
@@ -132,7 +134,12 @@ def test_fate_throw_roundtrips_to_fate_roll():
     assert roll.roll_total == 1
     # The thrower's gesture is echoed so every seat replays the same tumble.
     assert roll.throw_params.velocity == (0.0, 4.0, -1.0)
-    # Dispatch ran end-to-end: the depleted foe was taken out and the conflict ended.
+    # Story 126-8: the proactive throw parks at the DEFEND barrier (the depleted foe
+    # counter-swings at the PC). Drive the PC defense + RESUME; the PC's ladder-5
+    # attack takes the depleted foe out regardless of the NPC defense (max 4).
+    snap = session._session_data.snapshot
+    assert enc.pending_defenses  # parked at the DEFEND barrier
+    resolve_parked_defenses(encounter=enc, snapshot=snap, ruleset=get_ruleset_module("fate"))
     assert enc.find_actor("Thug").withdrawn is True
     assert enc.resolved is True
 

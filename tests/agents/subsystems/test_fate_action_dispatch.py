@@ -11,8 +11,10 @@ from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore
 from sidequest.game.encounter import EncounterActor, EncounterMetric, StructuredEncounter
 from sidequest.game.fate_sheet import Aspect, FateSheet
+from sidequest.game.ruleset import get_ruleset_module
 from sidequest.game.session import GameSnapshot, Npc
 from sidequest.protocol.dispatch import SubsystemDispatch, VisibilityTag
+from tests._helpers.fate_fixtures import resolve_parked_defenses
 
 
 class _FixedRng:
@@ -90,7 +92,12 @@ def test_handler_builds_payload_routes_and_emits_classified_span(otel_capture):
         )
     )
     assert isinstance(out, SubsystemOutput)
-    # Routed to dispatch_fate_action → solo barrier closed → exchange resolved.
+    # Story 126-8: routed to dispatch_fate_action → the depleted opponent's
+    # counter-swing parks at the DEFEND barrier; the PC defends, RESUME takes it out.
+    assert enc.pending_defenses  # parked at the DEFEND barrier
+    resolve_parked_defenses(
+        encounter=enc, snapshot=snap, ruleset=get_ruleset_module("fate"), rng=_FixedRng(0)
+    )
     assert enc.find_actor("Thug").withdrawn is True
     assert enc.resolved is True
     names = [s.name for s in exporter.get_finished_spans()]

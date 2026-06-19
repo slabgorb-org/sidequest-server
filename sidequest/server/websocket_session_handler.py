@@ -3481,6 +3481,28 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
     # Lore embedding — RAG retrieval (pre-turn) + worker dispatch (post-turn)
     # ------------------------------------------------------------------
 
+    async def _narrate_resolved_fate_exchange(self, sd: _SessionData, action: str) -> list[object]:
+        """Narrate a server-resolved Fate exchange as one cinematic beat
+        (ADR-148/149, Story 126-8 §3 step 5). The DEFEND barrier has filled and
+        ``resume_fate_exchange`` already applied every mechanic, so this is a
+        mechanical *replay* with no new player intent — exactly the dice-resolution
+        precedent (``DiceThrowHandler`` ``[BEAT_RESOLVED]``/``[DOGFIGHT_SHOT_RESOLVED]``).
+
+        We reuse the REAL narration seam rather than hand-rolling a NarrationMessage:
+        ``suppress_intent_router=True`` skips the pre-narrator pass (the outcome is
+        already applied — re-classifying would be the [COST-1] driver), and
+        :meth:`_execute_narration_turn` owns persistence, husk-reaping, and the
+        per-peer NARRATION fan-out. The narrator fires exactly once because the
+        caller (``FateThrowHandler._finish_defense``) reaches this method only when
+        ``defense.ledger_full`` first flips True — the RESOLVE floor is the caller's
+        ledger gate, not a double-invocation guard inside this seam.
+        """
+        lore_context = await self._retrieve_lore_for_turn(sd, action)
+        turn_context = _build_turn_context(sd, lore_context=lore_context, room=self._room)
+        return await self._execute_narration_turn(
+            sd, action, turn_context, suppress_intent_router=True
+        )
+
     async def _retrieve_lore_for_turn(self, sd: _SessionData, action: str) -> str | None:
         """Pre-turn lore RAG retrieval. Delegates to ``lore_embed.retrieve_for_turn``."""
         from sidequest.server.dispatch import lore_embed

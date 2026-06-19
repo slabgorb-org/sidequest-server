@@ -204,10 +204,17 @@ class FateRulesetModule(RulesetModule):
         rng: random.Random,
         invoke_bonus: int = 0,
         actor: str = "",
+        role: str = "action",
         _tracer: trace.Tracer | None = None,
     ) -> FateOutcome:
         """NPC path: roll 4dF server-side and emit the lie-detector span tagged
-        ``source=server_rolled`` (ADR-148)."""
+        ``source=server_rolled`` (ADR-148).
+
+        ``role`` (ADR-148/149, Story 126-8, AC-8) tags the span: ``"action"`` for a
+        proactive NPC action, ``"defense"`` when an NPC server-rolls a reactive
+        defense (``_roll_defense``) so the GM panel can tell an NPC defense from an
+        NPC action — the same distinction ``resolve_action_from_faces`` makes on the
+        player path."""
         outcome = resolve_action(
             skill_rating=skill_rating,
             opposition=opposition,
@@ -223,6 +230,7 @@ class FateRulesetModule(RulesetModule):
             opposition_kind=opposition.kind,
             shifts=outcome.shifts,
             tier=outcome.tier.value,
+            role=role,
             source="server_rolled",
             _tracer=_tracer,
         )
@@ -236,12 +244,16 @@ class FateRulesetModule(RulesetModule):
         faces: tuple[int, int, int, int],
         invoke_bonus: int = 0,
         actor: str = "",
+        role: str = "action",
         _tracer: trace.Tracer | None = None,
     ) -> FateOutcome:
         """Player path (ADR-148): resolve from the client's thrown dF faces — the
         faces ARE the roll, never an rng — and emit the same lie-detector span
         tagged ``source=player_thrown`` so the GM panel can confirm the dice came
-        from the client. The Fate ladder math is identical to the NPC path."""
+        from the client. The Fate ladder math is identical to the NPC path.
+
+        ``role`` (ADR-148/149, Story 126-8) tags the span: ``"action"`` for a
+        proactive throw, ``"defense"`` when a seated PC throws to defend."""
         outcome = resolve_action_from_faces(
             skill_rating=skill_rating,
             opposition=opposition,
@@ -257,6 +269,7 @@ class FateRulesetModule(RulesetModule):
             opposition_kind=opposition.kind,
             shifts=outcome.shifts,
             tier=outcome.tier.value,
+            role=role,
             source="player_thrown",
             _tracer=_tracer,
         )

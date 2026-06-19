@@ -25,6 +25,7 @@ from sidequest.game.creature_core import CreatureCore
 from sidequest.game.encounter import EncounterActor, EncounterMetric, StructuredEncounter
 from sidequest.game.fate_sheet import Aspect, FateSheet
 from sidequest.game.persistence import GameMode
+from sidequest.game.ruleset import get_ruleset_module
 from sidequest.game.session import GameSnapshot, Npc
 from sidequest.handlers.fate_action import HANDLER as FATE_HANDLER
 from sidequest.protocol.fate import FateActionPayload
@@ -32,6 +33,19 @@ from sidequest.protocol.messages import FateActionMessage, FateRollMessage
 from sidequest.server.session_handler import _State
 from sidequest.server.session_room import SessionRoom
 from sidequest.server.websocket_session_handler import WebSocketSessionHandler
+from tests._helpers.fate_fixtures import resolve_parked_defenses
+
+
+class _FixedRng:
+    """Deterministic 4dF stand-in: ``.choice`` returns ``value`` for every die.
+    ``_FixedRng(-1)`` rolls the surviving NPC defense to its floor (-4) at RESUME so
+    the depleted foe is taken out regardless of the handler's random proactive roll."""
+
+    def __init__(self, value: int = 0) -> None:
+        self._value = value
+
+    def choice(self, seq):
+        return self._value
 
 
 def _room_with_seat(player_id: str):
@@ -124,6 +138,15 @@ def test_handler_drives_dispatch_end_to_end():
     assert len(roll.dice) == 4 and all(d in (-1, 0, 1) for d in roll.dice)
     assert roll.ladder_name  # the player reads the adjective, not just the number
     assert roll.tier in ("Fail", "Tie", "Succeed", "SucceedWithStyle")
+    # Story 126-8: dispatch parks at the DEFEND barrier (the depleted foe's
+    # counter-swing targets the PC). Drive the PC defense + RESUME to reach the
+    # resolved end-to-end state. (NOTE: this FATE_ACTION handler does NOT itself emit
+    # the FATE_DEFEND_REQUEST on the park — unlike FateThrowHandler — see the
+    # session Delivery Findings; the dispatch+resume machinery it routes to works.)
+    assert enc.pending_defenses  # parked at the DEFEND barrier
+    resolve_parked_defenses(
+        encounter=enc, snapshot=snap, ruleset=get_ruleset_module("fate"), rng=_FixedRng(-1)
+    )
     assert enc.find_actor("Thug").withdrawn is True  # dispatch → exchange ran end-to-end
     assert enc.resolved is True
 

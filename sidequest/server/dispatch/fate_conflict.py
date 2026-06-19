@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from opentelemetry import trace
@@ -28,6 +28,7 @@ from sidequest.game.encounter import (
     EncounterActor,
     EncounterPhase,
     FateAction,
+    FatePendingDefense,
     FateSealedCommit,
     StructuredEncounter,
 )
@@ -37,11 +38,12 @@ from sidequest.game.ruleset.base import RulesetModule
 from sidequest.game.ruleset.fate import FateRulesetModule
 from sidequest.game.ruleset.fate_resolution import FateOutcome, Opposition
 from sidequest.game.session import GameSnapshot
-from sidequest.protocol.fate import FateActionPayload
+from sidequest.protocol.fate import FateActionPayload, FateDefendRequestPayload
 from sidequest.protocol.sanitize import sanitize_player_text
 from sidequest.telemetry.spans import (
     fate_aspect_created_span,
     fate_conceded_span,
+    fate_defend_phase_span,
     fate_exchange_committed_span,
     fate_exchange_order_span,
     fate_exchange_resolved_span,
@@ -270,6 +272,7 @@ def _roll_defense(
         opposition=Opposition(value=0, kind="active"),
         rng=rng,
         actor=defender,
+        role="defense",  # AC-8: an NPC's reactive defense is role=defense, not action
         _tracer=_tracer,
     )
     return outcome.ladder_total
@@ -353,6 +356,62 @@ def _seat_opponent_commits(
         )
 
 
+def _build_pending_defenses(
+    *,
+    encounter: StructuredEncounter,
+    snapshot: GameSnapshot,
+    round_number: int = 0,
+    _tracer: trace.Tracer | None = None,
+) -> list[FateDefendRequestPayload]:
+    """After REVEAL, park each sealed attack that targets a live seated PC (ADR-148/
+    149, Story 126-8 §5). Writes one ``FatePendingDefense`` per such attack and
+    returns the matching defend requests; emits ``fate.defend_phase(responded=False)``
+    per request. Returns ``[]`` when no PC is targeted — the caller then resolves
+    immediately (today's path). PC = player-side actor with a Fate sheet
+    (``_seated_pc_names``); NPC-on-NPC attacks and passive actions never park (the
+    NPC defender is server-rolled at RESOLVE)."""
+    mental = encounter.category == "social"
+    pc_names = _seated_pc_names(snapshot)
+    requests: list[FateDefendRequestPayload] = []
+    for commit in encounter.fate_commits:
+        if commit.action != "attack" or commit.target is None:
+            continue
+        if commit.target not in pc_names:
+            continue  # NPC defender — server rolls it at RESOLVE, no park
+        target_actor = encounter.find_actor(commit.target)
+        if target_actor is None or target_actor.withdrawn:
+            continue
+        request_id = f"def:{round_number}:{commit.actor}->{commit.target}"
+        encounter.pending_defenses.append(
+            FatePendingDefense(
+                request_id=request_id,
+                attacker=commit.actor,
+                defender=commit.target,
+                attack_skill=commit.skill,
+                attack_total=commit.ladder_total,
+                mental=mental,
+            )
+        )
+        fate_defend_phase_span(
+            defender=commit.target,
+            attacker=commit.actor,
+            request_id=request_id,
+            responded=False,
+            _tracer=_tracer,
+        )
+        requests.append(
+            FateDefendRequestPayload(
+                request_id=request_id,
+                defender=commit.target,
+                attacker=commit.actor,
+                attack_skill=commit.skill,
+                attack_total=commit.ladder_total,
+                mental=mental,
+            )
+        )
+    return requests
+
+
 def run_fate_exchange(
     *,
     encounter: StructuredEncounter,
@@ -395,6 +454,10 @@ def run_fate_exchange(
     )
 
     commits = {c.actor: c for c in encounter.fate_commits}
+    # ADR-148/149 (Story 126-8 §7): PC defenses recorded at the DEFEND barrier are
+    # read here instead of being server-rolled. Empty on the no-park path (today's
+    # behavior unchanged); filled on RESUME. Keyed by defender name.
+    recorded_defenses = {p.defender: p for p in encounter.pending_defenses}
     walked: list[str] = []
     hints: list[str] = []
 
@@ -420,6 +483,7 @@ def run_fate_exchange(
                 mental=mental,
                 rng=rng,
                 hints=hints,
+                recorded_defenses=recorded_defenses,
                 _tracer=_tracer,
             )
         elif commit.action == "create_advantage":
@@ -472,6 +536,34 @@ def run_fate_exchange(
     )
 
 
+def resume_fate_exchange(
+    *,
+    encounter: StructuredEncounter,
+    snapshot: GameSnapshot,
+    ruleset: FateRulesetModule,
+    round_number: int = 0,
+    rng: random.Random | None = None,
+    _tracer: trace.Tracer | None = None,
+) -> FateExchangeResult:
+    """RESUME a parked exchange once every pending defense is filled (ADR-148/149,
+    Story 126-8 §5,§7): walk it (PC defenses read from the ledger via
+    ``run_fate_exchange``'s ``recorded_defenses``; NPC defenses server-rolled), then
+    clear the ledger. The ``rng`` here only feeds NPC defenses / NPC seating that
+    survived to RESOLVE — PC defenses never touch it. Defaults to a fresh
+    ``random.Random()`` (production: NPC defenses are genuinely random); a test may
+    pass a seeded rng to make the surviving NPC rolls deterministic."""
+    result = run_fate_exchange(
+        encounter=encounter,
+        snapshot=snapshot,
+        ruleset=ruleset,
+        rng=rng if rng is not None else random.Random(),
+        round_number=round_number,
+        _tracer=_tracer,
+    )
+    encounter.pending_defenses.clear()
+    return result
+
+
 def _opposition_total(
     *,
     ruleset: FateRulesetModule,
@@ -504,6 +596,7 @@ def _resolve_attack(
     mental: bool,
     rng: random.Random,
     hints: list[str],
+    recorded_defenses: dict[str, FatePendingDefense] | None = None,
     _tracer: trace.Tracer | None = None,
 ) -> None:
     if commit.target is None:
@@ -511,14 +604,40 @@ def _resolve_attack(
     target_core = snapshot.find_creature_core(commit.target)
     if target_core is None or target_core.fate_sheet is None:
         raise FateConflictError(f"attack target {commit.target!r} has no Fate sheet to defend with")
-    defense_total = _roll_defense(
-        ruleset=ruleset,
-        snapshot=snapshot,
-        defender=commit.target,
-        mental=mental,
-        rng=rng,
-        _tracer=_tracer,
-    )
+    # ADR-148/149 (Story 126-8 §7): a PC defender's number comes from the DEFEND
+    # ledger (the player THREW it — physics-is-the-roll), never a server roll. An
+    # NPC defender (no ledger entry) is still server-rolled. A conceded entry folds
+    # the defender on their own terms before shift math.
+    recorded = (recorded_defenses or {}).get(commit.target)
+    if recorded is not None and recorded.conceded:
+        target_actor = encounter.find_actor(commit.target)
+        if target_actor is not None:
+            target_actor.withdrawn = True
+        fate_taken_out_span(actor=commit.target, by=commit.actor, shifts=0, _tracer=_tracer)
+        hints.append(f"{commit.target} concedes to {commit.actor} (fold at defend).")
+        _maybe_resolve_side_cleared(encounter)
+        return
+    if recorded is not None and recorded.defense_total is not None:
+        defense_total = recorded.defense_total  # PC defense from the client (ADR-148)
+    elif recorded is not None:
+        # A PC defender's entry reached RESOLVE unfilled (no defense_total, not
+        # conceded). The ledger_full gate in _finish_defense makes this unreachable
+        # in production; if it ever happens, FAIL LOUD rather than server-roll a
+        # player's defense — that is exactly the no-roll_4df-on-the-player-path
+        # backdoor 126-8 closes (No Silent Fallbacks).
+        raise FateConflictError(
+            f"resolve reached an unfilled PC defense for {commit.target!r} — refusing "
+            "to server-roll a player's defense (No Silent Fallbacks)"
+        )
+    else:
+        defense_total = _roll_defense(  # NPC defender (no ledger entry) — server-rolled
+            ruleset=ruleset,
+            snapshot=snapshot,
+            defender=commit.target,
+            mental=mental,
+            rng=rng,
+            _tracer=_tracer,
+        )
     shifts = commit.ladder_total - defense_total
     track = "mental" if mental else "physical"
     if shifts <= 0:
@@ -744,6 +863,24 @@ class FateDispatchResult:
     #: accept, -1 on a compel refuse, 0 otherwise. Lets the player surface show the
     #: mechanical outcome inline (Sebastien/Jade legibility mandate).
     fate_point_delta: int = 0
+    #: ADR-148/149 (Story 126-8 §5): when the round PARKS at the DEFEND barrier, the
+    #: requests to emit — one per incoming attack on a PC. Empty unless awaiting_defense.
+    defend_requests: list[FateDefendRequestPayload] = field(default_factory=list)
+    #: True when the exchange is PARKED at the DEFEND barrier — the caller emits
+    #: defend_requests and does NOT narrate (no narration until RESOLVE).
+    awaiting_defense: bool = False
+
+
+@dataclass(frozen=True)
+class FateDefenseResult:
+    """Outcome of recording one PC defense at the DEFEND barrier (ADR-148/149,
+    Story 126-8 §5). ``ledger_full`` is True when every pending_defenses entry is
+    now filled (defense_total set or conceded) — the caller then RESUMEs the
+    exchange. ``defense_roll`` is None on a concession (no throw)."""
+
+    defense_roll: FateOutcome | None
+    ledger_full: bool
+    conceded: bool
 
 
 def dispatch_fate_action(
@@ -965,6 +1102,7 @@ def dispatch_fate_action(
             # Lazy import breaks the fate_conflict <-> fate_contest cycle.
             from sidequest.server.dispatch.fate_contest import run_fate_contest_exchange
 
+            # A Contest has no attacks, so it never parks at a DEFEND barrier.
             result = run_fate_contest_exchange(
                 encounter=encounter,
                 snapshot=snapshot,
@@ -973,14 +1111,124 @@ def dispatch_fate_action(
                 round_number=round_number,
                 _tracer=_tracer,
             )
-        else:
-            result = run_fate_exchange(
-                encounter=encounter,
-                snapshot=snapshot,
-                ruleset=ruleset,
-                rng=rng,
-                round_number=round_number,
-                _tracer=_tracer,
+            return FateDispatchResult(
+                commitment_pending=False, exchange=result, action_roll=outcome
             )
+
+        # REVEAL: seat + lock the NPC attacks NOW (their 4dF is rolled here and
+        # never re-rolled across the suspend), then decide park-or-resolve.
+        _seat_opponent_commits(
+            encounter=encounter,
+            snapshot=snapshot,
+            ruleset=ruleset,
+            mental=encounter.category == "social",
+            rng=rng,
+            _tracer=_tracer,
+        )
+        defend_requests = _build_pending_defenses(
+            encounter=encounter,
+            snapshot=snapshot,
+            round_number=round_number,
+            _tracer=_tracer,
+        )
+        if defend_requests:
+            # PARK at the DEFEND barrier (ADR-148/149 §5): a clean persisted
+            # checkpoint. No walk, no narration yet — the caller emits the requests
+            # and waits for the PCs' defenses.
+            return FateDispatchResult(
+                commitment_pending=False,
+                exchange=None,
+                action_roll=outcome,
+                defend_requests=defend_requests,
+                awaiting_defense=True,
+            )
+        # No PC targeted → resolve immediately (today's single-call path).
+        # run_fate_exchange re-runs _seat_opponent_commits, but already-committed
+        # opponents are skipped, so the NPC dice locked at REVEAL are not re-rolled.
+        result = run_fate_exchange(
+            encounter=encounter,
+            snapshot=snapshot,
+            ruleset=ruleset,
+            rng=rng,
+            round_number=round_number,
+            _tracer=_tracer,
+        )
         return FateDispatchResult(commitment_pending=False, exchange=result, action_roll=outcome)
     return FateDispatchResult(commitment_pending=True, exchange=None, action_roll=outcome)
+
+
+def dispatch_fate_defense(
+    *,
+    encounter: StructuredEncounter,
+    snapshot: GameSnapshot,
+    ruleset: FateRulesetModule,
+    actor_name: str,
+    request_id: str,
+    skill: str,
+    thrown_faces: tuple[int, int, int, int],
+    conceded: bool = False,
+    _tracer: trace.Tracer | None = None,
+) -> FateDefenseResult:
+    """Record a PC's interactive defense onto the parked exchange (ADR-148/149,
+    Story 126-8 §5,§7).
+
+    Player path: the defender's 4dF faces ARE the roll (ADR-148) — resolved via
+    ``resolve_action_from_faces`` (``role="defense"``), NEVER ``roll_4df``. The
+    chosen ``skill`` is free-pick (the Zork Problem). On concede, the entry is
+    flagged and no roll is recorded. Fails loud on an unknown / already-filled
+    ``request_id``, or when the throw comes from a PC who is NOT the request's
+    defender (No Silent Fallbacks). Returns ``ledger_full`` so the caller knows
+    when to RESUME."""
+    entry = next((p for p in encounter.pending_defenses if p.request_id == request_id), None)
+    if entry is None:
+        raise FateConflictError(
+            f"FATE_THROW(defend) for unknown request_id {request_id!r} — "
+            "no pending defense awaits it (No Silent Fallbacks)"
+        )
+    # ADR-119 authorization: the throw must come from the PC who was actually
+    # attacked. ``request_id`` is client-supplied AND derivable
+    # (``def:{round}:{attacker}->{target}``, broadcast to the whole table), so
+    # without this guard a seated player could answer ANOTHER PC's defense with
+    # their own dice + skill, filling and locking the real defender's entry. The
+    # sibling FATE_THROW handler already rejects player_id spoofing; the defend
+    # path must enforce the same per-PC authorization (fail loud, never silently
+    # record a defense for the wrong actor).
+    if entry.defender != actor_name:
+        raise FateConflictError(
+            f"FATE_THROW(defend) for {request_id!r} from {actor_name!r}, but that "
+            f"defense belongs to {entry.defender!r} — a player may only answer their "
+            "own defend request (authorization)"
+        )
+    if entry.defense_total is not None or entry.conceded:
+        raise FateConflictError(
+            f"defense for {request_id!r} already recorded — one defense per attack"
+        )
+
+    if conceded:
+        entry.conceded = True
+        outcome = None
+    else:
+        core = snapshot.find_creature_core(actor_name)
+        rating = core.fate_sheet.skills.get(skill, 0) if core and core.fate_sheet else 0
+        outcome = ruleset.resolve_action_from_faces(
+            skill_rating=rating,
+            opposition=Opposition(value=0, kind="active"),
+            faces=thrown_faces,
+            actor=actor_name,
+            role="defense",
+            _tracer=_tracer,
+        )
+        entry.defense_total = outcome.ladder_total
+
+    fate_defend_phase_span(
+        defender=entry.defender,
+        attacker=entry.attacker,
+        request_id=request_id,
+        responded=True,
+        conceded=entry.conceded,
+        _tracer=_tracer,
+    )
+    ledger_full = all(
+        (p.defense_total is not None or p.conceded) for p in encounter.pending_defenses
+    )
+    return FateDefenseResult(defense_roll=outcome, ledger_full=ledger_full, conceded=entry.conceded)

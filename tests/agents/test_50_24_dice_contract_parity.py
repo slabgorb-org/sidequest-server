@@ -40,24 +40,26 @@ _SELF_GATING_LOOPHOLE = "When the prose hinges on an uncertain outcome the engin
 
 
 def _dice_section() -> str:
-    """Slice the '7. DICE RESOLUTION' category out of the SDK prompt.
+    """Slice the dice-obligation region out of the SDK prompt.
 
-    The eight tool-owned categories are numbered "1." … "8.". §7 runs
-    from the '7. DICE RESOLUTION' header to the '8. SCENARIO-CLUE'
-    header. Asserting against this slice (not the whole doc) is what
-    makes the MUST/MANDATORY assertion meaningful — the rest of the
-    document is saturated with MUST language for the other categories.
+    Story 151-6 (ADR-150 step 5) shrank ``output_only.md`` from the eight
+    numbered "1." … "8." tool-owned categories to a compact bullet brief, so
+    the old "7. DICE RESOLUTION" → "8. SCENARIO-CLUE" header anchors are gone.
+    The dice obligation now lives in the ``- DICE —`` bullet plus the standalone
+    ``ANTI-FABRICATION`` paragraph that follows the bullet list, ending at the
+    ``PART 2`` boundary. Slicing that region (not the whole doc) keeps the
+    MUST/MANDATORY assertion meaningful — the rest of the brief still carries
+    MUST language for the other tool categories (``apply_status``/``tick_tropes``).
     """
     text = NARRATOR_OUTPUT_ONLY
-    start = text.find("7. DICE RESOLUTION")
+    start = text.find("- DICE —")
     assert start != -1, (
-        "Could not locate the '7. DICE RESOLUTION' header in "
-        "NARRATOR_OUTPUT_ONLY — the section structure changed; "
-        "update this slice helper."
+        "Could not locate the '- DICE —' bullet in NARRATOR_OUTPUT_ONLY — "
+        "the section structure changed; update this slice helper."
     )
-    end = text.find("8. SCENARIO-CLUE", start)
+    end = text.find("PART 2", start)
     assert end != -1, (
-        "Could not locate the '8. SCENARIO-CLUE' header after §7 — "
+        "Could not locate the 'PART 2' boundary after the dice bullet — "
         "the section structure changed; update this slice helper."
     )
     return text[start:end]

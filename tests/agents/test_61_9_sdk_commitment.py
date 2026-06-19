@@ -197,14 +197,19 @@ class TestConstantAndFileRename:
 
     def test_narrator_output_only_contains_sdk_tool_use_directive(self) -> None:
         """Post-rename, ``NARRATOR_OUTPUT_ONLY`` carries SDK tool-use prose,
-        not the legacy full-sidecar prose. Sentinel phrase ``tools`` paired
-        with a tool name (``begin_confrontation``) identifies the SDK file.
-        Phrasing-stable enough to survive minor compaction in 61-12."""
+        not the legacy full-sidecar prose. Sentinel = a live tool name
+        (``advance_confrontation``) identifies the SDK file.
+
+        Story 151-6 re-pointed this sentinel off ``begin_confrontation`` — a
+        tool RETIRED in 59-4 (ADR-113) that survived only as a "the
+        begin_confrontation tool was retired" aside in the pre-shrink recap.
+        The 151-6 shrink removed that recap, so the brittle sentinel had to
+        move to a tool the brief actually still routes to."""
         from sidequest.agents.narrator_prompts import NARRATOR_OUTPUT_ONLY
 
-        assert "begin_confrontation" in NARRATOR_OUTPUT_ONLY, (
+        assert "advance_confrontation" in NARRATOR_OUTPUT_ONLY, (
             "Post-rename, NARRATOR_OUTPUT_ONLY must be the SDK prose. The "
-            "SDK prose references the begin_confrontation tool name; the "
+            "SDK prose references the advance_confrontation tool name; the "
             "legacy prose does not. Sentinel check for the file swap."
         )
 
@@ -251,12 +256,16 @@ class TestBuildOutputFormatSignature:
         accidental case where Dev removes the kwarg but leaves the
         gating branch returning legacy prose by default.
 
-        Sentinel: ``begin_confrontation`` appears in the SDK prose (it
+        Sentinel: ``advance_confrontation`` appears in the SDK prose (it
         references the tool name) and NOT in the legacy prose (which
         instructs full-sidecar emit, not tool-routing). After Dev's
         rename, ``NARRATOR_OUTPUT_ONLY`` is the SDK prose so the body
         carries the sentinel; today the default is legacy prose so it
         doesn't.
+
+        Story 151-6 re-pointed this off the retired ``begin_confrontation``
+        (see the sibling test above) to ``advance_confrontation``, which the
+        shrunk brief still routes to.
         """
         import sidequest.agents.tools  # noqa: F401 — wires tool registry
         from sidequest.agents.narrator import NarratorAgent
@@ -272,9 +281,9 @@ class TestBuildOutputFormatSignature:
             f"Expected exactly one narrator_output_only section, got {len(match)}"
         )
         body = match[0].content
-        assert "begin_confrontation" in body, (
+        assert "advance_confrontation" in body, (
             "AC-2: with no kwarg, build_output_format must register SDK prose. "
-            "SDK prose references tool names (e.g. begin_confrontation); "
+            "SDK prose references tool names (e.g. advance_confrontation); "
             "legacy prose does not. The default branch must return the SDK "
             "prose, not silently fall back to legacy."
         )

@@ -75,10 +75,13 @@ async def test_pc_at_zero_edge_injects_paired_directives_in_prompt():
         "swing sword",
         context,
     )
-    assert "must_narrate" in prompt
-    assert "Render the death" in prompt
-    assert "must_not_narrate" in prompt
-    assert "narrate survival" in prompt
+    # Directives land as player-safe in-fiction imperatives, NOT the raw
+    # NarratorDirectiveKind token (2026-06-19 must_not_narrate leak fix).
+    assert "Bring into the scene" in prompt  # must_narrate imperative
+    assert "Render the death" in prompt  # must_narrate payload preserved
+    assert "Keep out of the fiction" in prompt  # must_not_narrate imperative
+    assert "narrate survival" in prompt  # must_not_narrate payload preserved
+    assert "[must_not_narrate]" not in prompt  # the leaky bracket token is gone
 
 
 async def test_pc_above_zero_edge_injects_no_lethality_directives():

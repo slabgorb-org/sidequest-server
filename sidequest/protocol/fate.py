@@ -109,6 +109,11 @@ class FateThrowPayload(ProtocolBase):
         # are present; this adds the value-range check.
         if self.concede and self.action != "defend":
             raise ValueError("concede is only valid on a defend throw")
+        if self.concede and self.face is not None:
+            # A concession FOLDS without rolling, so it carries no dice. Faces
+            # alongside a concede are contradictory and would be silently discarded
+            # by the dispatch concede branch (No Silent Fallbacks) — reject loud.
+            raise ValueError("a concede throw carries no dice faces")
         if self.face is None:
             if not self.concede:
                 raise ValueError("a non-concede throw must carry four dF faces")

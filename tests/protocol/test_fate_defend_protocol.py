@@ -157,3 +157,22 @@ def test_fate_throw_non_concede_defend_still_requires_faces():
             throw_params=_throw_params(),
             # no `face` and no `concede` → invalid
         )
+
+
+def test_fate_throw_defend_concede_rejects_faces():
+    # AC-1 / No Silent Fallbacks (lang-review #1, #11): a concession FOLDS without
+    # rolling, so it carries NO dice. A payload that sets concede=True AND supplies
+    # `face` is contradictory: the faces would be silently DISCARDED by the concede
+    # branch downstream (dispatch_fate_defense sets outcome=None and never reads
+    # thrown_faces), so a client could animate a 4dF tumble while the server records
+    # a fold — the narration-vs-mechanics divergence the OTEL lie-detector exists to
+    # catch. The validator fails loud on every other contradiction (missing faces,
+    # out-of-range faces, concede-on-non-defend); this closes the one gap.
+    with pytest.raises(ValidationError):
+        FateThrowPayload(
+            request_id="d1",
+            action="defend",
+            concede=True,
+            throw_params=_throw_params(),
+            face=(1, 1, 1, 1),  # a concede carries no dice faces — contradictory
+        )

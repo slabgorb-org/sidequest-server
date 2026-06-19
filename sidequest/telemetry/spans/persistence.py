@@ -194,3 +194,34 @@ def persistence_load_span(
         tracer_override=_tracer,
     ) as span:
         yield span
+
+
+# ---------------------------------------------------------------------------
+# turn_telemetry retention prune — Story 126-22. Unlike projection_cache,
+# turn_telemetry is forensic data (ADR-124), not a rebuildable cache, so it
+# gets a keep-last-N-rounds retention rather than eviction. The prune emits
+# rows_pruned + session_id so the save-DB cleanup is observable, not a silent
+# table shrink that could quietly destroy forensic history.
+# ---------------------------------------------------------------------------
+SPAN_TURN_TELEMETRY_PRUNE = "turn_telemetry.prune"
+SPAN_ROUTES[SPAN_TURN_TELEMETRY_PRUNE] = SpanRoute(
+    event_type="state_transition",
+    component="persistence",
+    extract=lambda span: {
+        "field": "turn_telemetry.prune",
+        "session_id": (span.attributes or {}).get("session_id", 0),
+        "rows_pruned": (span.attributes or {}).get("rows_pruned", 0),
+    },
+)
+
+
+@contextmanager
+def turn_telemetry_prune_span(
+    *, session_id: int, _tracer: trace.Tracer | None = None
+) -> Iterator[trace.Span]:
+    with Span.open(
+        SPAN_TURN_TELEMETRY_PRUNE,
+        {"session_id": session_id},
+        tracer_override=_tracer,
+    ) as span:
+        yield span

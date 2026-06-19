@@ -31,7 +31,12 @@ from sidequest.game.persistence import SavedSession
 from sidequest.game.pg import sessions
 from sidequest.game.pg._conn import session_tx
 from sidequest.game.pg.asset_ledger import PgAssetLedgerStore
-from sidequest.game.pg.events import PgEventStore, PgSaveTransaction
+from sidequest.game.pg.events import (
+    PROJECTION_CACHE_KEEP_LAST_PER_PLAYER,
+    TURN_TELEMETRY_KEEP_LAST_ROUNDS,
+    PgEventStore,
+    PgSaveTransaction,
+)
 from sidequest.game.pg.lore import PgLoreStore
 from sidequest.game.pg.narrative import BackfillRow, PgNarrativeStore
 from sidequest.game.pg.promotions import PgLocationPromotionRow, PgPromotionStore
@@ -147,6 +152,13 @@ class PgSaveRepository:
 
     def save(self, snapshot: GameSnapshot) -> None:
         self._snapshot.save_snapshot(snapshot)
+        # Story 126-22: bound the save-DB on the routine persistence path
+        # (per-turn + on disconnect) so projection_cache / turn_telemetry do
+        # not re-bloat. Both prunes are session-scoped and emit OTEL spans.
+        self._events.prune_projection_cache(
+            keep_last_per_player=PROJECTION_CACHE_KEEP_LAST_PER_PLAYER
+        )
+        self._events.prune_turn_telemetry(keep_last_rounds=TURN_TELEMETRY_KEEP_LAST_ROUNDS)
 
     def load(self) -> SavedSession | None:
         return self._snapshot.load_snapshot()

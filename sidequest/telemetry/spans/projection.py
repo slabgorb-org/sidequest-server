@@ -83,3 +83,35 @@ def projection_cache_lazy_fill_span(
         tracer_override=_tracer,
     ) as span:
         yield span
+
+
+# ---------------------------------------------------------------------------
+# Cache retention prune — Story 126-22. projection_cache is a pure cache (it
+# lazy-fills from the event log on reconnect), so a per-(session, player)
+# keep-last-N window is bounded and recoverable. The GM panel / save-forensics
+# must SEE the prune fire (rows_pruned + session_id) rather than the table
+# silently shrinking — otherwise an over- or under-aggressive bound is
+# invisible (CLAUDE.md OTEL Observability Principle).
+# ---------------------------------------------------------------------------
+SPAN_PROJECTION_CACHE_PRUNE = "projection.cache.prune"
+SPAN_ROUTES[SPAN_PROJECTION_CACHE_PRUNE] = SpanRoute(
+    event_type="state_transition",
+    component="projection",
+    extract=lambda span: {
+        "field": "projection.cache.prune",
+        "session_id": (span.attributes or {}).get("session_id", 0),
+        "rows_pruned": (span.attributes or {}).get("rows_pruned", 0),
+    },
+)
+
+
+@contextmanager
+def projection_cache_prune_span(
+    *, session_id: int, _tracer: trace.Tracer | None = None
+) -> Iterator[trace.Span]:
+    with Span.open(
+        SPAN_PROJECTION_CACHE_PRUNE,
+        {"session_id": session_id},
+        tracer_override=_tracer,
+    ) as span:
+        yield span

@@ -106,34 +106,19 @@ DEFERRED_FIELDS: tuple[str, ...] = (
 # ---------------------------------------------------------------------------
 
 
-def _core(name: str, *, gold: int = 0, items: list[dict] | None = None) -> CreatureCore:
+def _core(name: str, *, gold: int = 0) -> CreatureCore:
     inv = Inventory()
     inv.gold = gold
-    if items:
-        inv.items = list(items)
     return CreatureCore(name=name, description="X.", personality="Y.", inventory=inv)
 
 
-def _pc(name: str, *, gold: int = 0, items: list[dict] | None = None) -> Character:
+def _pc(name: str, *, gold: int = 0) -> Character:
     return Character(
-        core=_core(name, gold=gold, items=items),
+        core=_core(name, gold=gold),
         backstory="A wanderer.",
         char_class="adventurer",
         race="human",
     )
-
-
-def _item(name: str, *, category: str = "tool", state: str = "Carried") -> dict:
-    slug = name.lower().replace(" ", "_")
-    return {
-        "id": f"narrator:{slug}",
-        "name": name,
-        "description": f"{name}, on hand.",
-        "category": category,
-        "state": state,
-        "equipped": False,
-        "quantity": 1,
-    }
 
 
 class _RecordingHub:

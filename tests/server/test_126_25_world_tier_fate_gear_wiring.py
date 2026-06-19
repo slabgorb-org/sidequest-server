@@ -72,9 +72,7 @@ def _gain(snap: Any, pack: Any, actor_name: str, items_gained: list[dict[str, An
         narration="You lift them from the dead witch's feet; the silver catches the light.",
         items_gained=items_gained,
     )
-    _apply_narration_result_to_snapshot(
-        snap, result, actor_name, pack=pack, room=room_for(snap)
-    )
+    _apply_narration_result_to_snapshot(snap, result, actor_name, pack=pack, room=room_for(snap))
 
 
 @pytest.fixture
@@ -120,11 +118,16 @@ def test_world_tier_gear_promotes_to_invokable_aspect_when_world_active(
     shoes = next((it for it in sam.core.inventory.items if it.get("name") == _GEAR_NAME), None)
     assert shoes is not None and shoes.get("promoted") is True
 
-    # 2) the world-authored aspect landed on the sheet, back-linked to the item id
+    # 2) the world-authored aspect landed on the sheet, back-linked to the
+    #    INVENTORY ITEM id (the promoter's contract: source_gear == the gained
+    #    item's id). The match here is by case-folded name — the realistic
+    #    placement-content path — so the item id is the name-derived id minted by
+    #    `_narrator_item_dict`, not the GearDef catalog id. Assert the back-link is
+    #    consistent with the actual stored item rather than a hardcoded literal.
     sheet = sam.core.fate_sheet
     aspect = next((a for a in sheet.aspects if a.text == _ASPECT), None)
     assert aspect is not None
-    assert aspect.source_gear == f"narrator:{_GEAR_ID}"
+    assert aspect.source_gear == shoes["id"]
 
     # 3) it reaches the player-facing FATE_STATE projection
     payload = build_fate_state_payload(snap)

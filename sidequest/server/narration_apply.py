@@ -4961,10 +4961,14 @@ def _apply_narration_result_to_snapshot(
             # permissions only; matched-gear stunts are deferred (counted in the
             # span, not applied). The promoter never touches refresh/fate_points.
             if recipient_char.core.fate_sheet is not None:
+                from sidequest.game.ruleset.fate_gear import resolve_fate_gear_catalog
                 from sidequest.game.ruleset.fate_item_promotion import promote_gained_item
 
-                _fate_cfg = pack.rules.fate if pack is not None else None
-                _gear_defs = list(_fate_cfg.gear_catalog) if _fate_cfg is not None else []
+                # World-first effective Fate gear (story 126-25): the genre catalog
+                # UNIONED with the active world's gear by id (world wins), so a
+                # world-specific found-item (the Oz silver shoes) is in scope when
+                # that world is active. Genre-only when no world gear (ADR-145 §D3).
+                _gear_defs = resolve_fate_gear_catalog(pack, snapshot.world_slug)
                 _promo = promote_gained_item(
                     sheet=recipient_char.core.fate_sheet,
                     item_id=str(item_dict["id"]),

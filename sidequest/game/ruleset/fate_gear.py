@@ -14,21 +14,27 @@ The whole balance story (SOUL → Bind the Ruleset, Don't Balance It):
   - stunt-gear MUST debit refresh once the free-stunt allotment is exhausted.
 
 ``compile_gear_onto_sheet`` does the chargen materialization + refresh invariant +
-``fate.gear_compiled`` span. Gear is loaded at the **genre tier only** today
-(``loader._load_gear`` → ``GenrePack.gear`` → ``FateConfig.gear_catalog``); a
-world-tier ``gear.yaml`` merge (the ADR-145 §D3 paradigm-neutral by-id merge the
-inventory path uses) is a future story — no pack authors world-distinct gear yet,
-and the design defers the one example (Oz's silver shoes) to mid-game placement."""
+``fate.gear_compiled`` span. Genre-tier gear loads via ``loader._load_gear`` →
+``GenrePack.gear`` → ``FateConfig.gear_catalog``. World-tier gear
+(``worlds/<slug>/gear.yaml`` → ``World.gear``) loads alongside it (story 126-25);
+at runtime ``resolve_fate_gear_catalog`` UNIONS the two by id (world wins — the
+ADR-145 §D3 paradigm-neutral by-id merge the inventory path uses) so the #945
+item-promoter sees a world's found-items (e.g. Oz's silver shoes) when that world
+is active."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from opentelemetry import trace
 
 from sidequest.game.fate_sheet import Aspect, FateSheet, Stunt
 from sidequest.genre.models.inventory import GearDef
 from sidequest.telemetry.spans.fate import fate_gear_compiled_span
+
+if TYPE_CHECKING:
+    from sidequest.genre.models.pack import GenrePack
 
 #: SRD floor — a character's refresh can never drop below this, no matter how
 #: much stunt-gear an archetype bundles.
@@ -131,4 +137,72 @@ def compile_gear_onto_sheet(
         refresh_before=base_refresh,
         refresh_after=refresh_after,
         refresh_debited=refresh_debited,
+    )
+
+
+def resolve_fate_gear_catalog(pack: GenrePack | None, world_slug: str | None) -> list[GearDef]:
+    """Resolve the effective Fate gear catalog for the active world (story 126-25).
+
+    The genre-tier ``rules.fate.gear_catalog`` UNIONED with the active world's
+    ``World.gear`` by id — world wins on a shared id (ADR-145 §D3, the same by-id
+    rule ``resolve_inventory`` applies to the item catalog). A falsy/unknown world,
+    or a world that authors no gear, resolves to the pure genre baseline. World
+    gear loads regardless of ruleset; this merge is the fate-gated step (the only
+    caller invokes it for a character that has a FateSheet). The runtime sibling of
+    the chargen-tier ``compile_gear_onto_sheet`` lookup — both read GearDefs, but
+    the promoter (#945) needs the WORLD's found-items in scope when that world is
+    active, which the genre-only ``gear_catalog`` could never supply."""
+    fate_cfg = pack.rules.fate if pack is not None else None
+    genre_gear: list[GearDef] = list(fate_cfg.gear_catalog) if fate_cfg is not None else []
+
+    world = pack.worlds.get(world_slug) if (pack is not None and world_slug) else None
+    world_gear: list[GearDef] = list(getattr(world, "gear", []) or []) if world is not None else []
+    if not world_gear:
+        # Pure genre baseline (no world, unknown world, or world ships no gear).
+        return genre_gear
+
+    merged_by_id: dict[str, GearDef] = {g.id: g for g in genre_gear}
+    overridden = sum(1 for g in world_gear if g.id in merged_by_id)
+    for world_def in world_gear:
+        merged_by_id[world_def.id] = world_def  # world wins on a shared id
+    merged = list(merged_by_id.values())
+
+    _emit_fate_gear_merged(
+        world_slug=world_slug or "",
+        genre_count=len(genre_gear),
+        world_gear_ids=[g.id for g in world_gear],
+        overridden=overridden,
+        merged_count=len(merged),
+    )
+    return merged
+
+
+def _emit_fate_gear_merged(
+    *,
+    world_slug: str,
+    genre_count: int,
+    world_gear_ids: list[str],
+    overridden: int,
+    merged_count: int,
+) -> None:
+    """Emit a ``state_transition`` watcher event for the world∪genre Fate gear
+    merge (OTEL Observability Principle + ADR-145 §D3): the GM panel can confirm a
+    world's authored gear was WIRED into the effective catalog — naming the active
+    world and the world gear ids that merged — not merely authored. Mirrors
+    ``inventory_resolve._emit_inventory_merged``."""
+    from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
+
+    _watcher_publish(
+        "state_transition",
+        {
+            "field": "resolved_fate_gear",
+            "op": "merged",
+            "world_slug": world_slug,
+            "tier": "world",
+            "genre_count": genre_count,
+            "world_gear_ids": world_gear_ids,
+            "overridden": overridden,
+            "merged_count": merged_count,
+        },
+        component="genre",
     )

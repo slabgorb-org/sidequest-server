@@ -101,6 +101,7 @@ from sidequest.server.intent_router_pass import execute_intent_router_pre_narrat
 from sidequest.server.narration_apply import (
     _apply_narration_result_to_snapshot,
     _handshake_resolved_tropes,
+    merge_sidecar_extraction_transactional,
 )
 from sidequest.server.session_helpers import (
     _build_turn_context,
@@ -1142,6 +1143,26 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         # None for non-dungeon worlds.
                         lookahead_handle=sd.lookahead_handle,
                     )
+                    # Sidecar cutover I (Story 151-4, ADR-150 step 4): the
+                    # post-narration extractor now runs BEFORE apply so its seven
+                    # transactional fields (items×4, gold, companions×2) — retired
+                    # from the narrator game_patch in
+                    # ``orchestrator.extract_structured_from_response`` — are merged
+                    # onto the result and applied through the UNCHANGED apply
+                    # machinery (recipient attribution, gold clamp, companion dedup,
+                    # the inventory/party catch-loops). Non-fatal by contract: the
+                    # runner never raises into turn delivery (catch-loops are the
+                    # net) and emits the sidecar_extraction.* OTEL (run / per-field /
+                    # mismatch). On failure / empty narration it returns None and the
+                    # merge is skipped — the transactional fields stay empty (a loud
+                    # span fired), never a silent fall-back to the retired game_patch.
+                    sidecar_extraction = await run_sidecar_extraction_watcher(
+                        narration=getattr(result, "narration", "") or "",
+                        snapshot=snapshot,
+                        llm=build_sidecar_extractor_llm(session_id=seed_session_id),
+                    )
+                    if sidecar_extraction is not None:
+                        merge_sidecar_extraction_transactional(result, sidecar_extraction)
                     applied_outcome = _apply_narration_result_to_snapshot(
                         snapshot,
                         result,
@@ -1210,20 +1231,6 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         narration=getattr(result, "narration", "") or "",
                         package=turn_context.dispatch_package,
                         snapshot=snapshot,
-                    )
-
-                    # Sidecar extractor SHADOW pass (Story 151-2, ADR-150 step 2):
-                    # a post-narration Haiku emit_tool pass reads the prose and
-                    # derives the eleven bucket-B sidecar fields, emitting
-                    # sidecar_extraction.* OTEL (run / per-field / mismatch) so the
-                    # lie-detector watches from day one. It APPLIES NOTHING this
-                    # story — field cutover is 151-4 / 151-5. Non-fatal by contract:
-                    # the runner never raises into turn delivery (catch-loops are
-                    # the net), exactly like the sibling watchers above.
-                    await run_sidecar_extraction_watcher(
-                        narration=getattr(result, "narration", "") or "",
-                        snapshot=snapshot,
-                        llm=build_sidecar_extractor_llm(session_id=seed_session_id),
                     )
 
                     encounter_resolved_this_turn = encounter_unresolved_before and (

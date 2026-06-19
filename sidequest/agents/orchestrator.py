@@ -1339,10 +1339,19 @@ def extract_structured_from_response(raw: str) -> dict[str, Any]:
     return {
         "prose": prose,
         "footnotes": patch.get("footnotes", []),
-        "items_gained": patch.get("items_gained", []),
-        "items_lost": patch.get("items_lost", []),
-        "items_discarded": patch.get("items_discarded", []),
-        "items_consumed": patch.get("items_consumed", []),
+        # Story 151-4 (ADR-150 step 4): the seven TRANSACTIONAL fields (items×4,
+        # gold_change, companions×2) are RETIRED from the narrator game_patch.
+        # The post-narration sidecar extractor produces them and
+        # ``narration_apply.merge_sidecar_extraction_transactional`` sources them
+        # onto the result before apply. Surface EMPTY here — do NOT read the
+        # game_patch even if a (non-compliant) narrator still emits them (the
+        # extraction is the sole source; mirrors action_rewrite retirement, 151-3).
+        # Keys stay present (empty) so the shared assembler's subscript access is
+        # safe. npcs_present + the cosmetic fields below are 151-5 — still sourced.
+        "items_gained": [],
+        "items_lost": [],
+        "items_discarded": [],
+        "items_consumed": [],
         "npcs_present": patch.get("npcs_present", []),
         "visual_scene": patch.get("visual_scene"),
         "scene_mood": patch.get("scene_mood", patch.get("mood")),
@@ -1360,7 +1369,7 @@ def extract_structured_from_response(raw: str) -> dict[str, Any]:
             for d in patch.get("affinity_progress", [])
             if isinstance(d, dict) and "name" in d
         ],
-        "gold_change": patch.get("gold_change"),
+        "gold_change": None,  # 151-4: retired from game_patch (extractor-sourced)
         "lore_established": patch.get("lore_established"),
         "status_changes": patch.get("status_changes", []),
         # Magic system (Coyote Star iter 3 — Task 3.3). Forwarded as a
@@ -1369,8 +1378,9 @@ def extract_structured_from_response(raw: str) -> dict[str, Any]:
         # raised at the apply seam (where ``MagicWorkingParseError`` is
         # defined) rather than during extraction.
         "magic_working": patch.get("magic_working"),
-        "companions_added": [d for d in patch.get("companions_added", []) if isinstance(d, dict)],
-        "companions_dismissed": [str(n) for n in patch.get("companions_dismissed", []) if n],
+        # 151-4: companions retired from game_patch (extractor-sourced, empty here).
+        "companions_added": [],
+        "companions_dismissed": [],
         # Story 50-4: Coerce to non-negative int. Anything else (string, float,
         # negative, missing) maps to 0 — same silent-drop pattern as items.
         "days_advanced": (

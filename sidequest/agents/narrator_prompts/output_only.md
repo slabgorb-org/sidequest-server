@@ -117,39 +117,6 @@ The fields below have NO tool. They are parsed from the game_patch sidecar
 on this path. Emit ONLY these in PART 2; never as tool calls. Only include
 fields that changed.
 
-Items — four arrays, same entry shape, picked by transaction kind:
-  {"name": "<short>", "description": "<one-sentence>", "category": "weapon|armor|tool|consumable|quest|treasure|misc", "recipient": "<exact PC name>",
-   "grants_aspect": "<items_gained only, optional — see below>"}
-- items_gained — acquired, picked up, found, looted, received, given.
-  `grants_aspect` (optional): for a **genuinely significant** found item only (a named
-  magic item, a relic, a thing the story will lean on), a short Fate aspect phrase the
-  player can invoke — e.g. `"The Silver Shoes of the Dead Witch"`. Leave it OFF for
-  mundane gear (a rope, a banjo, a torch). This grants narrative weight, never a free
-  mechanical bonus: invoking it still costs the player a fate point.
-- items_lost — given away, traded, stolen, destroyed; the item is GONE.
-- items_discarded — dropped, abandoned, set down; stays in the world
-  (recoverable). Prefer discarded when unsure — recoverability is safer.
-- items_consumed — patch-foam applied, ration eaten, potion drunk, charge
-  expended; GONE because its function was spent.
-
-CRITICAL INVENTORY RULE: any item changing hands or leaving a PC's
-possession MUST appear in the matching array. State ONLY changes through
-these fields — "the merchant takes your sword" without items_lost leaves
-the sword in inventory and diverges narrative from state. `recipient` is
-MANDATORY on every entry (single-PC games included): each PC has their
-own inventory; omit it and the item lands on the wrong character. Split
-multi-recipient hand-offs into one entry per recipient.
-
-gold_change: Integer. Emit on gain/loss outside beat costs (poker win
-+50, bribe -20). Beat costs handle themselves.
-
-companions_added: Array. Emit when an NPC is hired, recruited, or joins
-for ongoing travel:
-  {"name": "<name>", "role": "<torchbearer, porter, scout, ...>", "description": "<one-sentence>", "notes": "<optional terms>", "recruited_by": "<acting PC name>"}
-companions_dismissed: Array of names leaving service — fired, paid off,
-walked off, killed. Required when an NPC joins or leaves; a one-scene NPC
-who never leaves their post is NOT a companion.
-
 npcs_present: Array of NPC mentions from this turn's prose. Format each entry:
   {"name": "<NPC or group name>", "role": "<hostile|friendly|neutral|merchant|ally|patron|quest_giver|...>", "pronouns": "<she/her|he/him|they/them|it/its>", "appearance": "<short physical/attire note>", "is_new": true, "side": "player|opponent|neutral", "is_creature": false, "disengaged": false}
 Only name, role, and side are required; the rest are optional but

@@ -435,7 +435,11 @@ def test_assemble_turn_result_still_applies_sidecar_on_non_sdk_path() -> None:
     assert len(result.beat_selections) == 1
     assert result.days_advanced == 3
     assert result.affinity_progress == [("Mara", 2)]
-    assert result.gold_change == -19
+    # Story 151-4 / ADR-150 step 4: gold_change (and the other six transactional
+    # fields) are RETIRED from the narrator game_patch — sourced post-narration by
+    # the sidecar extractor + merge now, so the assembler surfaces None here. The
+    # non-retired sidecar fields above still flow (the regression guard's point).
+    assert result.gold_change is None
     assert result.game_patch_dict != {}
     # Presentation also present (parity — proves the SDK split didn't
     # regress the shared parse).

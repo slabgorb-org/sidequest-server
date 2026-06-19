@@ -16,7 +16,8 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from pydantic import ValidationError
 
 if TYPE_CHECKING:
-    from sidequest.agents.orchestrator import BeatSelection
+    from sidequest.agents.orchestrator import BeatSelection, NarrationTurnResult
+    from sidequest.agents.sidecar_extractor import SidecarExtraction
     from sidequest.dungeon.lookahead_worker import LookaheadWorkerHandle
     from sidequest.game.character import Character
     from sidequest.game.encounter import EncounterActor, EncounterPhase, StructuredEncounter
@@ -3595,6 +3596,36 @@ def _encounter_is_mobile(enc: object, pack: GenrePack | None) -> bool:
         cdef = find_confrontation_def(pack.rules.confrontations, getattr(enc, "encounter_type", ""))
         cat = (cdef.category if cdef is not None else "") or ""
     return cat in _MOBILE_CONFRONTATION_CATEGORIES
+
+
+def merge_sidecar_extraction_transactional(
+    result: NarrationTurnResult, extraction: SidecarExtraction
+) -> NarrationTurnResult:
+    """Source the seven transactional bucket-B fields from the post-narration
+    sidecar extractor onto the narration result (ADR-150 step 4, Story 151-4).
+
+    The seven fields — ``items_gained`` / ``items_lost`` / ``items_discarded`` /
+    ``items_consumed``, ``gold_change``, ``companions_added`` /
+    ``companions_dismissed`` — are retired from the narrator ``game_patch``
+    (``orchestrator.extract_structured_from_response``) and produced by the
+    post-narration extractor instead. The extraction is the SOLE source: each
+    field is OVERWRITTEN, never merged with the result's own (retired) value —
+    No Silent Fallbacks, no second producer running in parallel (ADR-150).
+
+    The WS turn handler calls this between the (pre-apply) extractor and
+    ``_apply_narration_result_to_snapshot``; the apply machinery
+    (``resolve_item_recipient`` attribution, the gold clamp,
+    ``_apply_companion_changes`` dedup, and the ``inventory.narrator_extracted``
+    catch-loop) is UNCHANGED and consumes these now-extractor-sourced fields.
+    """
+    result.items_gained = list(extraction.items_gained)
+    result.items_lost = list(extraction.items_lost)
+    result.items_discarded = list(extraction.items_discarded)
+    result.items_consumed = list(extraction.items_consumed)
+    result.gold_change = extraction.gold_change
+    result.companions_added = list(extraction.companions_added)
+    result.companions_dismissed = list(extraction.companions_dismissed)
+    return result
 
 
 def _apply_narration_result_to_snapshot(

@@ -264,7 +264,8 @@ class FateThrowHandler:
                 actor_name=character.core.name,
                 request_id=payload.request_id,
                 skill=payload.skill,
-                thrown_faces=payload.face,
+                thrown_faces=payload.face,  # None on a concession (no roll)
+                conceded=payload.concede,
             )
         except FateConflictError as exc:
             logger.warning("fate.defend.dispatch_error error=%s", exc)

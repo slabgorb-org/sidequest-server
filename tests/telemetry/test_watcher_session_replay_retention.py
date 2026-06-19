@@ -99,9 +99,7 @@ async def test_busy_session_does_not_evict_quiet_session_history(
 
     driven = [e for e in sock.events if e.get("session_slug") == "driven"]
     driven_turn_ids = sorted(
-        e["fields"]["turn_id"]
-        for e in driven
-        if e["event_type"] == "turn_complete"
+        e["fields"]["turn_id"] for e in driven if e["event_type"] == "turn_complete"
     )
     assert driven_turn_ids == [0, 1, 2], (
         "the quiet driven session's turns were evicted by the noisy neighbor's "
@@ -163,9 +161,7 @@ async def test_session_less_infra_events_are_retained_globally(
     sock = FakeSocket()
     await fresh_hub.replay(sock)  # type: ignore[arg-type]
 
-    infra = [
-        e for e in sock.events if e["fields"].get("name") == "watcher.connected"
-    ]
+    infra = [e for e in sock.events if e["fields"].get("name") == "watcher.connected"]
     assert len(infra) == 1, (
         "the global session-less infra marker was evicted by the noisy "
         "session's flood — infra events must survive per-session retention."

@@ -94,6 +94,49 @@ def test_output_only_is_a_short_brief() -> None:
     )
 
 
+def test_output_only_drops_tool_owned_recording_manual() -> None:
+    """AC1 (the directive driver). A size ceiling says the file must shrink but not
+    WHAT to cut; this pins the specific recording-manual structure that must go.
+    The eight native tools self-describe in their own SDK ``description=`` fields
+    (e.g. ``tools/roll_dice.py``: "Roll dice for a mechanical resolution. Use
+    whenever a check, save, …"), so the in-contract reminder is redundant — the
+    pattern ADR-111 moves to tool descriptions — and ADR-150 §Decision's target
+    brief ("write the prose; obey the perception firewall; withhold single-PC
+    perception into private_segments") contains none of these markers. RED until
+    the manual is removed.
+
+    NOTE (Dev): removing the NATIVE TOOLS opener breaks 151-1's OUTPUT_ONLY_MARKER
+    ('You are running with NATIVE TOOLS.') — re-point that sentinel to a
+    post-shrink-stable phrase (see Delivery Findings → 151-1 coupling).
+    """
+    text = NARRATOR_OUTPUT_ONLY
+    for marker in (
+        "TOOL-OWNED MECHANICS",  # the 8-category recording-manual section header
+        "You are running with NATIVE TOOLS",  # the recording-manual opener
+        "SIDECAR-OWNED FIELDS",  # the multi-field manual header (now one field)
+    ):
+        assert marker not in text, (
+            f"output_only.md still contains the recording-manual marker {marker!r}; "
+            f"ADR-150 step 5 shrinks the contract to prose + firewall + "
+            f"private_segments — the tool-owned reminder is redundant (tools "
+            f"self-describe; ADR-111) and must be cut"
+        )
+
+
+def test_output_only_omits_all_retired_sidecar_fields() -> None:
+    """AC1 (regression guard). None of the eleven bucket-B fields nor
+    ``action_rewrite`` — retired to the post-narration extractor / pre-narrator
+    IntentRouter in 151-3/4/5 — may reappear in the shrunk contract. Green today
+    (they are already absent on this branch) and MUST stay green: the rewrite must
+    not reintroduce a single retired field as it cuts the manual."""
+    text = NARRATOR_OUTPUT_ONLY
+    for field in (*BUCKET_B_FIELDS, "action_rewrite"):
+        assert field not in text, (
+            f"output_only.md instructs the retired sidecar field {field!r}; it moved "
+            f"off the narrator turn in 151-3/4/5 and must not reappear in the shrink"
+        )
+
+
 def test_output_only_brief_retains_firewall_and_private_segments() -> None:
     """AC1 (retention guard). The shrink must NOT throw out the irreducible
     content. ``private_segments`` (the one field that stays — ADR-150 bucket C),

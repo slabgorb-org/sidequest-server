@@ -103,3 +103,57 @@ def test_fate_throw_defend_rejects_out_of_range_face():
             throw_params=_throw_params(),
             face=(0, 1, -1, 2),  # 2 is not a dF face
         )
+
+
+# ---------------------------------------------------------------------------
+# Story 126-14: a defend-CONCESSION signal on FATE_THROW(action="defend").
+# The engine concede branch already exists (dispatch_fate_defense(conceded=...),
+# the _resolve_attack fold, the `ledger_full ... or p.conceded` clause,
+# FatePendingDefense.conceded) but has no player-side wire. This story adds a
+# `concede` field to the throw; faces become optional ON THE CONCEDE PATH ONLY
+# (a concession does not roll), while a non-concede defend throw MUST still carry
+# four valid faces (the anti-backdoor invariant 126-8 set).
+# RED: FateThrowPayload has no `concede` field and `face` is still required.
+# ---------------------------------------------------------------------------
+
+
+def test_fate_throw_defend_concede_valid_without_faces():
+    # AC-1: a concession carries no dice — the defender folds ("no roll_4df, no
+    # reported faces required"). The payload must accept action="defend" + concede
+    # with NO `face` supplied.
+    p = FateThrowPayload(
+        request_id="d1",
+        action="defend",
+        concede=True,
+        throw_params=_throw_params(),
+    )
+    assert p.action == "defend"
+    assert p.concede is True
+
+
+def test_fate_throw_defend_concede_field_defaults_false():
+    # AC-1: a normal (rolled) defend throw is NOT a concession — the flag defaults
+    # False so an existing defend throw keeps its physics-is-the-roll meaning.
+    p = FateThrowPayload(
+        request_id="d1",
+        action="defend",
+        skill="Athletics",
+        throw_params=_throw_params(),
+        face=(0, 1, -1, 0),
+    )
+    assert p.concede is False
+
+
+def test_fate_throw_non_concede_defend_still_requires_faces():
+    # AC-1 anti-backdoor guard: faces are optional ONLY when conceding. A defend
+    # throw that is NOT a concession and supplies NO faces must still be rejected
+    # loud — an empty/absent faces field must never re-open the
+    # server-rolls-for-the-player door (No Silent Fallbacks, lang-review #11).
+    with pytest.raises(ValidationError):
+        FateThrowPayload(
+            request_id="d1",
+            action="defend",
+            skill="Athletics",
+            throw_params=_throw_params(),
+            # no `face` and no `concede` → invalid
+        )

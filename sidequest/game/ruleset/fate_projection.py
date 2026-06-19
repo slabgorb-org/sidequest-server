@@ -30,6 +30,7 @@ from sidequest.protocol.models import (
     FateSkillEntry,
     FateStatePayload,
     FateStressBox,
+    FateStuntEntry,
 )
 from sidequest.protocol.sanitize import sanitize_player_text
 
@@ -149,6 +150,16 @@ def build_fate_state_payload(snapshot: GameSnapshot) -> FateStatePayload:
                         text=c.aspect.text if c.aspect is not None else "",
                     )
                     for c in sheet.consequences
+                ],
+                # Playtest 150-2: under Fate a PC's special abilities ARE their
+                # stunts — project them so the Character/Fate panel can render them
+                # in place of the native class-move surface. Display text is raw
+                # (the UI escapes it), consistent with the rest of this builder.
+                stunts=[
+                    FateStuntEntry(
+                        name=st.name, description=st.description, source_gear=st.source_gear
+                    )
+                    for st in sheet.stunts
                 ],
             )
         )

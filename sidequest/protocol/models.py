@@ -1021,13 +1021,33 @@ class FateConsequenceEntry(BaseModel):
     text: str = ""
 
 
+class FateStuntEntry(BaseModel):
+    """One Fate stunt for the wire (ADR-144 F3a / playtest 150-2).
+
+    A stunt is a named special rule the player picked at chargen; under Fate a PC's
+    special abilities ARE their stunts (there is no native class-move surface). The
+    ``description`` is the SRD effect text the Character/Fate panel renders.
+    ``source_gear`` is the GearDef id this stunt was compiled from (``None`` for a
+    hand-picked stunt) — the same traceability the sheet's ``Stunt`` model carries.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    name: str
+    description: str = ""
+    source_gear: str | None = None
+
+
 class FateCharacterEntry(BaseModel):
     """One PC's full Fate sheet for the wire (ADR-144 F3a / Story 118-1).
 
     ``aspects`` is the named character aspects only (high_concept / trouble /
     character) — a FILLED consequence is invokable but surfaces in
     ``consequences``, not duplicated here. ``stress`` maps each track name
-    (``physical`` / ``mental``) to its ordered boxes.
+    (``physical`` / ``mental``) to its ordered boxes. ``stunts`` are the PC's
+    chosen stunts — under Fate the player's special abilities ARE their stunts, so
+    the Character/Fate panel renders these in place of the native class-move surface
+    (playtest 150-2).
     """
 
     model_config = {"extra": "forbid"}
@@ -1039,6 +1059,7 @@ class FateCharacterEntry(BaseModel):
     aspects: list[FateAspectEntry] = Field(default_factory=list)
     stress: dict[str, list[FateStressBox]] = Field(default_factory=dict)
     consequences: list[FateConsequenceEntry] = Field(default_factory=list)
+    stunts: list[FateStuntEntry] = Field(default_factory=list)
 
 
 class FateConflictParticipant(BaseModel):

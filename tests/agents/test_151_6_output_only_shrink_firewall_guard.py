@@ -96,31 +96,28 @@ def test_output_only_is_a_short_brief() -> None:
 
 def test_output_only_drops_tool_owned_recording_manual() -> None:
     """AC1 (the directive driver). A size ceiling says the file must shrink but not
-    WHAT to cut; this pins the specific recording-manual structure that must go.
-    The eight native tools self-describe in their own SDK ``description=`` fields
-    (e.g. ``tools/roll_dice.py``: "Roll dice for a mechanical resolution. Use
-    whenever a check, save, …"), so the in-contract reminder is redundant — the
-    pattern ADR-111 moves to tool descriptions — and ADR-150 §Decision's target
-    brief ("write the prose; obey the perception firewall; withhold single-PC
-    perception into private_segments") contains none of these markers. RED until
-    the manual is removed.
+    WHAT to cut; this pins the specific structure that must go: the 8-category
+    ``TOOL-OWNED MECHANICS`` recording-manual recap. The eight native tools
+    self-describe in their own SDK ``description=`` fields (e.g. ``tools/roll_dice.py``:
+    "Roll dice for a mechanical resolution. Use whenever a check, save, …"), so the
+    in-contract enumeration is redundant — the pattern ADR-111 moves to tool
+    descriptions — and ADR-150 §Decision collapses it to a compact pointer. RED
+    until the 8-category recap is removed.
 
-    NOTE (Dev): removing the NATIVE TOOLS opener breaks 151-1's OUTPUT_ONLY_MARKER
-    ('You are running with NATIVE TOOLS.') — re-point that sentinel to a
-    post-shrink-stable phrase (see Delivery Findings → 151-1 coupling).
+    ALIGNED WITH THE GREEN-PHASE ARCHITECT DECISION (session ## Architect Decision,
+    2026-06-19): the shrink REMOVES the 8-category ``TOOL-OWNED MECHANICS`` recap
+    but deliberately KEEPS the literal opener "You are running with NATIVE TOOLS."
+    (to preserve 151-1's ``OUTPUT_ONLY_MARKER``) plus a compact tool pointer and the
+    relocated anti-fabrication clause. So this guard asserts ONLY the recap header
+    is gone — it must NOT assert the NATIVE TOOLS opener is gone (that would
+    contradict the Architect ruling and the 151-1 marker coupling).
     """
-    text = NARRATOR_OUTPUT_ONLY
-    for marker in (
-        "TOOL-OWNED MECHANICS",  # the 8-category recording-manual section header
-        "You are running with NATIVE TOOLS",  # the recording-manual opener
-        "SIDECAR-OWNED FIELDS",  # the multi-field manual header (now one field)
-    ):
-        assert marker not in text, (
-            f"output_only.md still contains the recording-manual marker {marker!r}; "
-            f"ADR-150 step 5 shrinks the contract to prose + firewall + "
-            f"private_segments — the tool-owned reminder is redundant (tools "
-            f"self-describe; ADR-111) and must be cut"
-        )
+    assert "TOOL-OWNED MECHANICS" not in NARRATOR_OUTPUT_ONLY, (
+        "output_only.md still contains the 8-category 'TOOL-OWNED MECHANICS' "
+        "recording-manual recap; ADR-150 step 5 (and the green-phase Architect "
+        "decision) replaces it with a compact pointer — the tools self-describe "
+        "(ADR-111). The 'NATIVE TOOLS' opener + anti-fabrication clause stay."
+    )
 
 
 def test_output_only_omits_all_retired_sidecar_fields() -> None:

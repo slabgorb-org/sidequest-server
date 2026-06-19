@@ -306,3 +306,36 @@ def test_compact_build_fate_projection_contract_is_unchanged():
     assert compact["skills"]["Vance"] == {"Fight": 3, "Notice": -1}
     assert compact["fate_points"]["Vance"] == 3
     assert compact["active_conflict"] is True
+
+
+# ---------------------------------------------------------------------------
+# Playtest 150-2 — a PC's chosen stunts project onto FATE_STATE (under Fate the
+# player's special abilities ARE their stunts; the Character/Fate panel renders
+# these in place of the native class-move surface). Before this, FateCharacterEntry
+# had no stunts field, so the persisted sheet.stunts never reached the client.
+# ---------------------------------------------------------------------------
+
+
+def test_stunts_project_onto_fate_state():
+    from sidequest.game.fate_sheet import Stunt
+    from sidequest.game.ruleset.fate_projection import build_fate_state_payload
+
+    snap = _conflict_snapshot()
+    sheet = snap.characters[0].core.fate_sheet
+    sheet.stunts.append(Stunt(name="The Quick Draw", description="Iron clears leather first."))
+    sheet.stunts.append(
+        Stunt(name="Nerves of Cold Iron", description="+2 to Will under a leveled gun.")
+    )
+
+    pc = _pc_entry(build_fate_state_payload(snap))
+    assert [s.name for s in pc.stunts] == ["The Quick Draw", "Nerves of Cold Iron"]
+    assert pc.stunts[0].description == "Iron clears leather first."
+
+
+def test_stunts_empty_when_sheet_has_none():
+    """A PC who picked no stunts projects an empty list (the wire default), never a
+    missing field — the UI renders no Stunts section rather than crashing."""
+    from sidequest.game.ruleset.fate_projection import build_fate_state_payload
+
+    pc = _pc_entry(build_fate_state_payload(_conflict_snapshot()))
+    assert pc.stunts == []

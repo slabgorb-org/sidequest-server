@@ -97,8 +97,11 @@ def test_fate_routing_rules_spliced_into_system_prompt():
 # call site (``intent_router_pass.py``) ships the *same fat projection* (PC
 # skills + ALL live aspects) into the Haiku router's state_summary. On Fate
 # worlds that bloats the structured router prompt enough that the single
-# classification call intermittently can't finalize inside the mandatory
-# ``max_turns=2`` floor — ``intent_router_pass`` spikes 37-81s vs the ~4-6s
+# classification call intermittently can't finalize inside the turn budget
+# (the original symptom was at the ``max_turns=2`` floor — ``2`` is the
+# mandatory FLOOR; the structured-output choke point now passes ``max_turns=4``
+# for headroom, 2026-06-19 — but trimming the fat projection is the right fix
+# regardless) — ``intent_router_pass`` spikes 37-81s vs the ~4-6s
 # non-Fate baseline (annees_folles, ~162s/turn).
 #
 # The lever (AC2): the router needs far less than the narrator — the PC skills

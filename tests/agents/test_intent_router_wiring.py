@@ -178,7 +178,7 @@ async def test_intent_router_sdk_adapter_calls_haiku_model(
 ) -> None:
     """AC-3 behavioral (Story 119-3 transport): when the adapter ``emit_tool()``
     runs, it drives the module-level ``query`` seam with
-    ``ClaudeAgentOptions(model=claude-haiku-4-5-20251001, max_turns=2,
+    ``ClaudeAgentOptions(model=claude-haiku-4-5-20251001, max_turns=4,
     output_format={json_schema})`` — the VERIFIED Path A surface (no
     ``tool_choice``; the Agent SDK has none). The adapter returns the dict from
     ``ResultMessage.structured_output`` where the forced tool's ``.input`` went.
@@ -207,9 +207,12 @@ async def test_intent_router_sdk_adapter_calls_haiku_model(
         f"adapter must request the Haiku 4.5 model; got model={getattr(opts, 'model', None)!r}"
     )
     # The Agent SDK has no tool_choice; the forced-extraction surface is
-    # output_format JSON-schema at max_turns=2 (the +1 finalize turn).
-    assert getattr(opts, "max_turns", None) == 2, (
-        f"forced extraction must run at max_turns=2 (max_turns=1 fails closed); "
+    # output_format JSON-schema. ``2`` is the mandatory FLOOR (the +1 finalize
+    # turn means max_turns=1 fails closed); the structured-output choke point
+    # (_call_haiku_sdk) raises the value to 4 for headroom against intermittent
+    # error_max_turns at mt=2 (2026-06-19 playtest).
+    assert getattr(opts, "max_turns", None) == 4, (
+        f"forced extraction must run at max_turns=4 (2 is the floor; raised for headroom); "
         f"got {getattr(opts, 'max_turns', None)!r}"
     )
     output_format = getattr(opts, "output_format", None)

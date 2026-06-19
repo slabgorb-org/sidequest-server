@@ -7,9 +7,12 @@ forced-extraction sites (Intent Router, unseeded-objective classifier,
 archetype inference) can't transliterate the raw "force one tool, read its
 ``.input``" mechanism. The VERIFIED replacement is ``output_format``
 JSON-schema structured output read from ``ResultMessage.structured_output``
-(Path A, §6.4.2) — at **``max_turns=2``** (``max_turns=1`` fails closed with
-``subtype='error_max_turns'``; the +1 is mandatory, OQ-16). The aside is the
-easy one — already no-tools, also ``max_turns=2``.
+(Path A, §6.4.2) — at **``max_turns=4``** (``2`` is the mandatory FLOOR:
+``max_turns=1`` fails closed with ``subtype='error_max_turns'``, the +1 is
+mandatory, OQ-16; the shared _call_haiku_sdk choke point raises the value to 4
+for headroom against intermittent error_max_turns at mt=2, 2026-06-19 playtest).
+The aside is the easy one — already no-tools, routes through the same choke point
+so also ``max_turns=4``.
 
 Each site preserves its structured-payload contract (``dict`` / ``str`` /
 ``None``), its caller-tagged ``llm.request`` / ``llm.sdk.usage`` telemetry, and
@@ -17,9 +20,10 @@ its ``session_id``-keyed ``check_ceiling`` / ``record_call`` cost-safety. All
 tests drive the fake ``query`` seam (OQ-9) — no live subscription.
 
 **RED/GREEN GUARDRAIL (spec §9):** Dev MUST NOT hardcode ``max_turns=1`` from
-any stale spec text — it fails closed. The options tests pin ``max_turns=2`` +
-``output_format`` + ``allowed_tools=[]``; the ``max_turns_one`` tests pin that
-the verified fail-closed shape raises the site's loud error.
+any stale spec text — it fails closed. The options tests pin ``max_turns=4``
+(2-floor + headroom) + ``output_format`` + ``allowed_tools=[]``; the
+``max_turns_one`` tests pin that the verified fail-closed shape raises the
+site's loud error.
 """
 
 from __future__ import annotations
@@ -210,8 +214,8 @@ async def test_archetype_inference_none_on_out_of_enum(
 
 
 async def test_aside_complete_returns_text(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``_AsideLlm.complete`` ports to a plain no-tools ``max_turns=2``
-    ``query()`` returning the assistant text (§6.4.2)."""
+    """``_AsideLlm.complete`` ports to a plain no-tools ``max_turns=4`` (2-floor
+    + headroom) ``query()`` returning the assistant text (§6.4.2)."""
     text = "Your pack holds rope, a lantern, and three days of rations."
     _patch_query(monkeypatch, converged_text_stream(text=text))
     from sidequest.agents import llm_factory
@@ -222,18 +226,21 @@ async def test_aside_complete_returns_text(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 # ===========================================================================
-# max_turns=2 + output_format canonical surface (the +1 guardrail)
+# max_turns (4: 2-floor + headroom) + output_format canonical surface
 # ===========================================================================
 
 
 @pytest.mark.parametrize("site", ["router", "classifier"])
-async def test_forced_extraction_sites_use_output_format_at_max_turns_two(
+async def test_forced_extraction_sites_use_output_format_at_max_turns_four(
     monkeypatch: pytest.MonkeyPatch, site: str
 ) -> None:
     """The forced-extraction sites must build
-    ``ClaudeAgentOptions(max_turns=2, allowed_tools=[],
+    ``ClaudeAgentOptions(max_turns=4, allowed_tools=[],
     output_format={'type':'json_schema','schema': <tool_schema>})`` — the
-    VERIFIED Path A surface. ``max_turns`` MUST be 2, never 1 (fails closed)."""
+    VERIFIED Path A surface. ``2`` is the mandatory FLOOR (never 1 — fails
+    closed); the structured-output choke point (_call_haiku_sdk) raises the value
+    to 4 for headroom against intermittent error_max_turns at mt=2 (2026-06-19
+    playtest)."""
     from sidequest.agents import llm_factory
 
     fake = _patch_query(monkeypatch, structured_output_stream({"intent": "attack"}))
@@ -245,9 +252,10 @@ async def test_forced_extraction_sites_use_output_format_at_max_turns_two(
     await _drive_emit_tool(adapter, tool_schema=_TOOL_SCHEMA)
 
     opts = fake.last_options
-    assert getattr(opts, "max_turns", None) == 2, (
-        "max_turns MUST be 2 — the SDK spends an internal finalize turn, so "
-        f"max_turns=1 fails closed with error_max_turns (OQ-16); got {getattr(opts, 'max_turns', None)!r}"
+    assert getattr(opts, "max_turns", None) == 4, (
+        "max_turns is raised to 4 for headroom — 2 is the FLOOR (the SDK spends "
+        "an internal finalize turn, so max_turns=1 fails closed with "
+        f"error_max_turns, OQ-16); got {getattr(opts, 'max_turns', None)!r}"
     )
     assert getattr(opts, "allowed_tools", "MISSING") == [], (
         "the structured-output path advertises NO tools (allowed_tools=[])"
@@ -263,8 +271,10 @@ async def test_forced_extraction_sites_use_output_format_at_max_turns_two(
     )
 
 
-async def test_aside_uses_no_tools_at_max_turns_two(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The aside is a plain completion: no tools, no output_format, max_turns=2."""
+async def test_aside_uses_no_tools_at_max_turns_four(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The aside is a plain completion: no tools, no output_format. It routes
+    through the shared _call_haiku_sdk choke point, so it gets max_turns=4 (2 is
+    the floor; raised for headroom)."""
     from sidequest.agents import llm_factory
 
     fake = _patch_query(monkeypatch, converged_text_stream(text="ok"))
@@ -272,7 +282,10 @@ async def test_aside_uses_no_tools_at_max_turns_two(monkeypatch: pytest.MonkeyPa
     await adapter.complete(system="S", user="U")
 
     opts = fake.last_options
-    assert getattr(opts, "max_turns", None) == 2, "aside also needs the +1 (max_turns=2)"
+    assert getattr(opts, "max_turns", None) == 4, (
+        "aside routes through the shared choke point at max_turns=4 (2 is the "
+        "floor — the +1 finalize turn — raised for headroom)"
+    )
     assert getattr(opts, "allowed_tools", "MISSING") == [], "aside advertises no tools"
     assert not getattr(opts, "output_format", None), (
         "the aside is a plain text completion — no output_format"

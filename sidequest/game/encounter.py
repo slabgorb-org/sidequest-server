@@ -187,7 +187,7 @@ class FateSealedCommit(BaseModel):
 
 class FatePendingDefense(BaseModel):
     """One incoming attack on a PC awaiting that PC's interactive defense (ADR-148/
-    149, Story 126-8 §5).
+    151, Story 126-8 §5).
 
     Written at REVEAL when an attack targets a seated PC; filled by the PC's
     ``FATE_THROW(action="defend")``. ``defense_total is None`` and ``not conceded``
@@ -311,7 +311,7 @@ class StructuredEncounter(BaseModel):
     exchange walk consumes and clears it. Always empty for native/WN encounters
     and between Fate exchanges (sibling to ``wn_commits``)."""
     pending_defenses: list[FatePendingDefense] = Field(default_factory=list)
-    """ADR-148/149 (Story 126-8 §5): incoming attacks on PCs awaiting interactive
+    """ADR-148/151 (Story 126-8 §5): incoming attacks on PCs awaiting interactive
     defense. An unfilled entry is the "we are parked at DEFEND" signal; the exchange
     is suspended at a persisted checkpoint until every entry is filled (defense_total
     set or conceded), then resumes and resolves. Always empty for native/WN

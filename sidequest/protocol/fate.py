@@ -74,7 +74,7 @@ class FateThrowPayload(ProtocolBase):
     the sole exception is a defend CONCESSION (``concede=True``), which folds
     without rolling and so carries no faces (see below).
 
-    ``action`` is the three proactive ROLL verbs plus ``defend`` (ADR-148/149,
+    ``action`` is the three proactive ROLL verbs plus ``defend`` (ADR-148/151,
     Story 126-8): a defend throw answers a ``FATE_DEFEND_REQUEST``, echoing its
     ``request_id``, with the defender's four settled faces — the player defense
     is physics-is-the-roll exactly like the proactive throw (NEVER ``roll_4df``).
@@ -100,7 +100,7 @@ class FateThrowPayload(ProtocolBase):
 
     @model_validator(mode="after")
     def _validate_faces(self) -> FateThrowPayload:
-        # A defend CONCESSION does not roll (ADR-148/149, Story 126-14): the
+        # A defend CONCESSION does not roll (ADR-148/151, Story 126-14): the
         # defender folds, so ``face`` is omitted ON THAT PATH ONLY and ``concede``
         # is meaningful only for ``action="defend"``. EVERY other throw MUST carry
         # four valid dF faces — an empty/absent faces field must never re-open the
@@ -126,7 +126,7 @@ class FateThrowPayload(ProtocolBase):
 
 class FateDefendRequestPayload(ProtocolBase):
     """Server -> client: "you are attacked by ``attacker`` with ``attack_skill`` at
-    total ``attack_total`` — defend" (ADR-148/149, Story 126-8 §6).
+    total ``attack_total`` — defend" (ADR-148/151, Story 126-8 §6).
 
     One per incoming attack on a seated PC, emitted when the round PARKS at the
     DEFEND barrier. The defender is *informed* — they see the committed attack

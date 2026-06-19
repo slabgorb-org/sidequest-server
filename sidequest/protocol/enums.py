@@ -154,7 +154,7 @@ class MessageType(StrEnum):
     # ladder rating, the shift total, the outcome tier, and the succeed-with-
     # style flag. The dice tuple previously lived only on the OTEL span.
     FATE_ROLL = "FATE_ROLL"
-    # Server -> client at the DEFEND barrier (ADR-148/149, Story 126-8): "you are
+    # Server -> client at the DEFEND barrier (ADR-148/151, Story 126-8): "you are
     # attacked by X — defend." One per incoming attack on a seated PC when the
     # round parks; carries the committed attack total so the defender is informed
     # before they throw their own 4dF (physics-is-the-roll for the defense too).

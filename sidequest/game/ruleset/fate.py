@@ -210,7 +210,7 @@ class FateRulesetModule(RulesetModule):
         """NPC path: roll 4dF server-side and emit the lie-detector span tagged
         ``source=server_rolled`` (ADR-148).
 
-        ``role`` (ADR-148/149, Story 126-8, AC-8) tags the span: ``"action"`` for a
+        ``role`` (ADR-148/151, Story 126-8, AC-8) tags the span: ``"action"`` for a
         proactive NPC action, ``"defense"`` when an NPC server-rolls a reactive
         defense (``_roll_defense``) so the GM panel can tell an NPC defense from an
         NPC action — the same distinction ``resolve_action_from_faces`` makes on the
@@ -252,7 +252,7 @@ class FateRulesetModule(RulesetModule):
         tagged ``source=player_thrown`` so the GM panel can confirm the dice came
         from the client. The Fate ladder math is identical to the NPC path.
 
-        ``role`` (ADR-148/149, Story 126-8) tags the span: ``"action"`` for a
+        ``role`` (ADR-148/151, Story 126-8) tags the span: ``"action"`` for a
         proactive throw, ``"defense"`` when a seated PC throws to defend."""
         outcome = resolve_action_from_faces(
             skill_rating=skill_rating,

@@ -194,6 +194,24 @@ class FateRulesetModule(RulesetModule):
             refresh=sheet.refresh,
             _tracer=_tracer,
         )
+        # 126-24 (AC9): the narrative-wizard path must compile the pack's signature gear
+        # onto the sheet too — the Menu path (seed_chargen_resources) already does. The
+        # stored save 2026-06-19 showed source_gear=null on every aspect because this path
+        # bypassed compile_gear_onto_sheet. Compile AFTER the completed-span census (which
+        # reflects the player-authored sheet); gear aspects/stunts carry source_gear and any
+        # refresh debit rides the fate.gear_compiled span. No-op when the pack ships no gear.
+        if cfg.gear:
+            from sidequest.game.ruleset.fate_gear import compile_gear_onto_sheet
+
+            compile_gear_onto_sheet(
+                sheet,
+                archetype=choices.archetype or "(narrative)",
+                gear_ids=list(cfg.gear),
+                gear_defs=list(cfg.gear_catalog),
+                base_refresh=cfg.base_refresh,
+                free_stunts=cfg.free_stunts,
+                _tracer=_tracer,
+            )
         return ChargenResources(fate_sheet=sheet)
 
     def resolve_action(

@@ -657,9 +657,7 @@ class ConfrontationDef(BaseModel):
         )
         if self.resolution_mode == ResolutionMode.contest:
             for beat in self.beats:
-                offending = [
-                    f for f in _DIAL_BEAT_FIELDS if getattr(beat, f, None) is not None
-                ]
+                offending = [f for f in _DIAL_BEAT_FIELDS if getattr(beat, f, None) is not None]
                 # base defaults to 1 (non-None) — only flag a non-default magnitude.
                 if beat.base != 1:
                     offending.append("base")
@@ -1096,6 +1094,21 @@ class FateStuntDef(BaseModel):
     description: str = ""
 
 
+class FateHintSeed(BaseModel):
+    """One narrative-chargen hint's Fate seed (story 126-24). Maps a narrative answer's
+    hint VALUE (a ``class_hint`` / ``rpg_role_hint`` / ``background``, e.g. ``"Detective"``)
+    to a COMPLETE, legal skill-pyramid allocation plus free-aspect text seeds. Authored in
+    the genre's ``rules.fate.chargen_seed_table`` (the skill list is the rulebook, ADR-140)
+    and overridable per-hint by a world (``resolve_fate_chargen_seed_table``, world wins).
+    The seed is always an EDITABLE DEFAULT — the player overrides any rating or aspect at
+    chargen; it exists to retire the blank-Fate-sheet on-ramp (the friendly path for Alex)."""
+
+    model_config = {"extra": "forbid"}
+
+    pyramid: dict[str, int] = Field(default_factory=dict)
+    aspects: list[str] = Field(default_factory=list)
+
+
 class FateConfig(BaseModel):
     """Fate Core per-genre content schema (ADR-144 F4a). The genre authors the
     mechanical identity — the skill list and its starting ratings, the refresh,
@@ -1155,6 +1168,13 @@ class FateConfig(BaseModel):
     # not wired today (no pack authors world-distinct gear). Default empty for
     # non-fate / synthetic configs.
     gear_catalog: list[GearDef] = Field(default_factory=list)
+    # Narrative-chargen seed table (story 126-24): narrative-hint VALUE -> FateHintSeed
+    # (a complete legal pyramid + aspect text seeds). The genre authors the base table;
+    # a world layers per-hint overrides (``resolve_fate_chargen_seed_table``, world wins).
+    # Consumed at chargen PRESENT-time by ``CharacterBuilder._fate_step_payload`` to
+    # pre-fill the pyramid + free aspects as editable defaults — the friendly on-ramp that
+    # retires the blank-sheet bug. Empty for packs without a narrative wizard.
+    chargen_seed_table: dict[str, FateHintSeed] = Field(default_factory=dict)
 
     @field_validator("chargen_pyramid")
     @classmethod

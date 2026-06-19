@@ -65,6 +65,7 @@ from sidequest.genre.models.psionics import PsionicDisciplineCatalog
 from sidequest.genre.models.rigs_world import ChassisInstanceConfig, RigsWorldConfig
 from sidequest.genre.models.rules import (
     FateConfig,
+    FateHintSeed,
     ResolutionMode,
     RulesConfig,
     WinCondition,
@@ -785,6 +786,24 @@ def _load_gear(path: Path) -> list[GearDef]:
     if not isinstance(raw, list):
         raise GenreLoadError(path=path, detail="gear.yaml must be a list of GearDef")
     return [GearDef.model_validate(g) for g in raw]
+
+
+def _load_chargen_seed_table(path: Path) -> dict[str, FateHintSeed]:
+    """Load a ``chargen_seed_table.yaml`` (a top-level ``hint -> {pyramid, aspects}``
+    map) from ``path`` into ``hint -> FateHintSeed`` (story 126-24). Absent file →
+    empty dict (legitimate absence, not a silent fallback); a present but malformed
+    file fails loud via pydantic. The world-tier sibling of the genre-tier
+    ``rules.fate.chargen_seed_table``; pydantic coercion here is what keeps a world
+    override a real ``FateHintSeed`` (``.pyramid``/``.aspects``), never a raw dict."""
+    raw = _load_yaml_raw_optional(path)
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise GenreLoadError(
+            path=path,
+            detail="chargen_seed_table.yaml must be a map of hint -> {pyramid, aspects}",
+        )
+    return {str(hint): FateHintSeed.model_validate(seed) for hint, seed in raw.items()}
 
 
 def _validate_fate_gear(
@@ -1848,6 +1867,11 @@ def _load_single_world(
     # fate-gated, at resolution time (``resolve_fate_gear_catalog``). Absent file
     # → [] (a valid authored choice, the common case — No Silent Fallbacks).
     world_gear: list[GearDef] = _load_gear(world_path / "gear.yaml")
+    # 126-24: world-tier narrative-chargen seed override, loaded unconditionally of
+    # ruleset (mirrors world_gear); merged world-first by resolve_fate_chargen_seed_table.
+    world_chargen_seed_table: dict[str, FateHintSeed] = _load_chargen_seed_table(
+        world_path / "chargen_seed_table.yaml"
+    )
 
     # Story 104-1 / M-A: single-vs-cluster is a system COUNT, decided at load
     # time and cached on the World so the in-game MAP_UPDATE path (which holds
@@ -1885,6 +1909,7 @@ def _load_single_world(
         items=items,
         inventory=world_inventory,
         gear=world_gear,
+        chargen_seed_table=world_chargen_seed_table,
         equipment_tables=world_equipment_tables,
         bestiary=world_bestiary,
         saints=world_saints,

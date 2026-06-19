@@ -651,6 +651,23 @@ SPAN_ROUTES["fate.chargen.completed"] = SpanRoute(
         "refresh": (span.attributes or {}).get("refresh", 0),
     },
 )
+# --- 126-24: narrative-chargen seed-applied span (GM panel = lie detector) -----
+# The narrative-chargen seed fired at PRESENT-time: the accumulated narrative
+# ``hint`` pre-filled a legal pyramid + free aspects as editable defaults. The
+# GM-panel evidence that the friendly on-ramp seeded the sheet from the player's
+# answers rather than presenting the blank Fate sheet the forensic save showed.
+# Literal key (no SPAN_* constant) — the routing-completeness lint only inspects
+# SPAN_* module constants (the F4a/F4a2 precedent).
+SPAN_ROUTES["fate.chargen.seed_applied"] = SpanRoute(
+    event_type="state_transition",
+    component="fate",
+    extract=lambda span: {
+        "field": "chargen_seed_applied",
+        "hint": (span.attributes or {}).get("hint", ""),
+        "skill_count": (span.attributes or {}).get("skill_count", 0),
+        "aspect_count": (span.attributes or {}).get("aspect_count", 0),
+    },
+)
 # --- 114-10: chargen gear-compile span (GM panel = lie detector) -------------
 # The engine materialized a character's starting gear onto its FateSheet at
 # chargen — the GM-panel evidence that gear actually fired (aspects/stunts placed,
@@ -966,6 +983,30 @@ def fate_chargen_seeded_span(
         **attrs,
     }
     with Span.open("fate.chargen.seeded", attributes, tracer_override=_tracer):
+        pass
+
+
+def fate_chargen_seed_applied_span(
+    *,
+    hint: str,
+    skill_count: int,
+    aspect_count: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``fate.chargen.seed_applied`` — the narrative-chargen seed was applied at
+    PRESENT-time (story 126-24): the accumulated narrative ``hint`` pre-filled a legal
+    pyramid (``skill_count``) + free aspects (``aspect_count``) as editable defaults.
+    The GM-panel evidence that the on-ramp seeded the sheet from the player's answers,
+    not that the UI/narrator presented the blank Fate sheet the forensic save showed."""
+    attributes: dict[str, Any] = {
+        "field": "chargen_seed_applied",
+        "hint": hint,
+        "skill_count": skill_count,
+        "aspect_count": aspect_count,
+        **attrs,
+    }
+    with Span.open("fate.chargen.seed_applied", attributes, tracer_override=_tracer):
         pass
 
 

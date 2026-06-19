@@ -950,6 +950,16 @@ class ConnectHandler:
                 chargen_classes = resolve_classes(genre_pack, row.world_slug)
                 if chargen_classes:
                     builder = builder.with_classes(chargen_classes)
+                # 126-24: resolve the narrative-chargen Fate seed table world-first (genre
+                # base ∪ world per-hint overrides, world wins) and attach it so the chargen
+                # pyramid/aspects steps present editable defaults seeded from the player's
+                # narrative answers. Empty for non-Fate packs / packs without a seed table —
+                # a no-op (the builder falls back to the genre-tier cfg.chargen_seed_table).
+                from sidequest.game.ruleset.fate_chargen import resolve_fate_chargen_seed_table
+
+                fate_seed_table = resolve_fate_chargen_seed_table(genre_pack, row.world_slug)
+                if fate_seed_table:
+                    builder = builder.with_fate_seed_table(fate_seed_table)
                 # ADR-143 Task 9: attach resolved background + focus catalogs
                 # (world-first, same merge semantics as classes). Empty dicts
                 # when neither tier authors anything — no silent fallback, just

@@ -165,11 +165,21 @@ def test_extract_structured_extracts_footnotes():
     assert result["footnotes"][0]["summary"] == "The key is lost"
 
 
-def test_extract_structured_extracts_items_gained():
+def test_extract_structured_no_longer_surfaces_items_gained():
+    """Story 151-4 / ADR-150 step 4: the seven transactional fields (items×4,
+    gold_change, companions×2) are retired from the narrator game_patch — the
+    post-narration sidecar extractor produces them now and
+    ``narration_apply.merge_sidecar_extraction_transactional`` sources them onto
+    the result before apply. ``extract_structured_from_response`` must no longer
+    surface ``items_gained`` even when a (non-compliant) narrator still emits the
+    block. Inverts the pre-151-4 ``test_extract_structured_extracts_items_gained``
+    (mirrors the 151-3 action_rewrite inversion below)."""
     raw = '```game_patch\n{"items_gained": [{"name": "Rusty Key", "description": "An old key", "category": "misc"}]}\n```'
     result = extract_structured_from_response(raw)
-    assert len(result["items_gained"]) == 1
-    assert result["items_gained"][0]["name"] == "Rusty Key"
+    assert result["items_gained"] == [], (
+        "game_patch items_gained must no longer be extracted — retired in 151-4 "
+        "(the post-narration sidecar extractor owns it)"
+    )
 
 
 def test_extract_structured_extracts_beat_selections():
@@ -200,10 +210,16 @@ def test_extract_structured_drops_legacy_npcs_met_key():
     assert result["npcs_present"] == []
 
 
-def test_extract_structured_extracts_gold_change():
+def test_extract_structured_no_longer_surfaces_gold_change():
+    """Story 151-4 / ADR-150 step 4: ``gold_change`` is retired from the narrator
+    game_patch (extractor-sourced now). ``extract_structured_from_response`` must
+    surface ``None`` even when a narrator still emits it. Inverts the pre-151-4
+    ``test_extract_structured_extracts_gold_change``."""
     raw = '```game_patch\n{"gold_change": -10}\n```'
     result = extract_structured_from_response(raw)
-    assert result["gold_change"] == -10
+    assert result["gold_change"] is None, (
+        "game_patch gold_change must no longer be extracted — retired in 151-4"
+    )
 
 
 def test_extract_structured_no_longer_surfaces_action_rewrite():
@@ -694,7 +710,13 @@ async def test_run_narration_turn_no_longer_warns_action_rewrite_absent_from_ext
 
 
 @pytest.mark.asyncio
-async def test_run_narration_turn_extracts_items_gained():
+async def test_run_narration_turn_no_longer_surfaces_items_gained_from_game_patch():
+    """Story 151-4 / ADR-150 step 4: ``run_narration_turn`` no longer surfaces the
+    transactional fields from the narrator game_patch — they are retired and
+    sourced post-narration by the sidecar extractor + merge (in the WS handler,
+    after this method returns). ``result.items_gained`` is therefore empty at the
+    orchestrator boundary. Inverts the pre-151-4
+    ``test_run_narration_turn_extracts_items_gained``."""
     narration_text = (
         "**The Chest**\n\nYou find a rusty key.\n\n"
         '```game_patch\n{"items_gained": [{"name": "Rusty Key", "description": "An old key", "category": "misc"}]}\n```'
@@ -703,8 +725,10 @@ async def test_run_narration_turn_extracts_items_gained():
     orch = Orchestrator(client=client)
     context = TurnContext(character_name="Kael")
     result = await orch.run_narration_turn("open chest", context)
-    assert len(result.items_gained) == 1
-    assert result.items_gained[0]["name"] == "Rusty Key"
+    assert result.items_gained == [], (
+        "items_gained is retired from the game_patch in 151-4 — the post-narration "
+        "extractor + merge_sidecar_extraction_transactional source it now"
+    )
 
 
 @pytest.mark.asyncio

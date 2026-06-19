@@ -406,7 +406,14 @@ async def test_magic_output_rules_section_absent_when_magic_state_none(
 
 
 # ---------------------------------------------------------------------------
-# AC-4 — items_* fields consolidated
+# AC-4 — items_* fields RETIRED from the narrator output (superseded by 151-4)
+#
+# Story 61-12 AC-4 consolidated the four ``items_*`` paragraphs into one block.
+# Story 151-4 / ADR-150 step 4 goes further and RETIRES the transactional
+# fields from the narrator output contract entirely — items×4 (plus gold_change,
+# companions×2) are extracted post-narration by the sidecar extractor now, not
+# emitted by the narrator. The consolidation AC is therefore superseded by full
+# removal; the block no longer exists to measure for compaction.
 # ---------------------------------------------------------------------------
 
 
@@ -418,53 +425,18 @@ ITEMS_FIELDS: tuple[str, ...] = (
 )
 
 
-def test_items_fields_all_still_named() -> None:
-    """Each of the four ``items_*`` sidecar fields must still be named
-    in the prose. AC-4 collapses the FOUR paragraphs into ONE consolidated
-    block (shared schema + per-field trigger line), but every field name
-    remains expressible — every transaction the narrator narrates must
-    still map to one of these four keys."""
+def test_items_fields_retired_from_narrator_output() -> None:
+    """Story 151-4 / ADR-150 step 4: the four ``items_*`` transactional sidecar
+    fields are RETIRED from the narrator output contract — the narrator no longer
+    emits them; the post-narration sidecar extractor produces them. They must no
+    longer be named in ``NARRATOR_OUTPUT_ONLY``. Supersedes the pre-151-4
+    ``test_items_fields_all_still_named`` (61-12 AC-4 consolidation)."""
     for field_name in ITEMS_FIELDS:
-        assert field_name in NARRATOR_OUTPUT_ONLY, (
-            f"NARRATOR_OUTPUT_ONLY no longer mentions {field_name!r}. "
-            f"AC-4 consolidates the four ``items_*`` paragraphs into "
-            f"one block but each field name must remain present so the "
-            f"narrator knows which key to emit. Without all four named, "
-            f"transaction-shape rules from the consolidated block don't "
-            f"reach every category."
+        assert field_name not in NARRATOR_OUTPUT_ONLY, (
+            f"NARRATOR_OUTPUT_ONLY still names {field_name!r}; ADR-150 step 4 "
+            f"retires the transactional fields from the narrator output contract "
+            f"(extracted post-narration now)."
         )
-
-
-def test_items_fields_block_compacted() -> None:
-    """The span between the first and last ``items_*`` reference shrinks
-    by ≥ 30 % from the pre-rewrite baseline.
-
-    Baseline (lines 186-195 of current output_only.md) is ~10 lines of
-    near-duplicated paragraphs. Post-rewrite is one consolidated block
-    — shared schema sentence plus one trigger line per field. The
-    30 % threshold is a structural heuristic: if the bytes between first
-    and last ``items_*`` mention haven't dropped meaningfully, the
-    paragraphs weren't consolidated.
-    """
-    # Measure current span as the baseline. Anchor against the actual
-    # current state of the file at red-phase RED.
-    starts = [
-        NARRATOR_OUTPUT_ONLY.find(f) for f in ITEMS_FIELDS if NARRATOR_OUTPUT_ONLY.find(f) >= 0
-    ]
-    assert len(starts) == len(ITEMS_FIELDS), (
-        "All four items_* fields must be locatable in the prose."
-    )
-    span = max(starts) - min(starts)
-    # Pre-rewrite span ~1,400 bytes (lines 186-195). Post-rewrite must be
-    # ≤ 1,000 bytes (30 % reduction from a tight 1,400 baseline).
-    assert span <= 1_000, (
-        f"Span between first and last ``items_*`` reference in "
-        f"NARRATOR_OUTPUT_ONLY is {span} bytes; AC-4 requires ≤ 1,000 "
-        f"bytes (≥ 30 % reduction from the ~1,400-byte pre-rewrite "
-        f"baseline). The four near-identical paragraphs must collapse "
-        f"into a consolidated block (shared schema sentence + per-field "
-        f"trigger line)."
-    )
 
 
 # ---------------------------------------------------------------------------

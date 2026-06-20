@@ -32,6 +32,16 @@ SPAN_NARRATOR_LOCATION_DRIFT_REPAIRED = "narrator.location_drift_repaired"
 # is what lets the GM panel (22-4) prove injection engaged.
 SPAN_NARRATOR_SEED_CONTEXT = "narrator.seed_context"
 
+# Story 126-36: party-scale (seat-count) signal. dust_and_lead playtest —
+# a SOLO session registered NO party section (register_party_peer_section
+# returns early on empty peers), so the narrator had no seat-count ground
+# truth and improvised a party-scaled quest brief ("fifty each for two
+# riders") in a one-player game. The fix injects an always-on party_scale
+# section; this span fires every prompt build, even solo (player_count=1),
+# so the GM panel can prove the narrator was told the party size — exactly
+# the always-emit discipline of narrator.seed_context above.
+SPAN_NARRATOR_PARTY_SCALE = "narrator.party_scale"
+
 # Story 71-40: per-turn tool-loop observability. ``complete_with_tools`` runs
 # one SDK round-trip per iteration; a turn that keeps requesting tools balloons
 # solo-turn p95. The summary span records how many iterations a turn actually
@@ -58,6 +68,7 @@ FLAT_ONLY_SPANS.update(
         SPAN_NARRATOR_SESSION_ROTATED,
         SPAN_NARRATOR_UNRECOVERABLE,
         SPAN_NARRATOR_SEED_CONTEXT,
+        SPAN_NARRATOR_PARTY_SCALE,
     }
 )
 
@@ -301,6 +312,7 @@ def narrator_multi_text_block_discarded_span(
 __all__ = [
     "SPAN_NARRATOR_LOCATION_DRIFT_REPAIRED",
     "SPAN_NARRATOR_MULTI_TEXT_BLOCK_DISCARDED",
+    "SPAN_NARRATOR_PARTY_SCALE",
     "SPAN_NARRATOR_SEALED_ROUND",
     "SPAN_NARRATOR_SEED_CONTEXT",
     "SPAN_NARRATOR_SESSION_ROTATED",

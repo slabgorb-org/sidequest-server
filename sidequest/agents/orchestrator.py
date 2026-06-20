@@ -2335,6 +2335,20 @@ class Orchestrator:
             )
             registry.register_party_peer_section(agent_name, context.party_peers)
 
+        # Party-scale seat-count signal (Story 126-36). ALWAYS fires, unlike
+        # the peer roster above (which is MP-only). A SOLO session leaves the
+        # peer list empty, so before this the narrator had no party-size
+        # ground truth and improvised a party-scaled quest brief ("fifty each
+        # for two riders") in a one-player dust_and_lead game. ``party_peers``
+        # excludes self, so seat count = 1 + len(peers). The span fires every
+        # build — even solo (player_count=1) — so the GM panel can prove the
+        # narrator was told the count (mirrors narrator.seed_context below).
+        from sidequest.telemetry.spans import SPAN_NARRATOR_PARTY_SCALE, Span
+
+        _player_count = 1 + len(context.party_peers)
+        with Span.open(SPAN_NARRATOR_PARTY_SCALE, {"player_count": _player_count}):
+            registry.register_party_scale_section(agent_name, _player_count)
+
         # Chassis interior positions — renders the Ship-tab source of truth
         # into the narrator prompt + the state-patch instruction.
         if context.pc_positions:

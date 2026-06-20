@@ -145,6 +145,15 @@ _WN_ACTION_BEAT_IDS = frozenset(
         WN_RUN_BEAT_ID,
     }
 )
+# Story 152-2 (ADR-143, WWN SRD §4.2) — the synthesized WWN cast action. 108-3
+# stripped ``cast_spell`` from every WWN hp_depletion combat def (cdef.beats == []);
+# the WWN engine OWNS the action set, so cast is a synthesized transient beat, not an
+# authored cdef entry. It is DELIBERATELY NOT in ``_WN_ACTION_BEAT_IDS``: cast routing
+# is WWN-ruleset-specific (the cast spine — ``_resolve_wwn_cast_for_beat`` — has no
+# non-WWN arm), so each call site gates synthesis on the ``wwn`` binding and a
+# cast_spell commit on any OTHER ruleset stays a loud unknown-beat raise (No Silent
+# Fallbacks), rather than synthesizing-but-silently-not-resolving.
+WN_CAST_SPELL_BEAT_ID = "cast_spell"
 # The disengage (move) actions that withdraw the actor from melee: ``run`` provokes
 # one free opportunity attack from each adjacent opponent; ``fighting_withdrawal``
 # does not (SRD §2.4.4).
@@ -219,6 +228,36 @@ def wn_action_beat(beat_id: str) -> BeatDef:
         kind=BeatKind.push,
         base=0,
         stat_check="DEX",
+    )
+
+
+def wn_cast_beat() -> BeatDef:
+    """The transient ``BeatDef`` for the synthesized WWN cast action (story 152-2).
+
+    108-3 stripped ``cast_spell`` from every WWN hp_depletion combat def; the WWN
+    engine OWNS the action set (ADR-143), so cast is synthesized, not looked up in
+    ``cdef.beats``. This beat is an inert VEHICLE — the real resolution is the WWN
+    cast spine (``_resolve_wwn_cast_for_beat``), gated downstream on
+    ``beat.id == "cast_spell"``:
+
+    * NO ``strike`` damage channel — spell damage flows through the cast spine, not
+      the weapon channel (``damage_channel`` defaults to ``none``).
+    * ``push`` kind — the pre-cast d20 outcome does NOT gate the cast: WWN High Magic
+      casting is automatic and the DEFENDER saves (SRD §4.2), so the spine runs
+      regardless of the throw tier.
+    * ``INT`` ``stat_check`` keeps the pre-cast throw well-formed.
+
+    Unlike ``attack``/the defensive actions this is NOT a member of
+    ``_WN_ACTION_BEAT_IDS`` / ``is_wn_action_beat`` — cast routing is WWN-specific, so
+    each dispatch seam gates synthesis on the ``wwn`` binding (a non-WWN ``cast_spell``
+    stays a loud unknown-beat raise).
+    """
+    return BeatDef(
+        id=WN_CAST_SPELL_BEAT_ID,
+        label="Cast Spell",
+        kind=BeatKind.push,
+        base=0,
+        stat_check="INT",
     )
 
 

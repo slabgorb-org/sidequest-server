@@ -6323,9 +6323,25 @@ def _apply_narration_result_to_snapshot(
                     raise ValueError(f"unknown actor {sel.actor!r} in beat selection")
                 beat = beat_by_id.get(sel.beat_id)
                 if beat is None:
-                    raise ValueError(
-                        f"unknown beat_id {sel.beat_id!r} for encounter {enc.encounter_type!r}"
-                    )
+                    if (
+                        sel.beat_id == "cast_spell"
+                        and pack is not None
+                        and pack.rules is not None
+                        and pack.rules.ruleset == "wwn"
+                    ):
+                        # Story 152-2 (ADR-143): cast_spell is a synthesized WWN
+                        # action — 108-3 stripped it from cdef.beats, so the narrator
+                        # apply path raised here BEFORE reaching the cast spine below.
+                        # Synthesize the transient cast beat (mirroring dice.py /
+                        # wn_round.py) so this path reaches the SAME spine. WWN-gated:
+                        # a cast_spell on any other ruleset stays a loud raise.
+                        from sidequest.game.beat_filter import wn_cast_beat
+
+                        beat = wn_cast_beat()
+                    else:
+                        raise ValueError(
+                            f"unknown beat_id {sel.beat_id!r} for encounter {enc.encounter_type!r}"
+                        )
                 # Renamed from `outcome` to `tier` to avoid shadowing the
                 # function-scoped `outcome = NarrationApplyOutcome()`. The
                 # legacy beat path was silently returning RollOutcome from

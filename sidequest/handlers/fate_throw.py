@@ -233,7 +233,47 @@ class FateThrowHandler:
                 component="fate",
                 severity="info",
             )
-            return []
+            # Fall through (do NOT return): the FATE_ROLL broadcast above is
+            # display-only. A resolved/advanced exchange still has to be PERSISTED
+            # and NARRATED below.
+
+        # PERSIST + NARRATE a resolved-or-advanced exchange (#936). A Fate Contest
+        # round that scored a victory — or a Conflict that resolved WITHOUT parking
+        # at the DEFEND barrier — has already applied every mechanic in memory
+        # (``run_fate_contest_exchange`` mutated ``encounter.contest.player_victories``;
+        # ``run_fate_exchange`` applied stress/taken-out). Without this seam that
+        # mutation was DROPPED: never written to the snapshot, never pushed to the
+        # table — the Contest froze at 0/N, un-winnable. The Conflict path only
+        # *looked* fine because the NPC counter-attack PARKS it at the DEFEND barrier
+        # and ``_finish_defense`` narrates on RESUME; a Contest has no attacks, so it
+        # never parked and never narrated. We reuse the SAME persistence-owning seam
+        # the DEFEND-resume path uses (``_narrate_resolved_fate_exchange`` →
+        # ``_execute_narration_turn``): it owns ``room.save()``, husk-reaping, and the
+        # per-peer NARRATION + STATE fan-out. The DEFEND-park branch returned earlier
+        # (it parks; no narration until RESOLVE) and carries ``exchange=None``, so it
+        # is correctly skipped here.
+        if result.exchange is not None:
+            from sidequest.telemetry.watcher_hub import publish_event
+
+            # Consume this round's hints into the replay action and CLEAR them so a
+            # multi-round Contest does not re-narrate a prior round's victory line
+            # (``render_encounter_summary`` also reads ``encounter.narrator_hints``).
+            hints = list(encounter.narrator_hints)
+            encounter.narrator_hints.clear()
+            publish_event(
+                "state_transition",
+                {
+                    "field": "encounter",
+                    "op": "fate_exchange_narrated",
+                    "actor": character.core.name,
+                    "resolved": encounter.resolved,
+                    "source": "fate_throw",
+                },
+                component="encounter",
+                severity="info",
+            )
+            action = "[FATE_EXCHANGE_RESOLVED] " + " ".join(str(h) for h in hints)
+            return await session._narrate_resolved_fate_exchange(sd, action)
         return []
 
     async def _handle_defend(

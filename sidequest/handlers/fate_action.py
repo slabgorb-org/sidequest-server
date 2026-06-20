@@ -196,7 +196,37 @@ class FateActionHandler:
                 component="fate",
                 severity="info",
             )
-            return []
+            # Fall through (do NOT return): the FATE_ROLL broadcast above is
+            # display-only. A resolved/advanced exchange still needs persist+narrate.
+
+        # PERSIST + NARRATE a resolved-or-advanced exchange (#936) — the server-rolled
+        # sibling of the FateThrowHandler fix. A Fate Contest round that scored a
+        # victory (``run_fate_contest_exchange`` mutated
+        # ``encounter.contest.player_victories``) or a Conflict that resolved without
+        # parking at the DEFEND barrier has already applied every mechanic in memory;
+        # without this seam it is DROPPED (never saved, never pushed to the table).
+        # Reuse the same persistence-owning seam the DEFEND-resume path uses
+        # (``_narrate_resolved_fate_exchange`` → ``_execute_narration_turn``). The
+        # DEFEND-park branch carries ``exchange=None`` and is correctly skipped.
+        if result.exchange is not None:
+            from sidequest.telemetry.watcher_hub import publish_event
+
+            hints = list(encounter.narrator_hints)
+            encounter.narrator_hints.clear()
+            publish_event(
+                "state_transition",
+                {
+                    "field": "encounter",
+                    "op": "fate_exchange_narrated",
+                    "actor": character.core.name,
+                    "resolved": encounter.resolved,
+                    "source": "fate_action",
+                },
+                component="encounter",
+                severity="info",
+            )
+            action = "[FATE_EXCHANGE_RESOLVED] " + " ".join(str(h) for h in hints)
+            return await session._narrate_resolved_fate_exchange(sd, action)
         return []
 
 

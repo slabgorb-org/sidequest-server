@@ -21,7 +21,12 @@ from types import SimpleNamespace
 import sidequest.game.ruleset.fate_resolution as fr
 from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore
-from sidequest.game.encounter import EncounterActor, EncounterMetric, StructuredEncounter
+from sidequest.game.encounter import (
+    ContestState,
+    EncounterActor,
+    EncounterMetric,
+    StructuredEncounter,
+)
 from sidequest.game.fate_sheet import Aspect, FateSheet
 from sidequest.game.persistence import GameMode
 from sidequest.game.ruleset import get_ruleset_module
@@ -142,6 +147,99 @@ def test_fate_throw_roundtrips_to_fate_roll():
     resolve_parked_defenses(encounter=enc, snapshot=snap, ruleset=get_ruleset_module("fate"))
     assert enc.find_actor("Thug").withdrawn is True
     assert enc.resolved is True
+
+
+def _rival() -> Npc:
+    # A seated Other with a Fate sheet (so decide_opponent_action seats its commit);
+    # low skills so the player's thrown +4 wins the exchange deterministically.
+    sheet = FateSheet(skills={"Rapport": 0, "Empathy": 0, "Will": 0})
+    return Npc(core=CreatureCore(name="Rival", description="d", personality="p", fate_sheet=sheet))
+
+
+def _fate_contest_session():
+    # A Fate CONTEST (encounter.contest set) — the path #936 dropped. win_condition
+    # is the vestigial dial; ContestState.player_victories is the source of truth.
+    enc = StructuredEncounter(
+        encounter_type="social_duel",
+        category="social",
+        win_condition="dial_threshold",
+        player_metric=EncounterMetric(name="barbs_landed", threshold=3),
+        opponent_metric=EncounterMetric(name="barbs_landed", threshold=3),
+        contest=ContestState(target=3),
+        actors=[
+            EncounterActor(name="Hero", role="lead", side="player"),
+            EncounterActor(name="Rival", role="foe", side="opponent"),
+        ],
+    )
+    snap = GameSnapshot(
+        genre_slug="fate_test", characters=[_pc("Hero", {"Rapport": 4})], encounter=enc
+    )
+    snap.npcs.append(_rival())
+    room, q = _room_with_seat("p1")
+    narrated: dict = {}
+
+    async def _fake_narrate(sd, action):  # records the persist+narrate hand-off
+        narrated["called"] = True
+        narrated["action"] = action
+        return []
+
+    sd = SimpleNamespace(
+        snapshot=snap,
+        genre_pack=SimpleNamespace(rules=SimpleNamespace(ruleset="fate")),
+        genre_slug="fate_test",
+        world_slug="test_world",
+        player_id="p1",
+        _room=room,
+    )
+    session = SimpleNamespace(
+        _state=_State.Playing,
+        _session_data=sd,
+        _room=room,
+        _narrate_resolved_fate_exchange=_fake_narrate,
+    )
+    return session, enc, q, narrated
+
+
+def _overcome_throw() -> FateThrowMessage:
+    # Overcome is passive (no target). Thrown +4 faces → ladder 8 with Rapport 4.
+    return FateThrowMessage(
+        payload=FateThrowPayload(
+            request_id="c1",
+            action="overcome",
+            skill="Rapport",
+            target=None,
+            throw_params=ThrowParams(
+                velocity=(0.0, 4.0, -1.0), angular=(0.5, 0.5, 0.5), position=(0.5, 0.5)
+            ),
+            face=(1, 1, 1, 1),
+        ),
+        player_id="p1",
+    )
+
+
+def test_fate_contest_round_persists_and_narrates():
+    # #936 regression: a winning Contest Overcome must (a) advance the victory tally
+    # AND (b) be routed to the persist+narrate seam. Before the fix the handler
+    # broadcast the dice and returned [], dropping the in-memory victory increment —
+    # the Contest froze at 0/N, un-winnable. The engine-level integration tests pass
+    # because they drive run_fate_contest_exchange directly; this is the HANDLER seam.
+    session, enc, q, narrated = _fate_contest_session()
+
+    out = asyncio.run(FATE_THROW_HANDLER.handle(session, _overcome_throw()))
+
+    # Display path: the thrown faces broadcast as the authoritative roll.
+    rolls = _drain_rolls(q)
+    assert len(rolls) == 1
+    assert tuple(rolls[0].payload.dice) == (1, 1, 1, 1)
+    # ENGINE: the contest tally advanced in-memory (player +2 on a 3+ margin).
+    assert enc.contest is not None and enc.contest.player_victories >= 1
+    # HANDLER WIRING (#936): the resolved exchange reached the persist+narrate seam.
+    assert narrated.get("called") is True, "#936: resolved Contest exchange not narrated/persisted"
+    assert narrated["action"].startswith("[FATE_EXCHANGE_RESOLVED]")
+    # Hints consumed so a multi-round Contest does not re-narrate the prior round.
+    assert enc.narrator_hints == []
+    # The handler returns whatever the narration seam returned (broadcast, not return).
+    assert out == []
 
 
 def test_npc_path_still_server_rolls_in_same_exchange(monkeypatch):

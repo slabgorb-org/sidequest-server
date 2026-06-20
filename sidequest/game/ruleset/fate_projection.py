@@ -148,8 +148,16 @@ def _project_conflict_participant(
         if sheet is not None:
             stress = _project_stress(sheet)
             consequences = _project_consequences(sheet)
+    # Story 126-29: read the sealed-commit ledger (the server-authoritative,
+    # resume-safe record of who has acted this exchange) — never a parallel store.
+    enc = snapshot.encounter
+    committed = enc is not None and any(c.actor == actor.name for c in enc.fate_commits)
     return FateConflictParticipant(
-        name=actor.name, side=actor.side, stress=stress, consequences=consequences
+        name=actor.name,
+        side=actor.side,
+        committed=committed,
+        stress=stress,
+        consequences=consequences,
     )
 
 

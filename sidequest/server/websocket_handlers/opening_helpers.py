@@ -16,11 +16,13 @@ from opentelemetry import trace
 
 from sidequest.game.quest_offer import stash_quest_offers
 from sidequest.game.region_init import RegionInitError
+from sidequest.game.session import RoomState
 from sidequest.server.dispatch.opening import (
     OpeningResolutionError,
     _resolve_opening_post_chargen,
     build_directive,
 )
+from sidequest.telemetry.spans import SPAN_OPENING_PROPS_PERSISTED, Span
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
 
 if TYPE_CHECKING:
@@ -281,9 +283,6 @@ def persist_opening_props(
     """
     if not props:
         return
-
-    from sidequest.game.session import RoomState
-    from sidequest.telemetry.spans import SPAN_OPENING_PROPS_PERSISTED, Span
 
     room_state = snapshot.room_states.get(room_id)
     if room_state is None:

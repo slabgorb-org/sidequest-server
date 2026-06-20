@@ -186,6 +186,74 @@ def parked_conflict_filled(
     return snap, enc
 
 
+def parked_conflict_two_defenders(
+    *,
+    defenders: tuple[str, str] = ("Rux", "Vala"),
+    attackers: tuple[str, str] = ("Bandit", "Brigand"),
+    request_ids: tuple[str, str] = ("d1", "d2"),
+    attack_total: int = 4,
+    defend_skill: str = "Athletics",
+    defend_skill_rating: int = 2,
+) -> tuple[GameSnapshot, StructuredEncounter]:
+    """A conflict PARKED at the DEFEND barrier with TWO PC defenders — two unfilled
+    ``pending_defenses`` entries. ``parked_conflict`` only ever builds ONE entry, so
+    this is the fixture that exercises a PARTIAL fill: filling one defender's entry
+    leaves ``ledger_full`` False (the ``all(...)`` gate keeps the barrier open until
+    EVERY defender has answered), and filling both closes it.
+
+    Each defender is seated opposite their own NPC attacker, each with a sealed
+    attack commit, mirroring ``_parked_base`` per (attacker, defender) pair."""
+    from sidequest.game.encounter import FatePendingDefense
+
+    (d_a, d_b), (a_a, a_b), (r_a, r_b) = defenders, attackers, request_ids
+    pairs = ((a_a, d_a, r_a), (a_b, d_b, r_b))
+
+    enc = StructuredEncounter(
+        encounter_type="duel",
+        category="combat",
+        player_metric=EncounterMetric(name="p", threshold=10),
+        opponent_metric=EncounterMetric(name="o", threshold=10),
+        actors=[
+            EncounterActor(name=d_a, role="lead", side="player"),
+            EncounterActor(name=d_b, role="lead", side="player"),
+            EncounterActor(name=a_a, role="foe", side="opponent"),
+            EncounterActor(name=a_b, role="foe", side="opponent"),
+        ],
+    )
+    for attacker, defender, _rid in pairs:
+        enc.fate_commits.append(
+            FateSealedCommit(
+                actor=attacker,
+                action="attack",
+                skill="Fight",
+                target=defender,
+                ladder_total=attack_total,
+                dice=(1, 1, 1, 0),
+            )
+        )
+    snap = GameSnapshot(
+        genre_slug="fate_test",
+        characters=[
+            _pc(d_a, {defend_skill: defend_skill_rating, "Notice": 1}),
+            _pc(d_b, {defend_skill: defend_skill_rating, "Notice": 1}),
+        ],
+        encounter=enc,
+    )
+    for attacker in (a_a, a_b):
+        snap.npcs.append(_healthy_npc(attacker, {"Fight": 2, "Athletics": 1, "Notice": 1}))
+    for attacker, defender, rid in pairs:
+        enc.pending_defenses.append(
+            FatePendingDefense(
+                request_id=rid,
+                attacker=attacker,
+                defender=defender,
+                attack_skill="Fight",
+                attack_total=attack_total,
+            )
+        )
+    return snap, enc
+
+
 def _faces_for_sum(total: int) -> tuple[int, int, int, int]:
     """Build a 4dF face tuple summing to ``total`` (each face in {-1, 0, 1}). Fails
     loud if ``total`` is outside the [-4, 4] a single 4dF throw can express — a test

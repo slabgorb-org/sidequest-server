@@ -46,6 +46,17 @@ from sidequest.server.views import party_member_from_character
 
 CONTENT_ROOT = Path(__file__).resolve().parents[3] / "sidequest-content" / "genre_packs"
 
+# Combat beats that the WWN de-nativization (story 108-3 / ADR-143) removed from
+# the per-class surface. Under a Without Number binding the native combat beats
+# (``committed_blow``/``strike``) are stripped off the hp_depletion combat def and
+# the WN round supplies the universal combat action set (attack / cast / Total
+# Defense / Fighting Withdrawal) — so a WN class carries NONE of these as a
+# per-class encounter beat. What survives in ``encounter_beat_choices`` (and
+# therefore in ``class_moves``) is the chase/negotiation DIAL beats only.
+_COMBAT_BEAT_IDS: frozenset[str] = frozenset(
+    {"committed_blow", "strike", "attack", "cast_spell", "brace", "break_contact"}
+)
+
 
 @pytest.fixture
 def cc_pack():
@@ -156,15 +167,19 @@ def _build_sheet(pack, *, target_class: str):
 
 # ---------------------------------------------------------------------------
 # Warrior wiring test — the WWN Warrior signature pair (Killing Blow + Veteran's
-# Luck) flows end-to-end as Class-source abilities, and class_moves carry the
-# Warrior's combat beats.
+# Luck) flows end-to-end as Class-source abilities. class_moves carries only the
+# surviving chase/negotiation DIAL beats; the native combat beat committed_blow
+# is GONE under the WWN de-nativization (ADR-143), not unwired.
 # ---------------------------------------------------------------------------
 
 
 def test_warrior_chargen_yields_signature_pair_in_state_mirror(cc_pack):
     """A Warrior created in caverns_and_claudes shows the WWN Warrior signature
     pair in the protocol-shaped CharacterSheetDetails with source=Class and real
-    prose, and committed_blow appears in class_moves."""
+    prose. class_moves resolves only the surviving chase/negotiation DIAL beats —
+    committed_blow (a native combat beat) is de-nativized away under the WWN
+    binding (ADR-143), so the combat menu is the universal WWN action set, not a
+    per-class beat."""
     sheet = _build_sheet(cc_pack, target_class="Warrior")
 
     assert sheet.abilities, "Expected Warrior abilities — _seed_class_abilities may not be wired"
@@ -179,10 +194,27 @@ def test_warrior_chargen_yields_signature_pair_in_state_mirror(cc_pack):
             f"{ability.name} genre_description contains placeholder text"
         )
 
-    # class_moves: the Warrior's committed_blow beat is present and resolved.
+    # class_moves under the de-nativized WWN surface (epic-152 / ADR-143): a WN
+    # class carries NO per-class combat beat. committed_blow was the native
+    # Warrior combat beat; 108-3 stripped it and the WN round now supplies the
+    # universal combat action set (attack / cast / Total Defense / Fighting
+    # Withdrawal). What remains in class_moves is the chase/negotiation DIAL
+    # beats — populated, provenance-traceable, and label-resolved.
     move_ids = {m.id for m in sheet.class_moves}
-    assert "committed_blow" in move_ids, (
-        "committed_blow missing from class_moves — encounter_beat_choices not wired"
+    assert "committed_blow" not in move_ids, (
+        "committed_blow must NOT appear in class_moves — the native Warrior "
+        "combat beat was de-nativized under the WWN binding (ADR-143); combat is "
+        "the universal WWN action set supplied by the engine, not a per-class beat"
+    )
+    assert not (move_ids & _COMBAT_BEAT_IDS), (
+        f"WN class_moves must carry no per-class combat beat; found "
+        f"{move_ids & _COMBAT_BEAT_IDS} — combat is de-nativized (ADR-143)"
+    )
+    warrior_def = next(c for c in cc_pack.classes if c.display_name == "Warrior")
+    assert move_ids, "Warrior class_moves must still resolve the surviving DIAL beats"
+    assert move_ids <= set(warrior_def.encounter_beat_choices), (
+        f"class_moves must come from the Warrior's own encounter_beat_choices; "
+        f"leaked {move_ids - set(warrior_def.encounter_beat_choices)}"
     )
     assert all(m.label for m in sheet.class_moves), (
         f"every class_move must resolve to a non-empty label; got {sheet.class_moves!r}"
@@ -196,8 +228,10 @@ def test_warrior_chargen_yields_signature_pair_in_state_mirror(cc_pack):
 
 def test_mage_chargen_yields_read_worked_stone_signature(cc_pack):
     """The WWN Mage carries one signature Class ability (Read the Worked Stone);
-    its combat magic is gated through the rules.yaml cast_spell class_filter, not
-    a generic encounter_beat. class_moves must still be populated and resolved.
+    its combat magic is the WN ``cast`` action gated through the rules.yaml
+    cast_spell class_filter (story 152-2), not a per-class encounter beat. So no
+    combat beat (cast_spell included) appears in class_moves — only the surviving
+    chase/negotiation DIAL beats, which must still be populated and resolved.
     """
     sheet = _build_sheet(cc_pack, target_class="Mage")
 
@@ -207,7 +241,17 @@ def test_mage_chargen_yields_read_worked_stone_signature(cc_pack):
     )
 
     move_ids = {m.id for m in sheet.class_moves}
-    assert move_ids, "Mage class_moves must be populated from encounter_beat_choices"
+    assert move_ids, "Mage class_moves must still resolve the surviving DIAL beats"
+    assert not (move_ids & _COMBAT_BEAT_IDS), (
+        f"Mage class_moves must carry no per-class combat beat — cast is the WN "
+        f"cast action gated by cast_spell class_filter, not an encounter beat; "
+        f"found {move_ids & _COMBAT_BEAT_IDS}"
+    )
+    mage_def = next(c for c in cc_pack.classes if c.display_name == "Mage")
+    assert move_ids <= set(mage_def.encounter_beat_choices), (
+        f"class_moves must come from the Mage's own encounter_beat_choices; "
+        f"leaked {move_ids - set(mage_def.encounter_beat_choices)}"
+    )
     assert all(m.label for m in sheet.class_moves), (
         f"every Mage class_move must resolve to a non-empty label; got {sheet.class_moves!r}"
     )

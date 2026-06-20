@@ -419,6 +419,36 @@ def test_fighting_withdrawal_does_not_cancel_the_opponent_own_turn_attack(
     )
 
 
+def test_run_does_not_re_attack_a_fleer_downed_mid_flight(monkeypatch, otel_capture):
+    """RED (Reviewer MEDIUM, rework R1): in a MULTI-opponent flee, once the FIRST
+    opportunity attack downs the fleer the loop must STOP — the remaining opponents
+    must not keep swinging at a downed PC (which also double-fires the resolution
+    close, confusing the GM-panel lie detector). The own-turn slot already guards
+    this with ``if encounter.resolved: continue`` (wn_round.py); the opportunity
+    loop must mirror it (break/skip once the fight resolves or the fleer drops).
+
+    Two blades; the PC at 6 HP flees; MAX rolls so the first opportunity attack
+    (1d8=8) downs the PC. EXACTLY ONE opportunity_attack span must fire. Today the
+    loop has no guard, so BOTH blades swing → 2 spans → RED."""
+    monkeypatch.setattr("random.randint", lambda a, b: b)
+    pack = load_pack("heavy_metal")
+    snap, enc = seat_wn_combat(pack, [_PC], [_OPP, "Cutthroat"], pc_hp=6)
+    force_initiative(enc, [(_PC, 9), (_OPP, 5), ("Cutthroat", 2)])  # PC flees on its slot first
+
+    dispatch_throw(pack=pack, snap=snap, enc=enc, character_name=_PC, player_id="p1", beat_id=_RUN)
+
+    assert _pc_hp(snap) <= 0, (
+        f"fixture precondition: the first opportunity attack must DOWN the 6-HP fleer; "
+        f"PC at {_pc_hp(snap)} HP"
+    )
+    opp_atk = _opp_attack_spans(otel_capture, source="opportunity_attack")
+    assert len(opp_atk) == 1, (
+        "once the fleer is downed by the first opportunity attack the loop must STOP — the "
+        f"remaining opponent must not swing at the downed PC; got {len(opp_atk)} opportunity "
+        "attacks (the loop lacks the encounter.resolved/fleer-downed guard the own-turn slot has)"
+    )
+
+
 # ---------------------------------------------------------------------------
 # AC5 — wiring: the defensive round resolves through the production
 #       dispatch_dice_throw → run_wn_round seam, proven by the WWN round span.

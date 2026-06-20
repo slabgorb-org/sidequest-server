@@ -395,10 +395,26 @@ def run_wn_round(
                 # live opponent — the fleer leaves themselves open (SRD §2.4.4). The
                 # free attack is tagged ``source="opportunity_attack"`` so the GM
                 # panel distinguishes it from the opponent's own-turn slot attack.
+                fleer_core = snapshot.find_creature_core(token)
                 for opp in encounter.actors:
+                    # Stop once the fight resolves or the fleer is downed: a free
+                    # attack that drops the fleer must not let the REMAINING opponents
+                    # keep swinging at a downed PC (which would also double-fire the
+                    # resolution close). Mirrors the own-turn slot's ``encounter.resolved``
+                    # guard above; the HP check also covers the multi-PC case where the
+                    # fleer drops but the encounter stays live for the others.
+                    if encounter.resolved or (
+                        fleer_core is not None and fleer_core.hp.current <= 0
+                    ):
+                        break
                     if opp.side != "opponent" or opp.withdrawn:
                         continue
                     opp_core = snapshot.find_creature_core(opp.name)
+                    # ``opp_core is None`` (an opponent seated in the encounter but not
+                    # in the snapshot's creature map) counts as LIVE and still attacks —
+                    # intentional parity with ``_first_live_actor`` ("no resolvable core
+                    # counts as live — the opposite would silently exempt unseeded
+                    # fixtures"). Only a resolvable, downed (≤0 HP) opponent is skipped.
                     if opp_core is not None and opp_core.hp.current <= 0:
                         continue
                     messages.extend(

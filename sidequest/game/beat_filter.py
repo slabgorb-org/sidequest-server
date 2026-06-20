@@ -116,8 +116,9 @@ def item_use_beats(inventory_items: list[dict[str, Any]] | None) -> list[BeatDef
 # ``isinstance(ruleset, WithoutNumberRulesetModule)`` (dice.py + wn_round.py).
 #
 # item-use (``use_item:<slug>``) and cast (``cast_spell``) already have their own
-# dispatch routes and are NOT in this set. ``move`` is the WN disengage action and
-# is deferred (no resolution semantics on the dice path yet — story follow-up).
+# dispatch routes and are NOT in this set. The WN disengage/defensive actions
+# (``run`` / ``fighting_withdrawal`` / ``total_defense``) ARE in this set as of
+# story 152-1 — see the 152-1 block below for their (non-strike) synthesis.
 #
 # Gate caveat: a NATIVE pack may itself author a beat literally named ``attack``
 # (tests/fixtures/packs/test_genre). The isinstance gate at the call site leaves

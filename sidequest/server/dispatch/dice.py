@@ -34,10 +34,12 @@ from dataclasses import dataclass
 
 from sidequest.game.beat_filter import (
     WN_ATTACK_BEAT_ID,
+    WN_CAST_SPELL_BEAT_ID,
     WN_TOTAL_DEFENSE_BEAT_ID,
     is_item_use_beat,
     is_wn_action_beat,
     wn_action_beat,
+    wn_cast_beat,
 )
 from sidequest.game.beat_kinds import (
     ApplyResult,
@@ -417,6 +419,21 @@ def dispatch_dice_throw(
     # beat — keep the authored-beat lookup unchanged.
     if isinstance(ruleset, WithoutNumberRulesetModule) and is_wn_action_beat(payload.beat_id):
         beat = wn_action_beat(payload.beat_id)
+    elif (
+        payload.beat_id == WN_CAST_SPELL_BEAT_ID
+        and pack
+        and pack.rules
+        and pack.rules.ruleset == "wwn"
+    ):
+        # Story 152-2 (ADR-143): cast_spell is a synthesized WWN action — 108-3
+        # stripped it from cdef.beats, so it misses the is_wn_action_beat attack
+        # synthesis above and would otherwise fall into the empty-cdef raise below
+        # BEFORE the (already-correct) cast validations + spine ever run. Synthesize
+        # the transient cast beat here, mirroring the is_item_use_beat intercept, so
+        # the request reaches the cast-shape guards (spell_id/catalog/opposed) and
+        # the cast spine in _apply_committed_player_beat. WWN-gated: a cast_spell on
+        # any other ruleset stays a loud unknown-beat raise (No Silent Fallbacks).
+        beat = wn_cast_beat()
     else:
         beat = next((b for b in cdef.beats if b.id == payload.beat_id), None)
         if beat is None:

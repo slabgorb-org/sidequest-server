@@ -30,6 +30,7 @@ import random
 from dataclasses import dataclass
 
 from sidequest.game.beat_filter import (
+    WN_CAST_SPELL_BEAT_ID,
     WN_FIGHTING_WITHDRAWAL_BEAT_ID,
     WN_RUN_BEAT_ID,
     WN_TOTAL_DEFENSE_BEAT_ID,
@@ -38,6 +39,7 @@ from sidequest.game.beat_filter import (
     is_wn_flee_action,
     is_wn_nonoffensive_action,
     wn_action_beat,
+    wn_cast_beat,
 )
 from sidequest.game.beat_kinds import _opposite_side_first_actor
 from sidequest.game.encounter import EncounterActor, StructuredEncounter, WnSealedCommit
@@ -458,6 +460,18 @@ def run_wn_round(
         # barrier-closing walk re-raises after dice.py resolved the commit.
         if isinstance(ruleset, WithoutNumberRulesetModule) and is_wn_action_beat(commit.beat_id):
             beat = wn_action_beat(commit.beat_id)
+        elif (
+            commit.beat_id == WN_CAST_SPELL_BEAT_ID
+            and pack
+            and pack.rules
+            and pack.rules.ruleset == "wwn"
+        ):
+            # Story 152-2: the sealed-round twin of the dice.py cast intercept —
+            # a committed cast_spell (e.g. an MP barrier-closing walk) is a
+            # synthesized WWN action (108-3 stripped it from cdef.beats), so route
+            # it through the transient cast beat to the WWN cast spine in
+            # _apply_committed_player_beat instead of re-raising here. WWN-gated.
+            beat = wn_cast_beat()
         else:
             beat = next((b for b in cdef.beats if b.id == commit.beat_id), None)
             if beat is None:

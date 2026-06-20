@@ -899,6 +899,30 @@ def indefinite_article(word: str) -> str:
     return "a"
 
 
+def substitute_token_with_article(text: str, token: str, value: str) -> str:
+    """Replace ``token`` with ``value``, correcting a preceding indefinite article.
+
+    Chargen prose slots phrase {class}/{race} as nouns behind a HARDCODED article
+    ("a {class}'s working life", "a {race} household" — see the tea_and_murder
+    char_creation templates). A vowel-initial value then renders the wrong article
+    ("a Episcopal Rector"). When an "a"/"an" immediately precedes the token, swap it
+    for the article that agrees with ``value`` (case-preserving, so a sentence-
+    leading "A {class}" stays capitalized), then substitute. An empty value falls
+    through to a plain replace — the empty-slot warn path upstream is unchanged.
+    """
+    if not value:
+        return text.replace(token, value)
+    correct = indefinite_article(value)
+
+    def _fix_article(m: re.Match[str]) -> str:
+        leading = m.group(1)
+        art = correct.capitalize() if leading[0].isupper() else correct
+        return f"{art} {value}"
+
+    text = re.sub(rf"\b([Aa]n?)\s+{re.escape(token)}", _fix_article, text)
+    return text.replace(token, value)
+
+
 # A proper-noun-ish token ("Zeppo", "V8", "D'Arcy") and a 1-4 token phrase
 # ("Mad Max", "Duck Soup", "Snake Plissken"). Deliberately case-SENSITIVE —
 # the keyword prefixes below match case-insensitively via scoped (?i:) groups,
@@ -1679,12 +1703,14 @@ class CharacterBuilder:
         span = trace.get_current_span()
 
         if had_name or had_class or had_race or had_hc:
-            rendered = (
-                text.replace("{name}", name)
-                .replace("{class}", class_)
-                .replace("{race}", race)
-                .replace("{high_concept}", high_concept)
-            )
+            # {class}/{race} are noun slots behind a hardcoded article in the prose
+            # ("a {class}'s working life") — correct the article to agree with the
+            # substituted value so a vowel-initial vocation reads "an Episcopal
+            # Rector", not "a Episcopal Rector" (sq-playtest 150-6). {name} (proper
+            # noun) and {high_concept} (phrase) take no article correction.
+            rendered = substitute_token_with_article(text, "{class}", class_)
+            rendered = substitute_token_with_article(rendered, "{race}", race)
+            rendered = rendered.replace("{name}", name).replace("{high_concept}", high_concept)
             any_empty = (
                 (had_name and not name)
                 or (had_class and not class_)

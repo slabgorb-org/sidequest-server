@@ -163,8 +163,11 @@ class TestArticleLeadingCannedLabel:
         assert acc.class_hint == "Elementalist"
         # ...but the oblique flavor phrase is NOT stamped as the display label.
         assert acc.class_label is None
-        # {class} prose falls back to the resolved class — no doubled article.
-        assert b.interpolate_scene_narration("a {class}") == "a Elementalist"
+        # {class} prose falls back to the resolved class — no doubled article, and
+        # the hardcoded indefinite article now AGREES with the value (sq-playtest
+        # 150-6): "a {class}" before a vowel-initial vocation renders "an
+        # Elementalist", not the ungrammatical "a Elementalist".
+        assert b.interpolate_scene_narration("a {class}") == "an Elementalist"
 
     def test_definite_article_label_also_skipped(self) -> None:
         b = CharacterBuilder(scenes=[self._calling_scene()], rules=simple_rules())

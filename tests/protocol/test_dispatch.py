@@ -1,19 +1,29 @@
-"""Tests for DispatchPackage types (Group B, Local DM decomposer output contract)."""
+"""Tests for DispatchPackage types (Group B, Local DM decomposer output contract).
+
+Story 153-1 (output-slim): the contract was slimmed to the fields consumed
+pre-narration. ``Referent`` / ``PlayerDispatch.resolved`` / ``PlayerDispatch.
+lethality`` / ``ActionRewrite.you`` are gone; ``VisibilityTag`` is server-
+defaulted (omittable); ``DispatchPackage`` leads with ``per_player`` and
+``PlayerDispatch`` leads with ``dispatch`` (generation-order latency lever);
+and a straggler-strip validator drops a removed key Haiku still emits instead
+of letting ``extra="forbid"`` reject the whole package.
+"""
 
 from __future__ import annotations
 
 import json
+import logging
 
 import pytest
 from pydantic import ValidationError
 
 from sidequest.protocol.dispatch import (
+    ActionRewrite,
     CrossAction,
     DispatchPackage,
     LethalityVerdict,
     NarratorDirective,
     PlayerDispatch,
-    Referent,
     SubsystemDispatch,
     VisibilityTag,
 )
@@ -38,22 +48,6 @@ def test_dispatch_package_full_roundtrip():
             PlayerDispatch(
                 player_id="player:Alice",
                 raw_action="Let's attack him!",
-                resolved=[
-                    Referent(
-                        token="him",
-                        resolved_to="npc:goblin_2",
-                        confidence=0.55,
-                        alternatives=["npc:goblin_1", "npc:bandit_1"],
-                        resolution_note="most recent direct combatant",
-                    ),
-                    Referent(
-                        token="let's",
-                        resolved_to=None,
-                        confidence=0.0,
-                        alternatives=[],
-                        resolution_note="no party present",
-                    ),
-                ],
                 dispatch=[
                     SubsystemDispatch(
                         subsystem="distinctive_detail_hint",
@@ -82,7 +76,6 @@ def test_dispatch_package_full_roundtrip():
                         ),
                     ),
                 ],
-                lethality=[],
                 narrator_instructions=[
                     NarratorDirective(
                         kind="must_not_narrate",
@@ -386,9 +379,7 @@ def test_dispatch_package_rejects_duplicate_idempotency_keys_within_player():
                 PlayerDispatch(
                     player_id="p",
                     raw_action="",
-                    resolved=[],
                     dispatch=[dup, dup],
-                    lethality=[],
                     narrator_instructions=[],
                 ),
             ],
@@ -428,12 +419,179 @@ def test_dispatch_package_rejects_duplicate_idempotency_keys_across_per_and_cros
                 PlayerDispatch(
                     player_id="p",
                     raw_action="",
-                    resolved=[],
                     dispatch=[d_per],
-                    lethality=[],
                     narrator_instructions=[],
                 )
             ],
             cross_player=[CrossAction(participants=["p"], witnesses=["p"], dispatch=[d_cross])],
             confidence_global=1.0,
         )
+
+
+# ---------------------------------------------------------------------------
+# Story 153-1 (output-slim) — the slimmed contract
+# ---------------------------------------------------------------------------
+# AC1: resolved[] / lethality[] / action_rewrite.you / Referent are removed;
+#      LethalityVerdict/LethalityVerdictKind/Reversibility are RETAINED.
+
+
+def test_player_dispatch_has_no_resolved_or_lethality_fields():
+    """AC1: the two dead per-player fields are gone from the schema — the
+    router stops generating a prose Referent list and prose lethality verdicts
+    on every turn (the 0.94-with-output-tokens latency lever)."""
+    fields = set(PlayerDispatch.model_fields)
+    assert "resolved" not in fields
+    assert "lethality" not in fields
+    # The fields that survive are exactly the pre-narration-consumed ones.
+    assert fields == {"dispatch", "narrator_instructions", "player_id", "raw_action"}
+
+
+def test_action_rewrite_has_no_you_field():
+    """AC1: action_rewrite collapses to {named, intent}. ``you`` (the
+    second-person rewrite) was generated every acting turn and is cut."""
+    assert "you" not in ActionRewrite.model_fields
+    assert set(ActionRewrite.model_fields) == {"named", "intent"}
+
+
+def test_referent_is_removed():
+    """AC1: the Referent class itself is deleted (its sole consumer was the
+    cut ``resolved`` list)."""
+    import sidequest.protocol.dispatch as dispatch_module
+
+    assert not hasattr(dispatch_module, "Referent")
+
+
+def test_referent_removed_from_protocol_package_exports():
+    """AC1: the ``sidequest.protocol`` re-export of Referent is also gone, so
+    no importer can resurrect the dead type through the package surface."""
+    import sidequest.protocol as protocol_pkg
+
+    assert not hasattr(protocol_pkg, "Referent")
+    assert "Referent" not in getattr(protocol_pkg, "__all__", [])
+
+
+def test_lethality_verdict_types_are_retained():
+    """AC1 (the explicit KEEP): LethalityVerdict + its enums survive the cut —
+    the arbiter and genre/models/lethality.py still import them. Only the
+    router's per-player ``lethality`` FIELD is removed, not the type."""
+    from sidequest.protocol.dispatch import (
+        LethalityVerdict,
+        LethalityVerdictKind,
+        Reversibility,
+    )
+
+    # The class is still constructible (the arbiter builds these).
+    v = LethalityVerdict(
+        entity="npc:goblin",
+        verdict="defeated",
+        cause="HP 0",
+        reversibility="permanent",
+        narrator_directive="render it",
+        soul_md_constraint="genre_truth",
+    )
+    assert v.verdict == "defeated"
+    assert LethalityVerdictKind is not None
+    assert Reversibility is not None
+
+
+# AC2: straggler tolerance — a removed key Haiku still emits is stripped+logged,
+#      not rejected by extra="forbid".
+
+
+def test_straggler_resolved_lethality_are_stripped_not_rejected(caplog):
+    """AC2: Haiku may still emit the removed ``resolved``/``lethality`` keys out
+    of habit. With ``extra="forbid"`` an un-handled removed key would reject the
+    WHOLE package (dropping every dispatch — the exact spine-goes-dark failure
+    the existing coercion validators guard against). They must be stripped and
+    logged instead (normalize-don't-reject doctrine)."""
+    raw = {
+        "player_id": "player:alice",
+        "raw_action": "hit the goblin",
+        "resolved": [{"token": "the goblin", "resolved_to": "npc:g1", "confidence": 0.9}],
+        "lethality": [
+            {
+                "entity": "npc:g1",
+                "verdict": "defeated",
+                "cause": "x",
+                "reversibility": "permanent",
+                "narrator_directive": "y",
+                "soul_md_constraint": "z",
+            }
+        ],
+        "dispatch": [],
+    }
+    with caplog.at_level(logging.INFO):
+        pd = PlayerDispatch.model_validate(raw)
+
+    assert pd.player_id == "player:alice"
+    assert not hasattr(pd, "resolved")
+    assert not hasattr(pd, "lethality")
+    # Loud about the normalization, never silent (CLAUDE.md No Silent Fallbacks).
+    assert "stripped_deprecated" in caplog.text
+
+
+def test_straggler_action_rewrite_you_is_stripped():
+    """AC2: the same strip-don't-reject treatment for a leftover
+    ``action_rewrite.you``. named/intent survive; the package is NOT rejected
+    and ``you`` does not come back as an attribute."""
+    ar = ActionRewrite.model_validate(
+        {"you": "You draw", "named": "Alice draws", "intent": "draw sword"}
+    )
+    assert ar.named == "Alice draws"
+    assert ar.intent == "draw sword"
+    assert not hasattr(ar, "you")
+
+
+# AC3: VisibilityTag is server-defaulted (omittable) on dispatches + directives.
+
+
+def test_subsystem_dispatch_visibility_defaults_to_all_when_omitted():
+    """AC3: a dispatch that omits ``visibility`` validates and gets the
+    server default ``visible_to="all"`` — the model only emits a tag for a
+    genuine secret. Consumers reading ``.visibility.*`` still get a tag, never
+    ``None``."""
+    d = SubsystemDispatch.model_validate(
+        {"subsystem": "confrontation", "idempotency_key": "k1", "confidence": 0.9}
+    )
+    assert d.visibility.visible_to == "all"
+    assert d.visibility.redact_from_narrator_canonical is False
+
+
+def test_narrator_directive_visibility_defaults_to_all_when_omitted():
+    """AC3: same server-default for a narrator directive that omits visibility."""
+    n = NarratorDirective.model_validate({"kind": "must_narrate", "payload": "x"})
+    assert n.visibility.visible_to == "all"
+
+
+def test_visibility_tag_still_emittable_for_secrets():
+    """AC3 (the firewall stays intact): asymmetric visibility is still
+    expressible — the redaction/ADR-104/105 path is preserved, the field is
+    only OPTIONAL, not gone."""
+    d = SubsystemDispatch.model_validate(
+        {
+            "subsystem": "confrontation",
+            "idempotency_key": "k2",
+            "confidence": 0.9,
+            "visibility": {"visible_to": ["player:Alice"], "redact_from_narrator_canonical": True},
+        }
+    )
+    assert d.visibility.visible_to == ["player:Alice"]
+    assert d.visibility.redact_from_narrator_canonical is True
+
+
+# AC6: field order IS generation order (the latency lever) — output is serial,
+#      so the narrator-blocking fields must come off the front of the call.
+
+
+def test_dispatch_package_field_order_per_player_first():
+    """AC6: ``DispatchPackage`` declares ``per_player`` first and
+    ``action_rewrite`` later; ``PlayerDispatch`` declares ``dispatch`` first.
+    Declaration order drives JSON-schema property order, which drives the
+    autoregressive generation order — so the bytes the narrator blocks on are
+    generated before the trailing mechanical-only fields."""
+    pkg_fields = list(DispatchPackage.model_fields)
+    assert pkg_fields[0] == "per_player"
+    assert pkg_fields.index("action_rewrite") > pkg_fields.index("per_player")
+
+    pd_fields = list(PlayerDispatch.model_fields)
+    assert pd_fields[0] == "dispatch"

@@ -9,7 +9,8 @@ very turn whose visibility (``visibility_classifier``) and confrontation-intent 
 is meant to gate.
 
 These tests are RED until:
-  - ``DispatchPackage`` carries ``action_rewrite`` (you/named/intent), produced by
+  - ``DispatchPackage`` carries ``action_rewrite`` (named/intent — Story 153-1
+    cut the ``you`` perspective), produced by
     the IntentRouter's existing single Haiku ``emit_tool`` call (no new model
     call — the schema the router already forces IS the DispatchPackage schema).
   - ``decompose`` emits an ``intent_router.action_rewrite`` OTEL span (the
@@ -71,7 +72,6 @@ async def test_decompose_emits_action_rewrite_from_player_action() -> None:
     llm = _mock_router_llm(
         _package_dict(
             action_rewrite={
-                "you": "You draw your sword",
                 "named": "Kael draws their sword",
                 "intent": "draw sword",
             }
@@ -84,7 +84,10 @@ async def test_decompose_emits_action_rewrite_from_player_action() -> None:
         "the pre-pass IntentRouter must produce action_rewrite (ADR-150 §1) — "
         "the player-input transform no longer rides the narrator game_patch sidecar"
     )
-    assert pkg.action_rewrite.you == "You draw your sword"
+    # Story 153-1 (output-slim): action_rewrite is {named, intent} only — the
+    # second-person ``you`` perspective was cut (generated every acting turn,
+    # read by nothing that survives the slim).
+    assert not hasattr(pkg.action_rewrite, "you")
     assert pkg.action_rewrite.named == "Kael draws their sword"
     assert pkg.action_rewrite.intent == "draw sword"
 
@@ -115,9 +118,7 @@ async def test_decompose_emits_action_rewrite_span_when_present(otel_capture) ->
     can audit that the new producer engaged."""
     from sidequest.agents.intent_router import IntentRouter
 
-    llm = _mock_router_llm(
-        _package_dict(action_rewrite={"you": "You wait", "named": "Kael waits", "intent": "wait"})
-    )
+    llm = _mock_router_llm(_package_dict(action_rewrite={"named": "Kael waits", "intent": "wait"}))
     router = IntentRouter(llm=llm)
     await router.decompose(action="I wait", state_summary={})
 

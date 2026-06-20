@@ -13,7 +13,6 @@ from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.genre.models.lethality import LethalityPolicy, VerdictsOnZeroHp
 from sidequest.protocol.dispatch import (
     DispatchPackage,
-    LethalityVerdict,
     PlayerDispatch,
 )
 
@@ -164,71 +163,32 @@ def test_no_directives_when_no_verdicts():
     assert result.directives == []
 
 
-# Task 8 — merge with decomposer-authored verdicts
+# Story 153-1 (output-slim): the former "Task 8 — merge with decomposer-authored
+# verdicts" tests are REMOVED. They exercised the arbiter merge loop that read
+# the router's per-player ``lethality`` field — the "suspenders" the spec cuts.
+# Once ``PlayerDispatch.lethality`` is removed, the router can no longer supply
+# verdicts at all, so override-on-conflict and decomposer-only-passthrough are
+# behaviors that no longer exist. The HP=0 "belt" above (``_emit`` →
+# verdict + paired must/must-not directives) is the SOLE verdict source now and
+# is fully covered by the PC/NPC/multi-entity/paired-directive tests in this
+# file — none of which construct a router ``lethality`` list.
 
 
-def _decomposer_verdict(entity: str, verdict: str) -> LethalityVerdict:
-    return LethalityVerdict(
-        entity=entity,
-        verdict=verdict,  # type: ignore[arg-type]
-        cause="decomposer proposed",
-        reversibility="narrative_only",
-        narrator_directive="decomposer directive",
-        soul_md_constraint="decomposer_constraint",
-        witness_scope={},
-    )
-
-
-def test_arbiter_overrides_decomposer_verdict_on_conflict():
-    """Arbiter wins when both author a verdict for the same entity."""
-    arbiter = LethalityArbiter(policy=_heavy_metal_policy())
-    pc = _make_pc("Alice", edge_current=0)
-    pkg = DispatchPackage(
-        turn_id="t1",
-        per_player=[
-            PlayerDispatch(
-                player_id="alice",
-                raw_action="x",
-                lethality=[_decomposer_verdict("player:alice", "humiliated")],
-            )
-        ],
-        cross_player=[],
-        confidence_global=1.0,
-    )
+def test_arbiter_is_sole_verdict_source_from_hp_zero():
+    """Sole-source invariant: a package that carries NO router lethality (the
+    only shape the slim contract can produce) still yields the deterministic
+    HP=0 verdict + paired directives — the death-RP belt is untouched by the
+    cut. This is the positive anchor replacing the deleted merge tests."""
+    arbiter = LethalityArbiter(policy=_caverns_policy())
+    gobbert = _make_pc("Gobbert", edge_current=0)
     result = arbiter.arbitrate(
-        package=pkg,
+        package=_empty_package(),  # no ``lethality`` — the slim shape
         bank_result=BankResult(),
-        pc_cores_by_player={"alice": pc},
-        npc_cores_by_name={},
+        pc_cores_by_player={},
+        npc_cores_by_name={"Gobbert": gobbert},
     )
-    verdicts_for_alice = [v for v in result.verdicts if v.entity == "player:alice"]
-    assert len(verdicts_for_alice) == 1
-    assert verdicts_for_alice[0].verdict == "dead"  # arbiter wins
-    assert "decomposer proposed" not in verdicts_for_alice[0].cause
-
-
-def test_arbiter_passes_through_decomposer_only_entities():
-    """Entity the arbiter did not touch → decomposer verdict preserved."""
-    arbiter = LethalityArbiter(policy=_heavy_metal_policy())
-    pkg = DispatchPackage(
-        turn_id="t1",
-        per_player=[
-            PlayerDispatch(
-                player_id="alice",
-                raw_action="x",
-                lethality=[_decomposer_verdict("npc:BoneChewer", "maimed")],
-            )
-        ],
-        cross_player=[],
-        confidence_global=1.0,
-    )
-    result = arbiter.arbitrate(
-        package=pkg,
-        bank_result=BankResult(),
-        pc_cores_by_player={},  # no one at zero edge
-        npc_cores_by_name={},  # BoneChewer's core not tracked this turn
-    )
-    assert len(result.verdicts) == 1
-    assert result.verdicts[0].entity == "npc:BoneChewer"
-    assert result.verdicts[0].verdict == "maimed"
-    assert "decomposer proposed" in result.verdicts[0].cause
+    # Exactly the belt verdict, sourced solely from HP=0 (not a router merge).
+    assert [v.entity for v in result.verdicts] == ["npc:Gobbert"]
+    assert result.verdicts[0].verdict == "defeated"
+    kinds = {d.kind for d in result.directives}
+    assert kinds == {"must_narrate", "must_not_narrate"}

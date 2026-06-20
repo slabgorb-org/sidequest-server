@@ -28,6 +28,7 @@ from sidequest.game.builder import (
 )
 from sidequest.genre.loader import load_genre_pack
 from sidequest.genre.models import MechanicalEffects
+from sidequest.server.dispatch.equipment_tables_resolve import resolve_equipment_tables
 
 CONTENT_ROOT = Path(__file__).resolve().parents[3] / "sidequest-content" / "genre_packs"
 
@@ -40,13 +41,22 @@ def cc_pack():
     return load_genre_pack(path)
 
 
-def _drive_chargen(pack, *, target_class: str, name: str = "Wiring"):
+def _drive_chargen(pack, *, target_class: str, name: str = "Wiring", world_slug: str | None = None):
     """Walk the WWN 4-scene point-buy flow, picking the named Calling.
 
-    Choice-bearing scenes select the choice whose class_hint matches; other
-    scenes auto-advance (the_kit/the_mouth) or capture identity (the_story).
+    Choice-bearing scenes select the choice whose class_hint matches; non-class
+    choice-scenes (e.g. the_trade's six background choices) pick the first option;
+    other scenes auto-advance (the_kit/the_mouth) or capture identity (the_story).
     If no scene offered the target class_hint, inject it as a late SceneResult.
+
+    When ``world_slug`` is given the equipment tables are world-merged over genre
+    via the production ``resolve_equipment_tables`` (mirrors connect.py chargen),
+    so world-tier guaranteed_grants (the beneath_sunden heal potion) are applied.
+    Left ``None`` the build uses the pure-genre WWN baseline.
     """
+    equipment_tables = pack.equipment_tables
+    if world_slug is not None:
+        equipment_tables = resolve_equipment_tables(pack, world_slug)
     builder = (
         CharacterBuilder(
             scenes=list(pack.char_creation),
@@ -54,7 +64,7 @@ def _drive_chargen(pack, *, target_class: str, name: str = "Wiring"):
             backstory_tables=pack.backstory_tables,
         )
         .with_lobby_name(name)
-        .with_equipment_tables(pack.equipment_tables)
+        .with_equipment_tables(equipment_tables)
         .with_classes(pack.classes)
     )
 
@@ -87,11 +97,14 @@ def _drive_chargen(pack, *, target_class: str, name: str = "Wiring"):
             ),
             None,
         )
-        assert idx is not None, (
-            f"target_class {target_class} not in choices: "
-            f"{[c.mechanical_effects.class_hint for c in scene.choices]}"
-        )
-        matched = True
+        if idx is None:
+            # A non-class choice-scene (e.g. the_trade's six background choices,
+            # which carry background/focus_id/skill_grants but no class_hint).
+            # Pick the first choice to advance — the background does not affect
+            # class, kit, archetype, or class_moves.
+            idx = 0
+        else:
+            matched = True
         builder.apply_choice(idx)
 
     if not matched:
@@ -121,11 +134,20 @@ def test_e2e_warrior_kit_always_includes_exactly_one_heal_potion(cc_pack):
     deterministic so the beat-scan (Part C) tests against a known heal, and
     removes the old ~30%-of-Warriors-start-empty coin flip (playtest finding).
 
+    The Potion of Mending has no WWN SRD analog, so after the 120-1/120-4 verbatim
+    sweep (ADR-140/145) the heal guarantee is WORLD-tier bespoke
+    (worlds/beneath_sunden/equipment_tables.yaml), merged over the WWN-pure genre
+    baseline (which grants nothing). This drives chargen with the world-merged
+    tables — exactly as production does (connect.py → resolve_equipment_tables) —
+    so it exercises the real guarantee, not the heal-less genre baseline.
+
     25 fresh rolls: pre-fix the random consumable pool gave a heal only ~1-in-3.
     """
     heal_ids = {"potion_healing", "potion_healing_greater"}
     for i in range(25):
-        builder = _drive_chargen(cc_pack, target_class="Warrior", name=f"W{i}")
+        builder = _drive_chargen(
+            cc_pack, target_class="Warrior", name=f"W{i}", world_slug="beneath_sunden"
+        )
         character = builder.build("Wiring")
         ids = [it["id"] for it in character.core.inventory.items]
         heals = [x for x in ids if x in heal_ids]

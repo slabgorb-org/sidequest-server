@@ -112,11 +112,14 @@ def _build_character(pack, *, target_class: str):
             ),
             None,
         )
-        assert idx is not None, (
-            f"target_class {target_class!r} not in choices: "
-            f"{[c.mechanical_effects.class_hint for c in scene.choices]}"
-        )
-        matched = True
+        if idx is None:
+            # A non-class choice-scene (e.g. the_trade's six background choices,
+            # which carry background/focus_id/skill_grants but no class_hint).
+            # Pick the first choice to advance — the background does not affect
+            # class, kit, archetype, or class_moves.
+            idx = 0
+        else:
+            matched = True
         builder.apply_choice(idx)
 
     if not matched:

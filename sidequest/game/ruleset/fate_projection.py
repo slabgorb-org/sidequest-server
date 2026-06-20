@@ -277,6 +277,11 @@ def build_fate_state_payload(snapshot: GameSnapshot) -> FateStatePayload:
                 )
                 for c in enc.pending_compels
             ],
+            # spec 2026-06-17 §2: a Contest (enc.contest set) has no stress/
+            # consequences, so `attack` is invalid in it. Surface the kind so the
+            # player surface gates its action rack (Overcome + Create Advantage +
+            # Concede, never Attack) instead of offering a verb the server rejects.
+            is_contest=enc.contest is not None,
         )
         if enc is not None and not enc.resolved
         else None

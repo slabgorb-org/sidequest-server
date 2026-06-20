@@ -1127,6 +1127,14 @@ class FateConflictEntry(BaseModel):
     active: bool = True
     participants: list[FateConflictParticipant] = Field(default_factory=list)
     pending_compels: list[FatePendingCompel] = Field(default_factory=list)
+    #: True when this encounter is a Fate Contest (``encounter.contest is not None``)
+    #: rather than a Conflict (spec 2026-06-17 §2). A Contest has no stress/
+    #: consequences and resolves goals, so ``attack`` is invalid in it — the server
+    #: rejects an attack loudly (``fate_conflict.py``). The player surface reads this
+    #: to gate the action rack: a Contest exposes Overcome + Create Advantage (+
+    #: Concede), never Attack. Default False so pre-existing payloads/fixtures
+    #: (Conflicts) keep the full verb set.
+    is_contest: bool = False
 
 
 class FateStatePayload(BaseModel):

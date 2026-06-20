@@ -117,6 +117,29 @@ def test_sheetless_opponent_projects_empty_track_not_a_crash():
 
 
 # ---------------------------------------------------------------------------
+# is_contest — the Conflict-vs-Contest kind, so the surface gates its action rack
+# (spec 2026-06-17 §2; sq-playtest 150-6 action-gating finding).
+# ---------------------------------------------------------------------------
+
+
+def test_conflict_projection_is_contest_false_for_a_conflict():
+    snap, _ = conflict_with_pc_and_npc(pc="Rux", npc="Bandit")
+    payload = build_fate_state_payload(snap)
+    assert payload.conflict.is_contest is False
+
+
+def test_contest_projection_sets_is_contest_true():
+    # A Contest (enc.contest set) must surface is_contest so the player surface can
+    # gate its action rack — Attack is invalid in a Contest and the server rejects it.
+    from sidequest.game.encounter import ContestState
+
+    snap, enc = conflict_with_pc_and_npc(pc="Rux", npc="Bandit")
+    enc.contest = ContestState(target=3)
+    payload = build_fate_state_payload(snap)
+    assert payload.conflict.is_contest is True
+
+
+# ---------------------------------------------------------------------------
 # Progress metric — taken-out fill computed from the WIRE payload.
 # ---------------------------------------------------------------------------
 

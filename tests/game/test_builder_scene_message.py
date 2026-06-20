@@ -181,6 +181,39 @@ class TestInterpolateSceneNarration:
         rendered = b.interpolate_scene_narration("{name} the {class}, a {race}")
         assert rendered == "Thessa the Ranger, a Mutant"
 
+    def test_indefinite_article_agrees_with_vowel_initial_class(self) -> None:
+        # sq-playtest 150-6: a vowel-initial vocation behind a hardcoded "a {class}"
+        # rendered "a Episcopal Rector"; the article must agree with the value, incl.
+        # across the possessive ("a {class}'s …").
+        scenes = [
+            make_scene(
+                "class",
+                choices=[make_choice("Episcopal Rector", class_hint="Episcopal Rector")],
+            ),
+        ]
+        b = CharacterBuilder(scenes=scenes, rules=simple_rules())
+        b.apply_choice(0)
+        rendered = b.interpolate_scene_narration("the working contents of a {class}'s working life")
+        assert rendered == "the working contents of an Episcopal Rector's working life"
+
+    def test_indefinite_article_preserves_case_and_consonant(self) -> None:
+        # A consonant value keeps "a"; a sentence-leading article stays capitalized.
+        b = CharacterBuilder(
+            scenes=[make_scene("class", choices=[make_choice("Ranger", class_hint="Ranger")])],
+            rules=simple_rules(),
+        )
+        b.apply_choice(0)
+        assert b.interpolate_scene_narration("A {class} appears.") == "A Ranger appears."
+        # A vowel value at sentence start capitalizes the CORRECTED article.
+        b2 = CharacterBuilder(
+            scenes=[
+                make_scene("class", choices=[make_choice("Aristocrat", class_hint="Aristocrat")]),
+            ],
+            rules=simple_rules(),
+        )
+        b2.apply_choice(0)
+        assert b2.interpolate_scene_narration("A {class} appears.") == "An Aristocrat appears."
+
     def test_name_falls_back_to_lobby_name(self) -> None:
         scenes = [make_scene("origin", choices=[make_choice("Human", race_hint="Human")])]
         b = CharacterBuilder(scenes=scenes, rules=simple_rules()).with_lobby_name("Rux")

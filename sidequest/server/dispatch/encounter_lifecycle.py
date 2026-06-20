@@ -1626,13 +1626,35 @@ def instantiate_encounter_from_trigger(
             ",".join(a.name for a in actors if a.side == "player"),
         )
 
+        # Story 126-30 (Keith ruling 2026-06-19): de-nativize Fate confrontation SEATING.
+        # Under a Fate binding a standoff/conflict resolves through Fate's OWN conflict
+        # engine — 4dF + ladder, ablative stress toward taken-out, read off the Other's
+        # FateSheet (ADR-143/144 "Bind the Ruleset, Don't Balance It") — so the native
+        # ``opponent_metric.tension`` dial is REMOVED from the Fate path, never seated
+        # alongside Fate (the upstream half of the #964 cleanup). A Fate Contest keeps its
+        # OWN Fate path (``enc.contest``, below) with the metrics as its victory tally; a
+        # sealed-letter duel is a commit-reveal table, not a conflict — both are excluded
+        # from the conflict de-nativization.
+        is_fate = bool(pack and pack.rules and pack.rules.ruleset == "fate")
+        seat_as_fate_conflict = is_fate and cdef.resolution_mode not in (
+            ResolutionMode.contest,
+            ResolutionMode.sealed_letter_lookup,
+        )
+
         # Synthesize inert metrics when a combat declares no dial (win_condition: hp_depletion).
         # apply_beat gates its dial-resolution branches on win_condition, so these placeholders
         # never gate resolution; the absurdly high threshold (1e6, never reached) is just
         # belt-and-suspenders that keeps the ~9 live-metric readers safe.
         pm = cdef.player_metric
         om = cdef.opponent_metric
-        if pm is None and om is None:
+        if seat_as_fate_conflict:
+            # The native tension dial is REMOVED for a Fate conflict — inert placeholders
+            # (the same belt-and-suspenders as hp_depletion below) keep the live-metric
+            # readers safe; the authoritative win track is the opponent FateSheet stress
+            # seeded by ``_seed_fate_opponents`` (AC-2), never these metrics.
+            pm = MetricDef(name="fate_stress", starting=0, threshold=1_000_000)
+            om = MetricDef(name="fate_stress", starting=0, threshold=1_000_000)
+        elif pm is None and om is None:
             # hp_depletion: no dial authored — synthesize inert placeholders.
             pm = MetricDef(name="hp", starting=0, threshold=1_000_000)
             om = MetricDef(name="hp", starting=0, threshold=1_000_000)
@@ -1667,7 +1689,10 @@ def instantiate_encounter_from_trigger(
 
         enc = StructuredEncounter(
             encounter_type=encounter_type,
-            win_condition=cdef.win_condition.value,
+            # Story 126-30: a de-nativized Fate conflict carries the engine-only
+            # ``fate_conflict`` win track (the native dial is removed); every other path
+            # keeps the cdef-authored win condition.
+            win_condition=("fate_conflict" if seat_as_fate_conflict else cdef.win_condition.value),
             category=cdef.category,
             player_metric=EncounterMetric(
                 name=pm.name,
@@ -1721,6 +1746,19 @@ def instantiate_encounter_from_trigger(
             fate_contest_seeded_span(
                 encounter_type=encounter_type, target=target, player_seats=player_seats
             )
+        elif seat_as_fate_conflict:
+            # Story 126-30: the de-nativized Fate-conflict seat — the GM-panel
+            # lie-detector that the native ``tension`` dial was REMOVED and resolution
+            # runs through the 4dF conflict engine against the Other's FateSheet stress
+            # (the upstream sibling of ``fate.contest.seeded``). Mutually exclusive with
+            # the contest branch above (``seat_as_fate_conflict`` excludes contest mode).
+            from sidequest.telemetry.spans.fate import fate_conflict_seeded_span
+
+            fate_conflict_seeded_span(
+                encounter_type=encounter_type,
+                category=cdef.category,
+                opponent_count=sum(1 for a in actors if a.side == "opponent"),
+            )
         snapshot.encounter = enc
         _watcher_publish(
             "state_transition",
@@ -1765,7 +1803,16 @@ def instantiate_encounter_from_trigger(
         # is combat-category and only for opponent-side actors that have a
         # matching Npc. Non-combat encounters leave ``core.edge`` at its
         # standing value so the validator's dead-NPC check stays correct.
-        if cdef.category == "combat":
+        #
+        # Story 126-30 (ADR-143/144 "Bind the Ruleset"): a Fate-bound pack's combat is a
+        # Fate CONFLICT — resolved by 4dF + ablative stress against the Other's FateSheet
+        # (seeded by ``_seed_fate_opponents`` above), NOT native hp_depletion/edge. So the
+        # whole native combat-seeding block is REMOVED from the Fate path: under Fate it
+        # would leak ``_seed_combat_hp_depletion_to_npcs`` / ``_publish_combat_edge_to_npcs``
+        # and ``_roll_and_persist_initiative`` reaches FateConfig with no DEXTERITY map and
+        # crashes. Gated on ``is_fate`` (covers both the conflict AND contest Fate paths —
+        # neither uses native combat seeding).
+        if cdef.category == "combat" and not is_fate:
             turn_no = snapshot.turn_manager.interaction if hasattr(snapshot, "turn_manager") else 0
             if cdef.win_condition == WinCondition.hp_depletion:
                 # Task 9: no dial — seed opponent core.hp + core.armor_class

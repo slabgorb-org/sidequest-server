@@ -482,6 +482,25 @@ SPAN_ROUTES["fate.contest.seeded"] = SpanRoute(
         "player_seats": (span.attributes or {}).get("player_seats", 0),
     },
 )
+# --- 126-30: Fate-conflict seating span (Keith ruling 2026-06-19; GM panel = lie detector) -
+# The UPSTREAM sibling of ``fate.contest.seeded``: a Fate standoff/conflict was seated as a
+# pure Fate conflict — the native ``opponent_metric.tension`` dial REMOVED, win_condition
+# stamped ``fate_conflict`` so resolution runs through the 4dF conflict engine against the
+# Other's FateSheet stress (ADR-143/144 "Bind the Ruleset"). The GM-panel evidence that the
+# de-nativization fired: a seated Fate confrontation carries NO native dial, not the
+# vestigial ``tension`` track the playtest observed live at 6/10. Literal key (no SPAN_*
+# constant) — the routing-completeness lint only inspects SPAN_* module constants.
+SPAN_ROUTES["fate.conflict.seeded"] = SpanRoute(
+    event_type="state_transition",
+    component="fate",
+    extract=lambda span: {
+        "field": "conflict_seeded",
+        "encounter_type": (span.attributes or {}).get("encounter_type", ""),
+        "category": (span.attributes or {}).get("category", ""),
+        "opponent_count": (span.attributes or {}).get("opponent_count", 0),
+        "removed_native_dial": bool((span.attributes or {}).get("removed_native_dial", False)),
+    },
+)
 SPAN_ROUTES["fate.contest.exchange"] = SpanRoute(
     event_type="state_transition",
     component="fate",
@@ -878,6 +897,35 @@ def fate_contest_seeded_span(
         **attrs,
     }
     with Span.open("fate.contest.seeded", attributes, tracer_override=_tracer):
+        pass
+
+
+def fate_conflict_seeded_span(
+    *,
+    encounter_type: str,
+    category: str,
+    opponent_count: int,
+    removed_native_dial: bool = True,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``fate.conflict.seeded`` — a Fate standoff/conflict was de-nativized at
+    seating (story 126-30, Keith ruling 2026-06-19). The UPSTREAM counterpart to
+    ``fate.contest.seeded``: the native ``opponent_metric.tension`` dial was REMOVED and
+    the encounter stamped ``win_condition='fate_conflict'`` so resolution runs through the
+    4dF conflict engine against the Other's FateSheet stress (ADR-143/144 "Bind the
+    Ruleset, Don't Balance It"). The GM-panel evidence the seat went Fate-conflict — NOT
+    the vestigial native dial — for a Fate-bound pack. ``removed_native_dial`` is always
+    True (the span fires only on the de-nativized path); the firing IS the signal."""
+    attributes: dict[str, Any] = {
+        "field": "conflict_seeded",
+        "encounter_type": encounter_type,
+        "category": category,
+        "opponent_count": opponent_count,
+        "removed_native_dial": removed_native_dial,
+        **attrs,
+    }
+    with Span.open("fate.conflict.seeded", attributes, tracer_override=_tracer):
         pass
 
 
@@ -1370,6 +1418,7 @@ __all__ = [
     "fate_compel_offered_span",
     "fate_compel_refused_span",
     "fate_conceded_span",
+    "fate_conflict_seeded_span",
     "fate_contest_exchange_span",
     "fate_contest_resolved_span",
     "fate_contest_seeded_span",

@@ -86,15 +86,23 @@ def test_elemental_harmony_loads_clean_under_wwn() -> None:
                 f"class {cls.id!r} starting_prepared {spell_id!r} not in wwn_spell_catalog"
             )
 
-    # 5. "Martial Exchange" combat confrontation has a cast_spell beat
+    # 5. "Martial Exchange" combat confrontation is de-nativized (108-3 / ADR-143):
+    #    every native combat beat — cast_spell included — was stripped off the
+    #    hp_depletion combat def, so its beat pool is empty. Under the WWN binding
+    #    casting in combat is the synthesized WN cast action routed at dispatch
+    #    (epic-152), NOT an authored combat beat; caster capability is carried by
+    #    the classes' wwn_magic (asserted in #4 above, which is the real magic
+    #    surface). (Loader assertion-flip, story 125-8.)
     martial_exchange = next(
         (c for c in pack.rules.confrontations if c.label == "Martial Exchange"),
         None,
     )
     assert martial_exchange is not None, "No 'Martial Exchange' confrontation found"
     beat_ids = {b.id for b in martial_exchange.beats}
-    assert "cast_spell" in beat_ids, (
-        f"Martial Exchange beats: {sorted(beat_ids)} — cast_spell missing"
+    assert beat_ids == set(), (
+        "108-3 strips every native combat beat (cast_spell included) off the WWN "
+        "hp_depletion combat def — the WN round owns the action set, so the combat "
+        f"def authors zero beats; got {sorted(beat_ids)}"
     )
 
     # 6. Archetype markers: Guardian is warrior; Channeler + Spirit Medium are wwn casters

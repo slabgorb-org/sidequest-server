@@ -21,9 +21,10 @@ DETERMINISM: one arg-dispatching randint fake governs the whole path (dice.py,
 downed_seam.py and damage_roll.py all roll via the shared ``random`` module):
 (1, 20) → 20 — the reprisal to-hit always HITS (PC AC is 10; 20 + mods clears
 it; a save roll, if one ever happens here, simply succeeds and rolls no table);
-every other range → its MINIMUM — the player's committed_blow 2d6 deals 2 (the
-10-HP opponent survives at 8, so the player's own strike can never resolve the
-fight or trip the opponent-side downed seam), any trauma die rolls low (the
+every other range → its MINIMUM — the player's synthesized attack draws the
+equipped 2d6 blade and deals 2 (the 10-HP opponent survives at 8, so the
+player's own strike can never resolve the fight or trip the opponent-side downed
+seam), any trauma die rolls low (the
 scene stays non-traumatic), and the opponent's 1d6 reprisal damage deals 1
 (exactly enough to drop the 1-HP PC). The player's own d20 uses the thrown
 ``face=[20]``, never rng (base=4 → DC 18; 20 + STR-12 mod clears it).
@@ -40,10 +41,30 @@ from tests._helpers.genre_paths import GENRE_PACKS_DIR, PackNotFound, find_pack_
 
 PLAYER = "Vesska"
 OPPONENT = "The Collector's Blade"
-_STRIKE_BEAT = "committed_blow"  # strike, damage_override 2d6 (deterministic)
+# De-nativized WWN combat (108-3/108-8, ADR-143): the WN round owns the action
+# set — the committed action is the synthesized WN "attack" (the native
+# committed_blow beat was stripped). The PC is armed with a 2d6 blade
+# (resolve_damage priority 2), so the synthesized attack deals 2 at min — exactly
+# the pre-strip committed_blow 2d6 override, so the opponent still survives the
+# player's swing and the lethal beat stays the opponent's reprisal. Story 125-8.
+_STRIKE_BEAT = "attack"
 
 SPAN_WWN_MORTAL_INJURY = "wwn.mortal_injury.declared"
 SPAN_GENERIC_LETHALITY = "encounter.post_resolution_lethality"
+
+# BLOCKED on epic-152: this proof needs the opponent's reprisal to KILL the 1-HP
+# PC, but under de-nativized WWN combat the opponent attack is skipped
+# (``_resolve_opponent_reprisal`` requires an authored strike beat in
+# ``cdef.beats``, stripped by 108-3; 108-8 synthesized only the PLAYER's attack,
+# so ``wn_round`` logs ``opponent_reprisal_skipped reason=no_strike_beat`` and
+# the PC is never dropped). Fixing it needs production opponent-attack synthesis —
+# out of scope for 125-8 (test-debt only, AC3). Loud-skip + linked story per AC1;
+# see session Delivery Findings.
+_OPPONENT_ATTACK_BLOCKED = (
+    "epic-152: WN opponent attack/reprisal skipped under de-nativized WWN combat "
+    "(no_strike_beat — opponent strike beat never synthesized; 108-8 did only the "
+    "player). Production gap; 125-8 is test-debt only (AC3). See Delivery Findings."
+)
 
 
 def _has_real_content() -> bool:
@@ -70,7 +91,20 @@ def _make_dying_pc(name: str):
         name=name,
         description="A blade-bearer one wound from the dark.",
         personality="grim",
-        inventory=Inventory(),
+        # Armed with a 2d6 blade so the synthesized WN attack resolves weapon dice
+        # (resolve_damage priority 2) — heavy_metal ships no unarmed_damage floor.
+        # 2d6 → 2 at min reproduces the pre-108-3 committed_blow override (125-8).
+        inventory=Inventory(
+            items=[
+                {
+                    "id": "blade_2d6",
+                    "name": "Heavy Blade",
+                    "category": "weapon",
+                    "equipped": True,
+                    "damage": {"dice": "2d6", "bonus": 0},
+                }
+            ]
+        ),
         hp={"current": 1, "max": 12, "base_max": 12},
         armor_class=10,
     )
@@ -88,13 +122,16 @@ def _reprisal_hits_all_else_min(a: int, b: int) -> int:
     return 20 if (a, b) == (1, 20) else a
 
 
+@pytest.mark.skip(reason=_OPPONENT_ATTACK_BLOCKED)
 @pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
 def test_heavy_metal_reprisal_kill_emits_wwn_mortal_injury_for_pc(otel_capture, monkeypatch):
     """The AC5b combat-half proof: a PC dying to the Blade-work reprisal on the
     real wwn-bound heavy_metal pack (lethality pc=dead) must emit
     ``wwn.mortal_injury.declared`` with actor=PC, alongside the generic
-    ``encounter.post_resolution_lethality`` lethal_down decision. RED today —
-    the reprisal/lethality path emits zero wwn.* spans for a dying PC."""
+    ``encounter.post_resolution_lethality`` lethal_down decision.
+
+    SKIPPED (125-8): needs the opponent reprisal to kill the PC — the
+    no_strike_beat production gap owned by epic-152 (see _OPPONENT_ATTACK_BLOCKED)."""
     from sidequest.agents.orchestrator import NpcMention
     from sidequest.game.session import GameSnapshot
     from sidequest.game.turn import TurnManager

@@ -21,6 +21,8 @@ from tests._helpers.genre_paths import GENRE_PACKS_DIR, PackNotFound, find_pack_
 
 __all__ = [
     "GENRE_PACKS_DIR",
+    "HM_WEAPON",
+    "arm_pc",
     "dispatch_throw",
     "force_initiative",
     "load_pack",
@@ -30,11 +32,33 @@ __all__ = [
     "spans_named",
 ]
 
-# heavy_metal "Blade-work" combat constants (authored in rules.yaml; the
-# same block tests/integration/test_dice_path_spell_cast_102_2.py pins).
-HM_STRIKE_BEAT = "committed_blow"  # strike, damage_override 2d6 (deterministic under a pinned rng)
+# heavy_metal "Blade-work" WN combat constants. Under the WWN binding 108-3
+# stripped every native combat beat off the hp_depletion combat def
+# (``cdef.beats == []``) and 108-8 made the WN engine OWN the action set: the
+# only synthesized offensive WN action is ``"attack"`` (``is_wn_action_beat``).
+# The synthesized attack carries NO ``damage_override`` — it draws weapon dice
+# from the actor's inventory (``resolve_damage`` priority 2), and heavy_metal
+# ships NO ``unarmed_damage`` floor, so a PC must be armed (``arm_pc`` /
+# ``HM_WEAPON``) for a strike to ablate HP. (Pre-108-3 this was the native
+# ``committed_blow`` beat with a ``damage_override: 2d6``; that beat no longer
+# exists — ADR-143 "Bind the Ruleset, Don't Balance It"; story 125-8.)
+HM_STRIKE_BEAT = "attack"
 HM_OPPONENT_HP = 10  # opponent_default_stats.hp
 HM_STATS = {"STR": 12, "DEX": 10, "CON": 10, "INT": 14, "WIS": 10, "CHA": 10}
+
+# A plain 2d6 melee weapon as an inventory item dict carrying a serialised
+# ``damage`` spec (``resolve_damage`` priority 2 — the item-dict path, so tests
+# do not depend on a world-tier catalog lookup). 2d6 reproduces the pre-108-3
+# ``committed_blow`` ``damage_override`` exactly, so a pinned-rng strike deals
+# the same deterministic 2 (min) / 12 (max) the WN-combat suite's kill
+# choreography was built around. Mirrors test_108_8's local ``_WEAPON``.
+HM_WEAPON = {
+    "id": "blade_2d6",
+    "name": "Heavy Blade",
+    "category": "weapon",
+    "equipped": True,
+    "damage": {"dice": "2d6", "bonus": 0},
+}
 
 
 def load_pack(slug: str = "heavy_metal"):
@@ -118,6 +142,20 @@ def seat_wn_combat(
             "is a precondition of this suite, not its subject"
         )
     return snap, enc
+
+
+def arm_pc(snap, name: str, *, weapon: dict | None = None) -> None:
+    """Give a seated PC a real weapon so the synthesized WN ``attack`` resolves
+    weapon dice (``resolve_damage`` priority 2 — the item-dict path).
+
+    heavy_metal ships no ``unarmed_damage`` floor, so an unarmed PC's synthesized
+    attack resolves no damage spec and ablates 0 HP; an armed PC's draws its
+    weapon dice. Defaults to ``HM_WEAPON`` (2d6 — reproduces the pre-108-3
+    ``committed_blow`` ``damage_override`` for deterministic pinned-rng damage).
+    Mirrors test_108_8's local ``_arm_pc`` (story 125-8 / ADR-143)."""
+    core = snap.find_creature_core(name)
+    assert core is not None, f"PC {name!r} must be seated before arming"
+    core.inventory.items.append(dict(weapon or HM_WEAPON))
 
 
 def seat_npc_ally(snap, enc, name: str, *, hp: int = 8, role: str = "ally") -> None:

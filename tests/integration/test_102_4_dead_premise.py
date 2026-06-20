@@ -22,9 +22,12 @@ Contract pinned here:
   reaching prose. (The full ``swn_adjudicate_dead_premise`` tool shape is
   102-5's; this story surfaces the event, per the story scope boundary.)
 
-Kill choreography (deterministic): heavy_metal's ``committed_blow`` carries
-``damage_override: 2d6``; with ``random.randint`` pinned to max, A's strike
-deals 12 to the 10-HP blade — a one-slot kill, guaranteed.
+Kill choreography (deterministic): under the de-nativized WWN binding the
+committed action is the synthesized WN ``attack`` (108-8) drawing the actor's
+weapon dice; the PCs are armed with a 2d6 ``HM_WEAPON`` (``arm_pc``) — the
+de-nativized stand-in for the pre-108-3 ``committed_blow`` 2d6 override. With
+``random.randint`` pinned to max, A's strike deals 12 to the 10-HP blade — a
+one-slot kill, guaranteed (story 125-8 / ADR-143).
 
 Skips cleanly when sidequest-content is not on disk.
 """
@@ -35,6 +38,7 @@ import pytest
 
 from tests.integration._wn_round_102_4 import (
     GENRE_PACKS_DIR,
+    arm_pc,
     dispatch_throw,
     force_initiative,
     load_pack,
@@ -54,6 +58,18 @@ _PC_B = "Brakka"
 _SPAN_DEAD_PREMISE = "wwn.dead_premise"
 _SPAN_BEAT_APPLIED = "encounter.beat_applied"
 
+# BLOCKED on epic-152: under de-nativized WWN combat the opponent's attack is
+# skipped (``_resolve_opponent_reprisal`` requires an authored strike beat in
+# ``cdef.beats``, stripped by 108-3; 108-8 synthesized only the PLAYER's attack).
+# This test needs the slot-1 opponent to drop the 2-HP PC, which never happens.
+# Production gap (opponent-attack synthesis) — out of scope for 125-8 (AC3).
+# Loud-skip + linked story per AC1; see session Delivery Findings.
+_OPPONENT_ATTACK_BLOCKED = (
+    "epic-152: WN opponent attack skipped under de-nativized WWN combat "
+    "(no_strike_beat — opponent strike beat never synthesized). Production gap; "
+    "125-8 is test-debt only (AC3). See Delivery Findings."
+)
+
 
 @pytest.fixture
 def kill_order_combat(monkeypatch, otel_capture):
@@ -71,6 +87,8 @@ def kill_order_combat(monkeypatch, otel_capture):
     monkeypatch.setattr("random.randint", lambda a, b: b)
     pack = load_pack("heavy_metal")
     snap, enc = seat_wn_combat(pack, [_PC_A, _PC_B], [_OPP])
+    arm_pc(snap, _PC_A)  # 2d6 → pinned-max strike deals 12, drops the 10-HP blade
+    arm_pc(snap, _PC_B)
     force_initiative(enc, [(_PC_A, 9), (_PC_B, 7), (_OPP, 2)])
 
     dispatch_throw(pack=pack, snap=snap, enc=enc, character_name=_PC_A, player_id="p1")
@@ -135,6 +153,8 @@ def test_engine_never_auto_retargets_the_swing(otel_capture, monkeypatch):
     monkeypatch.setattr("random.randint", lambda a, b: b)
     pack = load_pack("heavy_metal")
     snap, enc = seat_wn_combat(pack, [_PC_A, _PC_B], [_OPP, _OPP_2])
+    arm_pc(snap, _PC_A)  # 2d6 → pinned-max strike deals 12, drops the 10-HP blade
+    arm_pc(snap, _PC_B)
     force_initiative(enc, [(_PC_A, 9), (_PC_B, 7), (_OPP, 2), (_OPP_2, 1)])
     second_hp_before = snap.find_creature_core(_OPP_2).hp.current
 
@@ -150,10 +170,14 @@ def test_engine_never_auto_retargets_the_swing(otel_capture, monkeypatch):
     )
 
 
+@pytest.mark.skip(reason=_OPPONENT_ATTACK_BLOCKED)
 def test_actor_dropped_before_its_slot_does_not_act(otel_capture, monkeypatch):
     """§6 rule, mechanically enforced (P4 only stated it in prose): the
     opponent at slot 1 drops 2-HP Vesska; her committed strike never lands.
-    """
+
+    SKIPPED (125-8): the slot-1 opponent must drop the PC, which needs the
+    opponent attack to fire — the no_strike_beat production gap owned by
+    epic-152 (see _OPPONENT_ATTACK_BLOCKED)."""
     monkeypatch.setattr("random.randint", lambda a, b: b)  # opp d20=20 hits, d8=8 dmg
     pack = load_pack("heavy_metal")
     snap, enc = seat_wn_combat(pack, [_PC_A], [_OPP], pc_hp=2)

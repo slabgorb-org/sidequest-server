@@ -32,7 +32,14 @@ import pytest
 
 from tests._helpers.genre_paths import GENRE_PACKS_DIR, PackNotFound, find_pack_path
 
-_STRIKE_BEAT = "strike"
+# De-nativized WWN combat (108-3 / 108-8, ADR-143): the WN round owns the action
+# set, so the committed action is the synthesized WN "attack" (the native
+# "strike"/"committed_blow" beats were stripped). The Warrior is armed with an
+# Iron Longsword item dict (resolve_damage priority 2), so the synthesized attack
+# resolves the longsword's 1d8 (+ optional Shock) exactly as the old "strike" beat
+# did — that beat also carried no damage_override and fell through to the weapon.
+# (Story 125-8.)
+_STRIKE_BEAT = "attack"
 _OPPONENT = "The White Ape"
 _ATTACKER = "Tarkas"
 
@@ -272,8 +279,11 @@ def test_player_hit_that_does_not_kill_anchors_opponent_alive(monkeypatch):
     opponent_core = snap.find_creature_core(_OPPONENT)
     assert opponent_core is not None and opponent_core.hp.current == 10
 
-    # Pin damage faces to MIN: committed_blow damage_override 2d6 → 2, plus
-    # the Warrior Killing Blow rider (+1 at L1) = 3. Opponent 10→7, ALIVE.
+    # Pin damage faces to MIN: the synthesized attack draws the Iron Longsword's
+    # 1d8 → 1, plus the Warrior Killing Blow rider (+1 at L1) = 2. Opponent 10→8,
+    # ALIVE. (Pre-108-3 this rode committed_blow's 2d6 override → 3 → 10→7; that
+    # beat is gone, and the assertion below is a range + the real hp_after, so it
+    # holds on the weapon dice — story 125-8.)
     monkeypatch.setattr("sidequest.server.dispatch.damage_roll.random.randint", lambda a, b: a)
 
     dispatch_dice_throw(
@@ -285,7 +295,7 @@ def test_player_hit_that_does_not_kill_anchors_opponent_alive(monkeypatch):
                 position=(0.5, 0.5),
             ),
             face=[20],  # natural 20 → CritSuccess, guaranteed hit
-            beat_id="committed_blow",
+            beat_id="attack",
         ),
         rolling_player_id="player-tarkas",
         character_name=_ATTACKER,

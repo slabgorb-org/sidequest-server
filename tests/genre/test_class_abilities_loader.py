@@ -13,17 +13,28 @@ from sidequest.genre.loader import load_genre_pack
 GENRE_ROOT = Path(__file__).parents[2] / "../sidequest-content/genre_packs"
 
 
-def test_caverns_and_claudes_loads_with_committed_blow_beat():
-    """WWN port: the loader resolves a class's encounter_beat_choices against
-    the rules.yaml beat pool. The Warrior declares 'committed_blow' (the WWN
-    all-in strike), and rules.yaml's combat confrontation defines it."""
+def test_caverns_and_claudes_warrior_has_no_native_combat_beat_post_denativization():
+    """De-nativized WWN combat (108-3 strip / 108-8 synthesis; ADR-143 "Bind the
+    Ruleset, Don't Balance It"): the native ``committed_blow`` all-in strike no
+    longer exists. 108-3 stripped it from the combat confrontation pool and 108-7
+    dropped it from WN classes' ``encounter_beat_choices`` — the combat action is
+    now the WN-synthesized ``attack`` (``is_wn_action_beat``), not a per-class
+    authored beat. The Warrior keeps only its NON-combat (chase/social) choices.
+
+    (Flipped from the pre-strip ``test_caverns_and_claudes_loads_with_committed_blow_beat``
+    to the de-nativized reality — the loader assertion-flip, story 125-8.)"""
     pack = load_genre_pack(GENRE_ROOT.resolve() / "caverns_and_claudes")
     warrior = next(c for c in pack.classes if c.id == "warrior")
-    assert "committed_blow" in warrior.encounter_beat_choices, (
-        "Warrior must declare 'committed_blow' in encounter_beat_choices"
+    assert "committed_blow" not in warrior.encounter_beat_choices, (
+        "the native 'committed_blow' strike was de-nativized (108-7): a WN class "
+        "carries no per-class combat beat — its combat action is the synthesized "
+        f"WN 'attack'. encounter_beat_choices={warrior.encounter_beat_choices!r}"
     )
     all_beat_ids = {b.id for cd in pack.rules.confrontations for b in cd.beats}
-    assert "committed_blow" in all_beat_ids, "rules.yaml must declare a 'committed_blow' beat"
+    assert "committed_blow" not in all_beat_ids, (
+        "108-3 stripped 'committed_blow' from every WWN combat confrontation pool "
+        f"(the WN round owns the action set); got beat ids {sorted(all_beat_ids)}"
+    )
 
 
 def test_class_def_parses_abilities_key():

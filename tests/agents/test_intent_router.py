@@ -42,10 +42,17 @@ import pytest
 
 @pytest.fixture
 def haiku_response_pronoun_resolved() -> dict:
-    """Synthetic SDK-Haiku tool input — a confrontation-shaped dispatch.
+    """Synthetic SDK-Haiku tool input — a single distinctive-detail dispatch.
 
     Per ADR-102 the router consumes the ``tool_use`` block's structured
     ``input`` dict, so this fixture is a dict (not a JSON string).
+
+    Story 153-1 (output-slim): the slim contract no longer carries the
+    ``resolved`` Referent list or the per-player ``lethality`` list — the
+    dispatch carries the resolved entity directly in ``params`` and the
+    LethalityArbiter computes verdicts from HP=0. ``visibility`` is left
+    explicit here (still a valid emission) so this fixture exercises the
+    opt-in tag; the server-default case is covered by its own test.
     """
     return {
         "turn_id": "turn-010",
@@ -53,15 +60,6 @@ def haiku_response_pronoun_resolved() -> dict:
             {
                 "player_id": "player:Alice",
                 "raw_action": "Attack him!",
-                "resolved": [
-                    {
-                        "token": "him",
-                        "resolved_to": "npc:goblin_2",
-                        "confidence": 0.55,
-                        "alternatives": ["npc:goblin_1"],
-                        "resolution_note": "most recent direct combatant",
-                    }
-                ],
                 "dispatch": [
                     {
                         "subsystem": "distinctive_detail_hint",
@@ -80,7 +78,6 @@ def haiku_response_pronoun_resolved() -> dict:
                         },
                     }
                 ],
-                "lethality": [],
                 "narrator_instructions": [
                     {
                         "kind": "distinctive_detail_for_referent",
@@ -169,8 +166,11 @@ async def test_intent_router_decompose_returns_dispatch_package(
     )
     assert pkg.turn_id == "turn-010"
     assert len(pkg.per_player) == 1
-    referent = pkg.per_player[0].resolved[0]
-    assert referent.resolved_to == "npc:goblin_2"
+    # Story 153-1: the resolved entity rides ``params`` on the dispatch, not a
+    # separate Referent list — assert the dispatch round-trips instead.
+    dispatch = pkg.per_player[0].dispatch[0]
+    assert dispatch.subsystem == "distinctive_detail_hint"
+    assert dispatch.params["target"] == "npc:goblin_2"
     assert pkg.confidence_global == pytest.approx(0.55)
     # The LLM was called exactly once on the happy path.
     assert llm.emit_tool.await_count == 1
@@ -895,3 +895,159 @@ def test_movement_instruction_scores_relocation_intent_not_exit_mapping() -> Non
         "the verbatim-descriptor rule (pass the player's own words, even a "
         "compass direction, through exit_descriptor) is missing"
     )
+
+
+# ---------------------------------------------------------------------------
+# Story 153-1 (output-slim) — the slimmed router output + prompt.
+# ---------------------------------------------------------------------------
+# These drive the REAL ``decompose`` with a mocked LLM and assert on the
+# produced package / the system prompt the router actually SENDS — the same
+# behavioral-observation pattern as the prompt-documents tests above, not a
+# source-text grep.
+
+
+@pytest.mark.asyncio
+async def test_decompose_action_rewrite_has_no_you_after_slim() -> None:
+    """AC1 + regression: the slim ``action_rewrite`` is {named, intent} only.
+
+    This is the load-bearing guard for the cut: ``decompose`` itself READS
+    ``pkg.action_rewrite.you`` today (intent_router.py, the ``ar_emitted``
+    line) — the spec's consumer table wrongly marked ``.you`` DEAD. Removing
+    the field WITHOUT updating that read makes decompose raise AttributeError
+    on every acting turn. Driving the real decompose with a {named,intent}
+    rewrite proves both the field is gone AND the read no longer touches it.
+    """
+    from sidequest.agents.intent_router import IntentRouter
+
+    response = {
+        "turn_id": "turn-ar",
+        "per_player": [],
+        "cross_player": [],
+        "confidence_global": 1.0,
+        "action_rewrite": {"named": "Kael draws their sword", "intent": "draw sword"},
+    }
+    llm = _make_mock_router_llm(response)
+    router = IntentRouter(llm=llm)
+
+    pkg = await router.decompose(action="I draw my sword", state_summary={})
+
+    assert pkg.action_rewrite is not None
+    assert pkg.action_rewrite.named == "Kael draws their sword"
+    assert pkg.action_rewrite.intent == "draw sword"
+    assert not hasattr(pkg.action_rewrite, "you"), (
+        "ActionRewrite.you is cut; decompose must not depend on it"
+    )
+
+
+@pytest.mark.asyncio
+async def test_decompose_accepts_dispatch_with_omitted_visibility() -> None:
+    """AC3: a dispatch that OMITS ``visibility`` validates end-to-end through
+    decompose and gets the server default ``visible_to="all"`` — the model is
+    no longer required to spend tokens emitting a tag on every dispatch."""
+    from sidequest.agents.intent_router import IntentRouter
+
+    response = {
+        "turn_id": "turn-vis",
+        "per_player": [
+            {
+                "player_id": "player:Alice",
+                "raw_action": "I strike the goblin",
+                "dispatch": [
+                    {
+                        "subsystem": "confrontation",
+                        "params": {"type": "combat", "opponent": {"name": "goblin"}},
+                        "idempotency_key": "k1",
+                        "confidence": 0.9,
+                        # visibility intentionally omitted — server-defaulted
+                    }
+                ],
+            }
+        ],
+        "cross_player": [],
+        "confidence_global": 0.9,
+    }
+    llm = _make_mock_router_llm(response)
+    router = IntentRouter(llm=llm)
+
+    pkg = await router.decompose(action="I strike the goblin", state_summary={})
+
+    dispatch = pkg.per_player[0].dispatch[0]
+    assert dispatch.visibility.visible_to == "all"
+    # No retry burned — the omission validates on the first attempt.
+    assert llm.emit_tool.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_prompt_drops_referent_resolution_step(haiku_response_quiet_turn: dict) -> None:
+    """AC5: the system prompt no longer teaches the referent-resolution step —
+    the router stops being asked to author a prose Referent list."""
+    from sidequest.agents.intent_router import IntentRouter
+
+    llm = _make_mock_router_llm(haiku_response_quiet_turn)
+    router = IntentRouter(llm=llm)
+
+    await router.decompose(action="Attack him!", state_summary={})
+
+    system = llm.emit_tool.await_args.kwargs["system"]
+    assert "Resolve referents" not in system, (
+        "router prompt still instructs referent resolution — the cut field's "
+        "instruction must go with the field (output-slim)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_prompt_action_rewrite_two_perspectives_only(haiku_response_quiet_turn: dict) -> None:
+    """AC5: action_rewrite is still taught, but only as {named, intent} — the
+    second-person ``you`` perspective + its example are removed from the prompt."""
+    from sidequest.agents.intent_router import IntentRouter
+
+    llm = _make_mock_router_llm(haiku_response_quiet_turn)
+    router = IntentRouter(llm=llm)
+
+    await router.decompose(action="x", state_summary={})
+
+    system = llm.emit_tool.await_args.kwargs["system"]
+    assert "action_rewrite" in system, "the router must still produce action_rewrite"
+    assert "You draw your sword" not in system, (
+        "the second-person action_rewrite example must be removed with the field"
+    )
+    assert '"you":' not in system, (
+        "the action_rewrite contract must no longer document a ``you`` key"
+    )
+
+
+@pytest.mark.asyncio
+async def test_prompt_drops_per_dispatch_visibility_mandate(
+    haiku_response_quiet_turn: dict,
+) -> None:
+    """AC5: the "every dispatch carries a visibility tag" mandate is gone —
+    the model is told to emit a tag ONLY for genuine secrets (server-default)."""
+    from sidequest.agents.intent_router import IntentRouter
+
+    llm = _make_mock_router_llm(haiku_response_quiet_turn)
+    router = IntentRouter(llm=llm)
+
+    await router.decompose(action="x", state_summary={})
+
+    system = llm.emit_tool.await_args.kwargs["system"]
+    assert "Every dispatch carries a visibility tag" not in system, (
+        "the per-dispatch visibility mandate must be replaced by the "
+        "server-default-with-secret-opt-in instruction"
+    )
+
+
+@pytest.mark.asyncio
+async def test_prompt_retains_confidence_contract(haiku_response_quiet_turn: dict) -> None:
+    """AC5 (the explicit KEEP): the prompt slim must NOT drop confidence_global
+    or the per-dispatch confidence gate — those are the preserved invariants
+    (ADR-113), not part of the cut."""
+    from sidequest.agents.intent_router import IntentRouter
+
+    llm = _make_mock_router_llm(haiku_response_quiet_turn)
+    router = IntentRouter(llm=llm)
+
+    await router.decompose(action="x", state_summary={})
+
+    system = llm.emit_tool.await_args.kwargs["system"]
+    assert "confidence_global" in system
+    assert "per-dispatch confidence" in system

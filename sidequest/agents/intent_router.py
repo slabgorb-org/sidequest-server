@@ -138,11 +138,7 @@ DispatchPackage by calling the ``emit_dispatch_package`` tool exactly once.
 Never write prose. Put every field into the tool input.
 
 For each player action:
-  1. Resolve referents (pronouns, ellipses, demonstratives). Every resolution
-     carries a confidence 0.0-1.0 and plausible alternatives. If nothing
-     plausibly resolves, set resolved_to=null with confidence=0 — do NOT
-     invent a filler.
-  2. Emit subsystem dispatches keyed on the action's mechanical intent.
+  1. Emit subsystem dispatches keyed on the action's mechanical intent.
      Each dispatch carries a free-form ``params`` object. ``params`` is NOT a
      place to describe the action — it is the typed input the subsystem's
      handler reads. Emit exactly the keys listed; do not invent extra keys.
@@ -289,7 +285,7 @@ For each player action:
      Score the confidence for each dispatch honestly — a high score fires the
      engine, a low score degrades the dispatch to a narrator hint instead of
      engaging. Do not inflate confidence to force engagement.
-  3. Emit narrator_instructions — advisory directives to the narrator. Each
+  2. Emit narrator_instructions — advisory directives to the narrator. Each
      item is EXACTLY {kind, payload, visibility} and NOTHING else. Do NOT add
      any other key (e.g. "target"); the schema forbids unknown fields and one
      stray key REJECTS THE ENTIRE package, dropping every dispatch this turn.
@@ -298,19 +294,19 @@ For each player action:
      For distinctive_detail_for_referent, put BOTH the referent and its detail
      inside ``payload`` (e.g. "the goblin: broken tooth") — there is no separate
      referent/target field here. (The ``target`` key belongs ONLY to the
-     distinctive_detail_hint DISPATCH in step 2 — a different mechanism; do not
+     distinctive_detail_hint DISPATCH in step 1 — a different mechanism; do not
      carry it into narrator_instructions.)
-  4. Set confidence_global to your overall confidence across the turn.
-  5. Emit action_rewrite — rewrite the player's raw action into three
-     perspectives: {"you": "<second-person>", "named": "<third-person with the
-     acting character's name>", "intent": "<neutral distilled intent, no
-     pronouns>"}. "I draw my sword" → {"you": "You draw your sword", "named":
-     "Kael draws their sword", "intent": "draw sword"}. Derive it from the raw
-     action ALONE — no prose is needed. Emit it on every turn a character acts;
-     omit only for pure atmosphere with no actor.
+  3. Set confidence_global to your overall confidence across the turn.
+  4. Emit action_rewrite — rewrite the player's raw action into two
+     perspectives: {"named": "<third-person with the acting character's name>",
+     "intent": "<neutral distilled intent, no pronouns>"}. "I draw my sword" →
+     {"named": "Kael draws their sword", "intent": "draw sword"}. Derive it from
+     the raw action ALONE — no prose is needed. Emit it on every turn a character
+     acts; omit only for pure atmosphere with no actor.
 
-Every dispatch carries a visibility tag. Default visible_to="all" with empty
-perception_fidelity unless the state clearly names asymmetric visibility.
+Visibility is server-defaulted to "all". Emit a visibility tag on a dispatch or
+directive ONLY when an action is genuinely secret (seen by some PCs and not
+others); otherwise omit it entirely.
 
 Pydantic rejects unknown fields. Stay inside the schema. Emit everything
 through the tool input — no preamble, no commentary, no extra text blocks."""
@@ -535,12 +531,12 @@ class IntentRouter:
                 span.set_attribute("degraded", False)
 
             # Story 151-3 (ADR-150 step 3): the pre-pass now PRODUCES the
-            # player-action rewrite (you/named/intent). Emit the GM-panel
+            # player-action rewrite (named/intent). Emit the GM-panel
             # lie-detector span on every successful decompose — emitted=False is
             # the loud net when the producer omitted it (the omitted→default
             # fallback is the transition safety, never a silent skip).
             ar = pkg.action_rewrite
-            ar_emitted = bool(ar and (ar.you or ar.named or ar.intent))
+            ar_emitted = bool(ar and (ar.named or ar.intent))
             with intent_router_action_rewrite_span(
                 emitted=ar_emitted,
                 intent=(ar.intent if ar is not None else ""),

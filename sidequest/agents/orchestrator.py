@@ -3721,9 +3721,9 @@ class Orchestrator:
         action_rewrite: ActionRewrite | None = None
         pre_pass = context.dispatch_package.action_rewrite if context.dispatch_package else None
         if pre_pass is not None:
-            action_rewrite = ActionRewrite(
-                you=pre_pass.you, named=pre_pass.named, intent=pre_pass.intent
-            )
+            # Story 153-1: the protocol ActionRewrite dropped ``you``; the
+            # orchestrator-local ActionRewrite keeps its own ``you`` default ("").
+            action_rewrite = ActionRewrite(named=pre_pass.named, intent=pre_pass.intent)
 
         return {
             "narration": prose,

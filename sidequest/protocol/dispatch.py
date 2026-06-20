@@ -8,8 +8,11 @@ per turn. Downstream consumers:
   - Narrator prompt builder — injects NarratorDirective entries into <game_state>
   - Group G (future) — reads VisibilityTag via Perception Rewriter + ProjectionFilter
 
-Group B emits stub values for LethalityVerdict (Group C fills in) and
-VisibilityTag (Group G wires the consumer pipeline).
+Story 153-1 (output-slim): the router no longer emits per-player LethalityVerdict
+stubs — ``PlayerDispatch.lethality`` was removed and the LethalityArbiter computes
+verdicts from HP=0 as the SOLE source. ``VisibilityTag`` is server-defaulted to
+``visible_to="all"`` (the model emits it only for a genuine secret); Group G still
+fills in non-trivial perception fidelity.
 
 No tool-calling. No prose. Structured JSON only — spec §3.2.
 
@@ -81,8 +84,10 @@ class VisibilityTag(ProtocolBase):
     """Authoritative ground-truth visibility for a dispatch/directive/verdict.
 
     Consumed by ADR-028 Perception Rewriter and Plan 03 ProjectionFilter.
-    Group B always emits `visible_to="all"` with empty fidelity; Group G
-    fills in asymmetric values.
+    Server-defaulted to `visible_to="all"` when the model omits the tag (Story
+    153-1 output-slim); the model emits it explicitly only for asymmetric
+    visibility (a secret seen by some PCs and not others). Group G fills in
+    non-trivial perception fidelity.
     """
 
     visible_to: list[str] | Literal["all"] = Field(
@@ -91,28 +96,6 @@ class VisibilityTag(ProtocolBase):
     perception_fidelity: dict[str, PerceptionFidelity] = Field(default_factory=dict)
     secrets_for: list[str] = Field(default_factory=list)
     redact_from_narrator_canonical: bool = False
-
-
-# ---------------------------------------------------------------------------
-# Referent resolution
-# ---------------------------------------------------------------------------
-
-
-class Referent(ProtocolBase):
-    token: str = Field(
-        description="The surface token from raw_action, e.g. 'him', 'let's', 'that'."
-    )
-    # Pingpong 2026-04-26 S2-OBS: the decomposer LLM occasionally emits a
-    # ``list[str]`` of player IDs when a token like "the party" resolves to
-    # multiple PCs (e.g. ``resolved_to=['Paul','John','George','Ringo']``).
-    # Schema accepts either form so multi-target turns survive validation.
-    resolved_to: str | list[str] | None = Field(
-        default=None,
-        description="Entity id, list of entity ids (multi-target), or None for absence.",
-    )
-    confidence: float = Field(ge=0.0, le=1.0)
-    alternatives: list[str] = Field(default_factory=list)
-    resolution_note: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -128,8 +111,17 @@ class SubsystemDispatch(ProtocolBase):
         description="List of sibling idempotency_keys this dispatch depends on.",
     )
     idempotency_key: str
-    visibility: VisibilityTag
-    # ADR-113 confidence gate (Story 71-16). Required — no silent default: the
+    visibility: VisibilityTag = Field(
+        default_factory=lambda: VisibilityTag(visible_to="all"),
+        description=(
+            "Server-defaulted to visible_to='all'; the model emits this ONLY for "
+            "genuinely asymmetric visibility (a secret seen by some PCs and not "
+            "others). Story 153-1 made it omittable to cut per-dispatch output."
+        ),
+    )
+    # ADR-113 confidence gate (Story 71-16). NOTE: ``visibility`` above is now
+    # intentionally server-defaulted (Story 153-1); ``confidence`` deliberately is
+    # NOT — it is Required with no silent default, because the
     # Intent Router scores how certain it is that THIS specific mechanical
     # engagement is what the player intended. ``run_dispatch_bank`` engages the
     # subsystem engine only when ``confidence >= threshold`` (per-subsystem,
@@ -162,11 +154,18 @@ NarratorDirectiveKind = Literal[
 class NarratorDirective(ProtocolBase):
     kind: NarratorDirectiveKind
     payload: str
-    visibility: VisibilityTag
+    visibility: VisibilityTag = Field(
+        default_factory=lambda: VisibilityTag(visible_to="all"),
+        description=(
+            "Server-defaulted to visible_to='all'; emitted only for a genuinely "
+            "secret directive (Story 153-1 output-slim)."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
-# Lethality — full contract, stub values in Group B
+# Lethality — full contract (LethalityArbiter is the sole source; Story 153-1
+# removed the router's per-player lethality stubs)
 # ---------------------------------------------------------------------------
 
 
@@ -199,12 +198,34 @@ class LethalityVerdict(ProtocolBase):
 
 
 class PlayerDispatch(ProtocolBase):
+    # Field order = JSON-schema property order = generation order (Story 153-1).
+    # The dispatch list is the only narrator-blocking output, so it leads; the
+    # ids (player_id/raw_action) are cheap and trail.
+    dispatch: list[SubsystemDispatch] = Field(default_factory=list)
+    narrator_instructions: list[NarratorDirective] = Field(default_factory=list)
     player_id: str
     raw_action: str
-    resolved: list[Referent] = Field(default_factory=list)
-    dispatch: list[SubsystemDispatch] = Field(default_factory=list)
-    lethality: list[LethalityVerdict] = Field(default_factory=list)
-    narrator_instructions: list[NarratorDirective] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _strip_deprecated(cls, data: Any) -> Any:
+        """Drop fields the output-slim removed (Story 153-1).
+
+        ``resolved`` (the Referent list) and ``lethality`` were generated every
+        turn and read by nothing on the live path — the dispatch carries the
+        resolved entity in ``params`` and the LethalityArbiter computes its own
+        HP=0 verdicts. They are gone from the schema, but Haiku may still emit
+        them out of habit, and ``extra="forbid"`` would reject the whole package
+        (dropping every dispatch this turn). Strip-and-log, the same
+        normalize-don't-reject doctrine as ``_coerce_stringified_lists``.
+        """
+        if isinstance(data, dict):
+            dropped = [key for key in ("resolved", "lethality") if key in data]
+            for key in dropped:
+                data.pop(key, None)
+            if dropped:
+                logger.info("dispatch_package.stripped_deprecated fields=%s", ",".join(dropped))
+        return data
 
 
 # ---------------------------------------------------------------------------
@@ -251,20 +272,19 @@ class CrossAction(ProtocolBase):
 
 
 class ActionRewrite(ProtocolBase):
-    """The player's own action rewritten into three perspectives.
+    """The player's own action rewritten into two perspectives.
 
     A mechanical transform of the submitted action — needs nothing from the
     narrator's prose. ADR-150 §1 moves this OFF the narrator's post-narration
     game_patch sidecar and ONTO the pre-narrator IntentRouter (this package),
     closing the ordering hazard where the field was emitted by the very turn
     whose visibility (``visibility_classifier``) and confrontation-intent it
-    gates. ``you`` = second-person, ``named`` = third-person with the acting
-    character's name, ``intent`` = neutral distilled intent (no pronouns).
+    gates. ``named`` = third-person with the acting character's name, ``intent``
+    = neutral distilled intent (no pronouns). Story 153-1 cut the redundant
+    second-person ``you`` perspective (generated every acting turn, read by
+    nothing that survives the slim).
     """
 
-    you: str = Field(
-        default="", description="The action in second person, e.g. 'You draw your sword'."
-    )
     named: str = Field(
         default="",
         description="The action in third person with the acting character's name, "
@@ -275,6 +295,16 @@ class ActionRewrite(ProtocolBase):
         description="The neutral distilled intent, no pronouns, e.g. 'draw sword'.",
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _strip_deprecated(cls, data: Any) -> Any:
+        """Drop the removed ``you`` perspective if the model still emits it
+        (Story 153-1) — strip-and-log rather than reject under extra=forbid."""
+        if isinstance(data, dict) and "you" in data:
+            data.pop("you", None)
+            logger.info("dispatch_package.stripped_deprecated fields=you")
+        return data
+
 
 # ---------------------------------------------------------------------------
 # Top-level package
@@ -282,7 +312,10 @@ class ActionRewrite(ProtocolBase):
 
 
 class DispatchPackage(ProtocolBase):
-    turn_id: str
+    # Field order = generation order (Story 153-1): output is serial, so the
+    # narrator-blocking dispatches lead off the front of the call; confidence_global
+    # is ~5 telemetry tokens; action_rewrite is read mechanically (not by the bank)
+    # so it trails; turn_id is a cheap id and goes last.
     per_player: list[PlayerDispatch] = Field(default_factory=list)
     cross_player: list[CrossAction] = Field(default_factory=list)
     confidence_global: float = Field(ge=0.0, le=1.0)
@@ -293,12 +326,13 @@ class DispatchPackage(ProtocolBase):
     action_rewrite: ActionRewrite | None = Field(
         default=None,
         description=(
-            "Rewrite of the player's OWN submitted action into three perspectives "
-            "(you/named/intent). Produce this on EVERY turn from the raw action "
+            "Rewrite of the player's OWN submitted action into two perspectives "
+            "(named/intent). Produce this on EVERY turn from the raw action "
             "alone — it feeds visibility classification and the confrontation-intent "
             "check. Omit only when no character acts (pure atmosphere)."
         ),
     )
+    turn_id: str
 
     # Note: the historical ``degraded`` / ``degraded_reason`` fields and the
     # ``_degraded_requires_reason`` validator were removed by Story 59-2
@@ -406,7 +440,6 @@ __all__ = [
     "NarratorDirectiveKind",
     "PerceptionFidelity",
     "PlayerDispatch",
-    "Referent",
     "Reversibility",
     "SubsystemDispatch",
     "VisibilityTag",

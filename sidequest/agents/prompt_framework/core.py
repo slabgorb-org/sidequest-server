@@ -1038,7 +1038,9 @@ If nothing new is revealed and nothing prior is referenced, omit the footnotes a
         zone beside the peer roster: seat count is acute framing data, not
         background lore.
         """
-        if player_count <= 1:
+        if player_count < 1:
+            raise ValueError(f"player_count must be >= 1, got {player_count!r}")
+        if player_count == 1:
             content = (
                 "## PARTY SCALE — 1 player (solo session)\n"
                 "There is exactly ONE player character at the table. Scale "

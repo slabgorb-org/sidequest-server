@@ -46,10 +46,7 @@ PARTY_SCALE_SPAN = "narrator.party_scale"
 
 def _make_peers(n: int) -> list[PartyPeer]:
     """``n`` canonical peer packets (peers exclude self → seat count = n + 1)."""
-    return [
-        PartyPeer(name=f"Peer{i}", race="human", char_class="drifter")
-        for i in range(n)
-    ]
+    return [PartyPeer(name=f"Peer{i}", race="human", char_class="drifter") for i in range(n)]
 
 
 def _solo_context(turn_number: int = 0) -> TurnContext:
@@ -107,10 +104,7 @@ async def test_party_scale_solo_states_single_player():
     section = await _party_scale_section(orch, _solo_context())
     assert section is not None
     content = section.content.lower()
-    assert any(
-        token in content
-        for token in ("solo", "1 player", "one player", "single player")
-    ), (
+    assert any(token in content for token in ("solo", "1 player", "one player", "single player")), (
         "solo party_scale section must signal a single player so the narrator "
         f"scales quest briefs to one rider; got: {section.content!r}"
     )

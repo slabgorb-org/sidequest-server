@@ -1296,6 +1296,10 @@ def instantiate_encounter_from_trigger(
             seat_seeds=seat_seeds,
         )
         snapshot.encounter = enc
+        # Story 150-3: stamp the birth turn so the location-change abandon ladder
+        # (narration_apply) doesn't kill this table the same turn it's dealt — a
+        # table scene moves the location to the table itself in the same response.
+        enc.created_turn = snapshot.turn_manager.interaction
         return enc
 
     # Story 45-18: NPC fallback when narrator's npcs_present is empty.
@@ -1760,6 +1764,10 @@ def instantiate_encounter_from_trigger(
                 opponent_count=sum(1 for a in actors if a.side == "opponent"),
             )
         snapshot.encounter = enc
+        # Story 150-3: stamp the birth turn (sibling of the table path above) so a
+        # freshly-seated confrontation survives the location-change abandon ladder
+        # on the turn it is created — see narration_apply's continued_fresh_this_turn.
+        enc.created_turn = snapshot.turn_manager.interaction
         _watcher_publish(
             "state_transition",
             {

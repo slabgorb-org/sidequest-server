@@ -233,6 +233,17 @@ async def test_table_resolution_dispatch_seats_the_table() -> None:
         f"encounter must honor dispatch.params['type']={POKER_TYPE!r}; got {enc.encounter_type!r}"
     )
 
+    # Story 150-3 wiring: the seating chokepoint must stamp the birth turn so the
+    # narration_apply location-change abandon ladder can EXEMPT this table on the
+    # turn it's dealt — a table scene moves the scene onto the table itself, which
+    # otherwise deactivated the freshly-seated encounter (five_points turn 5).
+    assert enc.created_turn == snap.turn_manager.interaction, (
+        "instantiate_encounter_from_trigger must stamp created_turn = the current "
+        f"interaction ({snap.turn_manager.interaction}); got {enc.created_turn!r}. "
+        "Without it the fresh-this-turn abandon exemption never fires and the "
+        "table self-destructs the same turn it seats."
+    )
+
     ts = enc.table_state
     assert ts is not None, (
         "a seated table_resolution encounter must carry a TableState — without "

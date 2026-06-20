@@ -346,6 +346,21 @@ class StructuredEncounter(BaseModel):
     spatial notion — design §4.2 / open-Q3). An actor's current zone lives in
     ``EncounterActor.per_actor_state['zone']``. Empty for non-Fate encounters."""
     tags: list[EncounterTag] = Field(default_factory=list)
+    # Story 150-3 (sq-playtest 2026-06-20, five_points): the interaction-turn on
+    # which this encounter was instantiated, stamped at the single seating
+    # chokepoint (instantiate_encounter_from_trigger). Lets the location-change
+    # abandon ladder in narration_apply EXEMPT an encounter that was born THIS
+    # same turn. A table scene (poker/auction) is inherently a NEW location — the
+    # narrator seats the table AND moves the scene to "The Groggery — Poker Table"
+    # in one response, and deactivate-on-location-change then killed the
+    # freshly-dealt table before the player could ever play it (table NARRATION
+    # but no table tab). An encounter cannot have been "walked away from" on the
+    # turn it was created — the location change that's firing is the one that
+    # CREATED its scene — so it CONTINUES across its birth-location-change; a
+    # genuine later departure (created_turn < interaction) abandons normally.
+    # None for legacy saves / direct-construction tests predating this field
+    # (treated as "not fresh" → old abandon behavior preserved).
+    created_turn: int | None = None
     outcome: str | None = None
     resolved: bool = False
     mood_override: str | None = None

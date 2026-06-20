@@ -1,39 +1,55 @@
-"""Story 106-2 (RED) — WWN reprisal model: a defensive beat must mitigate the
-per-beat opponent reprisal (easy-ramp lever #2).
+"""Story 152-1 (RED, ADR-143) — WWN defensive actions resolve through WWN math,
+NOT the native brace/break_contact reprisal-mitigation model.
 
-PLAYTEST BUG (caverns_and_claudes/beneath_sunden, WWN ruleset, ADR-117;
-sq-playtest-pingpong 2026-06-13): every player beat — strike, committed_blow,
-**and even a defensive brace** — was immediately answered by a full opponent
-attack. Zeppo's Brace (a *defensive* beat) ate a `d20=15+2=17 hit, 1d8=5`
-reprisal that killed him. The defense mitigated NOTHING — Brace was mechanically
-identical to Strike in damage taken. There was no survival play.
+REWRITE of the old 106-2 file (Keith ruling, 2026-06-20; design doc
+``docs/superpowers/specs/2026-06-20-wn-full-action-set-design.md``). The original
+106-2 spec encoded the NATIVE model — a per-beat opponent reprisal that a
+``brace`` mitigated with flat HP reduction (``resolve_tier_deltas``) and a
+``break_contact`` (push) PREVENTED wholesale. WWN has none of those: combat is
+side-initiative (SRD §2.4.1, the opponent attacks ONCE on its own slot, no
+per-beat reprisal), and defense is **Armor Class** (SRD §2.4.4). Shaping the
+native mechanics into the WWN binding is the exact ADR-143 / SOUL "Bind the
+Ruleset, Don't Balance It" trap, so the native scaffolding is REMOVED from the
+WWN path and the genuine WWN defensive verbs are added:
 
-ROOT DEFECT (cite-grounded, common to both opponent-attack paths): the reprisal
-resolver ``_resolve_opponent_reprisal`` (``dice.py:1568``) is **blind to the
-player's committed beat** — it reads the player's AC flat
-(``target_ac = int(player_core.armor_class)``, dice.py:1638) and rolls
-``resolve_opponent_attack`` with no defensive modifier. The WWN sealed-round walk
-(``wn_round.py:283-296``) calls that *same* blind resolver, so even on the
-WWN-faithful initiative path, **Brace changes nothing about the incoming attack.**
+  * **Total Defense** (SRD §2.4.4, Instant Action — give up your Main Action):
+    +2 Melee & Ranged AC and **immune to Shock** until the start of your next
+    turn. Resolved by the EXISTING WWN AC math — the opponent's d20+hit checks
+    the boosted AC and *misses*; there is no damage-reduction number.
+  * **Fighting Withdrawal** (SRD §2.4.4, Main Action): disengage from an adjacent
+    melee attacker so a following **Run** provokes NO free attack. It does NOT
+    cancel the opponent's own-turn attack.
+  * **Run** (the plain flee): a Move out of melee that DOES provoke one free
+    ("opportunity") attack from each adjacent enemy.
 
-OPERATOR RULING (Keith, 2026-06-13, .pennyfarthing/sidecars/gm-decisions.md):
-**Option A — WWN initiative round (full-defend).** Route WWN ``hp_depletion``
-combat through the sealed initiative round (``run_wn_round``) as the sole
-opponent-attack path; a committed **full-defend / Break Contact** makes the
-opponent's slot **miss or not occur** that round, and a committed **Brace**
-measurably blunts the reprisal (the WWN ``brace`` BeatKind already supplies a
-damage-mitigation primitive — ``apply_beat_hp_channel(target_mitigation=...)``,
-``beat_kinds.py:357-373``; context-story-106-2 "Existing infrastructure to
-reuse"). All magnitudes are WWN-SRD-sourced, never invented (standing ruling).
+All magnitudes are WWN-SRD-verbatim (+2 AC, Shock immunity) — never invented.
 
-These tests drive the **real** ``dispatch_dice_throw → run_wn_round`` seam on the
-REAL heavy_metal pack (``ruleset: wwn``), whose Blade-work ``hp_depletion``
-combat authors a ``brace`` and a ``break_contact`` beat. They assert the
-defensive choice now changes the enemy's attack. RED today on every count: the
-resolver never receives the committed beat.
+GROUND-TRUTH MEASUREMENT (2026-06-20, real heavy_metal pack, ``ruleset: wwn``):
+108-3 stripped every native combat beat off the ``hp_depletion`` combat def, so
+``cdef.beats == []``. Consequences this suite drives RED:
+  1. ``total_defense`` / ``fighting_withdrawal`` / ``run`` are not in the WN action
+     allowlist → ``DiceDispatchError: unknown beat_id ... available: []``.
+  2. The OPPONENT'S reprisal looks for a strike beat in the empty ``cdef.beats``
+     and SKIPS (``dice.opponent_reprisal_skipped reason=no_strike_beat``) — so the
+     opponent never attacks and there is nothing to defend against. Dev must
+     synthesize the opponent's WN strike (mirror of ``wn_action_beat('attack')``)
+     so the opponent attacks once on its slot vs the defender's AC.
 
-Shared fixtures: ``tests/integration/_wn_round_102_4`` (the 102-4 WN turn-model
-helpers). Skips cleanly when sidequest-content is not on disk.
+CONTRACT this story establishes (for Dev), all WWN-gated
+(``isinstance(ruleset, WithoutNumberRulesetModule)``):
+  * New synthesized WWN action ids (closed allowlist preserved — a bogus id still
+    raises, per 108-8's guard): ``total_defense``, ``fighting_withdrawal``, ``run``.
+  * The opponent's strike is WN-synthesized so it attacks on its slot.
+  * ``encounter.opponent_attack_resolved`` carries the defender's committed action
+    (``defender_beat``) and, under Total Defense, the AC delta (``ac_delta == 2``,
+    ``target_ac == base_ac + 2``). A free attack on a flee carries
+    ``source="opportunity_attack"``; the own-turn slot attack keeps
+    ``source="opponent_reprisal"``.
+  * 108-8's invariants stay green (covered by test_108_8): closed allowlist + the
+    isinstance gate; native packs resolve authored ids on the native engine.
+
+Shared fixtures: ``tests/integration/_wn_round_102_4``. Skips cleanly when
+sidequest-content is not on disk.
 """
 
 from __future__ import annotations
@@ -53,244 +69,395 @@ pytestmark = pytest.mark.skipif(
     not GENRE_PACKS_DIR.is_dir(), reason="sidequest-content not on disk"
 )
 
-# heavy_metal Blade-work combat (rules.yaml): hp_depletion, opponent_damage 1d8.
+# heavy_metal Blade-work combat (rules.yaml): hp_depletion, opponent_damage 1d8,
+# opponent_default_stats all-10 (SWN attribute mod +0), armor_class 12.
 _PC = "Vesska"
 _OPP = "Hired Blade"
 
-_BRACE = "brace"  # kind: brace — "Reduce incoming damage this round"
-_BREAK_CONTACT = "break_contact"  # kind: push — "Combat ends — withdraws / let go"
-_STRIKE = "committed_blow"  # kind: strike — the undefended baseline
+# Story 152-1 WWN defensive-action ids the dispatch must synthesize under a WWN
+# binding (centralised so a contract change is a one-line edit). ``attack`` is the
+# offensive baseline (already synthesized — story 108-8).
+_ATTACK = "attack"
+_TOTAL_DEFENSE = "total_defense"
+_FIGHTING_WITHDRAWAL = "fighting_withdrawal"
+_RUN = "run"
 
 _SPAN_OPP_ATTACK = "encounter.opponent_attack_resolved"
 _SPAN_ROUND_RESOLVED = "wwn.round.resolved"
 
+# WWN SRD §2.4.4 — Total Defense grants +2 Melee & Ranged AC (verbatim, not invented).
+# (Base Melee/Ranged AC is read from the baseline span at runtime, not hard-coded, so the
+# +2 assertion survives any change to the unarmored-AC default.)
+_TOTAL_DEFENSE_AC_BONUS = 2
 
-def _solo_wwn_combat():
+
+def _solo_wwn_combat(*, pc_hp: int = 12):
     """One PC vs one blade, real heavy_metal (wwn) hp_depletion combat."""
     pack = load_pack("heavy_metal")
-    snap, enc = seat_wn_combat(pack, [_PC], [_OPP])
+    snap, enc = seat_wn_combat(pack, [_PC], [_OPP], pc_hp=pc_hp)
     return pack, snap, enc
 
 
-def _pc_hp(snap) -> int:
-    core = snap.find_creature_core(_PC)
-    assert core is not None, "PC core must resolve"
+def _pc_hp(snap, name: str = _PC) -> int:
+    core = snap.find_creature_core(name)
+    assert core is not None, f"PC {name!r} core must resolve"
     return core.hp.current
 
 
+def _opp_attack_spans(otel_capture, *, source: str | None = None):
+    """Opponent-attack spans, optionally filtered to a ``source`` attribute
+    (``"opponent_reprisal"`` = own-turn slot; ``"opportunity_attack"`` = the free
+    attack a flee provokes)."""
+    spans = spans_named(otel_capture, _SPAN_OPP_ATTACK)
+    if source is None:
+        return spans
+    return [s for s in spans if dict(s.attributes).get("source") == source]
+
+
 # ---------------------------------------------------------------------------
-# AC1 — Brace measurably reduces the reprisal damage vs an undefended strike.
-#       (Also the AC5 wiring proof: drives the real dispatch → run_wn_round seam.)
+# AC1 — the opponent attacks ONCE on its slot vs the defender's AC. The WN engine
+#       OWNS the action set, so the opponent's strike is synthesized even on a
+#       zero-beat (post-108-3) combat def. Precondition for every defense test.
 # ---------------------------------------------------------------------------
 
 
-def test_brace_takes_strictly_less_reprisal_damage_than_strike(monkeypatch):
-    """AC1/AC5: under identical pinned rng + initiative (opponent slot first), a
-    PC who commits **Brace** loses strictly LESS HP to the opponent's reprisal
-    than a PC who commits a strike. The playtest counter-fact is that today they
-    are equal (Brace == Strike in damage taken); this pins that they now differ.
+def test_wwn_opponent_attacks_on_its_slot_with_a_synthesized_strike(monkeypatch, otel_capture):
+    """RED (AC1): on the zero-beat WWN combat def the opponent must still attack on
+    its own initiative slot. MEASURED today: ``_resolve_opponent_reprisal`` finds no
+    strike beat in the empty ``cdef.beats`` and skips (``no_strike_beat``) — the PC
+    takes ZERO damage under MAX rolls. The fix synthesizes the opponent's WN strike
+    so the enemy swings once on its slot (no per-beat reprisal model)."""
+    monkeypatch.setattr("random.randint", lambda a, b: b)  # MAX: any opponent hit lands hard
+    pack, snap, enc = _solo_wwn_combat()
+    force_initiative(enc, [(_OPP, 9), (_PC, 2)])  # opponent first → it acts while the PC is live
+    hp0 = _pc_hp(snap)
 
-    Brace mitigates via the existing ``target_mitigation`` damage-reduction
-    primitive (context-story-106-2 "Existing infrastructure to reuse"). The
-    round resolves through the WWN sealed walk — asserted via the
-    ``wwn.round.resolved`` span — so this is also the end-to-end wiring test:
-    the mitigation is reachable from the production ``dispatch_dice_throw``
-    entry, not a unit-level call.
-    """
-    # MAX rng: opponent d20=20 (guaranteed hit) and opponent damage 1d8=8 — the
-    # reprisal lands hard against the undefended baseline so any mitigation is
-    # visible as a strict HP-loss reduction.
+    dispatch_throw(
+        pack=pack, snap=snap, enc=enc, character_name=_PC, player_id="p1", beat_id=_ATTACK
+    )
+
+    loss = hp0 - _pc_hp(snap)
+    assert loss > 0, (
+        "the opponent took no turn on the zero-beat WWN combat def — its strike was "
+        f"skipped (no synthesized opponent beat); PC lost {loss} HP under MAX rolls. "
+        "The WN engine must OWN the opponent's action too (AC1: 'the opponent attacks "
+        "once on its slot vs the defender's AC')."
+    )
+    own_turn = _opp_attack_spans(otel_capture, source="opponent_reprisal")
+    assert len(own_turn) == 1, (
+        "exactly one own-turn opponent attack must fire on the opponent's slot; "
+        f"got {len(own_turn)} (source='opponent_reprisal' spans)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# AC2 — Total Defense: +2 Melee & Ranged AC (resolved by the existing AC math) and
+#       Shock immunity, both until the defender's next turn. WWN SRD §2.4.4.
+# ---------------------------------------------------------------------------
+
+
+def test_total_defense_flips_a_marginal_hit_to_a_miss(monkeypatch, otel_capture):
+    """RED (AC2): under identical pinned rng a marginal opponent hit at BASE AC must
+    become a MISS under Total Defense (+2 AC). Proves the boost flows through the
+    existing ``resolve_opponent_attack`` AC math, not a bespoke damage subtraction.
+
+    d20 pinned to 11; opponent all-10 stats → SWN mod +0 → attack_total 11. Base AC
+    10 → HIT (11 >= 10); Total-Defense AC 12 → MISS (11 < 12)."""
+    fake = lambda a, b: 11 if (a, b) == (1, 20) else b  # noqa: E731 — d20=11, damage=max
+    monkeypatch.setattr("random.randint", fake)
+
+    # Baseline: offensive commit, no defense — the marginal hit lands.
+    pack, snap, enc = _solo_wwn_combat()
+    force_initiative(enc, [(_OPP, 9), (_PC, 2)])
+    base_hp0 = _pc_hp(snap)
+    dispatch_throw(
+        pack=pack, snap=snap, enc=enc, character_name=_PC, player_id="p1", beat_id=_ATTACK
+    )
+    base_loss = base_hp0 - _pc_hp(snap)
+    base_spans = _opp_attack_spans(otel_capture, source="opponent_reprisal")
+    assert len(base_spans) == 1, f"one own-turn attack expected in baseline; got {len(base_spans)}"
+    base_attrs = dict(base_spans[0].attributes)
+    base_ac = int(base_attrs["target_ac"])
+    assert base_attrs["hit"] is True and base_loss > 0, (
+        "fixture precondition: the undefended marginal attack must HIT and deal damage "
+        f"(attack_total={base_attrs.get('attack_total')} vs AC {base_ac}); base_loss={base_loss}"
+    )
+    assert int(base_attrs["attack_total"]) in (base_ac, base_ac + 1), (
+        "fixture precondition: need a MARGINAL hit (attack_total within 1 of AC) for the "
+        f"+2 flip to be observable; attack_total={base_attrs['attack_total']} ac={base_ac}. "
+        "Adjust the pinned d20 if the opponent's synthesized to-hit modifier differs."
+    )
+
+    # Defended: a fresh identical combat, PC commits Total Defense.
+    otel_capture.clear()
+    pack, snap, enc = _solo_wwn_combat()
+    force_initiative(enc, [(_OPP, 9), (_PC, 2)])
+    td_hp0 = _pc_hp(snap)
+    dispatch_throw(
+        pack=pack, snap=snap, enc=enc, character_name=_PC, player_id="p1", beat_id=_TOTAL_DEFENSE
+    )
+    td_loss = td_hp0 - _pc_hp(snap)
+    td_spans = _opp_attack_spans(otel_capture, source="opponent_reprisal")
+    assert len(td_spans) == 1, (
+        f"one own-turn attack expected under Total Defense; got {len(td_spans)}"
+    )
+    td_attrs = dict(td_spans[0].attributes)
+
+    assert td_loss == 0, (
+        f"Total Defense must turn the marginal hit into a miss; PC lost {td_loss} HP "
+        f"(baseline lost {base_loss}). The +2 AC is not being applied to the opponent's roll."
+    )
+    assert td_attrs["hit"] is False, "the opponent's attack must MISS the Total-Defense AC"
+    assert int(td_attrs["target_ac"]) == base_ac + _TOTAL_DEFENSE_AC_BONUS, (
+        f"Total Defense must raise the checked AC by +{_TOTAL_DEFENSE_AC_BONUS} (SRD §2.4.4); "
+        f"span target_ac={td_attrs['target_ac']} expected {base_ac + _TOTAL_DEFENSE_AC_BONUS}"
+    )
+
+
+def test_total_defense_span_carries_committed_action_and_ac_delta(monkeypatch, otel_capture):
+    """RED (AC5 / OTEL lie-detector): the opponent-attack span must name the
+    defender's committed WWN action and the AC delta applied, so the GM panel sees
+    the defense fire (prose claiming 'you go on the defensive' must be span-backed).
+
+    Contract: ``defender_beat == 'total_defense'`` and ``ac_delta == 2``."""
     monkeypatch.setattr("random.randint", lambda a, b: b)
+    pack, snap, enc = _solo_wwn_combat()
+    force_initiative(enc, [(_OPP, 9), (_PC, 2)])
 
-    # Baseline: PC commits a strike. Opponent (initiative 9) reprises first.
+    dispatch_throw(
+        pack=pack, snap=snap, enc=enc, character_name=_PC, player_id="p1", beat_id=_TOTAL_DEFENSE
+    )
+
+    spans = _opp_attack_spans(otel_capture, source="opponent_reprisal")
+    assert len(spans) == 1, f"exactly one own-turn opponent attack expected; got {len(spans)}"
+    attrs = dict(spans[0].attributes)
+    assert attrs.get("defender_beat") == _TOTAL_DEFENSE, (
+        f"the opponent-attack span must name the committed defensive action; attrs={attrs}"
+    )
+    assert int(attrs.get("ac_delta", 0)) == _TOTAL_DEFENSE_AC_BONUS, (
+        f"the span must carry the +{_TOTAL_DEFENSE_AC_BONUS} AC delta Total Defense applied; "
+        f"attrs={attrs}"
+    )
+
+
+def test_total_defense_is_not_flat_mitigation_a_real_hit_takes_full_damage(
+    monkeypatch, otel_capture
+):
+    """RED (AC1 contrast): Total Defense is AC manipulation, NOT the native flat-HP
+    ``brace`` mitigation. When the opponent rolls high enough to hit EVEN the +2 AC,
+    the defender takes the FULL weapon damage — no partial reduction is subtracted.
+    Catches a regression to the native ``defense_mitigation`` model.
+
+    d20=20 (hits any AC), damage 1d8 pinned to 8 → the PC must lose exactly 8."""
+    fake = lambda a, b: 20 if (a, b) == (1, 20) else b  # noqa: E731 — d20=20 hit, 1d8=8
+    monkeypatch.setattr("random.randint", fake)
+    pack, snap, enc = _solo_wwn_combat(pc_hp=20)
+    force_initiative(enc, [(_OPP, 9), (_PC, 2)])
+    hp0 = _pc_hp(snap)
+
+    dispatch_throw(
+        pack=pack, snap=snap, enc=enc, character_name=_PC, player_id="p1", beat_id=_TOTAL_DEFENSE
+    )
+
+    loss = hp0 - _pc_hp(snap)
+    assert loss == 8, (
+        f"a hit that beats the Total-Defense AC must deal FULL weapon damage (8); PC lost "
+        f"{loss}. A reduced loss means native flat 'brace' mitigation leaked into the WWN path "
+        "(ADR-143: that scaffolding is REMOVED, not retuned)."
+    )
+    spans = _opp_attack_spans(otel_capture, source="opponent_reprisal")
+    attrs = dict(spans[0].attributes)
+    assert int(attrs.get("defense_mitigation", 0)) == 0, (
+        "Total Defense must not report a flat damage-mitigation magnitude (defense is AC, "
+        f"not HP reduction); attrs={attrs}"
+    )
+
+
+def test_total_defense_grants_shock_immunity(monkeypatch, otel_capture):
+    """RED (AC2 — Shock immunity, SRD §2.4.4): a committed Total Defense suppresses the
+    Shock chip a missed attack would otherwise deal. The immunity is EXPLICIT, not a
+    side effect of the +2 AC: the shock weapon's ``shock_ac`` ceiling (20) is far above
+    even the boosted AC (12), so without the immunity flag the chip would still land.
+
+    Setup: give the opponent a Shock 1 / AC 20 weapon; pin a MISS (d20=2). At base AC
+    the miss chips 1; under Total Defense it must chip 0."""
+    from sidequest.genre.models.inventory import DamageSpec
+
+    fake = lambda a, b: 2 if (a, b) == (1, 20) else b  # noqa: E731 — d20=2 → a clean miss
+    monkeypatch.setattr("random.randint", fake)
+
+    def _shock_combat():
+        pack, snap, enc = _solo_wwn_combat()
+        cdef = next(c for c in pack.rules.confrontations if c.win_condition == "hp_depletion")
+        cdef.opponent_damage = DamageSpec(dice="1d8", bonus=0, shock=1, shock_ac=20)
+        force_initiative(enc, [(_OPP, 9), (_PC, 2)])
+        return pack, snap, enc
+
+    # Baseline: undefended miss still chips Shock (the rule is live).
+    pack, snap, enc = _shock_combat()
+    base_hp0 = _pc_hp(snap)
+    dispatch_throw(
+        pack=pack, snap=snap, enc=enc, character_name=_PC, player_id="p1", beat_id=_ATTACK
+    )
+    base_chip = base_hp0 - _pc_hp(snap)
+    assert base_chip == 1, (
+        f"fixture precondition: an undefended miss must chip Shock 1; PC lost {base_chip}"
+    )
+
+    # Total Defense: immune to Shock → no chip despite the same miss.
+    pack, snap, enc = _shock_combat()
+    td_hp0 = _pc_hp(snap)
+    dispatch_throw(
+        pack=pack, snap=snap, enc=enc, character_name=_PC, player_id="p1", beat_id=_TOTAL_DEFENSE
+    )
+    td_chip = td_hp0 - _pc_hp(snap)
+    assert td_chip == 0, (
+        f"Total Defense must grant Shock immunity (SRD §2.4.4); PC still took {td_chip} Shock "
+        "damage. The +2 AC alone does not suppress Shock (shock_ac=20 > boosted AC 12) — the "
+        "immunity must be explicit."
+    )
+
+
+# ---------------------------------------------------------------------------
+# AC3 — Fighting Withdrawal + Run. A plain Run provokes the free attack; Fighting
+#       Withdrawal avoids it; neither cancels the opponent's own-turn attack.
+#       WWN SRD §2.4.4.
+# ---------------------------------------------------------------------------
+
+
+def test_plain_run_provokes_a_free_opportunity_attack(monkeypatch, otel_capture):
+    """RED (AC3): a plain Run out of melee provokes ONE free attack from the adjacent
+    enemy. PC-first so the flee resolves on the PC's slot; under MAX rolls the free
+    attack lands. The free attack is distinguished by ``source='opportunity_attack'``."""
+    monkeypatch.setattr("random.randint", lambda a, b: b)
+    pack, snap, enc = _solo_wwn_combat()
+    force_initiative(
+        enc, [(_PC, 9), (_OPP, 2)]
+    )  # PC flees first; opponent's later slot finds no target
+    hp0 = _pc_hp(snap)
+
+    dispatch_throw(pack=pack, snap=snap, enc=enc, character_name=_PC, player_id="p1", beat_id=_RUN)
+
+    opp_atk = _opp_attack_spans(otel_capture, source="opportunity_attack")
+    assert len(opp_atk) == 1, (
+        "a plain Run from melee must provoke exactly one free attack "
+        f"(source='opportunity_attack'); got {len(opp_atk)}"
+    )
+    assert hp0 - _pc_hp(snap) > 0, (
+        "the provoked free attack must land under MAX rolls (no damage taken)"
+    )
+
+
+def test_fighting_withdrawal_avoids_the_free_attack(monkeypatch, otel_capture):
+    """RED (AC3): Fighting Withdrawal disengages safely — the free attack a Run would
+    provoke does NOT occur. Same setup/rng as the Run test; the only change is the
+    committed action, so a difference is the disengage working, not luck."""
+    monkeypatch.setattr("random.randint", lambda a, b: b)
+    pack, snap, enc = _solo_wwn_combat()
+    force_initiative(enc, [(_PC, 9), (_OPP, 2)])
+    hp0 = _pc_hp(snap)
+
+    dispatch_throw(
+        pack=pack,
+        snap=snap,
+        enc=enc,
+        character_name=_PC,
+        player_id="p1",
+        beat_id=_FIGHTING_WITHDRAWAL,
+    )
+
+    assert not _opp_attack_spans(otel_capture, source="opportunity_attack"), (
+        "Fighting Withdrawal must avoid the free attack a flee would provoke (SRD §2.4.4); "
+        "an opportunity_attack span fired"
+    )
+    assert _pc_hp(snap) == hp0, (
+        f"Fighting Withdrawal must take no opportunity damage; PC lost {hp0 - _pc_hp(snap)} HP"
+    )
+
+
+def test_fighting_withdrawal_does_not_cancel_the_opponent_own_turn_attack(
+    monkeypatch, otel_capture
+):
+    """RED (AC3 / AC1): Fighting Withdrawal must NOT cancel the opponent's own-turn
+    attack — the key contrast with the REMOVED native break_contact (which set
+    ``defense_prevented`` and negated the whole attack).
+
+    The opponent acts FIRST (slot 9 > PC slot 2), so when its turn comes the PC has
+    not yet withdrawn (the withdrawal is the PC's own Main Action, resolved at the
+    PC's later slot) — faithful WWN side-initiative. The opponent therefore attacks
+    the still-seated PC normally; under MAX rolls it lands. A break_contact-style
+    whole-attack prevent would zero this."""
+    monkeypatch.setattr("random.randint", lambda a, b: b)
     pack, snap, enc = _solo_wwn_combat()
     force_initiative(enc, [(_OPP, 9), (_PC, 2)])
     hp0 = _pc_hp(snap)
+
     dispatch_throw(
-        pack=pack, snap=snap, enc=enc, character_name=_PC, player_id="p1", beat_id=_STRIKE
-    )
-    strike_loss = hp0 - _pc_hp(snap)
-    assert strike_loss > 0, (
-        "fixture precondition: the undefended reprisal must land (the opponent "
-        f"acts first and hits at pinned d20=20); strike_loss={strike_loss}"
-    )
-
-    # Defended: a fresh identical combat, PC commits Brace instead.
-    pack, snap, enc = _solo_wwn_combat()
-    force_initiative(enc, [(_OPP, 9), (_PC, 2)])
-    hp0 = _pc_hp(snap)
-    out = dispatch_throw(
-        pack=pack, snap=snap, enc=enc, character_name=_PC, player_id="p1", beat_id=_BRACE
-    )
-    brace_loss = hp0 - _pc_hp(snap)
-
-    assert out.commitment_pending is False, "a solo commit closes the barrier and fires the round"
-    assert brace_loss < strike_loss, (
-        "a committed Brace must take strictly LESS reprisal damage than an "
-        f"undefended strike under identical rng; brace_loss={brace_loss} "
-        f"strike_loss={strike_loss} (today they are equal — Brace is ignored)"
+        pack=pack,
+        snap=snap,
+        enc=enc,
+        character_name=_PC,
+        player_id="p1",
+        beat_id=_FIGHTING_WITHDRAWAL,
     )
 
+    own_turn = _opp_attack_spans(otel_capture, source="opponent_reprisal")
+    assert own_turn, (
+        "the opponent's own-turn attack must still fire after a Fighting Withdrawal — it does "
+        "NOT cancel the enemy turn (contrast the removed native break_contact whole-attack "
+        "prevent). No source='opponent_reprisal' span fired."
+    )
+    assert all(dict(s.attributes).get("defense_prevented") is not True for s in own_turn), (
+        "no own-turn opponent attack may be marked defense_prevented — the native whole-attack "
+        "prevention is REMOVED from the WWN path (ADR-143)"
+    )
+    assert hp0 - _pc_hp(snap) > 0, (
+        "the opponent's un-cancelled own-turn attack must land on the still-seated PC (MAX rolls)"
+    )
+    assert not _opp_attack_spans(otel_capture, source="opportunity_attack"), (
+        "Fighting Withdrawal is a safe disengage — it must not provoke a free opportunity attack"
+    )
 
-def test_brace_round_resolves_through_the_wwn_initiative_walk(monkeypatch, otel_capture):
-    """AC5 wiring anchor: a braced WWN round goes through the sealed-initiative
-    walk (Option A's sole opponent-attack path), proven by the
-    ``wwn.round.resolved`` span — so the mitigation tests above genuinely run on
-    the production ``dispatch_dice_throw → run_wn_round`` seam, not a unit call.
 
-    GREEN today (102-4 already routes WWN+initiative through the walk); this is
-    the regression net that keeps the mitigation reachable from the real entry.
-    """
+# ---------------------------------------------------------------------------
+# AC5 — wiring: the defensive round resolves through the production
+#       dispatch_dice_throw → run_wn_round seam, proven by the WWN round span.
+# ---------------------------------------------------------------------------
+
+
+def test_total_defense_round_resolves_through_the_wwn_sealed_walk(monkeypatch, otel_capture):
+    """RED (AC5, wiring): a Total-Defense round must resolve through the WWN
+    sealed-initiative walk (the sole opponent-attack path), proven by the
+    ``wwn.round.resolved`` span — so the AC-math tests above genuinely run on the
+    production seam, not a unit call."""
     monkeypatch.setattr("random.randint", lambda a, b: b)
     pack, snap, enc = _solo_wwn_combat()
     force_initiative(enc, [(_OPP, 9), (_PC, 2)])
 
     dispatch_throw(
-        pack=pack, snap=snap, enc=enc, character_name=_PC, player_id="p1", beat_id=_BRACE
+        pack=pack, snap=snap, enc=enc, character_name=_PC, player_id="p1", beat_id=_TOTAL_DEFENSE
     )
 
     assert spans_named(otel_capture, _SPAN_ROUND_RESOLVED), (
-        "the braced round must resolve through the WWN sealed-initiative walk "
-        f"(missing {_SPAN_ROUND_RESOLVED} span means it fell to the legacy "
-        "per-beat reprisal rider, defeating Option A)"
+        "the Total-Defense round must resolve through the WWN sealed-initiative walk "
+        f"(missing {_SPAN_ROUND_RESOLVED!r} means it fell off the production seam)"
     )
 
 
 # ---------------------------------------------------------------------------
-# AC3 — the defensive mitigation is OTEL-observable (the GM-panel lie-detector).
+# AC1 (no-regression, scope-pinning): the WWN defensive synthesis must NOT bleed
+# into the SWN family. A space_opera SWN fight with no persisted initiative still
+# reprises on the legacy path and does not raise — proving the new behavior is
+# bound to the WWN module, not all of SwnRulesetModule (ADR-117 isinstance).
+# (Carried over from the old 106-2 AC4 guard; GREEN by design today.)
 # ---------------------------------------------------------------------------
-
-
-def test_brace_mitigation_surfaces_on_opponent_attack_span(monkeypatch, otel_capture):
-    """AC3: the ``encounter.opponent_attack_resolved`` span must carry the
-    target's committed defensive beat and a non-zero mitigation magnitude, so a
-    reviewer can confirm in OTEL that **the brace changed the enemy's roll**
-    (prose claiming "you brace and the blow glances off" must be span-backed).
-
-    Contract pinned here for Dev: the span gains
-      - ``defender_beat``: the target's committed beat id this round ("brace"),
-      - ``defense_mitigation``: int magnitude of the defensive effect applied to
-        THIS attack (to-hit penalty or flat damage reduction, WWN-SRD-sourced;
-        0 when the committed beat is not defensive).
-    RED today — the span carries neither.
-    """
-    monkeypatch.setattr("random.randint", lambda a, b: b)
-    pack, snap, enc = _solo_wwn_combat()
-    force_initiative(enc, [(_OPP, 9), (_PC, 2)])
-
-    dispatch_throw(
-        pack=pack, snap=snap, enc=enc, character_name=_PC, player_id="p1", beat_id=_BRACE
-    )
-
-    spans = spans_named(otel_capture, _SPAN_OPP_ATTACK)
-    assert len(spans) == 1, (
-        f"exactly one opponent-attack span must fire for the braced round; got {len(spans)}"
-    )
-    attrs = dict(spans[0].attributes)
-    assert attrs.get("defender_beat") == _BRACE, (
-        "the opponent-attack span must name the target's committed defensive "
-        f"beat ('brace') so the GM panel sees the defense; attrs={attrs}"
-    )
-    assert int(attrs.get("defense_mitigation", 0)) > 0, (
-        "the span must carry a non-zero defense_mitigation proving the brace "
-        f"reduced the enemy's roll/damage; attrs={attrs}"
-    )
-
-
-def test_undefended_strike_span_reports_zero_mitigation(monkeypatch, otel_capture):
-    """AC3 (contrast): an undefended (offensive) commit must report
-    ``defense_mitigation == 0`` — the mitigation field is honest, not always-on.
-    Pins that the span distinguishes a real defense from an ordinary turn."""
-    monkeypatch.setattr("random.randint", lambda a, b: b)
-    pack, snap, enc = _solo_wwn_combat()
-    force_initiative(enc, [(_OPP, 9), (_PC, 2)])
-
-    dispatch_throw(
-        pack=pack, snap=snap, enc=enc, character_name=_PC, player_id="p1", beat_id=_STRIKE
-    )
-
-    spans = spans_named(otel_capture, _SPAN_OPP_ATTACK)
-    assert len(spans) == 1, f"one opponent-attack span expected; got {len(spans)}"
-    attrs = dict(spans[0].attributes)
-    assert int(attrs.get("defense_mitigation", 0)) == 0, (
-        "an undefended strike must report zero defensive mitigation (the field "
-        f"must not be always-on); attrs={attrs}"
-    )
-    assert attrs.get("defender_beat") != _BRACE, (
-        "an undefended strike must not be labeled as a brace on the span"
-    )
-
-
-# ---------------------------------------------------------------------------
-# AC2 — a committed full-defend / Break Contact prevents the reprisal this round
-#       (HP loss zero — the player is NOT taking a full enemy attack regardless
-#       of choice; evidence point #2).
-# ---------------------------------------------------------------------------
-
-
-def test_break_contact_prevents_the_reprisal_this_round(monkeypatch):
-    """AC2: a PC who commits **Break Contact** (full-defend / disengage) takes
-    ZERO reprisal damage this round — the opponent's slot misses or does not
-    occur. Today the opponent attacks the PC at full force regardless (the
-    defense is ignored), so the PC loses HP. RED.
-
-    rng MAX so the undefended baseline WOULD land for 8 (see AC1: strike_loss>0
-    under these exact conditions) — the zero here is the defense working, not a
-    lucky miss.
-    """
-    monkeypatch.setattr("random.randint", lambda a, b: b)
-    pack, snap, enc = _solo_wwn_combat()
-    force_initiative(enc, [(_OPP, 9), (_PC, 2)])
-    hp0 = _pc_hp(snap)
-
-    dispatch_throw(
-        pack=pack, snap=snap, enc=enc, character_name=_PC, player_id="p1", beat_id=_BREAK_CONTACT
-    )
-
-    assert _pc_hp(snap) == hp0, (
-        "a committed Break Contact / full-defend must prevent the opponent's "
-        f"reprisal this round (zero HP loss); before={hp0} after={_pc_hp(snap)}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# AC4 — WWN-gated, fail-loud: a WWN fight that cannot route through the sealed
-#       initiative walk must FAIL LOUD, never silently degrade to the legacy
-#       unconditional reprisal. The SWN sibling's legacy path stays untouched.
-# ---------------------------------------------------------------------------
-
-
-def test_wwn_combat_without_initiative_fails_loud(monkeypatch):
-    """AC4: a WWN ``hp_depletion`` combat with NO persisted initiative must raise
-    loudly when a beat is dispatched — Option A makes the sealed initiative walk
-    the *only* WWN opponent-attack path, so a missing order is a real failure,
-    not a cue to silently resolve on the legacy unconditional reprisal
-    (dice.py:641-652 today logs a warning and falls through — that silent
-    degrade is exactly what fails loud now). RED today: no raise.
-    """
-    monkeypatch.setattr("random.randint", lambda a, b: b)
-    from sidequest.server.dispatch.dice import DiceDispatchError
-
-    pack, snap, enc = _solo_wwn_combat()
-    enc.initiative = []  # pre-P4 / direct-construction shape: no persisted order
-
-    with pytest.raises(DiceDispatchError):
-        dispatch_throw(
-            pack=pack, snap=snap, enc=enc, character_name=_PC, player_id="p1", beat_id=_STRIKE
-        )
 
 
 def test_swn_sibling_without_initiative_keeps_legacy_reprisal_no_raise():
-    """AC4 (no-regression guard, scope-pinning): the WWN-only fail-loud above
-    must NOT regress the SWN family's legacy reprisal path (story 71-21,
-    space_opera/perseus_cloud), which deliberately resolves with no persisted
-    initiative. A space_opera SWN fight with empty initiative must STILL reprise
-    on the legacy path and NOT raise — proving the fail-loud is bound to the WWN
-    module class (ADR-117 isinstance), not applied to all SwnRulesetModule.
-
-    GREEN by design today; the guard fails only if Dev over-broadens the
-    fail-loud to the whole SWN family and breaks 71-21.
-    """
+    """The WWN-only defensive changes must NOT regress the SWN family's legacy
+    reprisal path (story 71-21, space_opera/perseus_cloud), which deliberately
+    resolves with no persisted initiative. A space_opera SWN fight with empty
+    initiative must STILL reprise on the legacy path and NOT raise."""
     from tests.integration.test_opponent_reprisal_e2e import (
         _load_space_opera_pack,
         _make_encounter,
@@ -301,7 +468,6 @@ def test_swn_sibling_without_initiative_keeps_legacy_reprisal_no_raise():
     if pack is None:
         pytest.skip("sidequest-content not on disk in this checkout")
 
-    # The space_opera firefight fixture carries NO initiative (legacy SWN path).
     snap = _make_snapshot(player_ac=2, player_hp=12)
     enc = _make_encounter()
     assert not enc.initiative, "fixture precondition: SWN legacy path has no persisted initiative"
@@ -312,7 +478,6 @@ def test_swn_sibling_without_initiative_keeps_legacy_reprisal_no_raise():
     from sidequest.protocol.dice import DiceThrowPayload, ThrowParams
     from sidequest.server.dispatch.dice import dispatch_dice_throw
 
-    # Must NOT raise — and the legacy reprisal must still ablate the AC-2 player.
     dispatch_dice_throw(
         payload=DiceThrowPayload(
             request_id="swn-noinit-1",
@@ -334,130 +499,6 @@ def test_swn_sibling_without_initiative_keeps_legacy_reprisal_no_raise():
         snapshot=snap,
     )
     assert player_core.hp.current < hp_before, (
-        "the SWN legacy reprisal must still fire with no initiative (WWN "
-        "fail-loud must not regress 71-21's space_opera path)"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Review-round hardening (Reviewer panel, 2026-06-13): the posture helper must
-# fail loud (not crash, not wrongly prevent) on a corrupt/Unknown commit, and a
-# Tie disengage must not prevent. RollOutcome._missing_ maps any bad wire value
-# to Unknown (it does NOT raise), so the original `except ValueError` was dead.
-# ---------------------------------------------------------------------------
-
-
-def _combat_cdef(pack):
-    return next(c for c in pack.rules.confrontations if c.win_condition == "hp_depletion")
-
-
-def test_posture_helper_corrupt_outcome_is_safe_no_crash_no_posture():
-    """A brace/push commit carrying an unrecognised outcome string must NOT crash
-    (`resolve_tier_deltas` raises on RollOutcome.Unknown) and must NOT grant a
-    defensive posture — it degrades loudly to no-defense. RED before the fix: a
-    garbage outcome → RollOutcome.Unknown → brace branch → resolve_tier_deltas
-    ValueError, or push branch → wrongful prevent."""
-    from sidequest.game.encounter import WnSealedCommit
-    from sidequest.server.dispatch.dice import _defensive_posture_for_reprisal
-
-    pack = load_pack("heavy_metal")
-    cdef = _combat_cdef(pack)
-
-    bad_brace = WnSealedCommit(
-        actor=_PC, beat_id=_BRACE, outcome="garbage", target=_OPP, spell_id=None
-    )
-    assert _defensive_posture_for_reprisal(cdef, bad_brace, encounter_type="combat") == (
-        "",
-        0,
-        False,
-    ), "a corrupt-outcome brace must not crash and must grant no mitigation"
-
-    bad_push = WnSealedCommit(
-        actor=_PC, beat_id=_BREAK_CONTACT, outcome="Unknown", target=_OPP, spell_id=None
-    )
-    assert _defensive_posture_for_reprisal(cdef, bad_push, encounter_type="combat") == (
-        "",
-        0,
-        False,
-    ), "a corrupt-outcome push must NOT prevent the opponent's attack"
-
-
-def test_posture_helper_push_prevents_only_on_success_not_tie():
-    """Break Contact prevents the attack only on Success/CritSuccess. A Tie push
-    resolves nothing in the dial engine (DEFAULT_DELTAS[push][Tie] == {}), so it
-    must not prevent the reprisal either."""
-    from sidequest.game.encounter import WnSealedCommit
-    from sidequest.server.dispatch.dice import _defensive_posture_for_reprisal
-
-    pack = load_pack("heavy_metal")
-    cdef = _combat_cdef(pack)
-
-    _, _, prev_tie = _defensive_posture_for_reprisal(
-        cdef,
-        WnSealedCommit(
-            actor=_PC, beat_id=_BREAK_CONTACT, outcome="Tie", target=_OPP, spell_id=None
-        ),
-        encounter_type="combat",
-    )
-    assert prev_tie is False, "a Tie break_contact must NOT prevent the attack"
-
-    _, _, prev_ok = _defensive_posture_for_reprisal(
-        cdef,
-        WnSealedCommit(
-            actor=_PC, beat_id=_BREAK_CONTACT, outcome="Success", target=_OPP, spell_id=None
-        ),
-        encounter_type="combat",
-    )
-    assert prev_ok is True, "a successful break_contact must prevent the attack"
-
-
-def test_posture_helper_unknown_beat_id_is_loud_no_posture():
-    """A sealed commit naming a beat absent from the cdef (content drift) degrades
-    to no-defense rather than mitigating from a phantom beat."""
-    from sidequest.game.encounter import WnSealedCommit
-    from sidequest.server.dispatch.dice import _defensive_posture_for_reprisal
-
-    pack = load_pack("heavy_metal")
-    cdef = _combat_cdef(pack)
-    assert _defensive_posture_for_reprisal(
-        cdef,
-        WnSealedCommit(
-            actor=_PC, beat_id="no_such_beat", outcome="Success", target=_OPP, spell_id=None
-        ),
-        encounter_type="combat",
-    ) == ("", 0, False)
-
-
-def test_brace_fully_absorbed_hit_directive_says_block_not_wounding_hit(monkeypatch):
-    """When a Brace's mitigation >= the damage roll, 0 HP is lost — the narrator
-    directive must say the brace ABSORBED the blow (a block), NOT 'narrate the hit
-    landing'. Pins the fully-absorbed honesty fix (Reviewer edge finding).
-
-    Arg-dispatching rng fake (damage_roll.random IS the global random singleton,
-    so two setattrs would clobber): the opponent to-hit d20 (1,20) → 20 (a
-    guaranteed HIT), the 1d8 damage (1,8) → 1, so brace mitigation (1) >= damage
-    (1) → 0 HP applied."""
-
-    def _fake_randint(a, b):
-        return b if (a, b) == (1, 20) else a
-
-    monkeypatch.setattr("random.randint", _fake_randint)
-
-    pack, snap, enc = _solo_wwn_combat()
-    force_initiative(enc, [(_OPP, 9), (_PC, 2)])
-    hp0 = _pc_hp(snap)
-
-    dispatch_throw(
-        pack=pack, snap=snap, enc=enc, character_name=_PC, player_id="p1", beat_id=_BRACE
-    )
-
-    assert _pc_hp(snap) == hp0, (
-        f"a fully-absorbed brace must lose no HP; before={hp0} after={_pc_hp(snap)}"
-    )
-    dirs = snap.next_turn_directives
-    assert any("absorbed the full" in d and _PC in d for d in dirs), (
-        f"the directive must state the brace absorbed the blow; got {dirs!r}"
-    )
-    assert not any("Narrate the hit landing" in d for d in dirs), (
-        "a fully-absorbed brace must NOT command the narrator to narrate a wounding hit"
+        "the SWN legacy reprisal must still fire with no initiative (the WWN defensive "
+        "synthesis must not regress 71-21's space_opera path)"
     )

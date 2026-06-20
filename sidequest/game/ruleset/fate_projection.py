@@ -35,6 +35,8 @@ from sidequest.protocol.models import (
 from sidequest.protocol.sanitize import sanitize_player_text
 
 if TYPE_CHECKING:
+    from sidequest.game.encounter import EncounterActor
+    from sidequest.game.fate_sheet import FateSheet
     from sidequest.game.session import GameSnapshot
 
 
@@ -100,6 +102,86 @@ def trim_fate_projection_for_router(full: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in full.items() if k not in _ROUTER_DROP_KEYS}
 
 
+def _project_stress(sheet: FateSheet) -> dict[str, list[FateStressBox]]:
+    """A Fate sheet's stress tracks in the wire shape — the single mapping shared by
+    the PC ``FateCharacterEntry`` and an opponent ``FateConflictParticipant``."""
+    return {
+        track_name: [FateStressBox(value=b.value, checked=b.checked) for b in track.boxes]
+        for track_name, track in sheet.stress.items()
+    }
+
+
+def _project_consequences(sheet: FateSheet) -> list[FateConsequenceEntry]:
+    """A Fate sheet's consequence slots in the wire shape (open vs filled) — shared
+    by the PC ``FateCharacterEntry`` and an opponent ``FateConflictParticipant``."""
+    return [
+        FateConsequenceEntry(
+            level=c.level,
+            value=c.value,
+            filled=c.aspect is not None,
+            text=c.aspect.text if c.aspect is not None else "",
+        )
+        for c in sheet.consequences
+    ]
+
+
+def _project_conflict_participant(
+    actor: EncounterActor, snapshot: GameSnapshot
+) -> FateConflictParticipant:
+    """Project one seated actor onto the wire (playtest 150-2 server follow-up).
+
+    An OPPONENT-side actor carries its stress/consequence track, resolved from its
+    NPC ``core.fate_sheet`` (seeded by #966), so the UI can draw the opponent track +
+    the win meter — per ADR-143 the meter is the opponent's stress fill toward
+    taken-out, NOT the native tension dial (we read the FateSheet, never the dial). A
+    player actor leaves the track empty: its full sheet already rides in
+    ``FateStatePayload.characters``, so the participant never duplicates it. A
+    non-player actor with no resolvable sheet projects an empty track — the honest
+    empty state; the seated-without-a-sheet invariant is enforced loudly in
+    ``decide_opponent_action`` (the #966 guard), never masked here.
+    """
+    stress: dict[str, list[FateStressBox]] = {}
+    consequences: list[FateConsequenceEntry] = []
+    if actor.side != "player":
+        core = snapshot.find_creature_core(actor.name)
+        sheet = core.fate_sheet if core is not None else None
+        if sheet is not None:
+            stress = _project_stress(sheet)
+            consequences = _project_consequences(sheet)
+    return FateConflictParticipant(
+        name=actor.name, side=actor.side, stress=stress, consequences=consequences
+    )
+
+
+def conflict_opponent_progress(conflict: FateConflictEntry | None) -> list[tuple[str, float]]:
+    """Per opponent-side participant with a projected track, the taken-out progress.
+
+    The ADR-143 win-meter number: used absorption (checked stress boxes + filled
+    consequence slots) over total absorption. ``1.0`` means the track is full — the
+    next overflowing hit takes the opponent out. Computed from the WIRE payload (the
+    projected participant), so the GM-panel ``fate.conflict.projected`` span confirms
+    exactly what the client received, not a parallel read of server state. A sheetless
+    participant (capacity 0) and every player participant are excluded — they have no
+    opponent meter to draw.
+    """
+    out: list[tuple[str, float]] = []
+    if conflict is None:
+        return out
+    for p in conflict.participants:
+        if p.side == "player":
+            continue
+        capacity = sum(b.value for boxes in p.stress.values() for b in boxes) + sum(
+            c.value for c in p.consequences
+        )
+        if capacity <= 0:
+            continue
+        used = sum(b.value for boxes in p.stress.values() for b in boxes if b.checked) + sum(
+            c.value for c in p.consequences if c.filled
+        )
+        out.append((p.name, used / capacity))
+    return out
+
+
 def build_fate_state_payload(snapshot: GameSnapshot) -> FateStatePayload:
     """The full client Fate projection (ADR-144 F3a / Story 118-1).
 
@@ -136,21 +218,8 @@ def build_fate_state_payload(snapshot: GameSnapshot) -> FateStatePayload:
                     FateAspectEntry(text=a.text, kind=a.kind, free_invokes=a.free_invokes)
                     for a in sheet.aspects
                 ],
-                stress={
-                    track_name: [
-                        FateStressBox(value=b.value, checked=b.checked) for b in track.boxes
-                    ]
-                    for track_name, track in sheet.stress.items()
-                },
-                consequences=[
-                    FateConsequenceEntry(
-                        level=c.level,
-                        value=c.value,
-                        filled=c.aspect is not None,
-                        text=c.aspect.text if c.aspect is not None else "",
-                    )
-                    for c in sheet.consequences
-                ],
+                stress=_project_stress(sheet),
+                consequences=_project_consequences(sheet),
                 # Playtest 150-2: under Fate a PC's special abilities ARE their
                 # stunts — project them so the Character/Fate panel can render them
                 # in place of the native class-move surface. Display text is raw
@@ -182,7 +251,10 @@ def build_fate_state_payload(snapshot: GameSnapshot) -> FateStatePayload:
             active=True,
             # Seating order is the engine's tiebreak order
             # (fate_opponent._live_player_actors); preserve encounter.actors order.
-            participants=[FateConflictParticipant(name=a.name, side=a.side) for a in enc.actors],
+            # An opponent-side participant carries its stress/consequence track for
+            # the win meter (ADR-143); a player participant's sheet rides in
+            # `characters` above (see _project_conflict_participant).
+            participants=[_project_conflict_participant(a, snapshot) for a in enc.actors],
             # ADR-144 F3e: surface the narrator's offered compels so the player
             # surface can render its accept/refuse control. Display text is raw
             # (the UI escapes it), consistent with the rest of this builder.

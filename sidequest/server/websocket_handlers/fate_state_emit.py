@@ -55,7 +55,11 @@ def _maybe_emit_fate_state(
 
     msg = FateStateMessage(payload=payload)
 
-    from sidequest.telemetry.spans import SPAN_FATE_PROJECTION_EMITTED, Span
+    from sidequest.telemetry.spans import (
+        SPAN_FATE_CONFLICT_PROJECTED,
+        SPAN_FATE_PROJECTION_EMITTED,
+        Span,
+    )
 
     with Span.open(
         SPAN_FATE_PROJECTION_EMITTED,
@@ -73,6 +77,30 @@ def _maybe_emit_fate_state(
         len(payload.scene_aspects),
         payload.conflict is not None,
     )
+
+    # 150-2 follow-up: when a conflict is seated, confirm the OPPONENT track + the
+    # win-meter number actually reached the wire (ADR-143 stress-fill toward
+    # taken-out, NOT the native dial). This is the GM-panel lie detector for the
+    # win meter — distinct from fate.projection.emitted, fired only in-conflict.
+    if payload.conflict is not None:
+        from sidequest.game.ruleset.fate_projection import conflict_opponent_progress
+
+        progress = conflict_opponent_progress(payload.conflict)
+        max_progress = max((pr for _, pr in progress), default=0.0)
+        with Span.open(
+            SPAN_FATE_CONFLICT_PROJECTED,
+            {
+                "opponent_count": len(progress),
+                "max_taken_out_progress": max_progress,
+                "opponents": ",".join(f"{name}:{pr:.3f}" for name, pr in progress),
+            },
+        ):
+            pass
+        logger.info(
+            "fate.conflict.projected opponents=%d max_taken_out_progress=%.3f",
+            len(progress),
+            max_progress,
+        )
 
     # Commit the signature only AFTER the broadcast succeeds (the quests/
     # relationships discipline): if emit_fn raises, the sig stays unchanged so

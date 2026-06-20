@@ -1075,12 +1075,19 @@ class FateConflictParticipant(BaseModel):
     They reuse the PC sheet's wire shapes (``FateStressBox`` / ``FateConsequenceEntry``).
     A player-side participant leaves both empty: its full sheet already rides in
     ``FateStatePayload.characters``, so the conflict participant never duplicates it.
+
+    ``committed`` (Story 126-29) is True when this actor has already sealed a
+    proactive action on ``encounter.fate_commits`` this exchange — the
+    server-authoritative, resume-safe signal the UI gates its proactive tiles on so
+    a reconnected mid-exchange conflict never re-offers an action the sealed-commit
+    guard (ADR-129/151) would reject.
     """
 
     model_config = {"extra": "forbid"}
 
     name: str
     side: str
+    committed: bool = False
     stress: dict[str, list[FateStressBox]] = Field(default_factory=dict)
     consequences: list[FateConsequenceEntry] = Field(default_factory=list)
 

@@ -87,19 +87,26 @@ def _maybe_emit_fate_state(
 
         progress = conflict_opponent_progress(payload.conflict)
         max_progress = max((pr for _, pr in progress), default=0.0)
+        # Story 126-29: confirm the committed-this-exchange status reached the wire
+        # so the GM panel can verify the proactive-tile gate is backed by the real
+        # sealed-commit ledger (ADR-129/151), not narrator improvisation.
+        committed = [p.name for p in payload.conflict.participants if p.committed]
         with Span.open(
             SPAN_FATE_CONFLICT_PROJECTED,
             {
                 "opponent_count": len(progress),
                 "max_taken_out_progress": max_progress,
                 "opponents": ",".join(f"{name}:{pr:.3f}" for name, pr in progress),
+                "committed_count": len(committed),
+                "committed_actors": ",".join(committed),
             },
         ):
             pass
         logger.info(
-            "fate.conflict.projected opponents=%d max_taken_out_progress=%.3f",
+            "fate.conflict.projected opponents=%d max_taken_out_progress=%.3f committed=%d",
             len(progress),
             max_progress,
+            len(committed),
         )
 
     # Commit the signature only AFTER the broadcast succeeds (the quests/

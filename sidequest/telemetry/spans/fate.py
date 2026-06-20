@@ -91,6 +91,9 @@ SPAN_ROUTES[SPAN_FATE_CONFLICT_PROJECTED] = SpanRoute(
         "opponent_count": (span.attributes or {}).get("opponent_count", 0),
         "max_taken_out_progress": (span.attributes or {}).get("max_taken_out_progress", 0.0),
         "opponents": (span.attributes or {}).get("opponents", ""),
+        # Story 126-29: who has sealed an action this exchange (proactive-tile gate).
+        "committed_count": (span.attributes or {}).get("committed_count", 0),
+        "committed_actors": (span.attributes or {}).get("committed_actors", ""),
     },
 )
 

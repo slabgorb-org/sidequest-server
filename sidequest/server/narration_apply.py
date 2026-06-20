@@ -2018,18 +2018,60 @@ def _comma_flip_name(name: str) -> str | None:
     return f"{given} {surname}"
 
 
+_LEADING_DEFINITE_ARTICLE = "the "
+
+
+def _strip_leading_the(name: str) -> str:
+    """Casefold and drop a single leading definite article ("The "). Returns the
+    casefolded name unchanged when there is no leading "the ". Used for
+    article-insensitive NPC reconciliation — see :func:`_npc_name_match_keys`.
+    """
+    folded = name.casefold().strip()
+    if folded.startswith(_LEADING_DEFINITE_ARTICLE):
+        return folded[len(_LEADING_DEFINITE_ARTICLE) :].strip()
+    return folded
+
+
 def _npc_name_match_keys(name: str) -> set[str]:
-    """Casefolded match keys for an NPC name: the name itself plus its
-    comma-flipped variant (when one exists). Two names reconcile to the same
-    identity when their key sets intersect — so ``"Gilligan, Denis"`` matches a
-    natural-order mention ``"Denis Gilligan"`` instead of minting a phantom
-    duplicate (playtest 2026-06-01 ADR-072 split-identity repro).
+    """Casefolded match keys for an NPC name: the name itself, its comma-flipped
+    variant (when one exists), and its leading-definite-article-stripped variant.
+    Two names reconcile to the same identity when their key sets intersect — so
+    ``"Gilligan, Denis"`` matches a natural-order mention ``"Denis Gilligan"``
+    (playtest 2026-06-01 ADR-072 split-identity repro), and a bare ``"Queen of
+    Hearts"`` matches a preloaded authored ``"The Queen of Hearts"`` instead of
+    minting a phantom culture-shuffled duplicate (sq-playtest 2026-06-20
+    wry_whimsy/wonderland WW-CANONICAL-NPC-NAMES-SHUFFLED).
+
+    Only the *definite* article is folded. Indefinite "a"/"an" precede generic
+    descriptors, not proper names; folding them would collapse "a man" onto a
+    rostered "The Man". Empty/unchanged article-stripped results are not added.
     """
     keys = {name.casefold()}
     flipped = _comma_flip_name(name)
     if flipped is not None:
         keys.add(flipped.casefold())
+    for key in list(keys):
+        if key.startswith(_LEADING_DEFINITE_ARTICLE):
+            stripped = key[len(_LEADING_DEFINITE_ARTICLE) :].strip()
+            if stripped:
+                keys.add(stripped)
     return keys
+
+
+def _reconciliation_form(candidate: str, mention: str) -> str:
+    """Honest telemetry label for a NON-exact NPC name reconciliation (the
+    ``npc.referenced`` ``match_form`` attribute). A match that survives the
+    exact-casefold check is reconciled either by leading-definite-article folding
+    or by comma-register inversion; label whichever applies so the GM-panel
+    lie-detector reports the real cause (article folding is the WW-CANONICAL fix).
+    Article is checked first: a "The …" ⇄ bare difference is the more specific
+    explanation, and comma inversion never produces equal article-stripped forms.
+    """
+    if candidate.casefold() != mention.casefold() and _strip_leading_the(
+        candidate
+    ) == _strip_leading_the(mention):
+        return "article_normalized"
+    return "comma_normalized"
 
 
 # Story 83-3: ongoing-threat reconciliation. Tokens too generic to identify a
@@ -2488,7 +2530,7 @@ def _apply_npc_mentions(
             for npc in snapshot.npcs:
                 if _npc_name_match_keys(npc.core.name) & mention_keys:
                     npc_hit = npc
-                    npc_match_form = "comma_normalized"
+                    npc_match_form = _reconciliation_form(npc.core.name, mention.name)
                     break
         if npc_hit is None:
             # Invented-name alias leg (original→mint binding cache): a pool
@@ -2638,7 +2680,7 @@ def _apply_npc_mentions(
             for member in snapshot.npc_pool:
                 if _npc_name_match_keys(member.name) & mention_keys:
                     pool_hit = member
-                    pool_match_form = "comma_normalized"
+                    pool_match_form = _reconciliation_form(member.name, mention.name)
                     break
         if pool_hit is None:
             for member in snapshot.npc_pool:

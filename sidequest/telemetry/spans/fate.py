@@ -74,6 +74,27 @@ SPAN_ROUTES[SPAN_FATE_PROJECTION_EMITTED] = SpanRoute(
 )
 
 
+# --- 150-2 follow-up: opponent-track projection span (GM panel = lie detector) ---
+# ``fate.conflict.projected`` confirms a FATE_STATE broadcast carried the OPPONENT
+# stress/consequence track + the win-meter number — the GM-panel evidence that the
+# UI's win meter is backed by real ablative state (ADR-143 stress-fill toward
+# taken-out), not narrator improvisation. Fires only while a conflict is seated.
+# SPAN_* module constant, so it needs a SPAN_ROUTES entry (the routing-completeness
+# lint). Distinct from ``fate.projection.emitted`` (which fires on every FATE_STATE).
+SPAN_FATE_CONFLICT_PROJECTED = "fate.conflict.projected"
+
+SPAN_ROUTES[SPAN_FATE_CONFLICT_PROJECTED] = SpanRoute(
+    event_type="state_transition",
+    component="fate",
+    extract=lambda span: {
+        "field": "conflict_projected",
+        "opponent_count": (span.attributes or {}).get("opponent_count", 0),
+        "max_taken_out_progress": (span.attributes or {}).get("max_taken_out_progress", 0.0),
+        "opponents": (span.attributes or {}).get("opponents", ""),
+    },
+)
+
+
 # --- F1b: fate-point economy + facet spans (GM panel = lie detector) ---------
 # Registered as typed state_transition routes so the GM panel surfaces each
 # economy delta and each stress/consequence mark in a typed tab (not just the
@@ -1328,6 +1349,7 @@ def fate_defend_phase_span(
 
 
 __all__ = [
+    "SPAN_FATE_CONFLICT_PROJECTED",
     "SPAN_FATE_PROJECTION_EMITTED",
     "fate_action_classified_span",
     "fate_action_resolved_span",

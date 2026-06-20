@@ -1067,12 +1067,22 @@ class FateConflictParticipant(BaseModel):
 
     ``side`` is the encounter actor's side (``player`` / ``opponent`` /
     ``neutral``).
+
+    ``stress`` / ``consequences`` carry an OPPONENT-side participant's mechanical
+    track (playtest 150-2 server follow-up) so the client can draw the opponent
+    stress track + the win-condition meter — per ADR-143 the meter is the
+    opponent's stress fill toward taken-out, NOT the vestigial native tension dial.
+    They reuse the PC sheet's wire shapes (``FateStressBox`` / ``FateConsequenceEntry``).
+    A player-side participant leaves both empty: its full sheet already rides in
+    ``FateStatePayload.characters``, so the conflict participant never duplicates it.
     """
 
     model_config = {"extra": "forbid"}
 
     name: str
     side: str
+    stress: dict[str, list[FateStressBox]] = Field(default_factory=dict)
+    consequences: list[FateConsequenceEntry] = Field(default_factory=list)
 
 
 class FatePendingCompel(BaseModel):

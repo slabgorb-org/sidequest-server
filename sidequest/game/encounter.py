@@ -273,10 +273,22 @@ class StructuredEncounter(BaseModel):
     model_config = {"extra": "forbid"}
 
     encounter_type: str
-    # "dial_threshold" (default) | "hp_depletion". Stamped from ConfrontationDef.win_condition
-    # at init (encounter_lifecycle). String-literal (NOT the WinCondition enum) to avoid a
-    # game->genre.models import cycle; the Literal still rejects typos at validation time.
-    win_condition: Literal["dial_threshold", "hp_depletion", "table_showdown"] = "dial_threshold"
+    # "dial_threshold" (default) | "hp_depletion" | "table_showdown" | "fate_conflict".
+    # Stamped from ConfrontationDef.win_condition at init (encounter_lifecycle).
+    # String-literal (NOT the WinCondition enum) to avoid a game->genre.models import cycle;
+    # the Literal still rejects typos at validation time.
+    #
+    # ``fate_conflict`` (story 126-30, Keith ruling 2026-06-19) is an ENGINE-only runtime
+    # value — never authored as content (it has no WinCondition enum member). The Fate
+    # seating de-nativization stamps it so a Fate standoff/conflict resolves through the
+    # 4dF conflict engine against the Other's FateSheet stress (ADR-143/144 "Bind the
+    # Ruleset") instead of the native ``tension`` dial. Like ``hp_depletion`` it routes OFF
+    # every native dial reader (``dial_threshold_outcome`` returns None below; the
+    # narration_apply dial-advance gate is ``!= "dial_threshold"``); its metrics are inert
+    # placeholders (the native dial is removed, not seated alongside Fate).
+    win_condition: Literal["dial_threshold", "hp_depletion", "table_showdown", "fate_conflict"] = (
+        "dial_threshold"
+    )
     # Confrontation category ("combat" | "social" | "movement" | "hacking" | ...),
     # stamped from ConfrontationDef.category at init (encounter_lifecycle), sibling
     # to win_condition. Lets the engine answer "is this confrontation MOBILE?" — a
@@ -441,8 +453,10 @@ class StructuredEncounter(BaseModel):
         momentum path (sq-playtest 2026-06-02 wry_whimsy/oz: an escape dial
         reached 8/8 with ``total_beats_fired == 0``, so apply_beat's check
         never ran and the encounter stayed unresolved). Only ``dial_threshold``
-        encounters resolve here — ``hp_depletion`` and ``table_showdown`` have
-        their own resolution channels and return ``None``.
+        encounters resolve here — ``hp_depletion``, ``table_showdown`` and
+        ``fate_conflict`` have their own resolution channels (HP, table showdown,
+        and the 4dF conflict engine reading the Other's FateSheet stress,
+        respectively) and return ``None``.
         """
         if self.win_condition != "dial_threshold":
             return None

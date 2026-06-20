@@ -173,6 +173,22 @@ def test_fate_standoff_seat_removes_native_tension_dial() -> None:
         f"fate.opponent.seeded must fire for a Fate seat; got spans: {sorted(names)}"
     )
 
+    # AC-4 (Dev marker-tightening, story 126-30): the green-phase marker is
+    # win_condition='fate_conflict' + the de-nativization span ``fate.conflict.seeded``
+    # (the GM-panel lie-detector that the native tension dial was REMOVED at seating, the
+    # upstream sibling of ``fate.contest.seeded``). Assert the chosen marker fired — this
+    # is the OTEL wiring test for the seating de-nativization (CLAUDE.md "Every Test Suite
+    # Needs a Wiring Test" / OTEL Observability Principle). TEA's RED was HOW-agnostic and
+    # invited this tightening once a concrete marker was picked.
+    assert enc.win_condition == "fate_conflict", (
+        "the de-nativized Fate standoff must carry the engine-only 'fate_conflict' win "
+        f"track (the native dial removed); got win_condition={enc.win_condition!r}"
+    )
+    assert "fate.conflict.seeded" in names, (
+        f"fate.conflict.seeded (the de-nativization lie-detector) must fire for a Fate "
+        f"standoff seat; got spans: {sorted(names)}"
+    )
+
 
 def test_fate_standoff_win_signal_is_opponent_stress_not_dial() -> None:
     """AC-2: the win/progress signal under Fate is the opponent's stress + consequence
@@ -211,6 +227,12 @@ def test_native_pack_standoff_keeps_native_dial_track() -> None:
     assert "fate.opponent.seeded" not in names, (
         "the Fate opponent sweep must be a no-op off a Fate pack (it seeds native packs "
         f"elsewhere); got spans: {sorted(names)}"
+    )
+    # The de-nativization (and its span) MUST be ruleset-gated — a native pack never
+    # de-nativizes, so ``fate.conflict.seeded`` must NOT fire off a non-Fate pack.
+    assert "fate.conflict.seeded" not in names, (
+        "fate.conflict.seeded must be ruleset-gated (Fate only) — it must never fire for a "
+        f"native (dial) pack; got spans: {sorted(names)}"
     )
     # The opponent stays a native creature — no FateSheet fabricated on a non-Fate pack.
     foe_core = snap.find_creature_core("Foe")

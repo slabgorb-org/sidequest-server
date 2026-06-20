@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -76,7 +76,10 @@ def pool(monkeypatch, migrated_db: str):
 
 
 def test_debug_state_poll_does_not_bump_last_activity_ts(pool, tmp_path) -> None:
-    slug = _slug("test-poll-nobump")
+    # A REAL-style (non-test-prefixed) slug on purpose: the read-only fix is
+    # universal (no prefix conditional in rest.py), so the bump must vanish for
+    # genuine sessions too — not just test-prefixed ones.
+    slug = _slug("2026-06-20-annees_folles")
     sessions.ensure_session(
         pool, slug=slug, mode="solo", genre_slug="pulp_noir", world_slug="annees_folles"
     )
@@ -150,7 +153,9 @@ def test_publish_event_does_not_tag_real_session_activity(captured_publishes) ->
 
     ev = captured_publishes[0]
     assert ev["session_slug"] == real
-    assert ev.get("session_type") != "test"
+    # Contract is key-ABSENT for a real session, not merely "not the string test"
+    # — an accidental session_type="infra"/"live" tag must also fail this.
+    assert "session_type" not in ev
 
 
 def test_test_and_real_activity_are_separable_in_the_live_stream(captured_publishes) -> None:
@@ -166,5 +171,26 @@ def test_test_and_real_activity_are_separable_in_the_live_stream(captured_publis
     wh.publish_event("turn_complete", {"turn_id": 2})
 
     by_slug = {e["session_slug"]: e for e in captured_publishes}
-    assert by_slug[real].get("session_type") != "test"
+    assert "session_type" not in by_slug[real]  # real session: tag absent entirely
     assert by_slug["test-foo-12345678"].get("session_type") == "test"
+
+
+def test_publish_event_does_not_tag_infix_test_slug(captured_publishes) -> None:
+    """The match is a PREFIX, not a substring: a real slug that merely contains
+    'test-' mid-string (e.g. 'greatest-...') is NOT a test session. Guards against
+    a future widening of is_test_session from startswith to `in`."""
+    wh.bind_session_slug("greatest-pulp_noir-deadbeef")
+    wh.publish_event("turn_complete", {"turn_id": 1})
+
+    assert "session_type" not in captured_publishes[0]
+
+
+def test_publish_event_does_not_tag_sessionless_infra(captured_publishes) -> None:
+    """Session-less infra (no bound slug → None) is global, shown in every view —
+    NOT a test session. is_test_session(None) must be False."""
+    # captured_publishes leaves the slug bound to None (fixture default).
+    wh.publish_event("watcher.health", {"ok": True})
+
+    ev = captured_publishes[0]
+    assert ev["session_slug"] is None
+    assert "session_type" not in ev

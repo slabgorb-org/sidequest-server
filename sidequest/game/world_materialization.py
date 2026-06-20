@@ -849,7 +849,37 @@ def preload_authored_npcs(
             pass
         return
 
+    # Story 150-3 (sq-playtest 2026-06-20, five_points): a canonical figure the
+    # world's history.yaml chapters ALSO name is already seeded into state.npcs
+    # by ``materialize_from_genre_pack``, which runs at the chargen seam BEFORE
+    # this preload (Isaiah Rynders is in two five_points chapters' ``npcs:`` AND
+    # in npcs.yaml). The chapter seeder dedups by name (``_apply_npc`` upserts an
+    # existing entry), but this preload did not — so the authored roster
+    # RE-APPENDED the same canonical name → a DOUBLE "Isaiah Rynders" in
+    # /snapshot npcs (DATA-LOW: dedup / disposition confusion if the two
+    # diverge). Track seen canonical names and skip any authored NPC already
+    # present; the chapter seed is maturity-aware (it picked the Fresh-
+    # appropriate disposition for this session), so we keep it rather than
+    # clobber it with the static npcs.yaml baseline. Also dedups WITHIN the
+    # authored list (id-uniqueness is validated at load, but two ids could share
+    # a name). Mirrors ``_apply_npc``'s dedup-by-name invariant.
+    seen_names = {n.core.name.casefold() for n in state.npcs}
     for authored_npc in authored:
+        if authored_npc.name.casefold() in seen_names:
+            # LOUD skip (CLAUDE.md "No Silent Fallbacks"): the GM panel sees the
+            # overlap fire rather than a silently-dropped duplicate.
+            with Span.open(
+                SPAN_NPC_AUTHORED_LOAD_SKIPPED,
+                {
+                    "reason": "duplicate_name_already_seeded",
+                    "authored_id": authored_npc.id,
+                    "npc_name": authored_npc.name,
+                    "genre_slug": getattr(state, "genre_slug", "") or "",
+                    "world_slug": getattr(state, "world_slug", "") or "",
+                },
+            ):
+                pass
+            continue
         # CreatureCore requires non-blank description + personality
         # (validators), so synthesize sensible defaults from the authored
         # fields rather than passing empty strings.
@@ -891,6 +921,7 @@ def preload_authored_npcs(
             resolved_archetype=None,
         )
         state.npcs.append(runtime)
+        seen_names.add(authored_npc.name.casefold())
         with Span.open(
             SPAN_NPC_AUTHORED_LOADED,
             {

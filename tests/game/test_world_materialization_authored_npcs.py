@@ -85,3 +85,63 @@ def test_empty_authored_list_is_noop() -> None:
     preload_authored_npcs(state, [])
 
     assert state.npcs == []
+
+
+def test_preload_skips_npc_already_seeded_by_chapter_materialization() -> None:
+    """Story 150-3 (sq-playtest 2026-06-20, five_points): a canonical figure
+    named by BOTH a history.yaml chapter and npcs.yaml (Isaiah Rynders) is
+    seeded into state.npcs by ``materialize_from_genre_pack`` BEFORE preload
+    runs. Preload must NOT re-append the same canonical name — pre-fix it
+    double-seeded, listing the figure twice in /snapshot npcs.
+    """
+    state = MagicMock()
+    # The chapter materialization already placed "Isaiah Rynders" (maturity-aware
+    # disposition picked from the Fresh chapter). Model it as an existing entry.
+    chapter_seeded = MagicMock()
+    chapter_seeded.core.name = "Isaiah Rynders"
+    chapter_seeded.disposition = 10
+    state.npcs = [chapter_seeded]
+    state.characters = []
+    state.turn_manager = MagicMock(interaction=1)
+
+    authored = [
+        AuthoredNpc(id="isaiah_rynders", name="Isaiah Rynders", initial_disposition=-30),
+        _make_npc("morrissey", disposition=0),  # distinct name → still preloads
+    ]
+
+    preload_authored_npcs(state, authored)
+
+    rynders_entries = [n for n in state.npcs if n.core.name == "Isaiah Rynders"]
+    assert len(rynders_entries) == 1, (
+        "Isaiah Rynders must appear exactly once — preload must skip the authored "
+        f"copy of a name already seeded by chapter materialization; got "
+        f"{len(rynders_entries)} entries"
+    )
+    # The maturity-aware chapter seed is kept (disposition 10), not clobbered by
+    # the static npcs.yaml baseline (-30).
+    assert rynders_entries[0] is chapter_seeded
+    assert int(rynders_entries[0].disposition) == 10
+    # A distinct authored name with no chapter overlap still preloads normally.
+    assert any(n.core.name == "Authored-morrissey" for n in state.npcs)
+
+
+def test_preload_dedups_within_authored_list() -> None:
+    """Defense in depth: id-uniqueness is validated at load, but two authored
+    ids that share a NAME must not both seed. The seen-name guard catches it."""
+    state = MagicMock()
+    state.npcs = []
+    state.characters = []
+    state.turn_manager = MagicMock(interaction=1)
+
+    authored = [
+        AuthoredNpc(id="rynders_a", name="Isaiah Rynders", initial_disposition=10),
+        AuthoredNpc(id="rynders_b", name="Isaiah Rynders", initial_disposition=-5),
+    ]
+
+    preload_authored_npcs(state, authored)
+
+    rynders_entries = [n for n in state.npcs if n.core.name == "Isaiah Rynders"]
+    assert len(rynders_entries) == 1, (
+        f"two authored entries sharing a name must seed once; got {len(rynders_entries)}"
+    )
+    assert int(rynders_entries[0].disposition) == 10, "first wins"

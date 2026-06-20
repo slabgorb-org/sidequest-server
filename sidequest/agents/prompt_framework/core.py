@@ -1020,3 +1020,49 @@ If nothing new is revealed and nothing prior is referenced, omit the footnotes a
                 SectionCategory.State,
             ),
         )
+
+    def register_party_scale_section(
+        self,
+        agent_name: str,
+        player_count: int,
+    ) -> None:
+        """Tell the narrator how many players are at the table (Story 126-36).
+
+        Unlike ``register_party_peer_section`` (MP-only — it returns early on
+        an empty peer list to keep solo zero-byte), this section ALWAYS
+        registers, because a SOLO session is exactly the case that needs it.
+        Without a seat-count signal the narrator had no ground truth on party
+        size and improvised a party-scaled quest brief — "fifty each for two
+        riders" — in a one-player ``dust_and_lead`` game. ``player_count`` is
+        ``1 + len(party_peers)`` (peers exclude self). Placed in the Early
+        zone beside the peer roster: seat count is acute framing data, not
+        background lore.
+        """
+        if player_count <= 1:
+            content = (
+                "## PARTY SCALE — 1 player (solo session)\n"
+                "There is exactly ONE player character at the table. Scale "
+                "every quest brief, reward split, headcount, and second-person "
+                'address to a SINGLE rider — "you", "a rider", "fifty for the '
+                'job" — never "the party", "two riders", or a plural group. '
+                "Anyone else in the scene is an NPC."
+            )
+        else:
+            content = (
+                f"## PARTY SCALE — {player_count} players\n"
+                f"There are {player_count} player characters at the table. "
+                f"Scale quest briefs, reward splits, and headcounts to "
+                f"{player_count} riders — state the count correctly "
+                f'("{player_count} riders", "fifty each for {player_count}"), '
+                "never invent a different number."
+            )
+
+        self.register_section(
+            agent_name,
+            PromptSection.new(
+                "party_scale",
+                content,
+                AttentionZone.Early,
+                SectionCategory.State,
+            ),
+        )

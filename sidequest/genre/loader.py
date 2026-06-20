@@ -2027,6 +2027,78 @@ def _validate_fate_chargen_steps(
             )
 
 
+def _validate_fate_chargen_seed_coverage(
+    *,
+    ruleset: str,
+    worlds: dict[str, World],
+    genre_char_creation: list[CharCreationScene],
+    genre_seed_table: dict[str, FateHintSeed],
+    path: Path,
+) -> None:
+    """Fail loud if a Fate pack's chargen funnel emits a ``class_hint`` calling with no
+    matching ``chargen_seed_table`` entry — the silent blank-pyramid regression.
+
+    Story 126-24's narrative-chargen seam pre-fills the Fate skill pyramid + free aspects
+    from the player's accumulated funnel hints, keyed by the choice's ``class_hint`` VALUE
+    (``select_chargen_seed``, precedence class_hint > rpg_role_hint > background). A calling
+    with no table entry resolves to a BLANK pyramid the player must hand-rank — the exact
+    "friendly on-ramp" failure 126-24 set out to retire. Adding a calling to the crucible
+    while forgetting its seed entry silently reintroduces the blank sheet for that vocation.
+
+    This guard makes that a LOAD-time error, not a runtime silent fallback (No Silent
+    Fallbacks): for each world's EFFECTIVE char_creation (world-replaces-genre, mirroring
+    ``resolve_char_creation_scenes``), every ``class_hint`` any choice emits MUST be a key in
+    the EFFECTIVE seed table — the genre ``rules.fate.chargen_seed_table`` unioned with the
+    world's ``chargen_seed_table`` (world wins by key, mirroring
+    ``resolve_fate_chargen_seed_table``; coverage only needs the key to exist in either tier).
+    It is the seed-coverage sibling of ``_validate_fate_chargen_steps``: that guard proves the
+    interactive steps EXIST; this one proves the funnel's callings are SEEDED — together they
+    make it physically impossible for a Fate pack (including future homebrew) to ship a
+    default/blank chargen. DRIVER/GM Dev follow-up, five_points playtest 2026-06-20.
+
+    No-op for every non-Fate ruleset (WN family / native): they seed no FateSheet, so the
+    chargen_seed_table contract does not apply.
+    """
+    if ruleset != "fate":
+        return
+    for slug, world in worlds.items():
+        # World-replaces-genre: a world's own funnel when it declares one, else the genre
+        # default (mirrors resolve_char_creation_scenes — no merge).
+        effective_scenes = world.char_creation if world.char_creation else genre_char_creation
+        # Coverage is keyed on PRESENCE: the union of genre + world seed-table keys. The
+        # world wins on the VALUE, but either tier supplying a key satisfies coverage — the
+        # same by-key merge resolve_fate_chargen_seed_table performs.
+        covered = set(genre_seed_table) | set(getattr(world, "chargen_seed_table", {}) or {})
+        emitted = [
+            choice.mechanical_effects.class_hint
+            for scene in effective_scenes
+            for choice in scene.choices
+            if choice.mechanical_effects.class_hint is not None
+        ]
+        uncovered = sorted({hint for hint in emitted if hint not in covered})
+        if uncovered:
+            is_world_tier = bool(world.char_creation)
+            tier_path = (
+                path / "worlds" / slug / "char_creation.yaml"
+                if is_world_tier
+                else path / "char_creation.yaml"
+            )
+            tier = "world" if is_world_tier else "genre"
+            raise GenreLoadError(
+                path=tier_path,
+                detail=(
+                    f"Fate pack world {slug!r} resolves a {tier}-tier char_creation whose "
+                    f"crucible emits calling(s) {uncovered} with no chargen_seed_table entry "
+                    "(genre rules.fate.chargen_seed_table unioned with the world override). "
+                    "The narrative chargen seam keys the Fate pyramid + aspect seeds off the "
+                    "class_hint; an unseeded calling silently hands that traveler a BLANK "
+                    "pyramid to hand-rank. Author a chargen_seed_table entry per calling — see "
+                    "pulp_noir/rules.yaml for the canonical hint -> pyramid+aspects shape. "
+                    "[Fate chargen seed-coverage load guard, playtest 2026-06-20]"
+                ),
+            )
+
+
 # ---------------------------------------------------------------------------
 # Top-level pack loader
 # ---------------------------------------------------------------------------
@@ -2408,6 +2480,19 @@ def load_genre_pack(path: Path | str) -> GenrePack:
         ruleset=rules.ruleset,
         worlds=worlds,
         genre_char_creation=char_creation,
+        path=path,
+    )
+
+    # Seed-coverage sibling (DRIVER/GM Dev follow-up, five_points playtest 2026-06-20):
+    # every class_hint the effective chargen funnel emits must have a chargen_seed_table
+    # entry, or that calling silently yields a blank Fate pyramid. Fail loud at LOAD so a
+    # Fate pack — including future homebrew — physically cannot ship an unseeded calling.
+    # No-op for non-Fate rulesets.
+    _validate_fate_chargen_seed_coverage(
+        ruleset=rules.ruleset,
+        worlds=worlds,
+        genre_char_creation=char_creation,
+        genre_seed_table=rules.fate.chargen_seed_table if rules.fate else {},
         path=path,
     )
 

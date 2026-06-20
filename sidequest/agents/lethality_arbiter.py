@@ -14,10 +14,10 @@ the policy's `verdicts_on_zero_hp` entry. Confrontation-beat-failure and
 resource-pool-depletion triggers land in Group E when the subsystems that
 produce those signals exist on the Python port.
 
-The arbiter is deterministic and synchronous — no LLM call. The decomposer
-may still emit `LethalityVerdict` entries in `DispatchPackage.per_player[*].
-lethality` for paper-trail purposes; arbiter output is authoritative on
-conflict (see Task 8).
+The arbiter is deterministic and synchronous — no LLM call. Story 153-1
+removed the router's `DispatchPackage.per_player[*].lethality` field (the
+output-slim "suspenders"), so the arbiter is now the SOLE source of lethality
+verdicts — its HP=0 path is authoritative.
 """
 
 from __future__ import annotations
@@ -83,13 +83,9 @@ class LethalityArbiter:
                         verdict_kind=self._policy.verdicts_on_zero_hp.npc,
                         core=core,
                     )
-            # Merge decomposer-authored verdicts. Arbiter wins on entity
-            # conflict; decomposer-only entities pass through.
-            arbiter_entities = {v.entity for v in result.verdicts}
-            for pd in package.per_player:
-                for decomposer_v in pd.lethality:
-                    if decomposer_v.entity not in arbiter_entities:
-                        result.verdicts.append(decomposer_v)
+            # Story 153-1: the router's per-player ``lethality`` field is gone,
+            # so there is nothing to merge — the deterministic HP=0 path above is
+            # the SOLE source of verdicts. (Removed the old decomposer-merge loop.)
             span.set_attribute("verdict_count", len(result.verdicts))
             return result
 

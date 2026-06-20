@@ -490,8 +490,12 @@ def test_lethality_verdict_types_are_retained():
         soul_md_constraint="genre_truth",
     )
     assert v.verdict == "defeated"
-    assert LethalityVerdictKind is not None
-    assert Reversibility is not None
+    # The retained Literal aliases still carry their full member sets — a real
+    # check, not a vacuous ``is not None`` on an always-truthy type alias.
+    from typing import get_args
+
+    assert "defeated" in get_args(LethalityVerdictKind)
+    assert "permanent" in get_args(Reversibility)
 
 
 # AC2: straggler tolerance — a removed key Haiku still emits is stripped+logged,
@@ -530,16 +534,20 @@ def test_straggler_resolved_lethality_are_stripped_not_rejected(caplog):
     assert "stripped_deprecated" in caplog.text
 
 
-def test_straggler_action_rewrite_you_is_stripped():
+def test_straggler_action_rewrite_you_is_stripped(caplog):
     """AC2: the same strip-don't-reject treatment for a leftover
-    ``action_rewrite.you``. named/intent survive; the package is NOT rejected
-    and ``you`` does not come back as an attribute."""
-    ar = ActionRewrite.model_validate(
-        {"you": "You draw", "named": "Alice draws", "intent": "draw sword"}
-    )
+    ``action_rewrite.you``. named/intent survive; the package is NOT rejected,
+    ``you`` does not come back as an attribute, and the drop is LOGGED (loud,
+    never silent — symmetry with the resolved/lethality straggler test)."""
+    with caplog.at_level(logging.INFO):
+        ar = ActionRewrite.model_validate(
+            {"you": "You draw", "named": "Alice draws", "intent": "draw sword"}
+        )
     assert ar.named == "Alice draws"
     assert ar.intent == "draw sword"
     assert not hasattr(ar, "you")
+    assert "stripped_deprecated" in caplog.text
+    assert "fields=you" in caplog.text
 
 
 # AC3: VisibilityTag is server-defaulted (omittable) on dispatches + directives.

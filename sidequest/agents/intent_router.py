@@ -294,7 +294,7 @@ For each player action:
      For distinctive_detail_for_referent, put BOTH the referent and its detail
      inside ``payload`` (e.g. "the goblin: broken tooth") — there is no separate
      referent/target field here. (The ``target`` key belongs ONLY to the
-     distinctive_detail_hint DISPATCH in step 2 — a different mechanism; do not
+     distinctive_detail_hint DISPATCH in step 1 — a different mechanism; do not
      carry it into narrator_instructions.)
   3. Set confidence_global to your overall confidence across the turn.
   4. Emit action_rewrite — rewrite the player's raw action into two
@@ -531,7 +531,7 @@ class IntentRouter:
                 span.set_attribute("degraded", False)
 
             # Story 151-3 (ADR-150 step 3): the pre-pass now PRODUCES the
-            # player-action rewrite (you/named/intent). Emit the GM-panel
+            # player-action rewrite (named/intent). Emit the GM-panel
             # lie-detector span on every successful decompose — emitted=False is
             # the loud net when the producer omitted it (the omitted→default
             # fallback is the transition safety, never a silent skip).

@@ -8,8 +8,11 @@ per turn. Downstream consumers:
   - Narrator prompt builder — injects NarratorDirective entries into <game_state>
   - Group G (future) — reads VisibilityTag via Perception Rewriter + ProjectionFilter
 
-Group B emits stub values for LethalityVerdict (Group C fills in) and
-VisibilityTag (Group G wires the consumer pipeline).
+Story 153-1 (output-slim): the router no longer emits per-player LethalityVerdict
+stubs — ``PlayerDispatch.lethality`` was removed and the LethalityArbiter computes
+verdicts from HP=0 as the SOLE source. ``VisibilityTag`` is server-defaulted to
+``visible_to="all"`` (the model emits it only for a genuine secret); Group G still
+fills in non-trivial perception fidelity.
 
 No tool-calling. No prose. Structured JSON only — spec §3.2.
 
@@ -81,8 +84,10 @@ class VisibilityTag(ProtocolBase):
     """Authoritative ground-truth visibility for a dispatch/directive/verdict.
 
     Consumed by ADR-028 Perception Rewriter and Plan 03 ProjectionFilter.
-    Group B always emits `visible_to="all"` with empty fidelity; Group G
-    fills in asymmetric values.
+    Server-defaulted to `visible_to="all"` when the model omits the tag (Story
+    153-1 output-slim); the model emits it explicitly only for asymmetric
+    visibility (a secret seen by some PCs and not others). Group G fills in
+    non-trivial perception fidelity.
     """
 
     visible_to: list[str] | Literal["all"] = Field(
@@ -114,7 +119,9 @@ class SubsystemDispatch(ProtocolBase):
             "others). Story 153-1 made it omittable to cut per-dispatch output."
         ),
     )
-    # ADR-113 confidence gate (Story 71-16). Required — no silent default: the
+    # ADR-113 confidence gate (Story 71-16). NOTE: ``visibility`` above is now
+    # intentionally server-defaulted (Story 153-1); ``confidence`` deliberately is
+    # NOT — it is Required with no silent default, because the
     # Intent Router scores how certain it is that THIS specific mechanical
     # engagement is what the player intended. ``run_dispatch_bank`` engages the
     # subsystem engine only when ``confidence >= threshold`` (per-subsystem,
@@ -157,7 +164,8 @@ class NarratorDirective(ProtocolBase):
 
 
 # ---------------------------------------------------------------------------
-# Lethality — full contract, stub values in Group B
+# Lethality — full contract (LethalityArbiter is the sole source; Story 153-1
+# removed the router's per-player lethality stubs)
 # ---------------------------------------------------------------------------
 
 

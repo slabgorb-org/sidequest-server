@@ -4613,6 +4613,45 @@ def _apply_narration_result_to_snapshot(
                         },
                         component="confrontation",
                     )
+                elif active_encounter.created_turn == snapshot.turn_manager.interaction:
+                    # Story 150-3 (sq-playtest 2026-06-20, five_points/poker): a
+                    # table scene is INHERENTLY a new location — the narrator seated
+                    # the poker table AND moved the scene to "The Groggery — Poker
+                    # Table" in the SAME response, so deactivate-on-location-change
+                    # killed the freshly-dealt encounter the very turn it was born
+                    # (the player got poker NARRATION but `hasTableTab: []` — no
+                    # playable surface). An encounter created THIS turn cannot have
+                    # been walked away from: the location change firing now is the
+                    # one that CREATED its scene. So it CONTINUES (resolved stays
+                    # False) and survives to a turn where its surface can render and
+                    # run. A genuine later departure (created_turn < interaction)
+                    # still abandons via the else below. Checked AFTER won/yield/
+                    # mobile/same-region so a real same-turn resolution still banks;
+                    # this rescues ONLY the would-be abandon. Sibling to the mobile
+                    # continue-branch. OTEL lie-detector: the GM panel must see the
+                    # engine CHOSE to keep the fresh encounter alive.
+                    logger.info(
+                        "encounter.continued_fresh_this_turn "
+                        "encounter_type=%s created_turn=%s old_location=%r "
+                        "new_location=%r player=%s",
+                        abandoned_type,
+                        active_encounter.created_turn,
+                        old_loc,
+                        result.location,
+                        player_name,
+                    )
+                    _watcher_publish(
+                        "confrontation_continued_fresh_this_turn",
+                        {
+                            "encounter_type": abandoned_type,
+                            "created_turn": active_encounter.created_turn,
+                            "old_location": old_loc,
+                            "new_location": result.location,
+                            "player_name": player_name,
+                            "turn_number": snapshot.turn_manager.interaction,
+                        },
+                        component="confrontation",
+                    )
                 else:
                     active_encounter.resolved = True
                     active_encounter.outcome = "abandoned_on_location_change"

@@ -1485,6 +1485,12 @@ _SDK_TOOL_OWNED_FIELDS: dict[str, str] = {
 # fallbacks). Read-only — never mutate this instance.
 _NTR_DEFAULTS = NarrationTurnResult(narration="")
 
+# In-fiction stall substituted when a narrator turn comes back with empty
+# player-facing prose (sq-playtest 2026-06-19 BLOCKER). Matches the default
+# ``_degraded_result`` stall so an empty-prose turn reads like every other
+# unrecoverable-narrator turn rather than a blank successful one.
+_EMPTY_NARRATION_STALL = "The world holds its breath."
+
 
 # ---------------------------------------------------------------------------
 # Prompt assembly helpers (ContextBuilder equivalent — inlined per spec)
@@ -3263,6 +3269,14 @@ class Orchestrator:
             result = await self._run_narration_turn_sdk(action, context)
         else:
             result = await self._run_narration_turn_synchronous(action, context)
+        # sq-playtest 2026-06-19 BLOCKER — empty player-facing prose must never
+        # present as a clean success. An empty narration was persisted with
+        # content='' + is_degraded=False (a turn marked complete + clean with
+        # nothing to render), hanging the client on "narrator is thinking" with
+        # no recovery. Trip the degraded stall + emit the GM-panel lie detector.
+        # Runs BEFORE the fabricated-roll repair: the substituted stall carries
+        # no roll numbers, so that pass is a no-op on a guarded turn.
+        result = self._guard_empty_narration(action=action, result=result)
         # sq-playtest 2026-06-13 — fabricated-roll lie detector + prose-only
         # repair. The narrator never sees server-rolled dice (reprisals,
         # opposed NPC checks), so any roll/AC NUMBER it printed when no
@@ -3270,6 +3284,66 @@ class Orchestrator:
         # narrator.fabricated_roll span (GM panel) and launder the prose via
         # a toolless rewrite so the player never reads the fabrication.
         return await self._maybe_repair_fabricated_roll(action=action, result=result)
+
+    def _guard_empty_narration(
+        self,
+        *,
+        action: str,
+        result: NarrationTurnResult,
+    ) -> NarrationTurnResult:
+        """Empty player-facing prose trips the degraded stall, never a blank success.
+
+        sq-playtest 2026-06-19 (BLOCKER-CRITICAL, Oz turns 14/15): a narrator
+        turn whose prose slot came back empty was persisted with ``content=''``
+        and ``is_degraded=False`` — marked ``session.narration_complete``,
+        ``degraded=False``. The client hung on "narrator is thinking" with no
+        recovery; resubmitting the same phrasing reproduced the empty result.
+
+        An empty narration is an unrecoverable-narrator outcome for this turn and
+        is handled like every other one (cf. :meth:`_degraded_result`): flag it
+        degraded and substitute the in-fiction stall so the surface stays honest
+        AND renderable (the durable narrative log, the NARRATION message, and the
+        TurnRecord all read ``result.narration`` downstream of here — fixing it at
+        this single point covers every consumer). The turn's mechanical side
+        effects are preserved: the WRITE tools already applied + saved state during
+        dispatch, so only ``narration``/``is_degraded`` are touched (mirroring how
+        :meth:`_maybe_repair_fabricated_roll` mutates ``narration`` in place).
+
+        Emits the ``narrator.empty_narration`` OTEL span (GM-panel lie detector,
+        CLAUDE.md OTEL principle) so an empty turn is auditable and distinct from a
+        deliberate quiet beat — which carries real prose and never reaches here.
+
+        Diagnosing WHY the prose came back empty (tool-only response / prose in the
+        wrong field) is the separately-tracked defect #2; this guard owns the
+        player-facing harm (the hang), not the root cause.
+        """
+        from sidequest.telemetry.spans.span import Span
+
+        if (result.narration or "").strip():
+            return result  # real prose — clean turn, no-op
+
+        with Span.open(
+            "narrator.empty_narration",
+            {
+                "action": action[:120],
+                "raw_len": len(result.raw_response_text or ""),
+                "tool_calls": len(result.tool_calls or []),
+                "agent": result.agent_name or self._narrator.name(),
+            },
+        ):
+            pass
+        logger.warning(
+            "narrator.empty_narration action=%r raw_len=%d tool_calls=%d — narrator "
+            "returned empty player-facing prose; tripping the degraded stall (was "
+            "persisting content='' as a clean success and hanging the client)",
+            action,
+            len(result.raw_response_text or ""),
+            len(result.tool_calls or []),
+        )
+
+        result.narration = _EMPTY_NARRATION_STALL
+        result.is_degraded = True
+        return result
 
     async def _maybe_repair_fabricated_roll(
         self,

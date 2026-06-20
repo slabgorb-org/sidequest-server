@@ -18,9 +18,15 @@ the cut, a WN round must resolve the strike's WN damage WITHOUT minting that tag
 and must emit ``wwn.native_scaffolding_suppressed`` (slug-honest per the WN family
 span invariant — the GM-panel lie-detector that the native engine is OFF).
 
-RED today:
-  * ``…grants_no_native_fleeting_tag`` — native ``apply_beat`` mints "Opening".
-  * ``…emits_native_scaffolding_suppressed_span`` — the span does not exist yet.
+STATUS (story 125-8): the 108-1 engine-core cut SHIPPED —
+``wwn.native_scaffolding_suppressed`` fires and the WN round mints no native
+fleeting tag. These tests went stale only on the BEAT ID: they drove the
+now-stripped ``committed_blow`` (108-3) and fail-louded at dispatch before the
+assertions ran. Restored by the harness ``HM_STRIKE_BEAT`` → ``attack`` swap +
+an armed PC (heavy_metal ships no ``unarmed_damage`` floor, so the synthesized
+attack needs weapon dice); they now pass on the de-nativized WN path (ADR-143):
+  * ``…grants_no_native_fleeting_tag`` — no "Opening" tag on a WN CritSuccess.
+  * ``…emits_native_scaffolding_suppressed_span`` — the suppression span fires.
   * ``…suppresses_native_scaffolding_end_to_end`` (wiring) — both, at the wire.
 
 Green guards (must STAY green through the cut):
@@ -45,6 +51,7 @@ from tests._helpers.genre_paths import GENRE_PACKS_DIR
 from tests.integration._wn_round_102_4 import (
     HM_OPPONENT_HP,
     HM_STRIKE_BEAT,
+    arm_pc,
     dispatch_throw,
     force_initiative,
     load_pack,
@@ -74,6 +81,7 @@ def _seat_pc_first():
     """
     pack = load_pack("heavy_metal")
     snap, enc = seat_wn_combat(pack, [_PC], [_OPP], genre_slug="heavy_metal")
+    arm_pc(snap, _PC)  # synthesized attack draws weapon dice — no unarmed floor in heavy_metal
     force_initiative(enc, [(_PC, 9), (_OPP, 3)])
     return pack, snap, enc
 
@@ -276,6 +284,7 @@ def _install_wire_wn_combat(sd) -> None:
     sd.snapshot.characters[0].stats.update(
         {"STR": 12, "DEX": 10, "CON": 10, "INT": 14, "WIS": 10, "CHA": 10}
     )
+    arm_pc(sd.snapshot, sd.snapshot.characters[0].core.name)
     sd.snapshot.npcs.append(
         Npc(
             core=CreatureCore(

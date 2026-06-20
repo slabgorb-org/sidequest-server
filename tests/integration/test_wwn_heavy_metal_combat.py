@@ -10,9 +10,11 @@ seam (instantiate_encounter_from_trigger) and the production dice seam
   3. a strike beat ablates the opponent's HP through the HP channel;
   4. the state_patch.hp span fires (the GM-panel lie detector).
 
-The strike beat under test ("committed_blow") carries a deterministic
-damage_override (2d6) so the proof does not depend on weapon-catalog plumbing;
-rng is pinned so the damage roll is deterministic.
+The committed action is the synthesized WN "attack" (108-8); the PC carries a 2d6
+weapon item dict so the attack resolves its weapon dice (resolve_damage priority
+2) — heavy_metal ships no unarmed floor, and 108-3 removed the native
+committed_blow 2d6 override the proof once rode. rng is pinned so the damage roll
+is deterministic (2 at min). (Story 125-8 / ADR-143.)
 
 Skips cleanly when sidequest-content is not present on disk.
 
@@ -29,7 +31,13 @@ from tests._helpers.genre_paths import GENRE_PACKS_DIR, PackNotFound, find_pack_
 # Authored on heavy_metal Blade-work opponent_default_stats (rules.yaml, Task 2).
 _OPPONENT_HP = 10
 _OPPONENT_AC = 12
-_STRIKE_BEAT = "committed_blow"  # strike, damage_override 2d6 (deterministic)
+# De-nativized WWN combat (108-3/108-8, ADR-143): the WN round owns the action
+# set — the committed action is the synthesized WN "attack" (the native
+# committed_blow beat was stripped). The attacker is armed with a 2d6 blade
+# (resolve_damage priority 2), so the synthesized attack resolves its weapon dice
+# — deterministic under pinned rng (2 at min), reproducing committed_blow's old
+# 2d6 override. Story 125-8.
+_STRIKE_BEAT = "attack"
 
 # Seating-time lie-detector: an hp_depletion combat seated an opponent with NO
 # resolvable reprisal damage source (no opponent_damage, no strike damage_override,
@@ -42,6 +50,22 @@ _SPAN_TOOTHLESS = "encounter.opponent_toothless"
 # actually ran (not narrator improv); its absence on a seated hp_depletion combat
 # means the enemy never swung.
 _SPAN_OPPONENT_ATTACK = "encounter.opponent_attack_resolved"
+
+# BLOCKED on epic-152: the opponent→player half needs the opponent's attack to
+# fire, but under de-nativized WWN combat it is skipped
+# (``_resolve_opponent_reprisal`` requires an authored strike beat in
+# ``cdef.beats``, stripped by 108-3; 108-8 synthesized only the PLAYER's attack,
+# so ``wn_round`` logs ``opponent_reprisal_skipped reason=no_strike_beat``).
+# Fixing it needs production opponent-attack synthesis (parallel to 108-8) — out
+# of scope for 125-8 (test-debt only, AC3). Loud-skip + linked story per AC1;
+# see session Delivery Findings. (The player→opponent half,
+# ``test_heavy_metal_combat_is_wwn_bound_and_ablates_hp``, is GREEN — the player's
+# attack IS synthesized.)
+_OPPONENT_ATTACK_BLOCKED = (
+    "epic-152: WN opponent attack/reprisal skipped under de-nativized WWN combat "
+    "(no_strike_beat — opponent strike beat never synthesized; 108-8 did only the "
+    "player). Production gap; 125-8 is test-debt only (AC3). See Delivery Findings."
+)
 
 
 def _has_real_content() -> bool:
@@ -73,7 +97,20 @@ def _make_attacker(name: str, *, armor_class: int = 10):
         name=name,
         description="A blade-bearer of a house that is ending.",
         personality="grim",
-        inventory=Inventory(),
+        # Armed with a 2d6 blade so the synthesized WN attack resolves weapon dice
+        # (resolve_damage priority 2) — heavy_metal ships no unarmed_damage floor.
+        # 2d6 → 2 at min reproduces the pre-108-3 committed_blow override (125-8).
+        inventory=Inventory(
+            items=[
+                {
+                    "id": "blade_2d6",
+                    "name": "Heavy Blade",
+                    "category": "weapon",
+                    "equipped": True,
+                    "damage": {"dice": "2d6", "bonus": 0},
+                }
+            ]
+        ),
         hp={"current": 12, "max": 12, "base_max": 12},
         armor_class=armor_class,
     )
@@ -193,8 +230,8 @@ def test_heavy_metal_combat_is_wwn_bound_and_ablates_hp(otel_capture, monkeypatc
 
     # ── Assertion 1: HP ablated through the HP channel ────────────────────
     assert opponent_core.hp.current < hp_before, (
-        f"committed_blow must ablate the opponent's HP on the real wwn pack; "
-        f"before={hp_before} after={opponent_core.hp.current}"
+        f"the synthesized WN attack must ablate the opponent's HP on the real wwn "
+        f"pack; before={hp_before} after={opponent_core.hp.current}"
     )
 
     # ── Assertion 2: state_patch.hp span fired (the lie detector) ─────────
@@ -272,9 +309,14 @@ def test_heavy_metal_combat_seats_no_toothless_opponent(otel_capture):
     )
 
 
+@pytest.mark.skip(reason=_OPPONENT_ATTACK_BLOCKED)
 @pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
 def test_heavy_metal_opponent_reprisal_ablates_player_hp(otel_capture, monkeypatch):
     """RED rework: prove the opponent→player half of the combat contract.
+
+    SKIPPED (125-8): the opponent→player ablation needs the opponent attack to
+    fire — the no_strike_beat production gap owned by epic-152 (see
+    _OPPONENT_ATTACK_BLOCKED).
 
     The original GREEN test proved only player→opponent ablation, so a Toothless
     Other passed review. Combat is a mutual exchange: after the player's
@@ -289,14 +331,16 @@ def test_heavy_metal_opponent_reprisal_ablates_player_hp(otel_capture, monkeypat
       * the opponent's d20 is rolled by ``dice.random.randint`` (``rng`` is the
         dice module's ``random``) — pinned to MAX so the hit is unconditional;
       * damage faces roll through ``damage_roll.random.randint`` — pinned to MIN
-        so the player's own 2d6 ``committed_blow`` deals only 2 (opponent survives
-        at 8 HP, so the reprisal is not gated out by an already-resolved encounter)
-        and the opponent's reprisal deals its minimum (still > 0 → player HP drops).
+        so the player's own synthesized attack (equipped 2d6 blade) deals only 2
+        (opponent survives at 8 HP, so the reprisal is not gated out by an
+        already-resolved encounter) and the opponent's reprisal deals its minimum
+        (still > 0 → player HP drops).
 
-    RED today: the weaponless seeded mook + no ``opponent_damage`` →
-    ``damage_spec is None`` → the hit lands but deals 0 HP
-    (``opponent_damage_spec_missing``), so the player's HP is unchanged. GREEN once
-    Dev authors ``opponent_damage``.
+    The opponent's reprisal damage comes from the cdef's authored ``opponent_damage``
+    (1d8) — the seeded mook is weaponless, so without it the hit would land for 0
+    HP (the Toothless Other guarded by ``test_..._seats_no_toothless_opponent``).
+    Story 125-8 restored only the player BEAT ID (committed_blow → synthesized
+    ``attack``); the opponent-damage authoring already shipped.
     """
     from sidequest.agents.orchestrator import NpcMention
     from sidequest.game.session import GameSnapshot

@@ -52,17 +52,27 @@ FAMILY = [
 
 
 def _combat_shape(pack):
-    """(encounter_type, strike_beat_id, stats) discovered from the pack."""
+    """(encounter_type, strike_beat_id, stats) discovered from the pack.
+
+    Under a de-nativized WWN binding (108-3, ADR-143) the hp_depletion combat def
+    authors zero beats — the WN round synthesizes the offensive action — so when
+    no authored strike beat exists the combat action is the synthesized WN
+    ``attack`` (``WN_ATTACK_BEAT_ID``). The not-yet-de-nativized siblings
+    (swn/cwn/awn) still carry an authored strike beat, which we keep using so
+    their coverage is unchanged (story 125-8)."""
+    from sidequest.game.beat_filter import WN_ATTACK_BEAT_ID
+
     cdef = next(
         c
         for c in pack.rules.confrontations
         if c.category == "combat" and c.win_condition == "hp_depletion"
     )
-    beat = next(b for b in cdef.beats if b.kind == "strike")
+    strike = next((b.id for b in cdef.beats if b.kind == "strike"), None)
+    beat_id = strike if strike is not None else WN_ATTACK_BEAT_ID
     cfg = pack.rules.ruleset_config()
     assert cfg is not None, "a WN pack must carry its ruleset config block"
     stats = {flavor: 10 for flavor in cfg.attribute_map.values()}
-    return cdef.confrontation_type, beat.id, stats
+    return cdef.confrontation_type, beat_id, stats
 
 
 @pytest.mark.parametrize(("genre", "slug"), FAMILY)

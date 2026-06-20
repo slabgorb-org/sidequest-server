@@ -18,8 +18,13 @@ exists to escape (SOUL: "escape El Dorado through structural support"). It pairs
 with 108-1's ``wwn.native_scaffolding_suppressed`` (no native rider) — together
 they prove the WN round resolved on the button and only on the button.
 
-RED today (the span does not exist yet):
-  * ``…attached_rider_emits_flavor_rider_span``
+STATUS (story 125-8): the 108-5 flavor-rider span SHIPPED
+(``wn_flavor_rider_span``). These tests went stale only on the BEAT ID — they
+drove the now-stripped ``committed_blow`` (108-3) and fail-louded at dispatch.
+Restored by the harness ``HM_STRIKE_BEAT`` → ``attack`` swap + an armed PC
+(heavy_metal ships no ``unarmed_damage`` floor); they now pass on the
+de-nativized WN path (ADR-143):
+  * ``…attached_rider_emits_flavor_rider_span`` — the span fires on an attached rider.
   * ``…flavor_rider_span_marks_mechanics_unaffected`` (the attr contract)
   * ``…flavor_rider_span_wired_end_to_end`` (wiring — the span at the wire)
 
@@ -44,6 +49,7 @@ from tests._helpers.genre_paths import GENRE_PACKS_DIR
 from tests.integration._wn_round_102_4 import (
     HM_OPPONENT_HP,
     HM_STRIKE_BEAT,
+    arm_pc,
     dispatch_throw,
     force_initiative,
     load_pack,
@@ -73,6 +79,7 @@ def _seat_pc_first():
     """
     pack = load_pack("heavy_metal")
     snap, enc = seat_wn_combat(pack, [_PC], [_OPP], genre_slug="heavy_metal")
+    arm_pc(snap, _PC)  # synthesized attack draws weapon dice — no unarmed floor in heavy_metal
     force_initiative(enc, [(_PC, 9), (_OPP, 3)])
     return pack, snap, enc
 
@@ -281,6 +288,7 @@ def _install_wire_wn_combat(sd) -> None:
     sd.snapshot.characters[0].stats.update(
         {"STR": 12, "DEX": 10, "CON": 10, "INT": 14, "WIS": 10, "CHA": 10}
     )
+    arm_pc(sd.snapshot, sd.snapshot.characters[0].core.name)
     sd.snapshot.npcs.append(
         Npc(
             core=CreatureCore(

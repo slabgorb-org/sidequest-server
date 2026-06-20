@@ -203,7 +203,19 @@ def test_heavy_metal_ships_real_wwn_spell_catalog() -> None:
 
 
 @pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
-def test_heavy_metal_blade_work_has_class_filtered_cast_spell() -> None:
+def test_heavy_metal_blade_work_combat_denativized_casting_gated_by_class() -> None:
+    """De-nativized WWN combat (108-3 / ADR-143 "Bind the Ruleset, Don't Balance
+    It"): the Blade-work hp_depletion combat def no longer authors a ``cast_spell``
+    beat (nor any native combat beat) — 108-3 stripped the pool empty and the WN
+    round owns the action set. Combat casting is the synthesized WN cast action
+    routed at dispatch (epic-152); WHO may cast is gated by the class's
+    ``magic_access``/``wwn_magic`` (the five caster Callings), NOT by a per-beat
+    ``class_filter``.
+
+    (Flipped from the pre-strip ``test_heavy_metal_blade_work_has_class_filtered_cast_spell``
+    to the de-nativized surface — the caster/non-caster gate the stripped
+    class_filter carried is preserved, re-expressed on the surviving class-magic
+    surface. Story 125-8.)"""
     pack = _load_heavy_metal()
 
     combat = next(
@@ -211,38 +223,30 @@ def test_heavy_metal_blade_work_has_class_filtered_cast_spell() -> None:
         None,
     )
     assert combat is not None, "heavy_metal must expose a 'combat' (Blade-work) confrontation"
-
-    cast_beat = next((b for b in combat.beats if b.id == "cast_spell"), None)
-    assert cast_beat is not None, (
-        f"Blade-work must add a cast_spell beat (real magic); beats: {sorted(b.id for b in combat.beats)}"
-    )
-    assert cast_beat.class_filter, (
-        "cast_spell must carry a class_filter so the cast gate fires only for casters"
+    assert [b.id for b in combat.beats] == [], (
+        "108-3 strips every native combat beat (cast_spell included) off the WWN "
+        "Blade-work hp_depletion def — the WN round owns the action set, so the "
+        f"combat def authors zero beats; got {[b.id for b in combat.beats]}"
     )
 
-    # The filter must name the three caster classes (by id or display_name) and nothing else.
+    # The caster/non-caster gate the stripped cast_spell class_filter used to
+    # carry now lives on the class magic surface: exactly the five caster Callings
+    # (3 doom + the two Barsoom Callings, 89-5) carry wwn magic_access; the martial
+    # Callings (Warrior/Expert) do not — so the cast gate still excludes them.
     by_id = {c.id: c for c in pack.classes}
-    caster_labels = {by_id[cid].id for cid in _CASTER_IDS} | {
-        by_id[cid].display_name for cid in _CASTER_IDS
-    }
-    noncaster_labels = {c.id for c in pack.classes if c.id not in _CASTER_IDS} | {
-        c.display_name for c in pack.classes if c.id not in _CASTER_IDS
-    }
-    flt = set(cast_beat.class_filter)
-    assert flt <= caster_labels, (
-        f"cast_spell class_filter must contain only the caster classes "
-        f"{sorted(caster_labels)}; got {sorted(flt)}"
-    )
-    assert not (flt & noncaster_labels), (
-        f"cast_spell class_filter must NOT include non-caster classes; got {sorted(flt)}"
-    )
-    # 89-5: the filter grows from the 3 doom Callings to 5 — the two Barsoom
-    # caster Callings join per the BARSOOM HOOK staged in 89-4. The loader's
-    # _validate_class_filter_refs fails loud on dangling names, so this count
-    # only passes once the Callings genuinely exist in classes.yaml.
-    assert len(flt) == 5, (
-        f"cast_spell class_filter must name all five caster Callings "
-        f"(3 doom + Mentalist + Super-scientist, 89-5); got {sorted(flt)}"
+    for cid in _CASTER_IDS:
+        cls = by_id.get(cid)
+        assert cls is not None, f"caster Calling {cid!r} not found in classes.yaml"
+        assert cls.magic_access == "wwn" and cls.wwn_magic is not None, (
+            f"caster Calling {cid!r} must gate casting via magic_access=='wwn' + "
+            f"wwn_magic (the de-nativized cast gate); got magic_access="
+            f"{cls.magic_access!r}, wwn_magic={'set' if cls.wwn_magic else None}"
+        )
+    casters_with_magic = {c.id for c in pack.classes if c.magic_access == "wwn"}
+    assert casters_with_magic == _CASTER_IDS, (
+        "exactly the five caster Callings may carry wwn magic_access — the cast "
+        "gate must include all casters and exclude every martial Calling; got "
+        f"{sorted(casters_with_magic)} vs expected {sorted(_CASTER_IDS)}"
     )
 
 

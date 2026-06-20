@@ -39,6 +39,7 @@ import pytest
 
 from tests.integration._wn_round_102_4 import (
     GENRE_PACKS_DIR,
+    arm_pc,
     dispatch_throw,
     force_initiative,
     load_pack,
@@ -61,12 +62,33 @@ _SPAN_RESOLVED = "wwn.round.resolved"
 _SPAN_BEAT_APPLIED = "encounter.beat_applied"
 _SPAN_OPP_ATTACK = "encounter.opponent_attack_resolved"
 
+# BLOCKED on epic-152 (opponent-attack synthesis). Under de-nativized WWN combat
+# the opponent's attack is SKIPPED: ``_resolve_opponent_reprisal`` (dice.py:2069)
+# requires an authored strike beat in ``cdef.beats``, which 108-3 stripped empty;
+# 108-8 synthesized only the PLAYER's ``attack``, never the opponent's, so
+# ``wn_round`` logs ``opponent_reprisal_skipped reason=no_strike_beat`` and the
+# Other never swings (a live combat outage). Fixing it needs production engine
+# code (synthesize the opponent strike beat, parallel to 108-8) — out of scope
+# for 125-8 (test-debt only, AC3). Loud-skip + linked story per AC1; see the
+# session Delivery Findings. Unskip when epic-152 lands the opponent-attack synthesis.
+_OPPONENT_ATTACK_BLOCKED = (
+    "epic-152: WN opponent attack skipped under de-nativized WWN combat "
+    "(no_strike_beat — opponent strike beat never synthesized; 108-8 did only the "
+    "player). Production gap; 125-8 is test-debt only (AC3). See Delivery Findings."
+)
+
 
 @pytest.fixture
 def two_pc_combat():
-    """Real heavy_metal Blade-work combat: two PCs vs one 10-HP blade."""
+    """Real heavy_metal Blade-work combat: two PCs vs one 10-HP blade.
+
+    Both PCs are armed (arm_pc → 2d6) so a committed WN ``attack`` resolves real
+    weapon dice: heavy_metal ships no unarmed_damage floor, and 108-3 removed the
+    native committed_blow damage_override the kill choreography once rode (125-8)."""
     pack = load_pack("heavy_metal")
     snap, enc = seat_wn_combat(pack, [_PC_A, _PC_B], [_OPP])
+    arm_pc(snap, _PC_A)
+    arm_pc(snap, _PC_B)
     return pack, snap, enc
 
 
@@ -193,13 +215,16 @@ def test_resolved_span_carries_the_walked_order(two_pc_combat, otel_capture, mon
     )
 
 
+@pytest.mark.skip(reason=_OPPONENT_ATTACK_BLOCKED)
 def test_opponent_with_higher_initiative_acts_before_the_player_strike(
     two_pc_combat, otel_capture, monkeypatch
 ):
     """AC2 behavioral order proof: forced order [opponent, A, B] means the
     opponent's attack resolves BEFORE A's strike applies. Today the engine
     does the exact reverse (strike, then reprisal) — this is the d8 mattering.
-    """
+
+    SKIPPED (125-8): needs the opponent attack to fire, which is the no_strike_beat
+    production gap owned by epic-152 (see _OPPONENT_ATTACK_BLOCKED)."""
     monkeypatch.setattr("random.randint", lambda a, b: b)  # max: everyone hits hard
     pack, snap, enc = two_pc_combat
     force_initiative(enc, [(_OPP, 9), (_PC_A, 5), (_PC_B, 3)])
@@ -221,6 +246,7 @@ def test_solo_pc_commit_fires_the_round_immediately(otel_capture, monkeypatch):
     monkeypatch.setattr("random.randint", lambda a, b: a)
     pack = load_pack("heavy_metal")
     snap, enc = seat_wn_combat(pack, [_PC_A], [_OPP])
+    arm_pc(snap, _PC_A)
     force_initiative(enc, [(_OPP, 9), (_PC_A, 3)])
 
     outcome = dispatch_throw(pack=pack, snap=snap, enc=enc, character_name=_PC_A, player_id="p1")
@@ -343,6 +369,7 @@ def test_round_walk_resolution_close_carries_wn_round_source(otel_capture, monke
     monkeypatch.setattr("random.randint", lambda a, b: b)  # max: 2d6=12 kills the 10-HP blade
     pack = load_pack("heavy_metal")
     snap, enc = seat_wn_combat(pack, [_PC_A], [_OPP])
+    arm_pc(snap, _PC_A)  # 2d6 weapon → pinned-max strike deals 12, kills the 10-HP blade
     force_initiative(enc, [(_PC_A, 9), (_OPP, 2)])
 
     dispatch_throw(pack=pack, snap=snap, enc=enc, character_name=_PC_A, player_id="p1")

@@ -123,6 +123,7 @@ from sidequest.telemetry.spans import (
     npc_mentions_replay_suppressed_span,
     npc_observation_gate_order_violation_span,
     npc_pc_name_skipped_span,
+    npc_person_reconciled_span,
     npc_referenced_span,
     npc_spawn_disposition_span,
     quest_update_span,
@@ -2213,6 +2214,84 @@ def _reconcile_epithet_to_person(
     return best
 
 
+def _reconcile_active_person(
+    *,
+    snapshot: GameSnapshot,
+    mention: Any,
+    acting_character_name: str | None,
+    turn_num: int,
+) -> tuple[Npc | None, NpcPoolMember | None, str] | None:
+    """Resolve a non-creature person mention to the NPC the player is actively
+    engaged with — the recency scene-guard (story 126-32, oz repro 2026-06-20).
+
+    When a mintable person reference misses the name-only Steps 1/2 and is NOT
+    flagged a new arrival, it is almost always the person the player is talking
+    to — there was "no sign of anyone else." The narrator handed a title or
+    re-reference ("the Good Witch of the North") that the namegen would otherwise
+    culture-route into a STRANGER ("Amaranth Warmacre") conjured beside her.
+    Resolve to the recently-engaged, co-located person instead.
+
+    Levers (the person twin of :func:`_reconcile_ongoing_threat`):
+      * ``scene_guard`` — exactly one non-creature person co-located with the
+        acting PC. The reference is that person; no token overlap required (the
+        player saw no one else).
+      * ``similarity``  — several co-located persons; pick the one whose
+        name/role/appearance tokens overlap the mention, only on a clear (>0)
+        best. Ties / zero overlap decline → the caller mints (conservative,
+        never a false merge).
+
+    Co-location bounds the guard to the actual scene — persons, unlike a single
+    active threat, are everywhere, so a person in another room is never the
+    referent. Returns ``(npc, None, signal)``, ``(None, member, signal)``, or
+    ``None`` when there is no safe referent (caller mints as before).
+    """
+    location = snapshot.party_location(perspective=acting_character_name)
+    if not location:
+        return None
+    npc_candidates = [
+        n
+        for n in snapshot.npcs
+        if n.creature_id is None and (n.last_seen_location == location or n.location == location)
+    ]
+    member_candidates = [
+        m for m in snapshot.npc_pool if not m.is_creature and m.last_seen_location == location
+    ]
+    total = len(npc_candidates) + len(member_candidates)
+    if total == 0:
+        return None
+    if total == 1:
+        # Scene-guard: one co-located person — the reference is them.
+        if npc_candidates:
+            return (npc_candidates[0], None, "scene_guard")
+        return (None, member_candidates[0], "scene_guard")
+
+    # Several co-located persons — disambiguate by token overlap, reconcile only
+    # on a clear best match. Ties / zero overlap decline so two genuinely
+    # distinct people in one scene stay distinct (mirrors the epithet guard).
+    incoming = _creature_tokens(mention.name, mention.role, mention.appearance)
+    best: tuple[Npc | None, NpcPoolMember | None, str] | None = None
+    best_score = 0
+    tied = False
+    for npc in npc_candidates:
+        existing = _creature_tokens(npc.core.name, npc.appearance, *npc.aliases)
+        score = len(incoming & existing)
+        if score > best_score:
+            best_score, best, tied = score, (npc, None, "similarity"), False
+        elif score == best_score and score > 0:
+            tied = True
+    for member in member_candidates:
+        score = _creature_similarity(
+            mention, name=member.name, role=member.role, appearance=member.appearance
+        )
+        if score > best_score:
+            best_score, best, tied = score, (None, member, "similarity"), False
+        elif score == best_score and score > 0:
+            tied = True
+    if best_score == 0 or tied:
+        return None
+    return best
+
+
 def _engagement_is_hostile_context(snapshot: GameSnapshot, mention: object, npc: object) -> bool:
     """True when a narrator cite of ``npc`` is combat attention, not interest.
 
@@ -2725,6 +2804,64 @@ def _apply_npc_mentions(
                         mention.name,
                         reconciled_to,
                         signal,
+                        target_store,
+                        turn_num,
+                    )
+                continue
+
+        # Story 126-32 (oz repro, Keith 2026-06-20): person recency scene-guard —
+        # the person twin of the creature guard above. A non-new person reference
+        # that missed the name-only Steps 1/2 (a title like "the Good Witch of the
+        # North", not the personal name the namegen would mint) would fall to the
+        # Step-3 person mint and culture-route a STRANGER ("Amaranth Warmacre")
+        # into a scene where the player sees no one else — they are re-referring
+        # to the NPC they are already talking to. Resolve to the recently-engaged,
+        # co-located person instead. A genuine new arrival (is_new=True) always
+        # falls through to Step 3 (Living World — the narrator can introduce
+        # people). Conservative + span-visible (No Silent Fallbacks).
+        if (not mention.is_creature) and (not mention.is_new):
+            reconciled_person = _reconcile_active_person(
+                snapshot=snapshot,
+                mention=mention,
+                acting_character_name=acting_character_name,
+                turn_num=turn_num,
+            )
+            if reconciled_person is not None:
+                rp_npc, rp_member, rp_signal = reconciled_person
+                if rp_npc is not None:
+                    rp_loc = snapshot.party_location(perspective=acting_character_name)
+                    if rp_loc:
+                        rp_npc.last_seen_location = rp_loc
+                    rp_npc.last_seen_turn = turn_num
+                    reconciled_to = rp_npc.core.name
+                    target_store = "npcs"
+                else:
+                    # Fill-empty upsert (story 72-7 additive precedent): the
+                    # re-reference accretes; existing values win.
+                    assert rp_member is not None
+                    if mention.role and not rp_member.role:
+                        rp_member.role = mention.role
+                    if mention.pronouns and not rp_member.pronouns:
+                        rp_member.pronouns = mention.pronouns
+                    if mention.appearance and not rp_member.appearance:
+                        rp_member.appearance = mention.appearance
+                    rp_member.last_seen_turn = turn_num
+                    reconciled_to = rp_member.name
+                    target_store = "pool"
+                with npc_person_reconciled_span(
+                    incoming=mention.name,
+                    reconciled_to=reconciled_to,
+                    signal=rp_signal,
+                    target_store=target_store,
+                    turn_number=turn_num,
+                ):
+                    logger.info(
+                        "npc.person_reconciled incoming=%r reconciled_to=%r "
+                        "signal=%s store=%s turn=%d — active-scene person, no "
+                        "phantom stranger minted",
+                        mention.name,
+                        reconciled_to,
+                        rp_signal,
                         target_store,
                         turn_num,
                     )

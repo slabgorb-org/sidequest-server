@@ -408,6 +408,30 @@ SPAN_ROUTES[SPAN_NPC_EPITHET_RECONCILED] = SpanRoute(
     },
 )
 
+# Story 126-32 (oz repro, Keith 2026-06-20): emitted when the person recency
+# scene-guard collapses a non-new person reference onto the NPC the player is
+# actively engaged with, instead of minting a Step-3 stranger ("Amaranth
+# Warmacre" conjured beside the Good Witch of the North the player was talking
+# to). The person twin of ``npc.creature_reconciled``: ``signal`` is the lever
+# (``scene_guard`` — exactly one recently-engaged person in scene | ``similarity``
+# — best role/appearance/name overlap among several). The GM panel reads this to
+# verify the engine recognized the conversation partner rather than spawning a
+# phantom.
+SPAN_NPC_PERSON_RECONCILED = "npc.person_reconciled"
+SPAN_ROUTES[SPAN_NPC_PERSON_RECONCILED] = SpanRoute(
+    event_type="state_transition",
+    component="npc_registry",
+    extract=lambda span: {
+        "field": "npc.person_reconciled",
+        "op": "reconciled",
+        "incoming": (span.attributes or {}).get("incoming", ""),
+        "reconciled_to": (span.attributes or {}).get("reconciled_to", ""),
+        "signal": (span.attributes or {}).get("signal", ""),
+        "target_store": (span.attributes or {}).get("target_store", ""),
+        "turn_number": (span.attributes or {}).get("turn_number", 0),
+    },
+)
+
 # Story 45-21 / 45-52: combat-stats publish onto Npc.core.edge.
 # Fired when an encounter handshake (or other combat-stats emit) writes the
 # dial-derived edge pool onto a matched ``snapshot.npcs`` entry. Renamed from
@@ -739,6 +763,39 @@ def npc_epithet_reconciled_span(
     }
     with Span.open(
         SPAN_NPC_EPITHET_RECONCILED,
+        attributes,
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def npc_person_reconciled_span(
+    *,
+    incoming: str,
+    reconciled_to: str,
+    signal: str,
+    target_store: str,
+    turn_number: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Story 126-32 (oz repro): emitted when the person recency scene-guard
+    collapses a non-new person reference onto the NPC the player is actively
+    engaged with, instead of minting a Step-3 stranger. ``incoming`` is the
+    narrator's reference; ``reconciled_to`` the surviving conversation partner;
+    ``signal`` the lever (``scene_guard`` | ``similarity``); ``target_store``
+    ``npcs`` or ``pool`` (twin of ``npc.creature_reconciled``)."""
+    attributes: dict[str, Any] = {
+        "incoming": incoming,
+        "reconciled_to": reconciled_to,
+        "signal": signal,
+        "target_store": target_store,
+        "turn_number": turn_number,
+        **attrs,
+    }
+    with Span.open(
+        SPAN_NPC_PERSON_RECONCILED,
         attributes,
         tracer_override=_tracer,
     ) as span:

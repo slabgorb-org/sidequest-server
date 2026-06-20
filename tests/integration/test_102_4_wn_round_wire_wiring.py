@@ -53,19 +53,6 @@ _OPPONENT_ATTACK_BLOCKED = (
     "player). Production gap; 125-8 is test-debt only (AC3). See Delivery Findings."
 )
 
-# BLOCKED (separate root, not pure-edit test-debt): once the committed_blow→attack
-# swap let the first commit SEAL, this MP wire test progresses to the second
-# commit, which misresolves to the first PC's seat ("'Rux' has already committed")
-# so the barrier never closes and the round never fires; the wire path also
-# reaches the real claude-agent-sdk transport (non-hermetic narrator). Needs an
-# MP-seat-resolution / wire-hermeticity follow-up (Dev investigation), not a
-# test-debt edit. See session Delivery Findings.
-_MP_WIRE_BLOCKED = (
-    "follow-up (not pure-edit test-debt): MP wire 2nd-commit misresolves to the "
-    "1st PC's seat (round never fires) + non-hermetic narrator transport. Needs an "
-    "MP-seat/hermeticity story; 125-8 is test-debt only. See Delivery Findings."
-)
-
 
 def _install_wn_combat(sd) -> None:
     """Seat Rux vs a resolvable 10-HP opponent core, opponent first in
@@ -185,51 +172,130 @@ async def test_ws_dice_throw_runs_the_initiative_ordered_round(
     )
 
 
-@pytest.mark.skip(reason=_MP_WIRE_BLOCKED)
 @pytest.mark.asyncio
 async def test_mp_wire_first_commit_seals_second_commit_fires_the_round(
     session_handler_factory, otel_capture, monkeypatch
 ):
-    """Review rework r1 [MEDIUM]: the seal→fire sequence at the WIRE level.
+    """The seal→fire sequence at the WIRE level, across two real MP sockets.
 
-    SKIPPED (125-8): a separate latent root exposed by the committed_blow→attack
-    fix — the 2nd MP commit misresolves to the 1st PC's seat so the round never
-    fires, and the wire path reaches the real SDK transport (non-hermetic). Needs
-    an MP-seat/hermeticity follow-up, not a test-debt edit (see _MP_WIRE_BLOCKED).
+    Two seated PCs, each on its OWN authenticated handler sharing ONE
+    SessionRoom — the production MP substrate (ADR-036 barrier on one shared
+    snapshot; ADR-119/118-9 per-socket identity: ``sd.player_id`` is the SOLE
+    seat-resolution source, so two seats require two sockets). The first
+    socket's DICE_THROW must SEAL (no round-phase spans, no resolution); the
+    second must close the barrier and walk the round exactly once, inside the
+    same production chain (handler → dispatch → wn_round).
 
-    Two seated PCs (snapshot.player_seats maps each player_id to its PC —
-    the production MP seat resolution in handlers/dice_throw.py). The first
-    DICE_THROW must seal (no round-phase spans, no resolution); the second
-    must close the barrier and walk the round exactly once, inside the same
-    production chain (handler → dispatch → wn_round). Before this test the
-    two-player sequence was proven at dispatch level only."""
+    History (152-5): this test was quarantined believing the
+    2nd-commit-misresolves-to-the-1st-seat symptom and the non-hermetic
+    transport were *production* roots needing a Dev fix. The investigation
+    proved both were *test construction*:
+
+      * Seat resolution is correct. The prior single-handler version drove BOTH
+        commits through one authenticated ``sd.player_id`` ("player-1"); under
+        ADR-119 the second message's ``player_id="player-2"`` is a rejected
+        spoof, so both resolved to "Rux" and ``seal_wn_commit`` raised
+        "'Rux' has already committed" — the round never fired. Real MP gives
+        each player its own socket/``sd.player_id``; two handlers sharing the
+        room fix it with no production change.
+      * The non-hermetic call is the post-narration sidecar-extraction watcher
+        (``run_sidecar_extraction_watcher`` → live ``build_sidecar_extractor_llm``
+        → real claude-agent-sdk ``query()``), not ``run_narration_turn``. Its
+        fail-loud real-transport guard is the correct signal that a server test
+        must install a fake; stubbing the watcher keeps the wire path hermetic.
+    """
     from sidequest.agents.orchestrator import NarrationTurnResult
-    from sidequest.game.encounter import EncounterActor
+    from sidequest.game.creature_core import CreatureCore, Inventory
+    from sidequest.game.encounter import (
+        EncounterActor,
+        EncounterMetric,
+        EncounterPhase,
+        StructuredEncounter,
+    )
+    from sidequest.game.persistence import GameMode
+    from sidequest.game.session import Npc
     from sidequest.protocol.models import InitiativeEntry
-    from sidequest.server.session_handler import _State
-    from tests.integration._wn_round_102_4 import make_pc
 
     monkeypatch.setattr("random.randint", lambda a, b: a)  # min: misses, nobody drops
     monkeypatch.setattr(
         "sidequest.server.dispatch.monster_manual_inject.ensure_loaded",
         lambda _sd: None,
     )
-
-    sd, handler = session_handler_factory(genre="heavy_metal")
-    handler._state = _State.Playing
-    _install_wn_combat(sd)
-    pc_one = sd.snapshot.characters[0].core.name
-    pc_two = "Vex Calder"
-    sd.snapshot.characters.append(make_pc(pc_two, stats=_STATS))
-    enc = sd.snapshot.encounter
-    enc.actors.append(EncounterActor(name=pc_two, role="combatant", side="player"))
-    enc.initiative.append(InitiativeEntry(token_id=pc_two, value=1))
-    sd.snapshot.player_seats = {"player-1": pc_one, "player-2": pc_two}
-    sd.orchestrator.run_narration_turn = AsyncMock(
-        return_value=NarrationTurnResult(narration="Steel waits on steel."),
+    # Hermeticity (152-5 root 2): the post-narration sidecar-extraction watcher
+    # builds a live SDK-backed LLM and would reach the real claude-agent-sdk
+    # query() transport. ``run_narration_turn`` (stubbed below) does NOT cover
+    # this seam — stub the watcher itself so the wire path stays hermetic.
+    monkeypatch.setattr(
+        "sidequest.server.websocket_session_handler.run_sidecar_extraction_watcher",
+        AsyncMock(return_value=None),
     )
 
-    await handler.handle_message(_strike_message(player_id="player-1", request_id="mp-wire-1"))
+    pc_one, pc_two = _PC, "Vex Calder"
+    slug = "test-mp-wn-round-wire"
+    seats = [("player-1", pc_one), ("player-2", pc_two)]
+    handler_one, sd_one, room = session_handler_factory(
+        genre="heavy_metal",
+        slug=slug,
+        mode=GameMode.MULTIPLAYER,
+        seat_players=seats,
+        active_player=("player-1", pc_one),
+    )
+    handler_two, sd_two, _room2 = session_handler_factory(
+        genre="heavy_metal",
+        slug=slug,
+        mode=GameMode.MULTIPLAYER,
+        seat_players=seats,
+        active_player=("player-2", pc_two),
+        existing_room=room,
+    )
+
+    # Install WN combat on the SHARED room snapshot: both PCs + a 10-HP opponent
+    # first in initiative. Both handlers read this one snapshot/commit barrier.
+    snapshot = room.snapshot
+    for ch in snapshot.characters:
+        if ch.core.name in (pc_one, pc_two):
+            ch.stats.update(_STATS)
+    snapshot.npcs.append(
+        Npc(
+            core=CreatureCore(
+                name=_OPP,
+                description="A furnace-fed revenant.",
+                personality="relentless",
+                inventory=Inventory(),
+                hp={"current": 10, "max": 10, "base_max": 10},
+                armor_class=12,
+            )
+        )
+    )
+    snapshot.encounter = StructuredEncounter(
+        encounter_type="combat",
+        player_metric=EncounterMetric(name="momentum", current=0, starting=0, threshold=10),
+        opponent_metric=EncounterMetric(name="momentum", current=0, starting=0, threshold=10),
+        beat=0,
+        structured_phase=EncounterPhase.Setup,
+        secondary_stats=None,
+        actors=[
+            EncounterActor(name=pc_one, role="combatant", side="player"),
+            EncounterActor(name=pc_two, role="combatant", side="player"),
+            EncounterActor(name=_OPP, role="combatant", side="opponent"),
+        ],
+        outcome=None,
+        resolved=False,
+        mood_override=None,
+        narrator_hints=[],
+        initiative=[
+            InitiativeEntry(token_id=_OPP, value=9),
+            InitiativeEntry(token_id=pc_one, value=3),
+            InitiativeEntry(token_id=pc_two, value=2),
+        ],
+    )
+
+    fake = NarrationTurnResult(narration="Steel waits on steel.")
+    sd_one.orchestrator.run_narration_turn = AsyncMock(return_value=fake)
+    sd_two.orchestrator.run_narration_turn = AsyncMock(return_value=fake)
+
+    # First socket commits → SEAL only; the barrier still waits on the second PC.
+    await handler_one.handle_message(_strike_message(player_id="player-1", request_id="mp-wire-1"))
 
     names_after_first = [s.name for s in otel_capture.get_finished_spans()]
     assert "wwn.round.committed" not in names_after_first, (
@@ -244,7 +310,8 @@ async def test_mp_wire_first_commit_seals_second_commit_fires_the_round(
         "reprisal on the FIRST sealed commit is the retired rider behavior"
     )
 
-    await handler.handle_message(_strike_message(player_id="player-2", request_id="mp-wire-2"))
+    # Second socket commits → barrier closes; the round walks exactly once.
+    await handler_two.handle_message(_strike_message(player_id="player-2", request_id="mp-wire-2"))
 
     names = [s.name for s in otel_capture.get_finished_spans()]
     assert "wwn.round.committed" in names and "wwn.round.resolved" in names, (

@@ -580,6 +580,36 @@ def apply_beat(
     if actor.withdrawn:
         return ApplyResult(deltas=None, resolved=False, skipped_reason="withdrawn_actor")
 
+    # Story 126-37 (ADR-143/144 "Bind the Ruleset, Don't Balance It"): a Fate conflict —
+    # seated by 126-30 with win_condition="fate_conflict" — resolves EXCLUSIVELY through
+    # the 4dF conflict engine (fate_conflict.py) reading the Other's FateSheet stress. The
+    # native beat/dial engine is REMOVED from the Fate path, not tuned to coexist, so
+    # apply_beat short-circuits here — BEFORE any delta / tag / resolution work — the same
+    # way the early returns above bail. This is the belt: the narration loop drops Fate
+    # beats upstream (narration_apply conflict_beat_dropped_dial_blocked), but any other
+    # caller that reaches apply_beat on a Fate conflict is suppressed here too. Emit a
+    # suppression event so the GM panel sees the native engine stood down (OTEL
+    # Observability Principle / No Silent Fallbacks); the narration loop renders the
+    # skipped_reason as encounter.beat_skipped.
+    if enc.win_condition == "fate_conflict":
+        _watcher_publish(
+            "state_transition",
+            {
+                "field": "encounter",
+                "op": "beat_suppressed_fate_conflict",
+                "actor": actor.name,
+                "actor_side": actor.side,
+                "beat_id": getattr(beat, "id", "?"),
+                "rationale": (
+                    "win_condition=fate_conflict — the 4dF conflict engine owns "
+                    "resolution; native beat/dial mechanics are removed from the Fate path"
+                ),
+            },
+            component="encounter",
+            severity="info",
+        )
+        return ApplyResult(deltas=None, resolved=False, skipped_reason="fate_conflict_suppressed")
+
     overrides = _normalize_overrides(getattr(beat, "deltas", None))
     deltas = resolve_tier_deltas(
         kind=beat.kind,

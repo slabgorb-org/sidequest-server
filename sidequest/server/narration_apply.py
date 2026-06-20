@@ -5546,6 +5546,45 @@ def _apply_narration_result_to_snapshot(
             if cdef is None:
                 raise ValueError(f"active encounter type {enc.encounter_type!r} not in pack")
 
+            # ---- Fate-conflict drop branch (Story 126-37, ADR-143/144 REPLACE) ----
+            # A Fate conflict — seated by 126-30 with win_condition="fate_conflict" —
+            # resolves EXCLUSIVELY through the 4dF conflict engine (FATE_ACTION →
+            # fate_conflict.py) reading the Other's FateSheet stress. It seats with the
+            # native resolution_mode (beat_selection), so without this guard it falls into
+            # the legacy ``else`` arm below and the narrator's beats feed the native dial
+            # engine — the downstream leak 126-30 left open. Mirror the Fate Contest drop
+            # (contest_beat_dropped_dial_blocked): the dial-beat scaffolding is gone from a
+            # de-nativized Fate path, but the narrator is an LLM and could hallucinate a
+            # stray beat_selection against a live conflict. Drop those selections and
+            # surface the block LOUDLY on the GM panel (No Silent Fallbacks: the dial
+            # engine was actively prevented from resolving a Fate conflict). The conflict
+            # still resolves via FATE_ACTION; the player's turn does not error. This is the
+            # narration-layer suspenders to apply_beat's belt (beat_kinds
+            # beat_suppressed_fate_conflict).
+            if enc.win_condition == "fate_conflict":
+                for sel in gated_selections:
+                    _watcher_publish(
+                        "state_transition",
+                        {
+                            "field": "encounter",
+                            "op": "conflict_beat_dropped_dial_blocked",
+                            "actor": sel.actor,
+                            "beat_id": sel.beat_id,
+                            "encounter_type": enc.encounter_type,
+                            "reason": "fate_conflict resolves only via FATE_ACTION (4dF)",
+                        },
+                        component="confrontation",
+                        severity="warning",
+                    )
+                logger.warning(
+                    "encounter.conflict_beat_dropped_dial_blocked "
+                    "encounter=%r dropped %d stray beat selection(s) — a Fate Conflict "
+                    "resolves only via FATE_ACTION; the legacy dial apply_beat engine was "
+                    "blocked (ADR-143/144 REPLACE)",
+                    enc.encounter_type,
+                    len(gated_selections),
+                )
+                _legacy_beat_path = False
             # ---- Sealed-letter lookup branch (T5, dogfight port) ----
             # When the confrontation declares ResolutionMode.sealed_letter_lookup
             # we resolve via cross-product cell lookup instead of the legacy
@@ -5560,7 +5599,7 @@ def _apply_narration_result_to_snapshot(
             # Sealed-letter resolution is EXCLUSIVE of the legacy beat loop —
             # because maneuver IDs collide with beat IDs by content design,
             # falling through to apply_beat would double-apply mechanics.
-            if cdef.resolution_mode == ResolutionMode.sealed_letter_lookup:
+            elif cdef.resolution_mode == ResolutionMode.sealed_letter_lookup:
                 if cdef.interaction_table is None:
                     raise ValueError(
                         f"confrontation {enc.encounter_type!r} declares "

@@ -214,6 +214,29 @@ async def advance_confrontation(args: AdvanceConfrontationArgs, ctx: ToolContext
             recoverable=True,
         )
 
+    # Fate-conflict guard (Story 126-37, ADR-143/144 "Bind the Ruleset, Don't Balance
+    # It"). A Fate conflict — seated by 126-30 with win_condition="fate_conflict" —
+    # resolves EXCLUSIVELY through the 4dF engine (FATE_ACTION → fate_conflict.py) reading
+    # the Other's FateSheet stress. Its dials are vestigial placeholders the engine never
+    # reads, so the narrator free-handing this tool would drift a dead dial and pollute
+    # forensics — the exact hp_depletion zombie-dial bug, one ruleset over. Refuse loudly
+    # (recoverable — the turn proceeds on prose), leave the dial frozen, and surface the
+    # refusal on the GM panel (No Silent Fallbacks), mirroring the guards above. The 4dF
+    # conflict engine owns every Fate resolution delta.
+    if encounter.win_condition == "fate_conflict":
+        ctx.otel_span.set_attribute("tool.confrontation.refused_fate_conflict", True)
+        ctx.otel_span.set_attribute("tool.confrontation.encounter_type", encounter.encounter_type)
+        ctx.otel_span.set_attribute("tool.confrontation.axis", args.axis)
+        ctx.otel_span.set_attribute("tool.confrontation.delta", args.delta)
+        return ToolResult.error(
+            f"encounter {encounter.encounter_type!r} resolves via fate_conflict — its "
+            "dials are vestigial placeholders the 4dF conflict engine never reads; the "
+            "Fate conflict engine (FATE_ACTION) is the authoritative resolution track "
+            "(opponent stress + consequence fill toward taken-out). Do not free-hand dial "
+            "advances on a Fate conflict.",
+            recoverable=True,
+        )
+
     # Opposed-check guard (RW-2 road_warrior chase, playtest 2026-06-05).
     # On a ``resolution_mode: opposed_check`` confrontation the DICE ENGINE
     # owns every dial delta: the player's stashed DICE_THROW d20 is paired

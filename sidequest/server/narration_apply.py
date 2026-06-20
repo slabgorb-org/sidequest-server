@@ -3846,25 +3846,19 @@ def merge_sidecar_extraction_npcs_present(
 def merge_sidecar_extraction_cosmetic(
     result: NarrationTurnResult, extraction: SidecarExtraction
 ) -> NarrationTurnResult:
-    """Source the cosmetic bucket-B fields (``scene_mood`` / ``visual_scene`` /
-    ``footnotes``) from the post-narration extractor (ADR-150 step 4, Story 151-5).
+    """Source the extractive cosmetic field ``scene_mood`` from the post-narration
+    extractor (ADR-150 step 4, Story 151-5).
 
-    These are presentation / feed fields with no engine ownership — copied from the
-    extraction, the ``visual_scene`` dict rebuilt into the ``VisualScene`` model the
-    result holds (the same conversion the result assembler does). A SEPARATE seam
-    from the npcs merge so the cosmetic fields can be scheduled off the critical path
-    (ADR-150 §Ordering). The extraction is the SOLE source: stale result values are
-    OVERWRITTEN (No Silent Fallbacks).
+    ``scene_mood`` is a presentation signal the prose STATES, with no engine
+    ownership — the extraction is the SOLE source (stale values OVERWRITTEN, No
+    Silent Fallbacks). ``visual_scene`` and ``footnotes`` once rode this seam too,
+    but the 2026-06-20 ADR-150 amendment (RENDER-NO-SUBJECT) returned them to
+    narrator-owned: they are GENERATIVE/authorial outputs a never-invent reader
+    structurally cannot produce, so this merge must NOT touch them (sourcing them
+    here clobbered the narrator's value back to empty and broke rendering / the
+    knowledge feed on every world).
     """
-    from sidequest.agents.orchestrator import VisualScene
-
     result.scene_mood = extraction.scene_mood
-    result.visual_scene = (
-        VisualScene.from_dict(extraction.visual_scene)
-        if isinstance(extraction.visual_scene, dict)
-        else None
-    )
-    result.footnotes = list(extraction.footnotes)
     return result
 
 

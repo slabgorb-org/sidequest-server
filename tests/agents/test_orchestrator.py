@@ -158,18 +158,20 @@ def test_extract_structured_extracts_location():
     assert result["location"] == "Docks"
 
 
-def test_extract_structured_no_longer_surfaces_footnotes():
-    """Story 151-5 / ADR-150 step 4 (cutover II): ``footnotes`` is retired from the
-    narrator game_patch — the post-narration sidecar extractor produces it now and
-    ``narration_apply.merge_sidecar_extraction_cosmetic`` sources it onto the result.
-    ``extract_structured_from_response`` must surface ``[]`` even when a
-    (non-compliant) narrator still emits the block. Inverts the pre-151-5
-    ``test_extract_structured_extracts_footnotes``."""
+def test_extract_structured_surfaces_narrator_footnotes():
+    """RENDER-NO-SUBJECT (ADR-150 amendment 2026-06-20): ``footnotes`` is the
+    player's knowledge/journal feed — a GENERATIVE/authorial narrator output the
+    post-narration never-invent reader cannot produce. It was CARVED BACK OUT of the
+    151-5 cutover to narrator-owned, so ``extract_structured_from_response`` must
+    once again surface it from the game_patch (the never-invent extractor returning
+    [] every turn caused known_facts=0 on mystery worlds)."""
     raw = '```game_patch\n{"footnotes": [{"summary": "The key is lost", "category": "Lore", "is_new": true}]}\n```'
     result = extract_structured_from_response(raw)
-    assert result["footnotes"] == [], (
-        "game_patch footnotes must no longer be extracted — retired in 151-5 "
-        "(the post-narration sidecar extractor owns it)"
+    assert result["footnotes"] == [
+        {"summary": "The key is lost", "category": "Lore", "is_new": True}
+    ], (
+        "game_patch footnotes must be surfaced — narrator-owned again "
+        "(ADR-150 amendment, RENDER-NO-SUBJECT)"
     )
 
 

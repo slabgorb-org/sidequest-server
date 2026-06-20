@@ -102,11 +102,13 @@ from sidequest.game.session import GameSnapshot
 # retirement + merge tests cannot drift apart.
 # ---------------------------------------------------------------------------
 
+# RENDER-NO-SUBJECT (ADR-150 amendment 2026-06-20): visual_scene + footnotes were
+# CARVED BACK OUT to narrator-owned (generative/authorial; a never-invent reader
+# cannot produce them). Only the genuinely-EXTRACTIVE cosmetic fields stay deferred
+# to the post-narration extractor.
 DEFERRED_FIELDS: tuple[str, ...] = (
     "npcs_present",
     "scene_mood",
-    "visual_scene",
-    "footnotes",
 )
 
 # 151-4's lane — must NOT regress here (already retired before 151-5).
@@ -205,10 +207,12 @@ def _full_bucket_b_patch() -> dict[str, Any]:
 
 
 def test_deferred_fields_complete_bucket_b_cutover() -> None:
-    """151-5's four fields are exactly the bucket-B members NOT cut over by 151-4,
-    and the two lanes UNION to the whole of ``BUCKET_B_FIELDS`` — after 151-5 the
+    """151-5's deferred fields are exactly the bucket-B members NOT cut over by
+    151-4, and the two lanes UNION to the whole of ``BUCKET_B_FIELDS`` — the
     migration is complete, with no field left in neither lane (a field-name typo
-    that silently un-tests a lane would break this)."""
+    that silently un-tests a lane would break this). Post RENDER-NO-SUBJECT
+    amendment, bucket-B is extractive-only (visual_scene/footnotes are
+    narrator-owned and out of BUCKET_B_FIELDS entirely)."""
     assert set(DEFERRED_FIELDS).issubset(set(BUCKET_B_FIELDS))
     assert set(DEFERRED_FIELDS).isdisjoint(set(TRANSACTIONAL_FIELDS))
     assert set(DEFERRED_FIELDS) | set(TRANSACTIONAL_FIELDS) == set(BUCKET_B_FIELDS)
@@ -288,19 +292,19 @@ def _output_only_md() -> str:
 
 
 def test_output_only_md_no_longer_instructs_deferred_fields() -> None:
-    """``output_only.md`` no longer teaches the narrator to emit ``npcs_present`` /
-    ``visual_scene`` / ``footnotes`` or the top-level scene-mood field — they are
-    extracted post-narration now. Asserts on the CONTRACT ARTIFACT (the prompt
-    template that IS this AC's deliverable), not a wiring grep of production
-    source. Plain substring, no regex (no catastrophic backtracking, per
-    CLAUDE.md). RED until the four instruction blocks are cut."""
+    """``output_only.md`` no longer teaches the narrator to emit the EXTRACTIVE
+    deferred fields (``npcs_present`` and the top-level scene-mood field) — they are
+    extracted post-narration now. ``visual_scene`` / ``footnotes`` are the exception:
+    RENDER-NO-SUBJECT (ADR-150 amendment) restored them to narrator-owned, so they
+    MUST still be taught here (see ``test_output_only_md_keeps_generative_fields``).
+    Asserts on the CONTRACT ARTIFACT, not a wiring grep of production source. Plain
+    substring, no regex (no catastrophic backtracking, per CLAUDE.md)."""
     output_only = _output_only_md()
 
-    for field in ("npcs_present", "visual_scene", "footnotes"):
-        assert field not in output_only, (
-            f"output_only.md still instructs the narrator to emit {field!r}; "
-            f"ADR-150 step 4 retires it from PART 2 (extracted post-narration now)"
-        )
+    assert "npcs_present" not in output_only, (
+        "output_only.md still instructs the narrator to emit 'npcs_present'; "
+        "ADR-150 step 4 retires it from PART 2 (extracted post-narration now)"
+    )
     # scene_mood travels as the top-level "mood:" instruction (extract reads
     # patch['scene_mood'] or patch['mood']); its distinctive instruction phrase
     # must be gone, asserted precisely so a stray "mood" inside prose-craft
@@ -320,6 +324,20 @@ def test_output_only_md_keeps_private_segments() -> None:
         "private_segments is the irreducible field — output_only.md must still "
         "instruct it after 151-5 (its shrink is 151-6, and it stays narrator-owned)"
     )
+
+
+def test_output_only_md_keeps_generative_fields() -> None:
+    """RENDER-NO-SUBJECT (ADR-150 amendment 2026-06-20): ``visual_scene`` (the
+    authorial art-direction directive) and ``footnotes`` (the knowledge feed) are
+    GENERATIVE narrator-owned outputs a never-invent reader cannot produce — so the
+    contract MUST still teach the narrator to emit them. Over-retiring them (the
+    151-5 bug) zeroed scrapbook rendering and the journal feed on every world."""
+    output_only = _output_only_md()
+    for field in ("visual_scene", "footnotes"):
+        assert field in output_only, (
+            f"output_only.md must instruct the narrator to emit {field!r} — it is a "
+            f"generative narrator-owned field (ADR-150 amendment, RENDER-NO-SUBJECT)"
+        )
 
 
 # ===========================================================================
@@ -486,83 +504,57 @@ def test_merge_npcs_present_no_mismatch_span_when_side_agrees(otel_capture) -> N
 
 
 # ===========================================================================
-# AC — cosmetic fields: scene_mood / visual_scene / footnotes from the extractor.
+# AC — cosmetic field: scene_mood from the extractor (visual_scene / footnotes are
+# narrator-owned per the RENDER-NO-SUBJECT amendment and must NOT be touched here).
 # ===========================================================================
 
 
-def test_merge_cosmetic_sources_all_three_fields() -> None:
-    """The cosmetic seam sources ``scene_mood`` / ``visual_scene`` / ``footnotes``
-    from the post-narration extraction onto the result. RED until the seam
-    exists."""
+def test_merge_cosmetic_sources_scene_mood_only() -> None:
+    """The cosmetic seam sources the EXTRACTIVE ``scene_mood`` from the extraction.
+    Post RENDER-NO-SUBJECT, it must NOT source (or clobber) the narrator-owned
+    generative fields ``visual_scene`` / ``footnotes`` — a never-invent reader can't
+    produce them, so sourcing them here zeroed rendering + the knowledge feed."""
     from sidequest.server.narration_apply import merge_sidecar_extraction_cosmetic
 
-    result = NarrationTurnResult(narration="prose")  # post-retirement: empty
-    extraction = SidecarExtraction(
-        scene_mood="ominous",
-        visual_scene={
-            "subject": "a dim cellar",
-            "tier": "scene_illustration",
-            "tags": ["location"],
-        },
+    # The narrator authored visual_scene + footnotes; the result already carries them.
+    result = NarrationTurnResult(
+        narration="prose",
+        visual_scene=VisualScene(subject="a dim cellar"),
         footnotes=[{"summary": "The vault is sealed.", "category": "Place", "is_new": True}],
     )
+    extraction = SidecarExtraction(scene_mood="ominous")
 
     merge_sidecar_extraction_cosmetic(result, extraction)
 
     assert result.scene_mood == "ominous"
+    # Narrator-owned generative fields survive the merge untouched.
+    assert isinstance(result.visual_scene, VisualScene)
+    assert result.visual_scene.subject == "a dim cellar"
     assert result.footnotes == [
         {"summary": "The vault is sealed.", "category": "Place", "is_new": True}
     ]
-    assert isinstance(result.visual_scene, VisualScene)
-    assert result.visual_scene.subject == "a dim cellar"
 
 
-def test_merge_cosmetic_visual_scene_dict_becomes_model() -> None:
-    """``SidecarExtraction.visual_scene`` is a raw dict (the ``emit_tool`` shape);
-    the merge converts it to a ``VisualScene`` model (the type ``NarrationTurnResult``
-    holds), carrying subject / tier / mood / tags — the same conversion the result
-    assembler does. RED until the seam converts it."""
-    from sidequest.server.narration_apply import merge_sidecar_extraction_cosmetic
-
-    result = NarrationTurnResult(narration="prose")
-    extraction = SidecarExtraction(
-        visual_scene={
-            "subject": "a storm over the spires",
-            "tier": "landscape",
-            "mood": "dramatic",
-            "tags": ["location", "atmosphere"],
-        }
-    )
-
-    merge_sidecar_extraction_cosmetic(result, extraction)
-
-    assert isinstance(result.visual_scene, VisualScene)
-    assert result.visual_scene.subject == "a storm over the spires"
-    assert result.visual_scene.tier == "landscape"
-    assert result.visual_scene.mood == "dramatic"
-    assert result.visual_scene.tags == ["location", "atmosphere"]
-
-
-def test_merge_cosmetic_overwrites_stale_no_fallback() -> None:
-    """No Silent Fallbacks: the extraction is the SOLE source. An empty extraction
-    OVERWRITES stale cosmetic values on the result (a non-compliant narrator's
-    game_patch leak) — scene_mood→None, visual_scene→None, footnotes→[]. RED until
-    the seam exists."""
+def test_merge_cosmetic_overwrites_stale_scene_mood_no_fallback() -> None:
+    """No Silent Fallbacks: the extraction is the SOLE source for ``scene_mood`` — an
+    empty extraction OVERWRITES a stale scene_mood (scene_mood→None). The generative
+    fields are NOT extractor-owned, so they are PRESERVED, not zeroed."""
     from sidequest.server.narration_apply import merge_sidecar_extraction_cosmetic
 
     result = NarrationTurnResult(
         narration="prose",
         scene_mood="STALE tense",
-        visual_scene=VisualScene(subject="STALE scene"),
-        footnotes=[{"summary": "STALE footnote"}],
+        visual_scene=VisualScene(subject="narrator scene"),
+        footnotes=[{"summary": "narrator footnote"}],
     )
-    extraction = SidecarExtraction()  # extractor read nothing cosmetic
+    extraction = SidecarExtraction()  # extractor read no scene_mood
 
     merge_sidecar_extraction_cosmetic(result, extraction)
 
     assert result.scene_mood is None, "stale scene_mood must be overwritten, not kept"
-    assert result.visual_scene is None, "stale visual_scene must be overwritten, not kept"
-    assert result.footnotes == [], "stale footnotes must be overwritten, not kept"
+    # Generative narrator-owned fields are NOT clobbered by the cosmetic merge.
+    assert result.visual_scene is not None and result.visual_scene.subject == "narrator scene"
+    assert result.footnotes == [{"summary": "narrator footnote"}]
 
 
 # ===========================================================================

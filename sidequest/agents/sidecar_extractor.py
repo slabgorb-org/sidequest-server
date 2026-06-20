@@ -2,9 +2,11 @@
 
 The foundation of the sidecar-accounting epic. A post-narration Haiku
 ``emit_tool`` pass (AsideResolver / IntentRouter-shaped) reads the narrator's
-emitted prose and derives the eleven *bucket-B* sidecar fields. It ships in
-SHADOW mode: it computes the fields and emits OTEL, but applies nothing — the
-lie-detector watches from day one before any field cuts over (151-4 / 151-5).
+emitted prose and derives the EXTRACTIVE *bucket-B* sidecar fields (nine, after the
+RENDER-NO-SUBJECT amendment carved the two generative fields — visual_scene,
+footnotes — back out to narrator-owned). It ships in SHADOW mode: it computes the
+fields and emits OTEL, but applies nothing — the lie-detector watches from day one
+before any field cuts over (151-4 / 151-5).
 
 Two layers mirror the live ADR-113 lineage:
 
@@ -40,7 +42,9 @@ from sidequest.telemetry.spans.sidecar_extraction import (
 
 logger = logging.getLogger(__name__)
 
-# The eleven bucket-B prose-readout fields (ADR-150 §Decision). Verified against
+# The nine EXTRACTIVE bucket-B prose-readout fields (ADR-150 §Decision + the
+# 2026-06-20 RENDER-NO-SUBJECT amendment, which excludes the two generative fields
+# visual_scene/footnotes — those are narrator-owned). Verified against
 # NarrationTurnResult field names (orchestrator.py:474-587); ``scene_mood`` is
 # the field the ADR refers to as "mood". This tuple is the SINGLE source of
 # truth the 151-4 / 151-5 cutover stories reference — do not drift a parallel
@@ -55,8 +59,10 @@ BUCKET_B_FIELDS: tuple[str, ...] = (
     "companions_dismissed",
     "npcs_present",
     "scene_mood",
-    "visual_scene",
-    "footnotes",
+    # visual_scene + footnotes are GENERATIVE/authorial narrator-owned fields
+    # (ADR-150 amendment 2026-06-20, RENDER-NO-SUBJECT) — a never-invent reader
+    # cannot produce a render subject or a knowledge-feed entry, so they are NOT
+    # read here. bucket-B is extractive-only.
 )
 
 # One attempt plus one bounded retry (ADR-150 no-fallbacks discipline, mirroring
@@ -76,7 +82,7 @@ _TOOL_NAME = "emit_sidecar_fields"
 _TOOL_DESCRIPTION = (
     "Emit the structured bucket-B sidecar fields you READ from the narration "
     "prose: items gained/lost/discarded/consumed, gold change, companions "
-    "added/dismissed, NPCs present, scene mood, visual scene, and footnotes. "
+    "added/dismissed, NPCs present, and scene mood. "
     "Report only what the prose states; never invent. An empty field is correct "
     "when the prose says nothing about it."
 )
@@ -90,7 +96,7 @@ _SYSTEM_PROMPT = (
 
 
 class SidecarExtraction(BaseModel):
-    """The eleven bucket-B fields as validated structured output (ADR-102).
+    """The nine extractive bucket-B fields as validated structured output (ADR-102).
 
     Shadow-mode skeleton: the list fields stay raw ``dict`` payloads (the shape
     ``emit_tool`` returns) because no field is applied this story — the 151-4 /
@@ -106,8 +112,10 @@ class SidecarExtraction(BaseModel):
     companions_dismissed: list[str] = Field(default_factory=list)
     npcs_present: list[dict[str, Any]] = Field(default_factory=list)
     scene_mood: str | None = None
-    visual_scene: dict[str, Any] | None = None
-    footnotes: list[dict[str, Any]] = Field(default_factory=list)
+    # visual_scene + footnotes deliberately absent — generative/authorial fields the
+    # narrator owns (ADR-150 amendment 2026-06-20, RENDER-NO-SUBJECT). The forced
+    # tool schema derives from this model, so dropping them stops the reader being
+    # asked to invent them.
 
 
 class SidecarExtractionFailure(Exception):

@@ -1,0 +1,14 @@
+{
+  "_comment": "CANONICAL test-session prefix contract — story 125-10 (follow-up to 126-34). VENDORED BYTE-IDENTICAL in two repos: sidequest-server/tests/fixtures/test_session_prefix_contract.json and sidequest-ui/src/components/Dashboard/__tests__/fixtures/test_session_prefix_contract.json. To change the test-session prefixes, edit BOTH copies of this file AND both predicates (server: is_test_session in sidequest/telemetry/watcher_hub.py; ui: isTestSession in src/components/Dashboard/source/useLiveSource.ts). Each repo's contract test pins its predicate's declared prefix set to this file, so a one-sided predicate change fails that repo's CI.",
+  "prefixes": ["test-", "tool-test"],
+  "cases": [
+    { "slug": "test-pulp_noir-deadbeef", "is_test": true },
+    { "slug": "tool-test-fate-cafef00d", "is_test": true },
+    { "slug": "test-", "is_test": true },
+    { "slug": "tool-test", "is_test": true },
+    { "slug": "2026-06-16-annees_folles-5cbe9403", "is_test": false },
+    { "slug": "greatest-pulp_noir-deadbeef", "is_test": false },
+    { "slug": "tooltest-missing-hyphen", "is_test": false },
+    { "slug": "", "is_test": false }
+  ]
+}

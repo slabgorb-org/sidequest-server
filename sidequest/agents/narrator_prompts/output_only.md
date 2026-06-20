@@ -53,7 +53,7 @@ real and the GM panel proves it never happened. Narrate reactions through behavi
 
 PART 2 — STATE PATCH
 After your prose, emit a fenced JSON block labeled game_patch. ALWAYS emit it,
-even if it is just `{}`. It carries exactly ONE field:
+even if it is just `{}`. It carries these narrator-owned fields:
 
 private_segments: Array. DEFAULT empty — most turns are fully public. Emit ONLY
 when this turn's prose would contain perception NOT observable by every PC
@@ -74,7 +74,21 @@ result as ordinary narration. If you start a privacy label, STOP — it belongs 
 `private_segments` with NO trace in PART 1. PART 1 gets ONLY the
 publicly-observable action; the reading itself is private.
 
-If nothing private occurred, still emit:
+visual_scene: Your AUTHORIAL choice of what is worth drawing (Diamonds & Coal). Emit
+when the setting changes, a new location is entered, or a visually significant event
+occurs (combat start, dramatic reveal, a new NPC). tier `"portrait"` for an NPC
+close-up, `"landscape"` for a place, `"scene_illustration"` for action. Format:
+  "visual_scene": { "subject": "<what to PAINT, max 100 chars>", "tier": "landscape|portrait|scene_illustration", "mood": "ominous|tense|mystical|dramatic|melancholic|atmospheric", "tags": ["location","combat","magic","character","atmosphere"] }
+OMIT the field on a turn with no new/changed scene — never emit an empty or guessed subject.
+
+footnotes: Knowledge the player learned THIS turn — lore, a named NPC, a location, a
+quest objective, an ability. The player's journal feed; include generously.
+  "footnotes": [{"summary": "<one sentence, third person>", "category": "Lore|Place|Person|Quest|Ability", "is_new": true}]
+`is_new` true on first appearance, false on reference. Distinct from
+`commit_known_fact` (which durably commits to party knowledge) — emit footnotes here
+AND call `commit_known_fact` when the fact should be durably known.
+
+If none of these fields apply, still emit:
 ```game_patch
 {}
 ```

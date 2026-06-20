@@ -72,8 +72,8 @@ BUCKET_B_FIELD_NAMES = (
     "companions_dismissed",
     "npcs_present",
     "scene_mood",
-    "visual_scene",
-    "footnotes",
+    # visual_scene + footnotes are narrator-owned generative fields, NOT extractive
+    # (ADR-150 amendment 2026-06-20, RENDER-NO-SUBJECT) — out of bucket-B entirely.
 )
 
 
@@ -90,8 +90,6 @@ def _full_emit() -> dict[str, Any]:
         "companions_dismissed": [],
         "npcs_present": [{"name": "Harlan"}],
         "scene_mood": "tense",
-        "visual_scene": None,
-        "footnotes": [],
     }
 
 
@@ -107,8 +105,6 @@ def _empty_emit() -> dict[str, Any]:
         "companions_dismissed": [],
         "npcs_present": [],
         "scene_mood": None,
-        "visual_scene": None,
-        "footnotes": [],
     }
 
 
@@ -243,15 +239,17 @@ async def test_extract_truncates_overlong_narration_before_the_sdk_call() -> Non
     )
 
 
-def test_bucket_b_field_set_is_the_eleven_canonical_fields() -> None:
+def test_bucket_b_field_set_is_the_canonical_extractive_fields() -> None:
     """The module exposes the canonical bucket-B field set so the 151-4/151-5
-    cutover stories reference ONE source of truth, not drifting string lists."""
+    cutover stories reference ONE source of truth, not drifting string lists. Post
+    RENDER-NO-SUBJECT (ADR-150 amendment), bucket-B is EXTRACTIVE-only — the nine
+    facts the prose states; visual_scene/footnotes are narrator-owned and excluded."""
     from sidequest.agents import sidecar_extractor as mod
 
     assert hasattr(mod, "BUCKET_B_FIELDS"), "module must publish a BUCKET_B_FIELDS constant"
     assert set(mod.BUCKET_B_FIELDS) == set(BUCKET_B_FIELD_NAMES), (
-        "BUCKET_B_FIELDS must be exactly the eleven prose-readout fields from "
-        "NarrationTurnResult (ADR-150 §Decision)"
+        "BUCKET_B_FIELDS must be exactly the nine extractive prose-readout fields "
+        "(ADR-150 §Decision + 2026-06-20 amendment); visual_scene/footnotes excluded"
     )
 
 

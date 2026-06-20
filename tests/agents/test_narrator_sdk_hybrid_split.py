@@ -262,14 +262,19 @@ async def test_sdk_path_zeros_tool_owned_state(
 async def test_sdk_path_keeps_presentation_fields(
     monkeypatch: pytest.MonkeyPatch, otel_capture: InMemorySpanExporter
 ) -> None:
-    """After the bucket-B cutover, ``sfx_triggers`` is the ONLY presentation field
-    with no successor producer — it still rides the sidecar parse.
+    """Presentation fields on the SDK path after the bucket-B cutover + the
+    RENDER-NO-SUBJECT amendment.
 
-    Story 151-5 / ADR-150 step 4 (cutover II): ``scene_mood`` / ``visual_scene`` /
-    ``npcs_present`` / ``footnotes`` are RETIRED from the sidecar — the post-narration
-    extractor produces them and the WS handler's merge seams source them onto the
-    result (npcs_present with engine-owned ``side``). The SDK assembler therefore
-    surfaces them empty; ``sfx_triggers`` (NOT a bucket-B field) survives.
+    Story 151-5 / ADR-150 step 4 (cutover II): the EXTRACTIVE fields ``scene_mood`` /
+    ``npcs_present`` are RETIRED from the sidecar — the post-narration extractor
+    produces them and the WS handler's merge seams source them onto the result. The
+    SDK assembler therefore surfaces them empty.
+
+    RENDER-NO-SUBJECT (ADR-150 amendment 2026-06-20): ``visual_scene`` (authorial
+    art-direction) and ``footnotes`` (the knowledge feed) are GENERATIVE
+    narrator-owned outputs a never-invent reader cannot produce — CARVED BACK OUT to
+    the sidecar parse, so they SURVIVE on the SDK result. ``sfx_triggers`` (never a
+    bucket-B field) also survives.
 
     Story 151-3 / ADR-150 step 3: ``action_rewrite`` is likewise no longer a
     game_patch-sourced presentation field — it is produced by the pre-narrator
@@ -277,12 +282,16 @@ async def test_sdk_path_keeps_presentation_fields(
     """
     result = await _run_sdk_turn(monkeypatch, "Phosphor moss glows green.")
 
-    # Retired in 151-5 — extractor-sourced now, so the assembler surfaces them empty.
+    # Extractive — retired in 151-5, so the assembler surfaces them empty.
     assert result.scene_mood is None
-    assert result.visual_scene is None
-    assert result.footnotes == []
     assert result.npcs_present == []
-    # The one surviving sidecar-parsed presentation field (no successor producer).
+    # Generative narrator-owned (RENDER-NO-SUBJECT) — sourced from the sidecar.
+    assert result.visual_scene is not None
+    assert result.visual_scene.subject == "Kael wading waist-deep in a flooded stone vault"
+    assert result.footnotes == [
+        {"summary": "The vault key is iron, not brass.", "category": "world"}
+    ]
+    # A surviving sidecar-parsed presentation field with no successor producer.
     assert result.sfx_triggers == ["water_drip", "distant_groan"]
 
 

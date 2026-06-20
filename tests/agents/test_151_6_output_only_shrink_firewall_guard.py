@@ -67,11 +67,18 @@ from tests.agents.fakes.fake_anthropic_sdk_client import (
 # The residual brief is *write the prose; obey the perception firewall; withhold
 # single-PC perception into private_segments*. A faithful brief of exactly that
 # content is ≈2.2–2.8k chars (the dense, load-bearing firewall + private_segments
-# instruction plus a short PART-1 framing). The file on this branch is ~7.9k
-# chars — still dominated by the ~92-line "TOOL-OWNED MECHANICS" recording-manual
-# recap. The ceiling sits well above a faithful brief and well below the current
-# manual: it exists to fail the manual, not to micro-manage the rewrite's wording.
-_BRIEF_CHAR_CEILING = 5000
+# instruction plus a short PART-1 framing). The file on this branch was ~7.9k
+# chars — dominated by the ~92-line "TOOL-OWNED MECHANICS" recording-manual recap.
+# The ceiling sits well above a faithful brief and well below that manual: it exists
+# to fail the manual, not to micro-manage the rewrite's wording.
+#
+# Raised 5000 -> 6500 by the RENDER-NO-SUBJECT fix (ADR-150 amendment 2026-06-20):
+# ``visual_scene`` (authorial art-direction) and ``footnotes`` (the knowledge feed)
+# are GENERATIVE narrator-owned fields a never-invent reader cannot produce, so the
+# brief legitimately re-teaches them (~1k chars). The 8-category recording manual
+# stays gone (pinned by ``test_output_only_drops_tool_owned_recording_manual``); the
+# ceiling still fails a regression to the old manual.
+_BRIEF_CHAR_CEILING = 6500
 
 
 def test_output_only_is_a_short_brief() -> None:

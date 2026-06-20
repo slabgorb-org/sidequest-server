@@ -4991,6 +4991,70 @@ def _apply_narration_result_to_snapshot(
                 narrating_character_name=narrating_name,
                 lane="gained",
             )
+            # 126-33: dedup the gained lane. When the narrator re-narrates an
+            # acquisition (Oz turn 7 re-granted 'silver shoes' -> a duplicate
+            # stack), the grant must be a no-op against an item the recipient
+            # already holds. Every sibling lane (items_lost / items_discarded /
+            # items_consumed) already matches the existing ledger by case-folded
+            # name before mutating, and the 45-13 container gate already blocks a
+            # re-emitted *container* retrieval; this lane was the lone outlier
+            # that appended blindly. Identity is id-first then case-folded name,
+            # checked against the RESOLVED recipient's ledger (ADR-037 per-player
+            # inventory). The narrator may re-reference an item by id while
+            # spelling the display name differently, and ``_narrator_item_dict``
+            # mints the stored id from the name (dropping the entry's id), so the
+            # entry's declared id joins the incoming key set. No-op on match (the
+            # duplicate is suppressed, not counted up) but LOUD per "No Silent
+            # Fallbacks": an ``item_gain.deduped`` watcher event fires so the GM
+            # panel sees the suppression rather than a silently dropped grant.
+            incoming_keys = {
+                key
+                for key in (
+                    str(item_dict.get("id", "") or "").strip().lower(),
+                    str(item_dict.get("name", "") or "").strip().lower(),
+                    str(entry.get("id", "") or "").strip().lower(),
+                )
+                if key
+            }
+            duplicate_of = None
+            for existing in recipient_char.core.inventory.items:
+                existing_keys = {
+                    str(existing.get("id", "") or "").strip().lower(),
+                    str(existing.get("name", "") or "").strip().lower(),
+                }
+                if existing_keys & incoming_keys:
+                    duplicate_of = existing
+                    break
+            if duplicate_of is not None:
+                # warning, not info: the narrator produced a known-bad duplicate
+                # that the gate had to suppress (parity with
+                # container_retrieval_blocked) — a client-side error path per
+                # python.md #4.
+                _watcher_publish(
+                    "item_gain.deduped",
+                    {
+                        "name": str(item_dict["name"]),
+                        "id": str(item_dict["id"]),
+                        "existing_id": str(duplicate_of.get("id", "") or ""),
+                        "existing_quantity": duplicate_of.get("quantity", 1),
+                        "recipient": recipient_char.core.name,
+                        "genre": snapshot.genre_slug,
+                        "world": snapshot.world_slug,
+                        "player_name": narrating_name,
+                        "turn_number": turn_num,
+                    },
+                    component="inventory",
+                    severity="warning",
+                )
+                logger.warning(
+                    "state.inventory_dedup player=%s turn=%d name=%r "
+                    "existing_id=%r reason=already_held",
+                    player_name,
+                    turn_num,
+                    str(item_dict["name"]),
+                    str(duplicate_of.get("id", "") or ""),
+                )
+                continue
             recipient_char.core.inventory.items.append(item_dict)
             added_names.append(str(item_dict["name"]))
             # ADR-144 / spec 2026-06-18: on a Fate-bound PC, a significant item

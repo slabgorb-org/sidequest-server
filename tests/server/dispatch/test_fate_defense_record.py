@@ -17,7 +17,11 @@ from sidequest.server.dispatch.fate_conflict import (
     FateConflictError,
     dispatch_fate_defense,
 )
-from tests._helpers.fate_fixtures import parked_conflict, parked_conflict_filled
+from tests._helpers.fate_fixtures import (
+    parked_conflict,
+    parked_conflict_filled,
+    parked_conflict_two_defenders,
+)
 
 
 def test_defense_records_from_faces_and_never_rolls(monkeypatch):
@@ -55,7 +59,9 @@ def test_unknown_request_id_fails_loud():
         defender="Rux", attacker="Bandit", request_id="d1", attack_total=4, defend_skill_rating=2
     )
     ruleset = get_ruleset_module("fate")
-    with pytest.raises(FateConflictError):
+    # match= pins the UNKNOWN-id branch: dispatch_fate_defense raises FateConflictError
+    # from four branches, so a bare raises() could pass on the wrong one.
+    with pytest.raises(FateConflictError, match="unknown request_id"):
         dispatch_fate_defense(
             encounter=encounter,
             snapshot=snap,
@@ -74,7 +80,8 @@ def test_already_filled_request_id_fails_loud():
         defender="Rux", attacker="Bandit", request_id="d1", attack_total=5, recorded_defense_total=2
     )
     ruleset = get_ruleset_module("fate")
-    with pytest.raises(FateConflictError):
+    # match= pins the ALREADY-FILLED branch (not just "some FateConflictError").
+    with pytest.raises(FateConflictError, match="already recorded"):
         dispatch_fate_defense(
             encounter=encounter,
             snapshot=snap,
@@ -96,7 +103,12 @@ def test_defend_throw_from_non_defender_is_rejected():
         defender="Rux", attacker="Bandit", request_id="d1", attack_total=4, defend_skill_rating=2
     )
     ruleset = get_ruleset_module("fate")
-    with pytest.raises(FateConflictError):
+    # match="authorization" pins the AUTHORIZATION branch specifically. Without it the
+    # bare raises() could pass even if Mallory's throw failed for an unrelated reason
+    # (unknown id / already-filled / no-faces) — and would NOT prove the per-defender
+    # authorization guard is what rejected it. (See dispatch_fate_defense: the auth
+    # message is the one ending in "(authorization)".)
+    with pytest.raises(FateConflictError, match="authorization"):
         dispatch_fate_defense(
             encounter=encounter,
             snapshot=snap,
@@ -183,3 +195,85 @@ def test_concede_marks_entry_and_fills_ledger():
     assert entry.conceded is True
     assert res.conceded is True
     assert res.ledger_full is True
+
+
+def test_partial_fill_keeps_ledger_open_until_all_defenders_respond():
+    # A MULTI-defender DEFEND barrier (two unfilled entries). Filling ONE leaves the
+    # ledger PARTIAL — ledger_full must stay False so the exchange does NOT RESUME
+    # until every defender has answered (the all(...) gate). Filling the second
+    # closes it. parked_conflict builds only one entry, so this is the gap 126-8's
+    # tests never covered.
+    snap, encounter = parked_conflict_two_defenders(
+        defenders=("Rux", "Vala"),
+        attackers=("Bandit", "Brigand"),
+        request_ids=("d1", "d2"),
+        attack_total=4,
+        defend_skill_rating=2,
+    )
+    ruleset = get_ruleset_module("fate")
+
+    first = dispatch_fate_defense(
+        encounter=encounter,
+        snapshot=snap,
+        ruleset=ruleset,
+        actor_name="Rux",
+        request_id="d1",
+        skill="Athletics",
+        thrown_faces=(1, 1, 0, 0),
+    )
+    assert first.ledger_full is False  # Vala has not answered — barrier stays open
+
+    # The first defender's throw touches ONLY their own entry.
+    rux_entry = next(p for p in encounter.pending_defenses if p.request_id == "d1")
+    vala_entry = next(p for p in encounter.pending_defenses if p.request_id == "d2")
+    assert rux_entry.defense_total == 1 + 1 + 2  # faces(+2) + Athletics(2), opposition 0
+    assert vala_entry.defense_total is None
+    assert vala_entry.conceded is False
+
+    second = dispatch_fate_defense(
+        encounter=encounter,
+        snapshot=snap,
+        ruleset=ruleset,
+        actor_name="Vala",
+        request_id="d2",
+        skill="Athletics",
+        thrown_faces=(0, 0, 0, 0),
+    )
+    assert second.ledger_full is True  # both answered — ledger closes
+
+
+def test_partial_fill_concede_counts_toward_ledger_full():
+    # A conceded entry satisfies the ledger gate exactly like a thrown defense: one
+    # defender throws, the other concedes → the barrier closes (ledger_full True).
+    # Proves the all(...) gate treats `conceded` and `defense_total` symmetrically in
+    # a multi-entry ledger.
+    snap, encounter = parked_conflict_two_defenders(
+        defenders=("Rux", "Vala"),
+        attackers=("Bandit", "Brigand"),
+        request_ids=("d1", "d2"),
+    )
+    ruleset = get_ruleset_module("fate")
+
+    first = dispatch_fate_defense(
+        encounter=encounter,
+        snapshot=snap,
+        ruleset=ruleset,
+        actor_name="Rux",
+        request_id="d1",
+        skill="Athletics",
+        thrown_faces=(1, 0, 0, 0),
+    )
+    assert first.ledger_full is False
+
+    second = dispatch_fate_defense(
+        encounter=encounter,
+        snapshot=snap,
+        ruleset=ruleset,
+        actor_name="Vala",
+        request_id="d2",
+        skill="Athletics",
+        thrown_faces=None,
+        conceded=True,
+    )
+    assert second.ledger_full is True
+    assert second.conceded is True

@@ -46,7 +46,7 @@ def test_action_resolved_defaults_role_action():
         source="player_thrown",
         _tracer=tracer,
     )
-    span = exporter.get_finished_spans()[0]
+    span = next(s for s in exporter.get_finished_spans() if s.name == "fate.action_resolved")
     assert span.attributes["role"] == "action"
     assert span.attributes["source"] == "player_thrown"
 
@@ -66,7 +66,7 @@ def test_action_resolved_role_defense():
         source="player_thrown",
         _tracer=tracer,
     )
-    span = exporter.get_finished_spans()[0]
+    span = next(s for s in exporter.get_finished_spans() if s.name == "fate.action_resolved")
     assert span.attributes["role"] == "defense"
     assert span.attributes["source"] == "player_thrown"
 
@@ -168,6 +168,6 @@ def test_defend_phase_request_time_unanswered():
         responded=False,
         _tracer=tracer,
     )
-    span = exporter.get_finished_spans()[0]
+    span = next(s for s in exporter.get_finished_spans() if s.name == "fate.defend_phase")
     assert span.attributes["responded"] is False
     assert span.attributes["conceded"] is False

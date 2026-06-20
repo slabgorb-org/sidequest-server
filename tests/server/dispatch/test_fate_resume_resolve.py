@@ -91,3 +91,73 @@ def test_recorded_pc_defense_used_instead_of_roll(monkeypatch):
     took_consequence = any(c.aspect is not None for c in rux.fate_sheet.consequences)
     taken_out = encounter.find_actor("Rux").withdrawn
     assert took_stress or took_consequence or taken_out
+
+
+def test_recorded_pc_defense_that_ties_applies_no_harm_and_grants_momentum():
+    # AC4 (defense WINS, exact tie). test_recorded_pc_defense_used_instead_of_roll
+    # covers the LOSE side (defense 2 vs attack 5 → 3 shifts of harm); this covers
+    # the win side of _resolve_attack's recorded-defense branch where shifts == 0:
+    # attack ladder_total 3 == recorded defense 3 → NO harm, defender NOT taken out,
+    # and the defender gains a Momentum boost (Fate's exact-tie reward).
+    from sidequest.server.dispatch.fate_conflict import _resolve_attack
+
+    snap, encounter = parked_conflict_filled(
+        defender="Rux", attacker="Bandit", attack_total=3, recorded_defense_total=3
+    )
+    commit = next(c for c in encounter.fate_commits if c.actor == "Bandit")
+    recorded = {p.defender: p for p in encounter.pending_defenses}
+    hints: list[str] = []
+
+    _resolve_attack(
+        encounter=encounter,
+        snapshot=snap,
+        ruleset=get_ruleset_module("fate"),
+        commit=commit,
+        mental=False,
+        rng=random.Random(0),
+        hints=hints,
+        recorded_defenses=recorded,
+    )
+
+    rux = snap.find_creature_core("Rux")
+    assert not any(b.checked for b in rux.fate_sheet.stress["physical"].boxes)
+    assert all(c.aspect is None for c in rux.fate_sheet.consequences)
+    assert encounter.find_actor("Rux").withdrawn is False
+    # Exact tie grants the defender exactly one Momentum boost with a free invoke.
+    momentum = [a for a in encounter.situation_aspects if "Momentum" in a.text]
+    assert len(momentum) == 1
+    assert momentum[0].kind == "boost"
+    assert momentum[0].free_invokes == 1
+
+
+def test_recorded_pc_defense_that_beats_attack_misses_with_no_harm_no_boost():
+    # AC4 (defense WINS, clean miss). Defense strictly greater than the attack →
+    # shifts < 0 → the attack MISSES: no harm, defender NOT taken out, and NO Momentum
+    # boost (the boost is the exact-tie reward only, not every successful defense).
+    from sidequest.server.dispatch.fate_conflict import _resolve_attack
+
+    snap, encounter = parked_conflict_filled(
+        defender="Rux", attacker="Bandit", attack_total=2, recorded_defense_total=4
+    )
+    commit = next(c for c in encounter.fate_commits if c.actor == "Bandit")
+    recorded = {p.defender: p for p in encounter.pending_defenses}
+    hints: list[str] = []
+
+    _resolve_attack(
+        encounter=encounter,
+        snapshot=snap,
+        ruleset=get_ruleset_module("fate"),
+        commit=commit,
+        mental=False,
+        rng=random.Random(0),
+        hints=hints,
+        recorded_defenses=recorded,
+    )
+
+    rux = snap.find_creature_core("Rux")
+    assert not any(b.checked for b in rux.fate_sheet.stress["physical"].boxes)
+    assert all(c.aspect is None for c in rux.fate_sheet.consequences)
+    assert encounter.find_actor("Rux").withdrawn is False
+    assert not any("Momentum" in a.text for a in encounter.situation_aspects)
+    # The miss is recorded as a narrator hint (mechanical truth, not improvisation).
+    assert any("missed" in h for h in hints)

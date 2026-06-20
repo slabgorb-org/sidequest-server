@@ -32,13 +32,17 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from sidequest.game.beat_filter import is_item_use_beat, is_wn_action_beat, wn_action_beat
+from sidequest.game.beat_filter import (
+    WN_ATTACK_BEAT_ID,
+    WN_TOTAL_DEFENSE_BEAT_ID,
+    is_item_use_beat,
+    is_wn_action_beat,
+    wn_action_beat,
+)
 from sidequest.game.beat_kinds import (
     ApplyResult,
-    BeatKind,
     _opposite_side_first_actor,
     apply_beat_hp_channel,
-    resolve_tier_deltas,
 )
 from sidequest.game.dice import ResolveError, generate_dice_seed, resolve_dice_with_faces
 from sidequest.game.encounter import (
@@ -1936,85 +1940,35 @@ def _emit_player_beat_resolution_close(
             )
 
 
+# WWN SRD §2.4.4 — Total Defense grants +2 Melee & Ranged AC (verbatim, never invented).
+_TOTAL_DEFENSE_AC_BONUS = 2
+
+
 def _defensive_posture_for_reprisal(
-    cdef: ConfrontationDef,
     defender_commit: WnSealedCommit | None,
-    *,
-    encounter_type: str = "?",
 ) -> tuple[str, int, bool]:
-    """Read the reprisal target's sealed beat into a defensive posture (story 106-2).
+    """Read the reprisal target's sealed WWN defensive action into an AC posture
+    (story 152-1, WWN SRD §2.4.4).
 
-    Returns ``(defender_beat_id, mitigation, prevents)``:
-    - ``defender_beat_id`` — the target's committed beat id when it is a defensive
-      beat (brace / push-to-disengage), else ``""`` (the GM-panel span label).
-    - ``mitigation`` — flat HP damage reduction from a committed **brace**, sized
-      from the brace beat's OWN authored magnitude at its commit outcome
-      (``resolve_tier_deltas`` — the same dial-drain value the brace already
-      drains from the opponent; no invented number, content-tunable per
-      "Crunch in the Genre"). 0 when not bracing or the brace failed.
-    - ``prevents`` — True only when the target committed a **push** beat (Break
-      Contact / full-defend / disengage) and it **succeeded** (Success/CritSuccess):
-      the opponent's attack does not land this round (WWN-faithful disengage — no
-      opportunity attacks). A Tie/Fail does NOT prevent — it mirrors the dial
-      engine, where ``DEFAULT_DELTAS[push][Tie] == {}`` (a tied disengage resolves
-      nothing), so a half-made break must not negate the attack.
+    Returns ``(defender_beat_id, ac_bonus, shock_immune)``:
+    - ``defender_beat_id`` — the target's committed defensive action id
+      (``"total_defense"``), else ``""`` (the GM-panel span label).
+    - ``ac_bonus`` — the Melee/Ranged AC bonus the opponent's to-hit must clear:
+      ``+2`` for a committed **Total Defense** (SRD §2.4.4), else 0.
+    - ``shock_immune`` — True for Total Defense (immune to Shock until the start of
+      the defender's next turn), else False.
 
-    Bound to beat KIND, not pack strings — works for any WWN/CWN/SWN content that
-    authors a brace or push beat. ``None`` commit (legacy SWN path) → no posture.
-
-    Fails LOUD, not silent (No Silent Fallbacks): a commit naming a beat absent
-    from the cdef, or carrying an unrecognised outcome (``RollOutcome._missing_``
-    maps any bad wire value to ``Unknown`` — it does NOT raise), degrades to "no
-    defensive posture" so the opponent's attack still resolves, but emits a WARNING
-    so the dropped defense is visible in the logs and the empty ``defender_beat``
-    shows on the GM-panel span. (The player-beat APPLY path in ``wn_round`` raises
-    for the same drift because it cannot apply a phantom beat; the reprisal only
-    READS a posture, so it warns-and-continues rather than crashing combat.)
+    WWN defense is **Armor Class manipulation**, not damage mitigation: the native
+    ``brace`` flat-HP mitigation and ``break_contact`` whole-attack prevention are
+    REMOVED from the WN path (ADR-143 — "Bind the Ruleset, Don't Balance It"). Any
+    other commit (attack, run, fighting_withdrawal, item-use, or ``None`` — the
+    legacy SWN path) grants no defensive posture; the opponent's attack resolves
+    against the unmodified AC.
     """
     if defender_commit is None:
         return "", 0, False
-    # Story 106-4 Part C: an item-use commit ("Drink <potion>") is a transient
-    # beat (not on the cdef) and is NOT defensive — it offers no mitigation and
-    # does not prevent the reprisal (drinking leaves you open). Recognise it
-    # explicitly so it does not trip the content-drift WARNING below.
-    if is_item_use_beat(defender_commit.beat_id):
-        return "", 0, False
-    beat = next((b for b in cdef.beats if b.id == defender_commit.beat_id), None)
-    if beat is None:
-        logger.warning(
-            "dice.defensive_posture_unknown_beat beat_id=%r encounter=%s — sealed "
-            "commit names a beat absent from the cdef (content drift mid-round); "
-            "reprisal proceeds with NO defensive mitigation",
-            defender_commit.beat_id,
-            encounter_type,
-        )
-        return "", 0, False
-    outcome = RollOutcome(defender_commit.outcome)
-    if outcome is RollOutcome.Unknown:
-        logger.warning(
-            "dice.defensive_posture_unknown_outcome beat_id=%r outcome=%r encounter=%s "
-            "— unrecognised commit outcome (RollOutcome._missing_ → Unknown); reprisal "
-            "proceeds with NO defensive mitigation",
-            defender_commit.beat_id,
-            defender_commit.outcome,
-            encounter_type,
-        )
-        return "", 0, False
-    succeeded = outcome in (RollOutcome.Success, RollOutcome.CritSuccess)
-    if beat.kind is BeatKind.push:
-        # Break Contact / full-defend: only a SUCCESSFUL disengage prevents.
-        return beat.id, 0, succeeded
-    if beat.kind is BeatKind.brace:
-        if outcome in (RollOutcome.Fail, RollOutcome.CritFail):
-            return beat.id, 0, False
-        deltas = resolve_tier_deltas(
-            kind=BeatKind.brace,
-            base=int(getattr(beat, "base", 0) or 0),
-            outcome=outcome,
-            overrides=getattr(beat, "deltas", None),
-            target_tag=None,
-        )
-        return beat.id, abs(int(deltas.opponent)), False
+    if defender_commit.beat_id == WN_TOTAL_DEFENSE_BEAT_ID:
+        return WN_TOTAL_DEFENSE_BEAT_ID, _TOTAL_DEFENSE_AC_BONUS, True
     return "", 0, False
 
 
@@ -2031,8 +1985,13 @@ def _resolve_opponent_reprisal(
     rng: random.Random,
     attacker_name: str | None = None,
     defender_commit: WnSealedCommit | None = None,
+    source: str = "opponent_reprisal",
 ) -> list[object]:
     """Server-driven opponent attack turn (story 71-21, SWN hp_depletion combat).
+
+    ``source`` labels the attack on the GM-panel span: ``"opponent_reprisal"`` for
+    the opponent's own-turn slot attack, ``"opportunity_attack"`` for the free
+    attack a plain Run out of melee provokes (story 152-1, WWN SRD §2.4.4).
 
     The seated opponent attacks the acting player: roll d20, resolve to-hit vs the
     player's AC through ``ruleset.resolve_opponent_attack`` (the pre-existing,
@@ -2067,11 +2026,20 @@ def _resolve_opponent_reprisal(
         None,
     )
     if opponent_beat is None:
-        logger.warning(
-            "dice.opponent_reprisal_skipped reason=no_strike_beat encounter=%s",
-            encounter.encounter_type,
-        )
-        return messages
+        # Story 152-1 (ADR-143): the WN engine OWNS the action set, so under a WN
+        # binding the opponent's strike is SYNTHESIZED too — 108-3 strips the native
+        # combat beats to [] (``cdef.beats == []``), and the opponent must still
+        # attack ONCE on its slot vs the defender's AC. Mirrors the player-side
+        # ``wn_action_beat`` synthesis; the to-hit terms come from the synthesized
+        # strike and the damage from ``cdef.opponent_damage`` (resolved below).
+        if isinstance(ruleset, WithoutNumberRulesetModule):
+            opponent_beat = wn_action_beat(WN_ATTACK_BEAT_ID)
+        else:
+            logger.warning(
+                "dice.opponent_reprisal_skipped reason=no_strike_beat encounter=%s",
+                encounter.encounter_type,
+            )
+            return messages
 
     opponent_stats = cdef.opponent_ability_scores()
     if not opponent_stats:
@@ -2091,65 +2059,17 @@ def _resolve_opponent_reprisal(
         return messages
     target_ac = int(player_core.armor_class)
 
-    # Story 106-2 (Option A): the reprisal reads the target's sealed defensive
-    # beat. A committed Break Contact / full-defend (push) PREVENTS the hit this
-    # round; a committed Brace supplies flat damage mitigation to the strike
-    # below. The defensive choice changes the enemy's roll — and the span proves
-    # it (the GM-panel lie detector; "you brace and it glances off" must be
-    # mechanically backed).
-    defender_beat_id, defense_mitigation, defense_prevents = _defensive_posture_for_reprisal(
-        cdef, defender_commit, encounter_type=encounter.encounter_type
+    # Story 152-1 (ADR-143, WWN SRD §2.4.4): the reprisal reads the target's sealed
+    # WWN defensive action. A committed Total Defense raises the AC the opponent's
+    # to-hit must clear (+2) and grants Shock immunity — WWN defense is Armor Class,
+    # so a connecting hit still deals FULL damage (no flat mitigation) and a defense
+    # never PREVENTS the whole attack (the native brace/break_contact scaffolding is
+    # REMOVED — "Bind the Ruleset, Don't Balance It"). The span proves the defense
+    # fired (GM-panel lie detector; the boosted AC + ac_delta are mechanically backed).
+    defender_beat_id, defense_ac_bonus, defense_shock_immune = _defensive_posture_for_reprisal(
+        defender_commit
     )
-
-    if defense_prevents:
-        # Full-defend / disengage: no to-hit, no damage this round. Emit the
-        # lie-detector span (hit=False, defender_beat set) so the GM panel sees
-        # the prevented attack, anchor the mechanical truth for the narrator, and
-        # INFO-log for text-log forensics (parity with the hit/miss lines).
-        with encounter_opponent_attack_resolved_span(
-            encounter_type=encounter.encounter_type,
-            attacker=opponent_name,
-            target=player_name,
-            d20=0,
-            modifier=0,
-            attack_total=0,
-            target_ac=target_ac,
-            hit=False,
-            defender_beat=defender_beat_id,
-            defense_mitigation=defense_mitigation,
-            defense_prevented=True,
-        ):
-            pass
-        _watcher_publish(
-            "state_transition",
-            {
-                "field": "encounter",
-                "op": "opponent_attack_prevented",
-                "attacker": opponent_name,
-                "target": player_name,
-                "defender_beat": defender_beat_id,
-                "source": "opponent_reprisal",
-            },
-            component="encounter",
-        )
-        logger.info(
-            "dice.opponent_reprisal_prevented attacker=%s target=%s defender_beat=%s "
-            "hp_unchanged=%s/%s",
-            opponent_name,
-            player_name,
-            defender_beat_id,
-            player_core.hp.current,
-            player_core.hp.max,
-        )
-        snapshot.next_turn_directives.append(
-            f"MECHANICAL TRUTH (weave into the narration): {player_name} committed "
-            f"to a full defense ({defender_beat_id}); {opponent_name}'s attack did "
-            f"NOT land this round — no damage, {player_name} remains at "
-            f"{player_core.hp.current}/{player_core.hp.max} HP. Narrate the defense "
-            "turning the attack aside; do NOT narrate the blow connecting or invent "
-            "any damage."
-        )
-        return messages
+    target_ac += defense_ac_bonus
 
     d20 = rng.randint(1, 20)
     outcome = ruleset.resolve_opponent_attack(
@@ -2161,10 +2081,11 @@ def _resolve_opponent_reprisal(
         d20=d20,
     )
 
-    # Lie-detector: the to-hit decision, every attempt (hit or miss). The
-    # defensive fields (story 106-2) carry the target's committed defensive beat
-    # and the mitigation magnitude so a reviewer can confirm in OTEL that a Brace
-    # actually reduced the enemy's damage.
+    # Lie-detector: the to-hit decision, every attempt (hit or miss). The defensive
+    # fields (story 152-1) carry the target's committed WWN action and the AC delta
+    # applied (``ac_delta`` — +2 under Total Defense) so a reviewer can confirm in
+    # OTEL that the defense raised the AC the enemy's roll had to clear. ``source``
+    # distinguishes the own-turn slot attack from a free opportunity attack on a flee.
     with encounter_opponent_attack_resolved_span(
         encounter_type=encounter.encounter_type,
         attacker=opponent_name,
@@ -2175,7 +2096,8 @@ def _resolve_opponent_reprisal(
         target_ac=outcome.target_ac,
         hit=outcome.hit,
         defender_beat=defender_beat_id,
-        defense_mitigation=defense_mitigation,
+        ac_delta=defense_ac_bonus,
+        source=source,
     ):
         pass
     _watcher_publish(
@@ -2192,8 +2114,8 @@ def _resolve_opponent_reprisal(
             "target_ac": outcome.target_ac,
             "hit": outcome.hit,
             "defender_beat": defender_beat_id,
-            "defense_mitigation": defense_mitigation,
-            "source": "opponent_reprisal",
+            "ac_delta": defense_ac_bonus,
+            "source": source,
         },
         component="encounter",
     )
@@ -2239,13 +2161,17 @@ def _resolve_opponent_reprisal(
             pack=pack,
             world_slug=snapshot.world_slug,
         )
+        # Story 152-1 (WWN SRD §2.4.4): Total Defense grants Shock immunity — the
+        # guaranteed-graze chip is suppressed ENTIRELY, not merely dodged by the +2
+        # AC (the weapon's shock_ac ceiling can exceed even the boosted AC, so the
+        # immunity must be explicit, not an AC side effect).
         chip = (
             ruleset.resolve_shock(
                 spec=shock_spec,
                 target_melee_ac=int(player_core.armor_class),
                 actor=opponent_name,
             )
-            if shock_spec is not None
+            if (shock_spec is not None and not defense_shock_immune)
             else 0
         )
         if chip <= 0:
@@ -2381,17 +2307,17 @@ def _resolve_opponent_reprisal(
     )
     dmg_total = dmg_resolved.total
 
-    # SWN damage is gated by AC (the to-hit roll), not further reduced by armor.
-    # Story 106-2 (Option A): a committed **Brace** supplies flat HP mitigation
-    # here (``defense_mitigation``, sized from the brace beat's own authored
-    # magnitude) — the brace finally "mitigates incoming HP damage this round"
-    # the BeatDef always promised. 0 for a non-bracing target (parity with the
-    # player-side strike/shock channel).
+    # WWN damage is gated by AC (the to-hit roll), not reduced after the fact.
+    # Story 152-1 (ADR-143): WWN defense is Armor Class — a Total Defense that fails
+    # to make the attack MISS (the d20 cleared even the +2 AC) takes the FULL weapon
+    # damage; there is NO flat post-hit mitigation (the native ``brace`` reduction is
+    # removed — "Bind the Ruleset, Don't Balance It"). ``target_mitigation`` stays 0,
+    # in parity with the player-side strike channel.
     applied_damage = apply_beat_hp_channel(
         target=player_core,
         channel="strike",
         damage_total=dmg_total,
-        target_mitigation=defense_mitigation,
+        target_mitigation=0,
         source_beat_id=f"{opponent_beat.id}:opponent_attack",
     )
     # Text-log forensics line (sq-playtest 2026-06-07 silent death-spiral): the
@@ -2401,44 +2327,25 @@ def _resolve_opponent_reprisal(
     # Brace's mitigation), not the raw roll — the log must not overstate the hit.
     logger.info(
         "dice.opponent_reprisal_hit attacker=%s target=%s beat=%s damage=%s "
-        "rolled=%s mitigation=%s hp_after=%s/%s",
+        "rolled=%s hp_after=%s/%s",
         opponent_name,
         player_name,
         opponent_beat.id,
         applied_damage,
         dmg_total,
-        defense_mitigation,
         player_core.hp.current,
         player_core.hp.max,
     )
     # The narrator never sees server-rolled reprisal damage (the dice messages
     # go to the table, not the prompt) — without this directive the prose
     # narrates around a hit the engine already applied, and state/story diverge
-    # (SOUL: mechanical state must back the story; sq-playtest 2026-06-07). When a
-    # Brace mitigated, anchor the NET damage and name the brace so the prose can
-    # honestly narrate the defense softening the blow.
-    if applied_damage == 0 and defense_mitigation > 0:
-        # The Brace fully absorbed the blow: 0 HP lost. Commanding "narrate the
-        # hit landing" here would be a lie (no damage). Direct the prose to a
-        # block/deflection so it matches the mechanical truth.
-        snapshot.next_turn_directives.append(
-            f"MECHANICAL TRUTH (weave into the narration): {opponent_name}'s "
-            f"{opponent_beat.label} connected but {player_name}'s Brace absorbed the "
-            f"full {dmg_total} damage — NO HP was lost; {player_name} remains at "
-            f"{player_core.hp.current}/{player_core.hp.max} HP. Narrate the brace "
-            "turning the blow, NOT a wounding hit; do NOT invent damage."
-        )
-    else:
-        _brace_note = (
-            f" (a Brace absorbed {defense_mitigation} of {dmg_total})" if defense_mitigation else ""
-        )
-        snapshot.next_turn_directives.append(
-            f"MECHANICAL TRUTH (weave into the narration): {opponent_name}'s "
-            f"{opponent_beat.label} struck {player_name} for {applied_damage} damage"
-            f"{_brace_note} — "
-            f"{player_name} is now at {player_core.hp.current}/{player_core.hp.max} HP. "
-            "Narrate the hit landing; do not soften or omit it."
-        )
+    # (SOUL: mechanical state must back the story; sq-playtest 2026-06-07).
+    snapshot.next_turn_directives.append(
+        f"MECHANICAL TRUTH (weave into the narration): {opponent_name}'s "
+        f"{opponent_beat.label} struck {player_name} for {applied_damage} damage — "
+        f"{player_name} is now at {player_core.hp.current}/{player_core.hp.max} HP. "
+        "Narrate the hit landing; do not soften or omit it."
+    )
     _watcher_publish(
         "state_transition",
         {

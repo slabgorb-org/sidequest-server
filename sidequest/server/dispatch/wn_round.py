@@ -29,7 +29,16 @@ import logging
 import random
 from dataclasses import dataclass
 
-from sidequest.game.beat_filter import is_item_use_beat, is_wn_action_beat, wn_action_beat
+from sidequest.game.beat_filter import (
+    WN_FIGHTING_WITHDRAWAL_BEAT_ID,
+    WN_RUN_BEAT_ID,
+    WN_TOTAL_DEFENSE_BEAT_ID,
+    is_item_use_beat,
+    is_wn_action_beat,
+    is_wn_flee_action,
+    is_wn_nonoffensive_action,
+    wn_action_beat,
+)
 from sidequest.game.beat_kinds import _opposite_side_first_actor
 from sidequest.game.encounter import EncounterActor, StructuredEncounter, WnSealedCommit
 from sidequest.game.ruleset.base import RulesetModule
@@ -372,6 +381,61 @@ def run_wn_round(
             )
             continue
 
+        # Story 152-1 (ADR-143, WWN SRD §2.4.4): the WWN non-offensive actions —
+        # Total Defense (an AC posture read at the OPPONENT's slot, not here),
+        # Fighting Withdrawal (a safe disengage), and Run (a flee that provokes a
+        # free opportunity attack from each adjacent opponent). None resolves an
+        # offensive strike on the actor's own slot, so they are handled BEFORE the
+        # strike-resolution path (mirrors the item-use intercept above).
+        if isinstance(ruleset, WithoutNumberRulesetModule) and is_wn_nonoffensive_action(
+            commit.beat_id
+        ):
+            if commit.beat_id == WN_RUN_BEAT_ID:
+                # A plain Run out of melee provokes ONE free attack from each seated,
+                # live opponent — the fleer leaves themselves open (SRD §2.4.4). The
+                # free attack is tagged ``source="opportunity_attack"`` so the GM
+                # panel distinguishes it from the opponent's own-turn slot attack.
+                for opp in encounter.actors:
+                    if opp.side != "opponent" or opp.withdrawn:
+                        continue
+                    opp_core = snapshot.find_creature_core(opp.name)
+                    if opp_core is not None and opp_core.hp.current <= 0:
+                        continue
+                    messages.extend(
+                        _resolve_opponent_reprisal(
+                            encounter=encounter,
+                            cdef=cdef,
+                            ruleset=ruleset,
+                            pack=pack,
+                            snapshot=snapshot,
+                            player_name=token,
+                            session_id=session_id,
+                            round_number=round_number,
+                            rng=rng,
+                            attacker_name=opp.name,
+                            defender_commit=commit,
+                            source="opportunity_attack",
+                        )
+                    )
+            # Run and Fighting Withdrawal both disengage the actor from melee; Total
+            # Defense holds position (no withdrawal).
+            if is_wn_flee_action(commit.beat_id):
+                enc_actor.withdrawn = True
+            encounter.narrator_hints.append(_wn_nonoffensive_narrator_hint(token, commit.beat_id))
+            _watcher_publish(
+                "state_transition",
+                {
+                    "field": "encounter",
+                    "op": "wn_nonoffensive_action",
+                    "actor": token,
+                    "beat_id": commit.beat_id,
+                    "withdrawn": is_wn_flee_action(commit.beat_id),
+                    "source": "wn_round",
+                },
+                component="encounter",
+            )
+            continue
+
         # Story 108-8 (ADR-143): the sealed-round twin of dice.py's intercept —
         # under a WN binding a core WN action (attack) is synthesized, not looked up
         # in cdef.beats (108-3 strips WWN combat beats to []). Without this the
@@ -447,6 +511,29 @@ def run_wn_round(
         component="encounter",
     )
     return WnRoundResult(messages=messages, resolution_order=resolution_order)
+
+
+def _wn_nonoffensive_narrator_hint(actor_name: str, beat_id: str) -> str:
+    """The MECHANICAL-TRUTH narrator hint for a WWN non-offensive action (story
+    152-1) so the prose describes the real defense/disengage, not improv."""
+    if beat_id == WN_TOTAL_DEFENSE_BEAT_ID:
+        return (
+            f"TOTAL DEFENSE: {actor_name} gave up their attack to go fully on the "
+            "defensive — +2 Melee & Ranged AC and immune to Shock until their next "
+            "turn (WWN SRD 2.4.4). Narrate the guarded stance; the bonus already "
+            "applied mechanically."
+        )
+    if beat_id == WN_FIGHTING_WITHDRAWAL_BEAT_ID:
+        return (
+            f"FIGHTING WITHDRAWAL: {actor_name} carefully disengaged from melee and "
+            "moved clear WITHOUT provoking a free attack (WWN SRD 2.4.4). Narrate the "
+            "controlled retreat; no opportunity attack was provoked."
+        )
+    return (
+        f"RUN: {actor_name} broke and fled from melee, provoking a free attack from "
+        "each adjacent enemy as they ran (WWN SRD 2.4.4). Narrate the flight and any "
+        "parting blow the dice already resolved."
+    )
 
 
 def _first_live_actor(

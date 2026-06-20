@@ -123,36 +123,101 @@ def item_use_beats(inventory_items: list[dict[str, Any]] | None) -> list[BeatDef
 # (tests/fixtures/packs/test_genre). The isinstance gate at the call site leaves
 # native ids on the authored-beat lookup, so this only fires under a WN binding.
 WN_ATTACK_BEAT_ID = "attack"
-_WN_ACTION_BEAT_IDS = frozenset({WN_ATTACK_BEAT_ID})
+
+# Story 152-1 (ADR-143, WWN SRD §2.4.4) — the WWN defensive / move actions. WWN
+# defense is Armor Class, NOT the native brace/break_contact reprisal-mitigation
+# model (which is removed from the WN path — SOUL "Bind the Ruleset, Don't Balance
+# It"). Total Defense is an Instant Action (+2 Melee/Ranged AC + Shock immunity);
+# Fighting Withdrawal is a safe Main-Action disengage; Run is the plain flee that
+# provokes a free attack. All three resolve NO offensive strike on the actor's own
+# slot — their effect is read at the opponent's slot (Total Defense → AC posture,
+# ``dice._defensive_posture_for_reprisal``) or at the actor's own slot as a
+# disengage (``wn_round`` flee intercept).
+WN_TOTAL_DEFENSE_BEAT_ID = "total_defense"
+WN_FIGHTING_WITHDRAWAL_BEAT_ID = "fighting_withdrawal"
+WN_RUN_BEAT_ID = "run"
+_WN_ACTION_BEAT_IDS = frozenset(
+    {
+        WN_ATTACK_BEAT_ID,
+        WN_TOTAL_DEFENSE_BEAT_ID,
+        WN_FIGHTING_WITHDRAWAL_BEAT_ID,
+        WN_RUN_BEAT_ID,
+    }
+)
+# The disengage (move) actions that withdraw the actor from melee: ``run`` provokes
+# one free opportunity attack from each adjacent opponent; ``fighting_withdrawal``
+# does not (SRD §2.4.4).
+_WN_FLEE_ACTION_IDS = frozenset({WN_FIGHTING_WITHDRAWAL_BEAT_ID, WN_RUN_BEAT_ID})
+# Actions that resolve no offensive strike on the actor's own slot — handled by the
+# wn_round flee/posture intercept BEFORE the strike-resolution path.
+_WN_NONOFFENSIVE_ACTION_IDS = frozenset(
+    {WN_TOTAL_DEFENSE_BEAT_ID, WN_FIGHTING_WITHDRAWAL_BEAT_ID, WN_RUN_BEAT_ID}
+)
 
 
 def is_wn_action_beat(beat_id: str) -> bool:
-    """True iff ``beat_id`` is a synthesized Without-Number action beat (story 108-8).
+    """True iff ``beat_id`` is a synthesized Without-Number action beat (story 108-8 /
+    152-1: attack + the defensive/move actions).
 
     A pure id check — the WN binding gate lives at the dispatch call site, mirroring
     ``is_item_use_beat``. Native packs route the same id through the cdef lookup."""
     return beat_id in _WN_ACTION_BEAT_IDS
 
 
-def wn_action_beat(beat_id: str) -> BeatDef:
-    """The transient strike ``BeatDef`` for a WN action id (story 108-8).
+def is_wn_flee_action(beat_id: str) -> bool:
+    """True iff ``beat_id`` is a WWN disengage/move action (``run`` /
+    ``fighting_withdrawal``) — story 152-1, WWN SRD §2.4.4."""
+    return beat_id in _WN_FLEE_ACTION_IDS
 
-    A plain STR strike carrying no authored damage: the weapon dice resolve from the
-    actor's inventory (``damage_roll`` priority 2/3) or the genre unarmed floor —
-    the same source the now-stripped native combat beat drew from. ``damage_channel``
-    is ``strike`` so ``dice._resolve_wn_committed_action`` lands the weapon dice on
-    the target's ablative HP (ADR-114) with the native scaffolding cut (ADR-143).
-    ``attack_bonus``/``combat_skill`` default to 0 — a synthesized action carries no
-    class to-hit progression, matching the ``wn_attack`` narrator tool."""
+
+def is_wn_nonoffensive_action(beat_id: str) -> bool:
+    """True iff ``beat_id`` is a WWN action that resolves no offensive strike on the
+    actor's own slot (Total Defense / Fighting Withdrawal / Run) — story 152-1."""
+    return beat_id in _WN_NONOFFENSIVE_ACTION_IDS
+
+
+def wn_action_beat(beat_id: str) -> BeatDef:
+    """The transient ``BeatDef`` for a WN action id (story 108-8 / 152-1).
+
+    ``attack`` → a plain STR strike carrying no authored damage: the weapon dice
+    resolve from the actor's inventory (``damage_roll`` priority 2/3) or the genre
+    unarmed floor — the same source the now-stripped native combat beat drew from.
+    ``damage_channel`` is ``strike`` so ``dice._resolve_wn_committed_action`` lands
+    the weapon dice on the target's ablative HP (ADR-114) with the native scaffolding
+    cut (ADR-143). ``attack_bonus``/``combat_skill`` default to 0 — a synthesized
+    action carries no class to-hit progression, matching the ``wn_attack`` tool.
+
+    The defensive / move actions (Total Defense / Fighting Withdrawal / Run) carry
+    NO ``strike`` channel — they deal no offensive damage on the actor's own slot
+    (their effect is the AC posture or the disengage). A DEX ``stat_check`` keeps the
+    pre-seal throw well-formed; the throw outcome does not gate the action's effect.
+    """
     if beat_id not in _WN_ACTION_BEAT_IDS:
         raise PackError(f"{beat_id!r} is not a synthesizable WN action beat")
+    if beat_id == WN_ATTACK_BEAT_ID:
+        return BeatDef(
+            id=beat_id,
+            label="Attack",
+            kind=BeatKind.strike,
+            base=0,
+            stat_check="STR",
+            damage_channel=DamageChannel.strike,
+        )
+    _labels = {
+        WN_TOTAL_DEFENSE_BEAT_ID: "Total Defense",
+        WN_FIGHTING_WITHDRAWAL_BEAT_ID: "Fighting Withdrawal",
+        WN_RUN_BEAT_ID: "Run",
+    }
+    # ``push`` ("pursue a discrete narrative goal — flee, disengage, hold") carries
+    # no ``target_tag`` requirement and no ``strike`` damage channel. The kind is
+    # inert on the WWN path: run/fighting_withdrawal are intercepted before the
+    # strike resolver and total_defense's effect is the AC posture, not the kind.
     return BeatDef(
         id=beat_id,
-        label="Attack",
-        kind=BeatKind.strike,
+        label=_labels[beat_id],
+        kind=BeatKind.push,
         base=0,
-        stat_check="STR",
-        damage_channel=DamageChannel.strike,
+        stat_check="DEX",
     )
 
 

@@ -57,15 +57,18 @@ def test_classes_yaml_absent_yields_empty_list(tmp_path: Path) -> None:
 def test_classes_yaml_loads_entries(tmp_path: Path) -> None:
     """classes.yaml is parsed and all entries become ClassDef instances.
 
-    WWN port (2026-06-12): the cloned caverns rules.yaml declares
-    allowed_classes [Warrior, Expert, Mage] and a beat_selection combat pool
-    (strike/cast_spell/brace/committed_blow/break_contact/...). The synthetic
-    classes.yaml must therefore declare exactly those three Callings with
-    encounter_beat_choices drawn from the real pool — _validate_class_filter_refs
-    (Task 5) rejects undeclared allowed_classes and dangling beat IDs. cast_spell
-    is offered only via the rules.yaml class_filter [Mage], never as a generic
-    beat. saving_throws are still required by _validate_saving_throws_refs
-    (Task 8) because the pack ships a wwn spell catalog.
+    WWN port: the cloned caverns rules.yaml declares allowed_classes
+    [Warrior, Expert, Mage]. Dungeon Combat is de-nativized under the WWN binding
+    (108-3, ADR-143) — its native beats (strike/brace/break_contact/...) were
+    STRIPPED from the combat pool and the WN round supplies the action set, so a
+    WN class must NOT declare combat beats in encounter_beat_choices.
+    _validate_class_filter_refs (Task 5) rejects undeclared allowed_classes and
+    dangling beat IDs, but EXEMPTS an empty encounter_beat_choices for a WN class
+    (story 108-7) — the engine owns the combat action set. So the synthetic
+    Callings declare an empty pool (mirroring the de-nativized real content, whose
+    classes carry only chase/negotiation dial beats). saving_throws are still
+    required by _validate_saving_throws_refs (Task 8) because the pack ships a wwn
+    spell catalog.
     """
     pack_dir = _clone_pack(_CAVERNS_PACK_DIR, tmp_path / "caverns_with_classes")
     saves_block = (
@@ -84,7 +87,7 @@ def test_classes_yaml_loads_entries(tmp_path: Path) -> None:
         "  prime_requisite: STR\n"
         "  minimum_score: 9\n"
         "  kit_table: warrior_kit\n"
-        "  encounter_beat_choices: [strike, brace, break_contact]\n"
+        "  encounter_beat_choices: []\n"
         + saves_block
         + "- id: expert\n"
         "  display_name: Expert\n"
@@ -93,14 +96,14 @@ def test_classes_yaml_loads_entries(tmp_path: Path) -> None:
         "  prime_requisite: DEX\n"
         "  minimum_score: 9\n"
         "  kit_table: expert_kit\n"
-        "  encounter_beat_choices: [strike, brace, break_contact]\n" + saves_block + "- id: mage\n"
+        "  encounter_beat_choices: []\n" + saves_block + "- id: mage\n"
         "  display_name: Mage\n"
         "  rpg_role: control\n"
         "  jungian_default: magician\n"
         "  prime_requisite: INT\n"
         "  minimum_score: 9\n"
         "  kit_table: mage_kit\n"
-        "  encounter_beat_choices: [strike, brace, break_contact]\n" + saves_block,
+        "  encounter_beat_choices: []\n" + saves_block,
         encoding="utf-8",
     )
     pack = load_genre_pack(pack_dir)

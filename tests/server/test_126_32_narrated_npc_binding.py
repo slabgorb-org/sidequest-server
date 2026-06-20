@@ -1,50 +1,37 @@
-"""RED — Story 126-32: bind narrated NPCs to seeded/registry entities.
+"""Story 126-32: bind narrated NPCs to existing identities, not fabricated ones.
 
-One root seam, three manifestations (epic-126 NPC-binding cluster). The root
-cause is a TIMING bug in ``narration_apply.py``: a narrator-named NPC is minted
-into ``snapshot.npc_pool`` but is NOT promoted to ``snapshot.npcs`` before the
-downstream mint/seating logic runs. The opponent-seater and the canonical-figure
-binder both read ``snapshot.npcs`` only, so the narrated identity is invisible to
-them and a hollow duplicate is fabricated instead. The fix promotes narrated NPCs
-to ``snapshot.npcs`` *before* mint/seating.
+Two manifestations of the NPC-binding cluster (epic 126):
 
-The three manifestations these tests pin:
+(a) **Narrated antagonist -> seated Fate opponent.** ``_seed_fate_opponents``
+    (`sidequest/server/dispatch/encounter_lifecycle.py`) builds its opponent map
+    from ``snapshot.npcs`` only. But confrontation seating runs in the
+    pre-narrator dispatch bank (ADR-113), BEFORE that turn's post-narrator
+    ``_apply_npc_mentions`` mint — so a narrated antagonist established on a prior
+    turn lives in ``snapshot.npc_pool``, invisible to the seater. It fabricated a
+    phantom ``Npc`` (``description="Fate conflict opponent"``, no pronouns,
+    ``created=True``) beside the cattle-baron the player had been talking to. The
+    fix consults the pool and promotes the narrated identity (``created=False``).
 
-(a) **Narrated antagonist -> seated Fate opponent identity by exact name.**
-    ``dust_and_lead`` seated a phantom "Henry Shaw" CreatureCore
-    (``description="Fate conflict opponent"``, no pronouns/appearance) beside the
-    narrator-established antagonist already sitting in the pool. The Defect-A
-    seater fix shipped (the bestiary "Western Diamondback" is no longer
-    conscripted for a non-combat Fate standoff); the *identity-binding residual*
-    is open — the human stub the seater mints must carry the narrated identity,
-    not a hollow phantom.
+(b) **Active-conversation person -> existing identity (recency scene-guard).**
+    The oz repro (Keith, 2026-06-20): while the player was talking to "The Good
+    Witch of the North", the narrator's re-reference missed the name-only Steps
+    1/2 (a title is not the personal name the namegen would mint) and the Step-3
+    person-mint culture-routed a STRANGER ("Amaranth Warmacre") standing next to
+    her. There is a creature scene-guard (`_reconcile_ongoing_threat`: "one
+    active creature in scene") but no person equivalent. The fix adds one: a
+    non-new (``is_new=False``) person reference in a scene with a recently-engaged
+    person reconciles to that person instead of minting. A genuine new arrival
+    (``is_new=True``) still mints (Living World).
 
-(b) **Described canonical figure -> seeded registry NPC.** A narrator reference
-    to a runtime-wired authored figure (oz "The Good Witch of the North",
-    she/her, disposition 25 — ADR-059 npcs.yaml roster) must reconcile to that
-    registry entity and carry its pronouns/disposition, not mint a hollow
-    culture-routed duplicate ("Amaranth Warmacre").
-
-(c) **Defect B namegen — shuffle_fallback culture/region reroute.** A
-    narrator-supplied proper name in the Anglo-settler ``dust_and_lead`` frontier
-    must NOT be blind-shuffled across to the Ndé (Apache) people-group. The
-    ``npc.invented_name_routed`` span records ``resolution_strategy`` — a
-    narrator-named NPC routed by the blind ``shuffle_fallback`` to a culturally
-    incongruous people-group is the defect; the mint must be keyed to the current
-    region instead.
+Manifestation (c) (namegen region->culture routing) was SPLIT to a follow-up
+story by Keith on 2026-06-20 — it needs a region->culture content mapping that
+does not exist today. Its RED-phase contract is preserved in git (commit
+64c60385).
 
 Test doctrine (mirrors test_npc_ongoing_threat_reconciliation.py): assert
-BEHAVIOR (the snapshot carries the narrated identity; no hollow duplicate) plus
-the OTEL CONTRACT, driving the REAL production seams. Mechanism is Dev's choice —
-these do not assert *which* promotion lever is used. Spans are referenced by
-string literal so RED failures are behavioral, never a collection-time
-ImportError.
-
-DESIGN NOTE (see session 126-32 Delivery Findings, blocking): manifestations (b)
-and (c) carry open design questions — the "seeded registry" lookup trigger (b)
-and the region->culture mapping (c, which has no content representation today).
-These tests pin the OBSERVABLE contract; the resolution mechanism is gated on the
-findings.
+BEHAVIOR (existing identity kept; no fabricated stranger) plus the OTEL CONTRACT,
+driving the REAL production seams. Spans are referenced by string literal so a
+failure is behavioral, never a collection-time ImportError.
 """
 
 from __future__ import annotations
@@ -63,7 +50,6 @@ from sidequest.server.narration_apply import _apply_npc_mentions
 CONTENT_GENRE_PACKS = Path(__file__).resolve().parents[3] / "sidequest-content" / "genre_packs"
 SPAGHETTI_WESTERN_DIR = CONTENT_GENRE_PACKS / "spaghetti_western"
 
-ROUTED_SPAN = "npc.invented_name_routed"
 FATE_OPPONENT_SEEDED_SPAN = "fate.opponent.seeded"
 
 _HAS_DUST_AND_LEAD = (SPAGHETTI_WESTERN_DIR / "worlds" / "dust_and_lead" / "world.yaml").exists()
@@ -86,6 +72,7 @@ def _mention(
     appearance: str = "",
     side: str = "neutral",
     is_creature: bool = False,
+    is_new: bool = False,
 ) -> NpcMention:
     return NpcMention(
         name=name,
@@ -94,6 +81,7 @@ def _mention(
         appearance=appearance,
         side=side,
         is_creature=is_creature,
+        is_new=is_new,
     )
 
 
@@ -117,19 +105,18 @@ def test_narrated_fate_opponent_binds_identity_not_phantom(otel_capture) -> None
     """A narrator-established antagonist seated as a Fate opponent must keep its
     identity, not be replaced by a hollow phantom.
 
-    Drives the REAL narration->seat ordering: the narrator names "Henry Shaw"
-    (side="opponent", he/him, with appearance) which lands in the cast; then the
-    Fate conflict seats an opponent of that exact name. Today the narrated
-    identity sits in ``snapshot.npc_pool`` while ``_seed_fate_opponents`` reads
-    only ``snapshot.npcs`` — so it CREATES a phantom
-    (``description="Fate conflict opponent"``, no pronouns, ``created=True``) and
-    the cattle-baron the player has been talking to is discarded. After the
-    promotion fix the seater BINDS to the established identity
+    Drives the production ordering: a prior turn's narration named "Henry Shaw"
+    (side="opponent", he/him, with appearance) which lives in
+    ``snapshot.npc_pool``; then the Fate conflict seats an opponent of that exact
+    name. Today the narrated identity sits in the pool while
+    ``_seed_fate_opponents`` reads only ``snapshot.npcs`` — so it CREATES a
+    phantom (``description="Fate conflict opponent"``, no pronouns,
+    ``created=True``) and the cattle-baron the player has been talking to is
+    discarded. The fix consults the pool and BINDS the established identity
     (``created=False``), carrying the narrated pronouns/appearance.
 
     No pack is threaded into ``_apply_npc_mentions`` so the raw narrator name is
-    preserved (this isolates the seating residual from the namegen reroute that
-    manifestation (c) covers).
+    preserved (the namegen reroute is split out to a follow-up story).
     """
     from sidequest.genre import load_genre_pack
 
@@ -143,7 +130,7 @@ def test_narrated_fate_opponent_binds_identity_not_phantom(otel_capture) -> None
 
     narrated_appearance = "a weathered cattle baron in a black frock coat"
     # The narrator establishes the antagonist as a named, gendered, described
-    # person and marks them the party's opponent.
+    # person and marks them the party's opponent (lands in the pool).
     _apply_npc_mentions(
         snapshot=snapshot,
         mentions=[
@@ -207,31 +194,54 @@ def test_narrated_fate_opponent_binds_identity_not_phantom(otel_capture) -> None
     )
 
 
-# ===========================================================================
-# Manifestation (b) — canonical figure binds to seeded registry NPC
-# ===========================================================================
+@requires_content
+def test_novel_fate_opponent_with_no_pool_member_still_seeds_phantom(otel_capture) -> None:
+    """Guard the unchanged path: a truly-novel opponent with NO narrated pool
+    identity still gets a seeded ephemeral stub (``created=True``).
 
-
-def test_canonical_figure_binds_to_registry_not_hollow_mint(otel_capture) -> None:
-    """A narrator reference to a runtime-wired authored figure must reconcile to
-    the seeded registry NPC, not mint a hollow culture-routed duplicate.
-
-    Models the oz repro: "The Good Witch of the North" is a runtime-wired roster
-    NPC (ADR-059 npcs.yaml: she/her, disposition 25). The narrator re-introduces
-    the canonical figure ("the Good Witch of the North") on a later turn. Today
-    the bare-string reference misses the name-only Step 1/2 lookups and falls to
-    the Step-3 person-mint, which culture-routes a phantom name ("Amaranth
-    Warmacre") — the player sees a stranger where the kindly Witch should stand,
-    and her authored disposition/pronouns are lost.
-
-    The binder must collapse the reference onto the registry identity and carry
-    its pronouns + disposition. Mechanism (epithet/canonical reconciliation vs
-    registry promotion) is Dev's choice; this asserts only the outcome.
-
-    DESIGN-GATED (session finding, blocking): the exact "seeded registry" lookup
-    trigger is unconfirmed against the playtest repro. This pins the contract.
+    The 126-32 fix only redirects the seater when a matching pool member exists;
+    a name the narrator never established must still seat a loud, ephemeral Fate
+    stub (No Silent Fallbacks — the conflict engine needs an Other with a sheet).
     """
-    registry_witch = Npc(
+    from sidequest.genre import load_genre_pack
+
+    pack = load_genre_pack(SPAGHETTI_WESTERN_DIR)
+    snapshot = GameSnapshot(genre_slug="spaghetti_western", world_slug="dust_and_lead")
+    snapshot.character_locations["Rux"] = "Sangre del Paso"
+
+    _seed_fate_opponents(
+        snapshot=snapshot,
+        actors=[EncounterActor(name="Nobody In Particular", role="foe", side="opponent")],
+        pack=pack,
+        turn=1,
+        acting_character_name="Rux",
+    )
+
+    seated = _npcs_named(snapshot, "Nobody In Particular")
+    assert len(seated) == 1
+    assert seated[0].core.fate_sheet is not None
+    assert seated[0].ephemeral is True, (
+        "a fabricated stub must be ephemeral (reaped with the encounter)"
+    )
+
+    seeded_spans = _attrs_for(otel_capture, FATE_OPPONENT_SEEDED_SPAN)
+    novel = [s for s in seeded_spans if s.get("opponent") == "Nobody In Particular"]
+    assert novel and novel[-1].get("created") is True, (
+        "a truly-novel opponent with no pool identity must still seed a phantom (created=True)"
+    )
+
+
+# ===========================================================================
+# Manifestation (b) — active-conversation person scene-guard
+# ===========================================================================
+
+PERSON_RECONCILED_SPAN = "npc.person_reconciled"
+
+
+def _active_witch() -> Npc:
+    """The kindly Good Witch of the North, present in the player's scene and
+    engaged on a prior turn (the active conversation partner)."""
+    return Npc(
         core=CreatureCore(
             name="The Good Witch of the North",
             description="A little old woman, kindly and slightly muddled.",
@@ -240,112 +250,72 @@ def test_canonical_figure_binds_to_registry_not_hollow_mint(otel_capture) -> Non
         pronouns="she/her",
         appearance="a little old woman in a white gown hung with tiny bells",
         disposition=25,
+        last_seen_location="Munchkin Country",
+        last_seen_turn=3,
     )
-    snapshot = GameSnapshot(genre_slug="wry_whimsy", world_slug="oz", npcs=[registry_witch])
 
-    # The narrator names the canonical figure by a near-canonical reference (no
-    # leading article) — a routine narrator variance the name-only lookups miss.
+
+def test_active_conversation_person_reconciles_not_stranger_mint(otel_capture) -> None:
+    """A non-new person reference, in a scene with one recently-engaged person,
+    must reconcile to that person — not mint a stranger beside them.
+
+    The oz repro: talking to "The Good Witch of the North", the narrator's
+    re-reference (a name/title that misses the exact name-only Steps 1/2) today
+    falls to the Step-3 person-mint and culture-routes "Amaranth Warmacre", a
+    stranger conjured into the room. The recency scene-guard must collapse the
+    reference onto the active conversation partner instead.
+    """
+    witch = _active_witch()
+    snapshot = GameSnapshot(genre_slug="wry_whimsy", world_slug="oz", npcs=[witch])
+    snapshot.character_locations["Dorothy"] = "Munchkin Country"
+
+    # The narrator re-refers to the witch under a name that misses Steps 1/2 and
+    # is NOT flagged as a new arrival. No pack threaded, so absent the fix the
+    # raw string mints verbatim (the stranger) rather than culture-routing.
     _apply_npc_mentions(
         snapshot=snapshot,
-        mentions=[_mention("Good Witch of the North", role="mentor", pronouns="she/her")],
+        mentions=[_mention("Locasta", role="kindly witch", is_new=False)],
         turn_num=4,
         acting_character_name="Dorothy",
     )
 
-    # No hollow duplicate may be minted: the cast still holds a SINGLE Good Witch
-    # identity and the narrator-invented pool stays empty (no "Amaranth Warmacre").
     invented = [m for m in snapshot.npc_pool if m.drawn_from == "narrator_invented"]
     assert invented == [], (
-        "the canonical figure must bind to the seeded registry NPC, not mint a "
-        f"hollow culture-routed duplicate; minted {[m.name for m in invented]!r}"
+        "a non-new reference in a one-person scene must reconcile to the active "
+        f"conversation partner, not mint a stranger; minted {[m.name for m in invented]!r}"
     )
-    witches = [n for n in snapshot.npcs if "good witch of the north" in n.core.name.casefold()]
-    assert len(witches) == 1, (
-        f"exactly one Good-Witch-of-the-North identity must exist; got {len(witches)}"
-    )
-    # Authored identity preserved through the bind.
-    assert witches[0].pronouns == "she/her"
-    assert int(witches[0].disposition) == 25, (
-        "the registry NPC's authored disposition must survive the reconciliation, "
-        f"not flatten to a fresh-mint neutral (got {int(witches[0].disposition)})"
+    persons = [n for n in snapshot.npcs if n.creature_id is None]
+    assert len(persons) == 1 and persons[0].core.name == "The Good Witch of the North", (
+        "the single scene person must survive unchanged — no phantom forked beside her"
     )
 
+    spans = _attrs_for(otel_capture, PERSON_RECONCILED_SPAN)
+    assert spans, f"a {PERSON_RECONCILED_SPAN} span must fire (GM-panel lie detector)"
+    assert spans[-1].get("reconciled_to") == "The Good Witch of the North"
+    assert spans[-1].get("signal") == "scene_guard"
 
-# ===========================================================================
-# Manifestation (c) — namegen does not blind-shuffle a name to the wrong people
-# ===========================================================================
 
-
-@requires_content
-def test_invented_name_not_shuffle_routed_to_wrong_people_group(otel_capture) -> None:
-    """A narrator-supplied proper name must not be blind-shuffled to a culturally
-    incongruous people-group.
-
-    ``dust_and_lead`` binds three cultures: Sangre Anglo (settlers/lawmen),
-    Sangre Frontera, and Ndé (Apache). The starting region (``sangre_del_paso``)
-    is Anglo-settler frontier. When the narrator names an unaffiliated stranger
-    and the route has no deterministic self-match, today's
-    ``_resolve_invented_naming_context`` blind-``random.shuffle``s the bound
-    cultures and takes the first that builds — so the same Anglo-frontier
-    stranger is rerouted to an Apache (Ndé) name. The
-    ``npc.invented_name_routed`` span records ``resolution_strategy`` and the
-    chosen ``culture``; the defect is the blind ``shuffle_fallback`` landing on a
-    people-group that does not fit the current region.
-
-    The route must be keyed to the current region instead of blind-shuffled.
-    This asserts the OBSERVABLE contract (no blind shuffle for a named stranger
-    in the Anglo region) — the region->culture mechanism is Dev's choice.
-
-    DESIGN-GATED (session finding, blocking): there is no region->culture binding
-    in the world content today, so "key the mint to the current region" requires
-    a design decision. This test pins the contract that motivates it.
+def test_genuinely_new_arrival_still_mints(otel_capture) -> None:
+    """The new-arrival guard: a mention flagged ``is_new=True`` must still mint a
+    new person even with an NPC active in scene — the narrator can introduce
+    arrivals (Living World), and the scene-guard must never silently swallow one.
     """
-    import random
+    witch = _active_witch()
+    snapshot = GameSnapshot(genre_slug="wry_whimsy", world_slug="oz", npcs=[witch])
+    snapshot.character_locations["Dorothy"] = "Munchkin Country"
 
-    from sidequest.genre import load_genre_pack
-    from sidequest.server.session_handler import _apply_narration_result_to_snapshot
-    from tests._helpers.session_room import room_for
-
-    pack = load_genre_pack(SPAGHETTI_WESTERN_DIR)
-    cultures, _ = pack.effective_cultures("dust_and_lead")
-    culture_names = {c.name for c in cultures}
-    assert "Ndé" in culture_names, (
-        "precondition: dust_and_lead must bind the Ndé culture (the wrong-people "
-        f"reroute target); bound: {sorted(culture_names)}"
+    _apply_npc_mentions(
+        snapshot=snapshot,
+        mentions=[_mention("Boq", role="munchkin farmer", pronouns="he/him", is_new=True)],
+        turn_num=4,
+        acting_character_name="Dorothy",
     )
 
-    snapshot = GameSnapshot(genre_slug="spaghetti_western", world_slug="dust_and_lead")
-    snapshot.character_locations["Rux"] = "Sangre del Paso"
-
-    # Seed RNG so the blind shuffle deterministically lands on a wrong-people
-    # routing if the route is still shuffle-based. The fix keys to the region and
-    # ignores this shuffle entirely.
-    random.seed(1)
-
-    from sidequest.agents.orchestrator import NarrationTurnResult
-
-    result = NarrationTurnResult(
-        narration="A marshal steps off the noon train into the dust.",
-        npcs_present=[_mention("Marshal Tate Buckley", role="lawman", pronouns="he/him")],
-        is_degraded=False,
+    minted = [m for m in snapshot.npc_pool if m.name == "Boq"]
+    assert len(minted) == 1, (
+        "is_new=True is the new-arrival cue — it must mint a fresh person, never "
+        "reconcile onto the active NPC"
     )
-    _apply_narration_result_to_snapshot(
-        snapshot,
-        result,
-        "player",
-        room=room_for(snapshot, slug="dust_and_lead"),
-        pack=pack,
-        world="dust_and_lead",
-        acting_character_name="Rux",
-    )
-
-    routed = _attrs_for(otel_capture, ROUTED_SPAN)
-    assert routed, (
-        "the invented-name route must fire its provenance span for a narrator-named stranger"
-    )
-    strategy = routed[-1].get("resolution_strategy")
-    assert strategy != "shuffle_fallback", (
-        "a narrator-named stranger in the Anglo-settler frontier must be routed "
-        "by a region-keyed strategy, not the blind people-group shuffle "
-        f"(got resolution_strategy={strategy!r}, culture={routed[-1].get('culture')!r})"
+    assert _attrs_for(otel_capture, PERSON_RECONCILED_SPAN) == [], (
+        "the scene-guard must not fire for a flagged new arrival"
     )

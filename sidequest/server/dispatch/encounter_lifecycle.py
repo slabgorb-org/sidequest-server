@@ -467,16 +467,45 @@ def _seed_fate_opponents(
             continue
         npc = by_name.get(actor.name)
         if npc is None:
-            core = CreatureCore(
-                name=actor.name,
-                description="Fate conflict opponent",
-                personality="Adversary",
-                inventory=Inventory(),
-                fate_sheet=module.seed_opponent_fate_sheet(rules=pack.rules),
+            # Story 126-32 (manifestation a): the narrated antagonist may have
+            # been established on a PRIOR turn and is sitting in
+            # ``snapshot.npc_pool``. Seating runs in the pre-narrator dispatch
+            # bank (ADR-113), BEFORE this turn's post-narrator
+            # ``_apply_npc_mentions`` mint — so the pool, NOT ``snapshot.npcs``,
+            # is where a prior-turn narrated opponent lives. Promote it carrying
+            # its narrated identity (pronouns / appearance / disposition) instead
+            # of fabricating a hollow phantom (``description="Fate conflict
+            # opponent"``, no pronouns) beside the cast member the player has been
+            # talking to. Creature members are skipped — a bestiary mob is the
+            # native/MM seater's job, not the Fate person-binder's.
+            pool_member = next(
+                (m for m in snapshot.npc_pool if m.name == actor.name and not m.is_creature),
+                None,
             )
-            npc = Npc(core=core, ephemeral=True)
-            snapshot.npcs.append(npc)
-            created = True
+            if pool_member is not None:
+                from sidequest.server.narration_apply import (
+                    _promote_pool_member_to_npc,
+                    _seed_invented_npc_identity,
+                )
+
+                npc = _promote_pool_member_to_npc(pool_member)
+                _seed_invented_npc_identity(
+                    npc=npc, member=pool_member, snapshot=snapshot, turn_num=turn
+                )
+                npc.core.fate_sheet = module.seed_opponent_fate_sheet(rules=pack.rules)
+                snapshot.npcs.append(npc)
+                created = False
+            else:
+                core = CreatureCore(
+                    name=actor.name,
+                    description="Fate conflict opponent",
+                    personality="Adversary",
+                    inventory=Inventory(),
+                    fate_sheet=module.seed_opponent_fate_sheet(rules=pack.rules),
+                )
+                npc = Npc(core=core, ephemeral=True)
+                snapshot.npcs.append(npc)
+                created = True
         elif npc.core.fate_sheet is None:
             npc.core.fate_sheet = module.seed_opponent_fate_sheet(rules=pack.rules)
             created = False

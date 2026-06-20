@@ -424,6 +424,25 @@ def current_session_slug() -> str | None:
     return _process_session_slug
 
 
+# Slug prefixes that mark a session as a test run (headless pytest harness,
+# tool-driven probe) rather than a player-driven game. Activity from these
+# sessions is tagged ``session_type="test"`` on the broadcast envelope so the
+# GM-panel per-session pin can filter it out of the live dashboard — 41 stale
+# ``test-*`` sessions linger under ADR-122 never-evict and would otherwise bury
+# the genuinely-driven session (story 126-34).
+_TEST_SESSION_SLUG_PREFIXES = ("test-", "tool-test")
+
+
+def is_test_session(slug: str | None) -> bool:
+    """True when ``slug`` belongs to a test run (``test-*`` / ``tool-test*``).
+
+    A loud, explicit classification — not a guess. ``None``/session-less infra
+    is NOT a test session (it's global and shown in every view)."""
+    if not slug:
+        return False
+    return slug.startswith(_TEST_SESSION_SLUG_PREFIXES)
+
+
 # Event types that are LIVE-PUSH ONLY — broadcast to the GM panel but never
 # written to turn_telemetry. These carry ephemeral UI/keystroke state with no
 # forensic or mechanical value; event-sourcing them is pure write-amplification
@@ -710,20 +729,25 @@ def publish_event(
         NULL event_seq. EXPLICIT — no connection-state sniffing.
     :param event_seq: The turn event's seq when ``tx`` is set; NULL otherwise.
     """
-    watcher_hub.publish(
-        {
-            "timestamp": datetime.now(UTC).isoformat(),
-            "component": component,
-            "event_type": event_type,
-            "severity": severity,
-            # Envelope-level partition key for the Live view (OTEL-INSPECTOR).
-            # NOT placed in ``fields`` — persistence serializes ``fields``, and
-            # the telemetry row is already session-scoped, so this stays out of
-            # the persisted payload and rides the broadcast only.
-            "session_slug": current_session_slug(),
-            "fields": fields,
-        }
-    )
+    slug = current_session_slug()
+    event: dict[str, Any] = {
+        "timestamp": datetime.now(UTC).isoformat(),
+        "component": component,
+        "event_type": event_type,
+        "severity": severity,
+        # Envelope-level partition key for the Live view (OTEL-INSPECTOR).
+        # NOT placed in ``fields`` — persistence serializes ``fields``, and
+        # the telemetry row is already session-scoped, so this stays out of
+        # the persisted payload and rides the broadcast only.
+        "session_slug": slug,
+        "fields": fields,
+    }
+    if is_test_session(slug):
+        # Mark test-run activity so the GM-panel per-session pin can filter it
+        # out of the live dashboard (story 126-34). Rides the broadcast only;
+        # like ``session_slug`` it never enters the persisted ``fields``.
+        event["session_type"] = "test"
+    watcher_hub.publish(event)
     _maybe_persist_encounter_row(event_type, fields, component)
     _persist_turn_telemetry(event_type, fields, component, tx=tx, event_seq=event_seq)
     if _watcher_as_spans_enabled():

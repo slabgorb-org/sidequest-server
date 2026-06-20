@@ -442,21 +442,21 @@ def create_rest_router() -> APIRouter:
         for save_row in save_rows:
             slug = save_row["slug"]
             # Per-slug resilience (restored in D7 review): one bad save — a
-            # session row with a mode value GameMode() rejects, or a snapshot
-            # that load() can't deserialize — must not 500 the entire State
-            # tab. Log loudly (No-Silent-Fallbacks: this is observable, not a
-            # quiet alternative path) and skip just that slug.
+            # snapshot that load() can't deserialize — must not 500 the entire
+            # State tab. Log loudly (No-Silent-Fallbacks: this is observable,
+            # not a quiet alternative path) and skip just that slug.
             try:
-                game = _pg_sessions.get_game(pool, slug=slug)
-                if game is None:
+                # Read-only projection: resolve the session_id and bind the
+                # repository DIRECTLY. We must NOT route through
+                # ``PgSaveRepository.for_slug``, whose ``ensure_session`` upserts
+                # ``ON CONFLICT … SET last_played = now()`` and so bumps
+                # ``last_activity_ts`` on every dashboard poll — floating idle
+                # (e.g. test-run) sessions to the top of auto-follow purely
+                # because the operator's GM panel polled them (story 126-34).
+                session_id = _pg_sessions.resolve_session_id(pool, slug=slug)
+                if session_id is None:
                     continue
-                repository = PgSaveRepository.for_slug(
-                    pool,
-                    slug=slug,
-                    mode=GameMode(game.mode),
-                    genre_slug=game.genre_slug,
-                    world_slug=game.world_slug,
-                )
+                repository = PgSaveRepository(pool, session_id=session_id)
                 saved = repository.load()
             except Exception as exc:  # noqa: BLE001
                 logger.warning(

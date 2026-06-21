@@ -58,6 +58,12 @@ class TropeDefinition(BaseModel):
     passive_progression: PassiveProgression | None = None
     is_abstract: bool = Field(default=False, alias="abstract")
     extends: str | None = None
+    # Faction/zone-scoped eligibility (epic-157, ADR-059 amendment). Additive +
+    # default-empty so existing trope YAML keeps parsing; the Seam 3 activation
+    # gate (``game/trope_tick.py``) drops a dormant trope whose factions don't
+    # match the party's active zone. ``["*"]`` = world-global; empty = permissive
+    # at runtime (the load validator, story 157-7, owns strictness).
+    factions: list[str] = Field(default_factory=list)
 
 
 class SeedTrope(BaseModel):
@@ -79,3 +85,7 @@ class SeedTrope(BaseModel):
     lifespan_turns: int = 0
     delivery_hints: list[str] = Field(default_factory=list)
     narrative_hint: str = ""
+    # Faction/zone-scoped eligibility (epic-157, ADR-059 amendment). Sibling to
+    # TropeDefinition.factions; the Seam 4 seed-deck draw filters a candidate
+    # whose factions don't match the party's active zone before dealing it.
+    factions: list[str] = Field(default_factory=list)

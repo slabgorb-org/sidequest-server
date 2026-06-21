@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from sidequest.game import zone_eligibility
 from sidequest.game.seed_deck import SeedDeck
 from sidequest.game.session import GameSnapshot, SeedState
 from sidequest.genre.models.tropes import SeedTrope
@@ -35,6 +36,20 @@ logger = logging.getLogger(__name__)
 # runs every turn, and an EMPTY deck never latches the active_seeds/seed_ghosts
 # idempotency guard — without this the warning would fire per turn.
 _deck_empty_signaled: set[str] = set()
+
+
+def _zone_context(snapshot: GameSnapshot, pack: Any) -> tuple[set[str], bool, str]:
+    """Resolve the Seam 4 zone-eligibility context for a deck draw (epic-157).
+
+    Returns ``(active_factions, zoned, region)``. Only a zoned world pays the
+    region query (Cost Scales with Drama); the 11 single-zone packs and any
+    pre-bind / no-cartography pack return the permissive ``(∅, False, "")`` so the
+    deck's draw filter is a no-op (zero behavior change for existing decks).
+    """
+    zoned = zone_eligibility.world_is_zoned(zone_eligibility.cartography_for(snapshot, pack))
+    if not zoned:
+        return set(), False, ""
+    return zone_eligibility.active_factions(snapshot, pack), True, snapshot.region_for() or ""
 
 
 def tick_seeds(
@@ -141,11 +156,15 @@ def ensure_initial_draw(
         )
         return
 
+    zone_active, zoned, region = _zone_context(snapshot, pack)
     deck = SeedDeck(
         genre_id=snapshot.genre_slug,
         world_id=snapshot.world_slug,
         session_id=session_id,
         seeds=seeds,
+        active_factions=zone_active,
+        zoned=zoned,
+        region=region,
     )
     drawn: list[SeedState] = []
     for _ in range(hand_size):
@@ -202,12 +221,16 @@ def draw_engaged_seed(
 
     drawn_ids = {s.id for s in snapshot.active_seeds} | {g.id for g in snapshot.seed_ghosts}
 
+    zone_active, zoned, region = _zone_context(snapshot, pack)
     deck = SeedDeck(
         genre_id=snapshot.genre_slug,
         world_id=snapshot.world_slug,
         session_id=session_id,
         seeds=seeds,
         drawn_ids=drawn_ids,
+        active_factions=zone_active,
+        zoned=zoned,
+        region=region,
     )
 
     seed = deck.draw()

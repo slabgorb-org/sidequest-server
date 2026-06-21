@@ -54,6 +54,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
+from sidequest.game import zone_eligibility
 from sidequest.game.session import GameSnapshot, TropeState
 from sidequest.game.trope_time_skip import _pass_a2_time_skip
 from sidequest.game.trope_tuning import (
@@ -72,6 +73,7 @@ from sidequest.telemetry.spans import (
     SPAN_TURN_TROPES,
     Span,
 )
+from sidequest.telemetry.spans.zone_eligibility import SPAN_ZONE_ELIGIBILITY_FILTERED
 
 # ---------------------------------------------------------------------------
 # Public — the engine called from _execute_narration_turn.
@@ -141,10 +143,26 @@ def tick_tropes(
             genre_slug=snapshot.genre_slug,
         )
 
-        # PASS D — activation gate (cooldown first, then cap).
+        # PASS D — activation gate. Seam 3 (epic-157, ADR-059 amendment): a
+        # faction-zone candidate filter runs FIRST (a dormant trope tagged for a
+        # faction outside the party's active zone is not even a candidate), then
+        # cooldown, then cap. The zone context is resolved once here and only for
+        # a zoned world (Cost Scales with Drama — the 11 single-zone packs skip the
+        # region query entirely); an unzoned world passes zoned=False so
+        # ``is_eligible`` is a no-op (zero behavior change).
+        zoned = zone_eligibility.world_is_zoned(zone_eligibility.cartography_for(snapshot, pack))
+        zone_active: set[str] = set()
+        region = ""
+        if zoned:
+            zone_active = zone_eligibility.active_factions(snapshot, pack)
+            region = snapshot.region_for() or ""
         queued_count = _gate_activations(
             snapshot.active_tropes,
+            pack_tropes_by_id,
             now_turn=now_turn,
+            zoned=zoned,
+            active=zone_active,
+            region=region,
         )
 
         # PASS E — aggregate metrics on the wrapping span.
@@ -307,17 +325,30 @@ def _fire_one_staggered_beat(
 
 def _gate_activations(
     active_tropes: list[TropeState],
+    pack_tropes_by_id: dict[str, Any],
     *,
     now_turn: int,
+    zoned: bool = False,
+    active: set[str] | None = None,
+    region: str = "",
 ) -> int:
-    """Pass D — gate dormant→progressing transitions through cooldown
-    and cap. Returns the count of tropes held back this tick (queued).
+    """Pass D — gate dormant→progressing transitions through faction-zone
+    eligibility, then cooldown, then cap. Returns the count of tropes held
+    back this tick by cooldown/cap (queued).
 
-    A dormant trope is eligible to activate by default (the activation
-    predicate stays simple in 45-27 — any dormant is a candidate).
-    Future stories may add trigger-keyword evaluation; this gate is
-    the structural shape, not the editorial policy.
+    Seam 3 (epic-157, ADR-059 amendment): a dormant trope is a CANDIDATE only
+    if ``is_eligible(tdef.factions, active, zoned)`` — a trope tagged for a
+    faction outside the party's active zone is dropped before the cooldown/cap
+    gates and fires a ``zone_eligibility.filtered`` span (the GM-panel
+    lie-detector that the engine actively held it, not that it merely never
+    rolled). ``zoned=False`` (the 11 single-zone packs, or a pre-bind turn)
+    makes the predicate permissive — zero behavior change.
+
+    Beyond the zone filter the activation predicate stays simple (any in-zone
+    dormant is a candidate); future stories may add trigger-keyword evaluation.
     """
+
+    active_factions = active or set()
 
     cooldown_until = max(
         ((t.fire_cooldown_until or 0) for t in active_tropes),
@@ -335,6 +366,26 @@ def _gate_activations(
 
     for trope in active_tropes:
         if trope.status != "dormant":
+            continue
+
+        # Seam 3 faction-zone candidate filter — runs BEFORE cooldown/cap so a
+        # wrong-zone trope is never a candidate; its exclusion is the
+        # zone_eligibility.filtered span, not a cooldown/cap block, and it is not
+        # counted as queued (it is not "held this tick" — it is out of zone).
+        tdef = pack_tropes_by_id.get(trope.id)
+        content_factions = list(getattr(tdef, "factions", [])) if tdef is not None else []
+        if not zone_eligibility.is_eligible(content_factions, active_factions, zoned=zoned):
+            with Span.open(
+                SPAN_ZONE_ELIGIBILITY_FILTERED,
+                {
+                    "subsystem": "trope",
+                    "content_id": trope.id,
+                    "content_factions": sorted(content_factions),
+                    "active_factions": sorted(active_factions),
+                    "region": region,
+                },
+            ):
+                pass
             continue
 
         # Cooldown gate first — Sebastien-tier visibility distinguishes

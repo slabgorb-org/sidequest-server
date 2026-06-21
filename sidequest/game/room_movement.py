@@ -13,10 +13,11 @@ log-and-continue (chargen must not hard-fail) or propagate.
 
 from __future__ import annotations
 
-from sidequest.game.session import GameSnapshot
+from sidequest.game.session import GameSnapshot, RoomState
 from sidequest.genre.models.world import RoomDef
 from sidequest.magic.confrontations import find_eligible_room_autofire
 from sidequest.magic.outputs import apply_mandatory_outputs
+from sidequest.telemetry.spans.movement import room_discovered_span
 from sidequest.telemetry.spans.rig import (
     emit_room_entry_evaluated,
     emit_room_entry_skipped,
@@ -54,6 +55,63 @@ def init_room_graph_location(snap: GameSnapshot, rooms: list[RoomDef]) -> str:
     if entrance.id not in snap.discovered_rooms:
         snap.discovered_rooms.append(entrance.id)
     return entrance.id
+
+
+def record_room_discovery(
+    snap: GameSnapshot,
+    *,
+    character_id: str,
+    from_room: str,
+    to_room: str,
+) -> None:
+    """Persist the room-graph axis on a dungeon transition (Story 153-24, ADR-055).
+
+    Runtime counterpart to :func:`init_room_graph_location`: as the party
+    walks the dungeon graph the *region* axis advances on its own, but the
+    *room* axis (``discovered_rooms`` / ``room_states`` /
+    ``Character.current_room``) was never written — so forensics and cold
+    reload (ADR-133 / ADR-115) saw an empty dungeon. This closes that gap by
+    wiring the existing transition seam to the existing fields. Mutates
+    ``snap`` in place:
+
+    - Both endpoints are dedup-appended to ``discovered_rooms``: the entered
+      room (``to_room``) AND the room crossed from (``from_room``). The
+      playtest finding was an empty ``discovered_rooms`` while standing
+      mid-crawl, so the room the actor came from must backfill too (AC1:
+      "must now show both the entrance and exp002.r2").
+    - ``room_states[to_room]`` is seeded with a fresh :class:`RoomState` on
+      first entry, and PRESERVED on re-entry (never clobber the Story 45-43
+      container/prop lifecycle written by the container-retrieval path).
+    - The acting character's ``current_room`` is set to ``to_room``.
+
+    Emits one ``room.discovered`` span carrying ``room_id``,
+    ``newly_discovered`` (first-entry vs backtracking), ``discovered_count``,
+    and ``character`` so the GM panel can confirm the room axis moved
+    (CLAUDE.md OTEL mandate; the region axis' ``dungeon.map_emitted`` does not
+    prove the room axis was written).
+    """
+    newly_discovered = to_room not in snap.discovered_rooms
+    if from_room not in snap.discovered_rooms:
+        snap.discovered_rooms.append(from_room)
+    if newly_discovered:
+        snap.discovered_rooms.append(to_room)
+
+    # Seed mechanical state for the entered room on first entry only — never
+    # overwrite the container/prop state the Story 45-43 path already wrote.
+    if to_room not in snap.room_states:
+        snap.room_states[to_room] = RoomState(room_id=to_room)
+
+    character = next((c for c in snap.characters if c.core.name == character_id), None)
+    if character is not None:
+        character.current_room = to_room
+
+    with room_discovered_span(
+        room_id=to_room,
+        newly_discovered=newly_discovered,
+        discovered_count=len(snap.discovered_rooms),
+        character=character_id,
+    ):
+        pass
 
 
 def process_room_entry(
@@ -228,4 +286,5 @@ __all__ = [
     "init_room_graph_location",
     "process_room_entry",
     "process_session_open",
+    "record_room_discovery",
 ]

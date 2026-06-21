@@ -48,6 +48,15 @@ SPAN_MOVEMENT_REGION_MODE = "movement.region_mode"
 # that earned it so the GM panel sees the dungeon clock turning on descent.
 SPAN_ROOM_TRANSITION_TICK = "room.transition_tick"
 
+# Story 153-24 (ADR-055): the persisted room axis advanced. The region axis
+# (discovered_regions / current_region) already emits ``dungeon.map_emitted``;
+# this span proves the ROOM axis (discovered_rooms / room_states /
+# Character.current_room) was written on a room-graph transition — without it
+# forensics/reload saw an empty dungeon. ``newly_discovered`` distinguishes
+# genuine exploration (first entry) from backtracking (re-entry of a known
+# room) so the GM panel can tell them apart.
+SPAN_ROOM_DISCOVERED = "room.discovered"
+
 # ---------------------------------------------------------------------------
 # Routing registrations
 # ---------------------------------------------------------------------------
@@ -116,6 +125,19 @@ SPAN_ROUTES[SPAN_ROOM_TRANSITION_TICK] = SpanRoute(
         "from_room": _attr("from_room")(s),
         "to_room": _attr("to_room")(s),
         "pc_name": _attr("pc_name")(s),
+    },
+)
+
+SPAN_ROUTES[SPAN_ROOM_DISCOVERED] = SpanRoute(
+    event_type="state_transition",
+    component="movement",
+    extract=lambda s: {
+        "field": "discovered_rooms",
+        "op": "room.discovered",
+        "room_id": _attr("room_id")(s),
+        "newly_discovered": _attr("newly_discovered")(s),
+        "discovered_count": _attr("discovered_count")(s),
+        "character": _attr("character")(s),
     },
 )
 
@@ -233,13 +255,45 @@ def room_transition_tick_span(
         yield span
 
 
+@contextmanager
+def room_discovered_span(
+    *,
+    room_id: str,
+    newly_discovered: bool,
+    discovered_count: int,
+    character: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """ADR-055 / Story 153-24: one span per room-graph transition recording
+    that the persisted room axis advanced (``discovered_rooms`` /
+    ``room_states`` / ``Character.current_room`` written). Complements the
+    region axis' ``dungeon.map_emitted`` so the GM panel can confirm the room
+    axis moved, not just the region graph. ``newly_discovered`` separates
+    genuine exploration (first entry) from backtracking (re-entry)."""
+    with Span.open(
+        SPAN_ROOM_DISCOVERED,
+        {
+            "room_id": room_id,
+            "newly_discovered": newly_discovered,
+            "discovered_count": discovered_count,
+            "character": character,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
 __all__ = [
     "SPAN_MOVEMENT_REGION_MODE",
     "SPAN_MOVEMENT_RESOLVED",
     "SPAN_MOVEMENT_UNRESOLVED",
+    "SPAN_ROOM_DISCOVERED",
     "SPAN_ROOM_TRANSITION_TICK",
     "movement_region_mode_span",
     "movement_resolved_span",
     "movement_unresolved_span",
+    "room_discovered_span",
     "room_transition_tick_span",
 ]

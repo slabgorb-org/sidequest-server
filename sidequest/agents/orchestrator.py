@@ -56,6 +56,7 @@ from sidequest.agents.claude_client import (
 from sidequest.agents.claude_client import (
     TimeoutError as _ClaudeTimeoutError,
 )
+from sidequest.agents.narration_hygiene import scrub_meta_preamble
 from sidequest.agents.narrator import (
     NarratorAgent,
     resolve_narrator_iteration_cap,
@@ -3696,6 +3697,13 @@ class Orchestrator:
         ``_assemble_turn_result_sdk`` adds only ``tool_calls``.
         """
         prose = extraction["prose"]
+
+        # Narration hygiene (playtest 2026-06-20 WWN-COMBAT-NARRATOR-LEAK):
+        # strip a leaked meta-cognitive preamble (e.g. "...6 damage, a clean
+        # hit. Now I narrate.") before the prose reaches the player card. Shared
+        # by BOTH assemblers, so the strip + its narrator.meta_preamble_stripped
+        # span fire on every backend. See agents/narration_hygiene.py.
+        prose = scrub_meta_preamble(prose).cleaned
 
         if context.dispatch_package is not None:
             audit_canonical_prose(

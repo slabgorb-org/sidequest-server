@@ -656,7 +656,13 @@ def inject(
 
 
 def mark_active_from_narration(
-    manual: MonsterManual, narration: str, current_location: str
+    manual: MonsterManual,
+    narration: str,
+    current_location: str,
+    *,
+    snapshot: GameSnapshot | None = None,
+    pack: Any = None,
+    perspective: str | None = None,
 ) -> list[str]:
     """Scan narration for Available Manual NPC names and mark Active.
 
@@ -664,6 +670,16 @@ def mark_active_from_narration(
     pattern at ``dispatch/mod.rs:1671-1695``: case-sensitive substring
     match against the cleaned narration text (the Python ``result.narration``
     is already the post-strip equivalent of Rust's ``clean_narration``).
+
+    ``snapshot``/``pack``/``perspective`` (epic-157 Seam 2, story 157-3):
+    generated walk-on **origin-stamp**. In a zoned world, an unplaced generated
+    NPC activated here is stamped with the acting PC's region ``controlled_by``
+    faction so it cannot later resurface in a different zone (the gulliver bleed).
+    The faction is resolved via :func:`zone_eligibility.active_factions` for
+    ``perspective`` and is only applied when exactly one faction resolves (a
+    zoned, resolvable region); an unzoned world, an unresolvable region, or a
+    split-party union (>1) stamps nothing. Omitting all three keeps the legacy
+    no-stamp behavior (back-compatible).
     """
     if not narration:
         return []
@@ -673,10 +689,35 @@ def mark_active_from_narration(
             continue
         if npc.name and npc.name in narration:
             activated.append(npc.name)
+
+    faction = _origin_stamp_faction(snapshot, pack, perspective)
     for name in activated:
-        manual.mark_active(name, current_location)
-        logger.info("monster_manual.npc_activated name=%r location=%r", name, current_location)
+        manual.mark_active(name, current_location, faction=faction)
+        logger.info(
+            "monster_manual.npc_activated name=%r location=%r faction=%r",
+            name,
+            current_location,
+            faction,
+        )
     return activated
+
+
+def _origin_stamp_faction(
+    snapshot: GameSnapshot | None, pack: Any, perspective: str | None
+) -> str | None:
+    """The single ``controlled_by`` faction to origin-stamp a walk-on with, or None.
+
+    Returns the lone active faction for ``perspective`` (the acting PC's zoned
+    region) only when exactly one resolves; an unzoned world, an unresolvable
+    region (∅), or a split-party union (>1) returns None — never an arbitrary
+    pick. ``snapshot``/``pack`` absent (legacy callers) → None (no stamp).
+    """
+    if snapshot is None or pack is None:
+        return None
+    active = zone_eligibility.active_factions(snapshot, pack, perspective=perspective)
+    if len(active) == 1:
+        return next(iter(active))
+    return None
 
 
 def mark_all_dormant(manual: MonsterManual | None) -> None:

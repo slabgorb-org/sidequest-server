@@ -58,16 +58,33 @@ def stage_region_cast(
     ``zone_eligibility.cast_staged`` carrying the region + staged names.
 
     The pack is resolved from ``snapshot.genre_slug`` so the staging always
-    reflects the session that owns this transition. A pre-bind / stub session
-    whose pack/world/cartography is unresolvable stages nothing rather than
-    raising (the seam must never crash a transition).
+    reflects the session that owns this transition. A session whose **world has
+    no cartography** stages nothing (an authored-content gap, not a crash). The
+    genre itself is assumed resolvable — ``load_genre_pack_cached`` raises
+    ``GenreNotFoundError`` on an unknown genre (a real misconfiguration that
+    fails loud per No Silent Fallbacks); in production ``snapshot.genre_slug`` is
+    a server-set, always-valid slug, so that path is unreachable.
     """
     pack = load_genre_pack_cached(snapshot.genre_slug)
     cartography = zone_eligibility.cartography_for(snapshot, pack)
     if cartography is None:
+        logger.debug(
+            "zone_eligibility.cast_staged.skip reason=no_cartography genre=%r world=%r",
+            snapshot.genre_slug,
+            snapshot.world_slug,
+        )
         return
     region = cartography.regions.get(to_region)
     if region is None:
+        # An actionable discrepancy: the transition names a region that is not in
+        # the world's cartography (e.g. a narrator-authored / misspelled region id
+        # from a WorldStatePatch, which the load-time validator in 157-7 does not
+        # gate). Warn so the operator can catch it without a GM-panel span hunt.
+        logger.warning(
+            "zone_eligibility.cast_staged.skip reason=unknown_region world=%r to_region=%r",
+            snapshot.world_slug,
+            to_region,
+        )
         return
 
     existing = {member.name for member in snapshot.npc_pool}

@@ -1265,6 +1265,12 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                             sd.monster_manual,
                             getattr(result, "narration", "") or "",
                             post_apply_location or "",
+                            # epic-157 Seam 2 (157-3): origin-stamp a generated
+                            # walk-on with the acting PC's zoned region faction so
+                            # it can't later resurface in a different zone.
+                            snapshot=snapshot,
+                            pack=getattr(sd, "genre_pack", None),
+                            perspective=_acting_for_render_trigger,
                         )
                         sd.monster_manual.save()
                     # Phase 5 (Story 47-3): drain magic-confrontation outbound

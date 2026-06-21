@@ -30,15 +30,15 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-import sidequest.game.region_cast_staging as region_cast_staging
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+import sidequest.game.region_cast_staging as region_cast_staging
+import sidequest.genre.loader as loader_mod
+from sidequest.dungeon import frontier_hook
 from sidequest.game.region_cast_staging import (
     register_cast_staging_observer,
     stage_region_cast,
 )
-
-import sidequest.genre.loader as loader_mod
-from sidequest.dungeon import frontier_hook
 from sidequest.game.session import GameSnapshot
 from sidequest.game.turn import TurnManager
 from sidequest.genre.models.world import CartographyConfig, Region
@@ -363,3 +363,33 @@ def test_real_region_transition_stages_cast_end_to_end(monkeypatch: pytest.Monke
         "the cast-staging observer is not wired into the real frontier dispatch "
         "(notify_region_transition fired but no cast was staged)"
     )
+
+
+def test_staging_warns_on_unknown_region(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Reviewer R2: a transition to a region id that is not in the cartography
+    (e.g. a narrator-authored / misspelled region) stages nothing AND emits a
+    warning — the operator must be able to tell 'no authored cast' from 'region
+    id does not match' without a GM-panel span hunt."""
+    import logging
+
+    pack = _pack(
+        "gulliver",
+        {
+            "mildendo": _region(
+                controlled_by=LILLIPUT, entities=[_npc_entity("the Emperor of Lilliput")]
+            )
+        },
+    )
+    _patch_loader(monkeypatch, {"wry_whimsy": pack})
+    snap = _snapshot(genre="wry_whimsy", world="gulliver")
+
+    with caplog.at_level(logging.WARNING):
+        stage_region_cast(
+            snapshot=snap, pc_name="Gulliver", from_region="mildendo", to_region="atlantis_typo"
+        )
+
+    assert _pool_names(snap) == []
+    assert "unknown_region" in caplog.text
+    assert "atlantis_typo" in caplog.text

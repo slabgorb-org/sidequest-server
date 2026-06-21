@@ -8,6 +8,7 @@ from sidequest.game.seams.base import (
 from sidequest.game.seams.registry import (
     get_seam_resolver,
     seam_route_for,
+    seam_route_via_adjacency,
     surface_owner_for_entrance,
 )
 
@@ -17,5 +18,6 @@ __all__ = [
     "UnknownSeamKindError",
     "get_seam_resolver",
     "seam_route_for",
+    "seam_route_via_adjacency",
     "surface_owner_for_entrance",
 ]

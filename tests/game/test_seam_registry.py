@@ -3,7 +3,11 @@
 import pytest
 
 from sidequest.game.seams.base import SeamCrossingError, UnknownSeamKindError
-from sidequest.game.seams.registry import get_seam_resolver, seam_route_for
+from sidequest.game.seams.registry import (
+    get_seam_resolver,
+    seam_route_for,
+    seam_route_via_adjacency,
+)
 from sidequest.genre.models.world import CartographyConfig, Region, Route
 
 
@@ -11,9 +15,17 @@ def _seam_cart() -> CartographyConfig:
     return CartographyConfig(
         starting_region="ropefoot",
         regions={
-            "ropefoot": Region(name="Ropefoot", summary="The surface.", description="A camp."),
+            "ropefoot": Region(
+                name="Ropefoot",
+                summary="The surface.",
+                description="A camp.",
+                adjacent=["the_dropmouth"],
+            ),
             "the_dropmouth": Region(
-                name="The Dropmouth", summary="The lip.", description="The mouth of the shaft."
+                name="The Dropmouth",
+                summary="The lip.",
+                description="The mouth of the shaft.",
+                adjacent=["ropefoot"],
             ),
         },
         routes=[
@@ -62,6 +74,54 @@ def test_seam_route_for_region_without_routes():
 
 def test_seam_route_for_none_cartography():
     assert seam_route_for(None, "the_dropmouth") is None
+
+
+def test_seam_route_via_adjacency_finds_neighbor_seam():
+    # ropefoot owns no seam, but is adjacent to the_dropmouth, which owns the
+    # deep_descent seam — the one-step-from-the-camp descent (sq-playtest
+    # 2026-06-21). The route returned is the_dropmouth's "Down the Rope".
+    route = seam_route_via_adjacency(_seam_cart(), "ropefoot")
+    assert route is not None
+    assert route.name == "Down the Rope"
+    assert route.to_id == "deep_descent"
+    assert route.from_id == "the_dropmouth"
+
+
+def test_seam_route_via_adjacency_none_when_neighbor_owns_no_seam():
+    # the_dropmouth's only neighbor (ropefoot) owns no registered seam, so
+    # there is no adjacent descent from the_dropmouth's perspective.
+    assert seam_route_via_adjacency(_seam_cart(), "the_dropmouth") is None
+
+
+def test_seam_route_via_adjacency_unknown_region():
+    assert seam_route_via_adjacency(_seam_cart(), "nonexistent_region") is None
+
+
+def test_seam_route_via_adjacency_none_cartography():
+    assert seam_route_via_adjacency(None, "ropefoot") is None
+
+
+def test_seam_route_via_adjacency_ambiguous_returns_none():
+    # Two adjacent regions each own a seam → the caller must NOT guess which
+    # descent was meant (No Silent Fallbacks). Mirrors surface_owner_for_entrance.
+    cart = CartographyConfig(
+        starting_region="hub",
+        regions={
+            "hub": Region(
+                name="Hub",
+                summary="Crossroads.",
+                description="Two ways down.",
+                adjacent=["pit_a", "pit_b"],
+            ),
+            "pit_a": Region(name="Pit A", summary="A.", description="A."),
+            "pit_b": Region(name="Pit B", summary="B.", description="B."),
+        },
+        routes=[
+            Route(name="Down A", description="d", from_id="pit_a", to_id="deep_descent"),
+            Route(name="Down B", description="d", from_id="pit_b", to_id="deep_descent"),
+        ],
+    )
+    assert seam_route_via_adjacency(cart, "hub") is None
 
 
 def test_seam_crossing_error_carries_reason_and_surface():

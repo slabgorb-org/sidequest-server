@@ -41,6 +41,28 @@ def _tags_match_location(location_tags: list[str], loc_lower: str) -> bool:
     return False
 
 
+def _encounter_has_native_class_enemy(enc: ManualEncounter) -> bool:
+    """Whether a cached encounter carries a native-path, PLAYER-class enemy.
+
+    The bestiary encountergen path stamps every enemy ``class="creature"``; the
+    native path stamps a player class. An explicit non-``"creature"`` class is
+    therefore the stale-native signal (see
+    :meth:`MonsterManual.purge_ruleset_incoherent_encounters`). A missing class
+    key or a non-list ``enemies`` is NOT treated as stale (conservative — no
+    over-purging of partial data).
+    """
+    enemies = enc.data.get("enemies") if isinstance(enc.data, dict) else None
+    if not isinstance(enemies, list):
+        return False
+    for enemy in enemies:
+        if not isinstance(enemy, dict):
+            continue
+        cls = enemy.get("class")
+        if isinstance(cls, str) and cls.strip() and cls != "creature":
+            return True
+    return False
+
+
 class EntryState(StrEnum):
     """Lifecycle state for a Manual entry."""
 
@@ -322,6 +344,39 @@ class MonsterManual(BaseModel):
     def needs_seeding(self) -> bool:
         """Whether the Manual needs more Available entries."""
         return len(self.available_npcs()) < 4 or not self.available_encounters()
+
+    def purge_ruleset_incoherent_encounters(
+        self, *, is_ruleset_module: bool
+    ) -> list[ManualEncounter]:
+        """Drop cached encounters that are incoherent with a bound ruleset module.
+
+        Playtest 150-20 (CWN-OTHER-SEATING): this Manual cache is keyed by
+        genre+world and persists across sessions. A Manual seeded under the
+        **native** ``encountergen.generate_enemy`` path carries encounter enemies
+        typed by a PLAYER CLASS (``class != "creature"``) with PC-scaled HP
+        (``hp = 8*level``). A ruleset-module pack (``wwn|cwn|swn|awn``) instead
+        samples its bestiary, where ``generate_enemy_from_bestiary`` always stamps
+        ``class="creature"`` — so a player-class enemy in the cache is stale,
+        pre-bestiary-binding output. Reusing it injected a 48-HP "Wheelman"
+        "Shadow" the seater grabbed as the combat Other against an L1 PC.
+
+        Dropping those encounters lets :meth:`needs_seeding` re-fire so the Manual
+        re-seeds via the correct bestiary path. ``is_ruleset_module`` gates the
+        purge: a native (``ruleset: "dial"``) pack legitimately has player-class
+        humanoid enemies, so it is never purged. Conservative: only an EXPLICIT
+        non-``"creature"`` class is the stale signal — a missing class key or an
+        empty enemy list is left untouched (no over-purging of partial data).
+
+        Returns the purged encounters (empty when nothing was incoherent). Pure;
+        the caller persists + emits the OTEL span.
+        """
+        if not is_ruleset_module:
+            return []
+        stale = [enc for enc in self.encounters if _encounter_has_native_class_enemy(enc)]
+        if stale:
+            stale_ids = {id(enc) for enc in stale}
+            self.encounters = [enc for enc in self.encounters if id(enc) not in stale_ids]
+        return stale
 
     # ── Placement ───────────────────────────────────────────────
 

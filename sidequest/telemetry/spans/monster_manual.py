@@ -27,7 +27,19 @@ SPAN_MONSTER_MANUAL_ROOM_BOUND = "monster_manual.room_bound"
 # random-minted walk-ons.
 SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL = "monster_manual.authored_backfill"
 
+# Playtest 150-20 (CWN-OTHER-SEATING, 2026-06-20): emitted when ``ensure_loaded``
+# purges a stale, native-era encounter from a ruleset-module pack's persisted
+# Manual cache. The cache is genre+world keyed and survives across sessions; one
+# seeded under the native ``generate_enemy`` path (PLAYER-class enemies,
+# ``hp=8*level``) is incoherent with a ``wwn|cwn|swn|awn`` binding (whose
+# encountergen samples the bestiary and always stamps ``class="creature"``).
+# Reusing it seated a 48-HP "Wheelman" against an L1 PC. The GM-panel
+# lie-detector that the engine caught + dropped the stale block and will re-seed
+# via the bestiary path.
+SPAN_MONSTER_MANUAL_STALE_PURGED = "monster_manual.stale_encounter_purged"
+
 FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_INJECTED)
 FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_HP_PRESERVED)
 FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_ROOM_BOUND)
 FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL)
+FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_STALE_PURGED)

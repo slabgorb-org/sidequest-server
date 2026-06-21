@@ -4186,14 +4186,39 @@ def _apply_narration_result_to_snapshot(
             and old_loc is not None
             and result.location != old_loc
         ):
-            from sidequest.game.room_movement import record_room_discovery
+            # Story 153-24 rework (Reviewer SEC-1): apply the SAME structural
+            # hygiene the region axis uses (Story 45-16) BEFORE recording the
+            # room. A narrator aside / multiline / over-long heading must not
+            # pollute the discovered_rooms forensics accumulator — reject loudly
+            # (rejection span + warning, GM-panel visible) and skip, exactly as
+            # the region-axis filter does below. This is "fail loud on a
+            # malformed location", not the silent-skip-of-valid-moves bug this
+            # story fixes (Technical Note #5). ``old_loc`` is the actor's already-
+            # accepted current position, so only the new ``result.location`` is
+            # re-validated here.
+            is_valid_room, room_rejection_reason = validate_region_name(result.location)
+            if not is_valid_room:
+                with region_entry_rejected_span(
+                    entry=result.location,
+                    reason=room_rejection_reason or "unknown",
+                    caller_path="narration_apply.room_graph_discovery",
+                    player_name=player_name,
+                ):
+                    logger.warning(
+                        "room.entry_rejected reason=%s entry=%r player=%s caller=narration_apply.room_graph_discovery",
+                        room_rejection_reason,
+                        result.location,
+                        player_name,
+                    )
+            else:
+                from sidequest.game.room_movement import record_room_discovery
 
-            record_room_discovery(
-                snapshot,
-                character_id=actor_for_location,
-                from_room=old_loc,
-                to_room=result.location,
-            )
+                record_room_discovery(
+                    snapshot,
+                    character_id=actor_for_location,
+                    from_room=old_loc,
+                    to_room=result.location,
+                )
         # Story 45-16: filter narrator-emitted location before adding
         # to the region graph. Playtest 3 leaked
         # `(aside — narrator brief)` into discovered_regions because

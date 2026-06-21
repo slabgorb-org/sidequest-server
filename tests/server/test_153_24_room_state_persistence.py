@@ -447,6 +447,72 @@ class TestRegionModeUnaffected:
 
 
 # ---------------------------------------------------------------------------
+# Reviewer SEC-1 (rework) — narrator-output hygiene. A structurally malformed
+# location (bracketed aside / multiline / over-long) must NOT pollute the room
+# axis, mirroring the Story 45-16 region-axis filter that already guards
+# discovered_regions against exactly this leak. The room write is rejected loudly
+# (rejection span + warning) and skipped — NOT silently swallowed, and NOT
+# recorded as a "discovered room".
+# ---------------------------------------------------------------------------
+
+
+class TestMalformedLocationRejected:
+    @pytest.mark.asyncio
+    async def test_bracketed_aside_not_recorded_on_room_axis(
+        self, session_handler_factory, otel_capture
+    ) -> None:
+        sd, handler = session_handler_factory(genre="caverns_and_claudes")
+        _enter_room_graph_mode(sd)  # room-graph nav; entrance seeded
+        _place_actor(sd, _ENTRANCE)
+
+        otel_capture.clear()
+        # Story 45-16's exact leak shape, now aimed at the room axis.
+        garbage = "(aside — narrator brief)"
+        await _move(handler, sd, to=garbage)
+
+        assert garbage not in sd.snapshot.discovered_rooms, (
+            "A bracketed narrator aside must NOT be recorded as a discovered room "
+            f"(Story 45-16 leak class); discovered_rooms={sd.snapshot.discovered_rooms}"
+        )
+        assert garbage not in sd.snapshot.room_states, (
+            f"A malformed location must NOT seed room_states; keys={list(sd.snapshot.room_states)}"
+        )
+        assert _actor_character(sd).current_room is None, (
+            "A rejected location must NOT set current_room; "
+            f"current_room={_actor_character(sd).current_room!r}"
+        )
+        assert not _finished(otel_capture, _DISCOVERED_SPAN), (
+            "A rejected location must NOT emit a room.discovered span (nothing was discovered)"
+        )
+
+    @pytest.mark.asyncio
+    async def test_multiline_location_not_recorded_on_room_axis(
+        self, session_handler_factory
+    ) -> None:
+        sd, handler = session_handler_factory(genre="caverns_and_claudes")
+        _enter_room_graph_mode(sd)
+        _place_actor(sd, _ENTRANCE)
+
+        garbage = "The Crypt\n(GM: remember the trap)"
+        await _move(handler, sd, to=garbage)
+
+        assert garbage not in sd.snapshot.discovered_rooms, (
+            "A multiline narrator location must NOT be recorded as a discovered room; "
+            f"discovered_rooms={sd.snapshot.discovered_rooms}"
+        )
+        assert all("\n" not in r for r in sd.snapshot.discovered_rooms), (
+            f"No multiline string may land in discovered_rooms; discovered_rooms={sd.snapshot.discovered_rooms}"
+        )
+        assert garbage not in sd.snapshot.room_states, (
+            f"A multiline location must NOT seed room_states; keys={list(sd.snapshot.room_states)}"
+        )
+        assert _actor_character(sd).current_room is None, (
+            "A rejected multiline location must NOT set current_room; "
+            f"current_room={_actor_character(sd).current_room!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # AC4 + AC6 — wiring/integration: a multi-turn crawl through the REAL narration-apply
 # seam, then a save→reload leg (ADR-115 serialization), proving forensics/reload sees
 # the real dungeon. This is the reproduction of the playtest finding end-to-end.

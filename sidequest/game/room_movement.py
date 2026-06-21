@@ -93,7 +93,10 @@ def record_room_discovery(
     newly_discovered = to_room not in snap.discovered_rooms
     if from_room not in snap.discovered_rooms:
         snap.discovered_rooms.append(from_room)
-    if newly_discovered:
+    # Re-test membership: when ``from_room == to_room`` the append above already
+    # recorded ``to_room``, so guard against a double-append (Reviewer LOW). The
+    # sole caller gates ``result.location != old_loc``, but the helper is public.
+    if newly_discovered and to_room not in snap.discovered_rooms:
         snap.discovered_rooms.append(to_room)
 
     # Seed mechanical state for the entered room on first entry only — never

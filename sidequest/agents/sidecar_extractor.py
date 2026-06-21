@@ -27,9 +27,9 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Annotated, Any, Protocol
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, WithJsonSchema
 
 from sidequest.agents.model_routing import CallType, resolve_model
 from sidequest.telemetry.spans.sidecar_extraction import (
@@ -83,9 +83,42 @@ _TOOL_DESCRIPTION = (
     "Emit the structured bucket-B sidecar fields you READ from the narration "
     "prose: items gained/lost/discarded/consumed, gold change, companions "
     "added/dismissed, NPCs present, and scene mood. "
+    "When the prose establishes a gained item as SIGNIFICANT (magical, "
+    "story-important, or character-defining), set that item's optional "
+    "grants_aspect to a short invokable aspect phrase capturing why it matters; "
+    "leave it unset for ordinary items (a hat is a hat). "
     "Report only what the prose states; never invent. An empty field is correct "
     "when the prose says nothing about it."
 )
+
+# Story 126-35: the JSON schema the extractor LLM sees for ONE items_gained entry.
+# Surfaced via WithJsonSchema so the narrator-contract DOCUMENTS the optional
+# grants_aspect lever (Keith design call 2026-06-20, PATH c — narrator-authored
+# promotion) while the runtime type stays a free-form ``dict`` (the merge +
+# apply-path consumer keep reading entries as dicts; No half-wired features).
+# ``additionalProperties`` stays open: ``_narrator_item_dict`` mints id/category/
+# etc. downstream, so the reader only needs name (+ the optional significance flag).
+_ITEMS_GAINED_ITEM_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "name": {
+            "type": "string",
+            "description": "The gained item's name, as the prose states it.",
+        },
+        "grants_aspect": {
+            "type": "string",
+            "description": (
+                "OPTIONAL. Set ONLY when the narration establishes this item as a "
+                "SIGNIFICANT find — magical, story-important, or character-defining "
+                "(the drifter's surveyor's map, a dead witch's silver shoes). The "
+                "value is a short invokable Fate aspect phrase naming why it matters "
+                "(e.g. 'Knows the Hidden Trails'). Leave UNSET for ordinary items — "
+                "do NOT mark every item; most gear is pure flavor."
+            ),
+        },
+    },
+    "additionalProperties": True,
+}
 _SYSTEM_PROMPT = (
     "You are a post-narration READER at a tabletop session. The narrator already "
     "wrote the prose; your only job is to extract the structured bucket-B sidecar "
@@ -103,7 +136,12 @@ class SidecarExtraction(BaseModel):
     151-5 cutover stories type them as they migrate into ``narration_apply``.
     """
 
-    items_gained: list[dict[str, Any]] = Field(default_factory=list)
+    # items_gained entries stay runtime dicts (the consumer + merge read .get(...)),
+    # but the EMITTED tool-schema documents the optional grants_aspect lever so the
+    # narrator/reader is told it may mark a significant item (story 126-35, AC1).
+    items_gained: list[Annotated[dict[str, Any], WithJsonSchema(_ITEMS_GAINED_ITEM_SCHEMA)]] = (
+        Field(default_factory=list)
+    )
     items_lost: list[dict[str, Any]] = Field(default_factory=list)
     items_discarded: list[dict[str, Any]] = Field(default_factory=list)
     items_consumed: list[dict[str, Any]] = Field(default_factory=list)

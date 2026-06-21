@@ -151,46 +151,30 @@ def test_space_opera_pack_loads_with_dual_dial_schema():
 
 
 @pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
-def test_spaghetti_western_pack_loads_with_dual_dial_schema():
-    """spaghetti_western's poker confrontation has been migrated to
-    ``resolution_mode: table_resolution`` (Task 16), which legitimately carries
-    NO player_metric/opponent_metric (table_state drives resolution, not dials).
-    Filter on win_condition == dial_threshold so the metricless table confrontation
-    is skipped. At least one dial confrontation must remain so the assertion is
-    not vacuous."""
+def test_spaghetti_western_pack_loads_as_fully_fate():
+    """Story 153-3: spaghetti_western is a Fate-bound pack, so it no longer carries
+    ANY native dial confrontation — the dual-dial schema (asserted for the WN-family
+    packs above) does not apply. Every confrontation resolves through a Fate mode:
+    standoff/negotiation/chase -> contest, combat -> conflict (lethal), poker ->
+    table_resolution. The loud Fate-mode guard (ADR-144) would reject the pack at
+    load if any native beat_selection/opposed_check def survived, so a clean load
+    AND an all-Fate-mode set are the assertion."""
     pack = load_pack("spaghetti_western")
     assert pack.rules is not None
-    dial_confrontations = [
-        cdef
-        for cdef in pack.rules.confrontations
-        if (
-            (
-                cdef.win_condition.value
-                if hasattr(cdef.win_condition, "value")
-                else cdef.win_condition
-            )
-            == "dial_threshold"
-            # Fate Contest (ADR-144) keeps win_condition=dial_threshold but resolves via
-            # the 4dF exchange — its beats are display-only stubs with no dial kind, so
-            # exclude it from this dial-beat-shape assertion (Westley M1).
-            and (
-                cdef.resolution_mode.value
-                if hasattr(cdef.resolution_mode, "value")
-                else cdef.resolution_mode
-            )
-            != "contest"
+    assert pack.rules.ruleset == "fate"
+    fate_modes = {"contest", "conflict", "table_resolution", "sealed_letter_lookup"}
+    modes = {
+        cdef.confrontation_type: (
+            cdef.resolution_mode.value
+            if hasattr(cdef.resolution_mode, "value")
+            else cdef.resolution_mode
         )
-    ]
-    assert dial_confrontations, (
-        "spaghetti_western must retain at least one dial_threshold confrontation "
-        "for this dual-dial assertion to be meaningful"
-    )
-    for cdef in dial_confrontations:
-        assert cdef.player_metric.threshold > 0
-        assert cdef.opponent_metric.threshold > 0
-        for beat in cdef.beats:
-            kind = beat.kind.value if hasattr(beat.kind, "value") else beat.kind
-            assert kind in {"strike", "brace", "push", "angle"}
+        for cdef in pack.rules.confrontations
+    }
+    assert modes, "spaghetti_western declares no confrontations"
+    for ctype, mode in modes.items():
+        assert mode in fate_modes, f"spaghetti_western {ctype!r} uses non-Fate mode {mode!r}"
+    assert modes.get("combat") == "conflict"  # a gunfight is lethal — a Conflict, not a Contest
 
 
 @pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")

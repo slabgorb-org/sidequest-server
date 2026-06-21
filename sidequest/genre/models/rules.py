@@ -344,6 +344,14 @@ class ResolutionMode(StrEnum):  # noqa: UP042 — matches project convention (se
       the higher result scores a victory (2 on a 3+ margin); a tie grants
       each side a boost. First to N victories (the metric ``threshold``) wins.
       No stress, no consequences. **Fate packs only.**
+    - ``conflict``: Fate Core Conflict (ADR-144) — the LETHAL sibling of
+      ``contest``. 4dF + skill exchanges resolve against the Other's
+      ``FateSheet``: hits become ablative stress, then consequences, then
+      *Taken Out* (a character can be removed/killed). The native dial is
+      REMOVED — seating synthesizes inert metrics and routes through the Fate
+      conflict engine (``seat_as_fate_conflict``). Carries display-only beats
+      (id + label + narrator_hint), never armed dial fields. Adversarial — it
+      always needs an Other. **Fate packs only.**
     """
 
     beat_selection = "beat_selection"
@@ -351,6 +359,21 @@ class ResolutionMode(StrEnum):  # noqa: UP042 — matches project convention (se
     opposed_check = "opposed_check"
     table_resolution = "table_resolution"
     contest = "contest"
+    conflict = "conflict"
+
+
+# Story 153-3 (ADR-144): the resolution modes a Fate-bound pack may author. Fate
+# resolves through its OWN engines (Contest / Conflict / table / sealed-letter),
+# never the native d20 dial — ``beat_selection`` and ``opposed_check`` are rejected
+# at pack load by ``RulesConfig._fate_packs_use_fate_resolution_modes``.
+_FATE_RESOLUTION_MODES = frozenset(
+    {
+        ResolutionMode.contest,
+        ResolutionMode.conflict,
+        ResolutionMode.table_resolution,
+        ResolutionMode.sealed_letter_lookup,
+    }
+)
 
 
 class InteractionCell(BaseModel):
@@ -558,13 +581,14 @@ class ConfrontationDef(BaseModel):
                 "'contest' but is missing player_metric; the Contest victory target "
                 "is seeded from player_metric.threshold (No Silent Fallbacks)"
             )
-        # A contest is exempt: it resolves via the 4dF exchange engine, not the dial,
-        # and only requires player_metric (checked above) — opponent_metric is optional
-        # even though win_condition defaults to dial_threshold (the metric is a victory
-        # tally, not a dial). Every other dial_threshold def needs both metrics.
+        # contest and conflict are exempt: both resolve via the 4dF Fate engine, not
+        # the dial. A contest only requires player_metric (checked above; the victory
+        # tally). A conflict requires NEITHER metric — seating synthesizes inert
+        # fate_stress placeholders and the win track is the Other's FateSheet stress.
+        # Every other dial_threshold def needs both metrics.
         if (
             self.win_condition == WinCondition.dial_threshold
-            and self.resolution_mode != ResolutionMode.contest
+            and self.resolution_mode not in (ResolutionMode.contest, ResolutionMode.conflict)
             and (self.player_metric is None or self.opponent_metric is None)
         ):
             raise ValueError(
@@ -663,7 +687,7 @@ class ConfrontationDef(BaseModel):
             "target_select",
             "resource_deltas",
         )
-        if self.resolution_mode == ResolutionMode.contest:
+        if self.resolution_mode in (ResolutionMode.contest, ResolutionMode.conflict):
             for beat in self.beats:
                 offending = [f for f in _DIAL_BEAT_FIELDS if getattr(beat, f, None) is not None]
                 # base defaults to 1 (non-None) — only flag a non-default magnitude.
@@ -674,10 +698,11 @@ class ConfrontationDef(BaseModel):
                 if offending:
                     raise ValueError(
                         f"confrontation '{self.confrontation_type}' uses resolution_mode "
-                        f"'contest' but beat '{beat.id}' carries dial-resolution field(s) "
-                        f"{sorted(offending)}; a Fate Contest beat is a display-only stub "
-                        "(id + label + optional flavor/narrator_hint only) — the 4dF "
-                        "exchange engine resolves it, not the dial (ADR-144 REPLACE)"
+                        f"'{self.resolution_mode.value}' but beat '{beat.id}' carries "
+                        f"dial-resolution field(s) {sorted(offending)}; a Fate "
+                        "Contest/Conflict beat is a display-only stub (id + label + "
+                        "optional flavor/narrator_hint only) — the 4dF Fate engine "
+                        "resolves it, not the dial (ADR-144 REPLACE)"
                     )
         else:
             for beat in self.beats:
@@ -1570,26 +1595,32 @@ class RulesConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _fate_packs_have_no_opposed_check(self) -> RulesConfig:
-        """spec 2026-06-17 §4 — the bleed tripwire. A Fate-bound pack must resolve
-        its confrontations through Fate's own mechanics (Contest / Conflict), never
-        the d20 dial's ``opposed_check``. Authoring one is a content error and fails
-        pack load loudly (No Silent Fallbacks). The gate is ``ruleset == 'fate'``
-        ONLY — the Without Number family (cwn/awn/swn/wwn) legitimately authors
-        ``opposed_check`` via the shared dial engine and is untouched (spec §0)."""
+    def _fate_packs_use_fate_resolution_modes(self) -> RulesConfig:
+        """spec 2026-06-17 §4 + story 153-3 — the bleed tripwire, generalized to a
+        Fate-mode allowlist. A Fate-bound pack must resolve its confrontations through
+        Fate's own mechanics, never the native d20 dial. Allowed: ``contest`` (no-harm
+        competition), ``conflict`` (lethal Fate Conflict), ``table_resolution``
+        (poker/auction), ``sealed_letter_lookup`` (commit-reveal duel). The native
+        ``beat_selection`` (d20 vs DC) and ``opposed_check`` modes are REJECTED — under
+        Fate their armed dial beats are inert (silent-inert native crunch, the
+        SOUL "Bind the Ruleset" violation). Fails pack load loudly (No Silent
+        Fallbacks). The gate is ``ruleset == 'fate'`` ONLY — the Without Number family
+        (cwn/awn/swn/wwn) legitimately authors ``beat_selection``/``opposed_check`` via
+        the shared dial engine and is untouched (spec §0)."""
         if self.ruleset != "fate":
             return self
         offenders = [
-            c.confrontation_type
+            (c.confrontation_type, c.resolution_mode.value)
             for c in self.confrontations
-            if c.resolution_mode == ResolutionMode.opposed_check
+            if c.resolution_mode not in _FATE_RESOLUTION_MODES
         ]
         if offenders:
             raise ValueError(
-                f"Fate-bound pack authors opposed_check confrontation(s) {offenders!r}; "
-                "a Fate pack resolves through the Contest mode (resolution_mode: "
-                "contest) or a Conflict, never the d20 dial's opposed_check. See "
-                "spec 2026-06-17 §3 for the Contest schema (ADR-144)."
+                f"Fate-bound pack authors native-dial confrontation(s) {offenders!r}; "
+                "a Fate pack resolves through a Contest (resolution_mode: contest), a "
+                "Conflict (resolution_mode: conflict), a table (table_resolution) or a "
+                "sealed-letter duel (sealed_letter_lookup) — never the d20 dial's "
+                "beat_selection or opposed_check. See ADR-144."
             )
         return self
 

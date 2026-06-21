@@ -9,8 +9,19 @@ still defer.
 
 from __future__ import annotations
 
-from sidequest.agents.subsystems.movement import _resolve_cartography_lateral
+import asyncio
+import types
+
+import pytest
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+import sidequest.telemetry.spans as spans_module
+from sidequest.agents.subsystems.movement import _resolve_cartography_lateral, run_movement_dispatch
+from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.world import CartographyConfig, NavigationMode, Region, Route
+from sidequest.protocol.dispatch import SubsystemDispatch, VisibilityTag
 
 
 def _oz_cartography_with_road() -> CartographyConfig:
@@ -131,3 +142,93 @@ def test_lateral_resolver_no_adjacency_is_no_match():
     assert target is None
     assert ambiguous is False
     assert candidates == []
+
+
+# ---------------------------------------------------------------------------
+# Dispatch-level tests (Task 2): engine crosses via apply_world_patch.
+# ---------------------------------------------------------------------------
+
+
+def _run(coro):
+    return asyncio.run(coro)
+
+
+def _movement(direction: str, descriptor: str = "") -> SubsystemDispatch:
+    return SubsystemDispatch(
+        subsystem="movement",
+        params={"direction": direction, "exit_descriptor": descriptor},
+        idempotency_key="mv-lateral",
+        confidence=1.0,
+        visibility=VisibilityTag(visible_to="all"),
+    )
+
+
+def _pack_with_cartography(world_slug: str, cartography: CartographyConfig):
+    world = types.SimpleNamespace(cartography=cartography)
+    return types.SimpleNamespace(worlds={world_slug: world})
+
+
+@pytest.fixture
+def capture_spans(monkeypatch):
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    local = provider.get_tracer("test-movement-lateral")
+    monkeypatch.setattr(spans_module, "tracer", lambda: local)
+    return exporter
+
+
+def test_dispatch_lateral_move_crosses_engine_side(capture_spans):
+    cart = _oz_cartography_with_road()
+    pack = _pack_with_cartography("oz", cart)
+    snap = GameSnapshot(
+        genre_slug="wry_whimsy",
+        world_slug="oz",
+        pc_regions={"Dorothy": "munchkin_country"},
+        player_seats={"p1": "Dorothy"},
+    )
+    out = _run(
+        run_movement_dispatch(
+            _movement("deeper", "follow the road to the Emerald City"),
+            snapshot=snap,
+            player_name="Dorothy",
+            dungeon_store=None,
+            palette=None,
+            pack=pack,
+        )
+    )
+    assert out.data["resolved_via"] == "region_lateral", out.data
+    assert out.data["to_region"] == "the_emerald_city"
+    assert snap.region_for(perspective="Dorothy") == "the_emerald_city", (
+        "engine must move the PC via apply_world_patch, not defer to narration"
+    )
+    resolved = [s for s in capture_spans.get_finished_spans() if s.name == "movement.resolved"]
+    assert len(resolved) == 1
+    attrs = resolved[0].attributes or {}
+    assert attrs["resolved_via"] == "region_lateral"
+    assert attrs["edge_kind"] == "cartography_adjacent"
+
+
+def test_dispatch_unmatched_lateral_still_defers(capture_spans):
+    cart = _oz_cartography_with_road()
+    pack = _pack_with_cartography("oz", cart)
+    snap = GameSnapshot(
+        genre_slug="wry_whimsy",
+        world_slug="oz",
+        pc_regions={"Dorothy": "munchkin_country"},
+        player_seats={"p1": "Dorothy"},
+    )
+    out = _run(
+        run_movement_dispatch(
+            _movement("deeper", "I look around the meadow"),
+            snapshot=snap,
+            player_name="Dorothy",
+            dungeon_store=None,
+            palette=None,
+            pack=pack,
+        )
+    )
+    assert out.data["resolved_via"] == "region_mode_deferred", out.data
+    assert snap.region_for(perspective="Dorothy") == "munchkin_country", (
+        "an unmatched intent must not move the PC (additive: defer, don't fail)"
+    )

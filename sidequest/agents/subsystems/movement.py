@@ -124,9 +124,76 @@ _BEARING_LR_RANK: dict[str, int] = {
 }
 
 
+# Common English function words that carry no geographic/region meaning and
+# must NOT influence token-overlap scoring (otherwise "I look around the
+# meadow" matches "The Emerald City" via the shared stopword "the").
+_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "of",
+        "in",
+        "on",
+        "at",
+        "to",
+        "for",
+        "and",
+        "or",
+        "but",
+        "by",
+        "from",
+        "with",
+        "into",
+        "onto",
+        "upon",
+        "i",
+        "me",
+        "my",
+        "you",
+        "your",
+        "we",
+        "our",
+        "it",
+        "its",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "do",
+        "does",
+        "did",
+        "have",
+        "has",
+        "had",
+        "this",
+        "that",
+        "these",
+        "those",
+        "there",
+        "here",
+        "up",
+        "down",
+        "out",
+        "around",
+        "over",
+        "under",
+        "back",
+    }
+)
+
+
 def _tokens(text: str) -> set[str]:
-    """Lowercased alpha tokens for descriptor token-overlap scoring."""
-    return {t for t in re.findall(r"[a-z]+", (text or "").lower())}
+    """Lowercased alpha tokens for descriptor token-overlap scoring.
+
+    Stopwords (articles, prepositions, pronouns, common verbs) are stripped
+    so that e.g. "I look around the meadow" does not match "The Emerald City"
+    via the shared article "the".
+    """
+    return {t for t in re.findall(r"[a-z]+", (text or "").lower()) if t not in _STOPWORDS}
 
 
 def _exit_sort_key(e: RegionExit) -> tuple[str, str]:
@@ -414,6 +481,63 @@ async def run_movement_dispatch(
             and from_region in dungeon_store.load_map(entrance_id=_ENTRANCE_ID).nodes
         )
         if not _in_dungeon:
+            # --- Engine-authoritative lateral cartography travel (Plan 1). ---
+            # A region-mode PC on a surface cartography region moving to an
+            # ADJACENT region (oz: munchkin_country -> the_emerald_city). The
+            # ONLY mover for this historically was the narration title-scrape
+            # (narration_apply.location_update) — the fragile path that let the
+            # narrator move the party. Resolve it engine-side against the
+            # cartography adjacency graph and cross via the per-PC chokepoint,
+            # exactly like the §Q1 dungeon navigator. ADDITIVE: an unmatched
+            # intent still defers (the scrape remains the backstop until Plan 2
+            # severs it); an AMBIGUOUS intent fails loud (No Silent Fallbacks).
+            target_id, via, ambiguous, candidate_ids, surface = _resolve_cartography_lateral(
+                cart=cart,
+                from_region=from_region,
+                exit_descriptor=exit_descriptor,
+                direction=direction,
+                discovered_regions=list(snapshot.discovered_regions or []),
+            )
+            if target_id is not None:
+                snapshot.apply_world_patch(WorldStatePatch(pc_region={player_name: target_id}))
+                with movement_resolved_span(
+                    pc_name=player_name,
+                    from_region=from_region,
+                    to_region=target_id,
+                ) as span:
+                    span.set_attribute("intent.direction", direction)
+                    span.set_attribute("intent.exit_descriptor", exit_descriptor)
+                    span.set_attribute("resolved_via", via)
+                    span.set_attribute("candidate_exits", candidate_ids)
+                    span.set_attribute("edge_kind", "cartography_adjacent")
+                    span.set_attribute("party_split_after", snapshot.region_for() is None)
+                logger.debug(
+                    "movement.resolved pc=%s from=%s to=%s via=%s kind=cartography_adjacent",
+                    player_name,
+                    from_region,
+                    target_id,
+                    via,
+                )
+                return SubsystemOutput(
+                    data={
+                        "to_region": target_id,
+                        "from_region": from_region,
+                        "resolved_via": via,
+                    }
+                )
+            if ambiguous:
+                return _unresolved(
+                    snapshot=snapshot,
+                    player_name=player_name,
+                    reason="ambiguous_region_exit",
+                    from_region=from_region,
+                    direction=direction,
+                    exit_descriptor=exit_descriptor,
+                    available=candidate_ids,
+                    surface=surface,
+                )
+            # No lateral match (non-travel intent / flavor descriptor): defer to
+            # the existing region-mode path (additive — Plan 1 removes nothing).
             return _defer_region_mode(
                 snapshot=snapshot,
                 player_name=player_name,

@@ -125,6 +125,12 @@ class WithoutNumberRulesetModule(RulesetModule):
     #: set by every concrete subclass; the core itself is never registered.
     slug: str
 
+    #: WN SRD unarmed-strike damage (1d2 — a parity die per WWN/SWN/CWN SRD).
+    #: The last-resort floor in ``resolve_damage`` (story 153-1) so a weaponless
+    #: WN attack still ablates HP instead of silently dealing 0. All four
+    #: siblings inherit; a sibling may override if its SRD unarmed value differs.
+    SRD_UNARMED_DICE: str = "1d2"
+
     @property
     def awards_native_turn_xp(self) -> bool:
         """The Without Number family (SWN/WWN/CWN/AWN) does NOT use the native
@@ -274,9 +280,18 @@ class WithoutNumberRulesetModule(RulesetModule):
         )
 
     def resolve_damage(self, *, beat, actor_core, pack, world_slug=None):
-        return resolve_damage_spec_from_beat_and_actor(
+        spec = resolve_damage_spec_from_beat_and_actor(
             beat=beat, actor_core=actor_core, pack=pack, world_slug=world_slug
         )
+        if spec is not None:
+            return spec
+        # Story 153-1: WN SRD unarmed-strike floor — the LAST resort, reached only
+        # when no weapon (priority 1-3) and no genre ``unarmed_damage`` (priority 4)
+        # resolved. A weaponless WN opponent's landed reprisal previously returned
+        # None here → ``dice.opponent_reprisal_damage_spec_missing`` → 0 HP, making
+        # combat unlosable (sq-playtest 150-20, the_circuit/CWN). Defer-to-SRD +
+        # No-Silent-Fallbacks: an unarmed strike deals 1d2, not nothing.
+        return DamageSpec(dice=self.SRD_UNARMED_DICE)
 
     def roll_initiative(
         self,

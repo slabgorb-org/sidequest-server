@@ -48,7 +48,7 @@ from sidequest.game.encounter import (
     EncounterMetric,
     StructuredEncounter,
 )
-from sidequest.game.session import GameSnapshot
+from sidequest.game.session import GameSnapshot, WorldStatePatch
 from sidequest.genre.models.world import (
     CartographyConfig,
     NavigationMode,
@@ -532,3 +532,138 @@ def test_seamless_region_mode_world_unchanged(oz_apply_kit):
     kit.assert_span("region.entry_rejected", reason="sub_location_in_region_mode_world")
     kit.assert_no_span_reason("seam_crossing_unresolvable")
     kit.assert_no_span_reason("seam_region_sub_location_stripped")
+
+
+# ---------------------------------------------------------------------------
+# Story 153-21: don't-clobber a same-turn crossing receipt.
+#
+# The movement subsystem already crossed the deep_descent seam EARLIER this
+# turn (ADR-113 engine-first dispatch runs before the narrator), leaving a
+# same-turn crossing receipt on the snapshot: PC at ENTRANCE_ID +
+# a this-turn region_transitions entry to "entrance". The bug: apply then
+# resolves the sticky heading "The Dropmouth — First Chamber" back to
+# known_region_id="the_dropmouth" (leading-segment match) and the static
+# latch (narration_apply.py ~4291) CLOBBERS current_region/pc_regions back
+# to "the_dropmouth", dragging the PC out of the dungeon. The fix is a guard
+# that refuses to clobber a same-turn crossing.
+# ---------------------------------------------------------------------------
+
+
+def _seed_same_turn_crossing_receipt(kit: _ApplyKit) -> None:
+    """Simulate what ``run_movement_dispatch`` → ``resolve_deep_descent``
+    already did earlier this turn (ADR-113 engine-first): the faithful
+    production receipt is a ``pc_region`` world patch onto ENTRANCE_ID
+    (``deep_descent.py:54`` calls exactly this). ``apply_world_patch``
+    (``session.py:1537``) then sets ``pc_regions["Groucho"]="entrance"``,
+    appends a same-turn ``RegionTransition(to_region="entrance")``, fires the
+    frontier hook (which dedup-appends "entrance" to ``discovered_regions``),
+    and anchor-syncs ``current_region`` to "entrance"."""
+    kit.snapshot.apply_world_patch(WorldStatePatch(pc_region={"Groucho": ENTRANCE_ID}))
+
+
+def test_seam_receipt_precondition_holds(hybrid_apply_kit):
+    """Sanity gate for the RED below: confirm the seeded receipt mirrors a
+    real movement crossing (PC at entrance, same-turn transition, current
+    anchor advanced, discovered counter bumped) BEFORE apply runs. If this
+    precondition ever breaks the AC1 test would red for the wrong reason."""
+    kit = hybrid_apply_kit
+    _seed_same_turn_crossing_receipt(kit)
+
+    assert kit.snapshot.region_for(perspective="Groucho") == ENTRANCE_ID
+    assert kit.snapshot.current_region == ENTRANCE_ID
+    this_turn = kit.snapshot.turn_manager.interaction
+    crossings = [
+        t
+        for t in kit.snapshot.region_transitions
+        if t.to_region == ENTRANCE_ID and t.turn == this_turn and t.pc_name == "Groucho"
+    ]
+    assert crossings, (
+        "the seed must leave a same-turn region_transitions entry to entrance "
+        f"(turn={this_turn}); got {kit.snapshot.region_transitions!r}"
+    )
+    # AC4 baseline: the crossing's frontier hook bumps discovered_regions.
+    assert ENTRANCE_ID in kit.snapshot.discovered_regions
+
+
+def test_resolved_seam_heading_honors_same_turn_crossing(hybrid_apply_kit, captured_watcher_events):
+    """153-21 AC1/AC3/AC4/AC6/AC7 — the don't-clobber guard.
+
+    Given a same-turn deep_descent crossing receipt (PC already at the
+    procedural ``entrance``), a sticky narrator heading that resolves BACK to
+    the seam-owning surface region ("The Dropmouth — First Chamber" →
+    ``the_dropmouth``) must NOT drag the PC back to the surface. Apply must
+    detect the same-turn crossing and DECLINE to clobber it.
+
+    FAILS against current code: the static latch at narration_apply.py ~4291
+    fires (``current_region != known_region_id`` is ``"entrance" !=
+    "the_dropmouth"`` → True), re-sets current_region/pc_regions to
+    ``the_dropmouth``, publishes ``region_current_advanced`` with
+    ``new_region="the_dropmouth"``, and logs
+    ``region.entry_resolved_to_cartography`` — the clobber-back.
+    """
+    kit = hybrid_apply_kit
+    _seed_same_turn_crossing_receipt(kit)
+
+    result = kit.narration_result(location="The Dropmouth — First Chamber")
+    kit.apply(result)
+
+    # AC1: the PC stays on the procedural entrance node — NOT clobbered back
+    # to the static surface region.
+    assert kit.snapshot.region_for(perspective="Groucho") == ENTRANCE_ID, (
+        f"AC1: PC must stay on the procedural entrance after a same-turn "
+        f"crossing; got {kit.snapshot.region_for(perspective='Groucho')!r} "
+        f"(clobbered back to the seam-owning surface region)"
+    )
+    assert kit.snapshot.current_region == ENTRANCE_ID, (
+        f"AC1: current_region must stay at the crossed entrance; got "
+        f"{kit.snapshot.current_region!r} (latch re-anchored the surface region)"
+    )
+
+    # AC3: the scene + ledger re-anchor to the AUTHORED entrance room name.
+    assert result.location == ENTRANCE_ROOM_NAME, (
+        f"AC3: scene must re-anchor to the authored entrance room "
+        f"{ENTRANCE_ROOM_NAME!r}; got {result.location!r}"
+    )
+    assert kit.snapshot.character_locations["Groucho"] == ENTRANCE_ROOM_NAME, (
+        f"AC3: ledger must agree with the re-anchored scene; got "
+        f"{kit.snapshot.character_locations['Groucho']!r}"
+    )
+
+    # AC4: the discovered counter reflects deep entry on THIS descent (the
+    # crossing's frontier hook added it). Apply must not regress it.
+    assert ENTRANCE_ID in kit.snapshot.discovered_regions, (
+        "AC4: the deep entrance must be in discovered_regions after the first descent"
+    )
+
+    # AC6: the apply decision is observable — a movement.resolved span fired
+    # recording that apply HONORED the same-turn crossing (narration-driven),
+    # reusing the 105-2 vocabulary.
+    kit.assert_span("movement.resolved", resolved_via="narration_seam_recovery")
+
+    # AC6: the static-region latch span MUST NOT fire for the crossed descent.
+    cartography_latches = [
+        s
+        for s in kit._captured_spans.get_finished_spans()
+        if s.name == "region.entry_canonicalized_dedup"
+        and (s.attributes or {}).get("resolution") == "cartography"
+        and (s.attributes or {}).get("existing_surface_form") == "the_dropmouth"
+    ]
+    assert not cartography_latches, (
+        "AC6: region.entry_canonicalized_dedup (the static-latch span) must "
+        f"NOT fire for the crossed descent; got {cartography_latches!r}"
+    )
+
+    # AC6: the watcher region-advance lane must carry "entrance", and must NOT
+    # publish a clobber-back to the seam-owning surface region.
+    advances = [e for e in captured_watcher_events if e["event_type"] == "region_current_advanced"]
+    clobber_backs = [e for e in advances if e["fields"].get("new_region") == "the_dropmouth"]
+    assert not clobber_backs, (
+        f"AC6: no region_current_advanced may carry new_region='the_dropmouth' "
+        f"(that is the clobber); got {clobber_backs!r}"
+    )
+    entrance_advances = [e for e in advances if e["fields"].get("new_region") == ENTRANCE_ID]
+    assert entrance_advances, (
+        f"AC6: a region_current_advanced with new_region={ENTRANCE_ID!r} must "
+        f"fire so the GM panel sees the engine honor the crossing; "
+        f"got advances={advances!r}"
+    )

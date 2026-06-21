@@ -42,6 +42,7 @@ from sidequest.telemetry.spans import Span
 from sidequest.telemetry.spans.monster_manual import (
     SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL,
     SPAN_MONSTER_MANUAL_INJECTED,
+    SPAN_MONSTER_MANUAL_STALE_PURGED,
 )
 from sidequest.telemetry.spans.zone_eligibility import SPAN_ZONE_ELIGIBILITY_FILTERED
 
@@ -129,6 +130,41 @@ def ensure_loaded(sd: _SessionData) -> MonsterManual | None:
 
     manual = MonsterManual.load(sd.genre_slug, sd.world_slug or "")
     pack = sd.genre_pack
+
+    # Stale-cache coherence (playtest 150-20 / CWN-OTHER-SEATING): the Manual
+    # cache is genre+world keyed and persists across sessions. A Manual seeded
+    # under the NATIVE encountergen path (player-class enemies, hp=8*level) is
+    # incoherent with a ruleset-module binding (wwn|cwn|swn|awn samples the
+    # bestiary, class="creature"). Reusing it seated a 48-HP "Wheelman" against
+    # an L1 PC. Drop the stale encounters BEFORE the needs_seeding() check so the
+    # re-seed below repopulates via the correct bestiary path. Emit a span so the
+    # GM panel sees the engine caught the stale cache (OTEL Observability).
+    if pack is not None:
+        ruleset = getattr(getattr(pack, "rules", None), "ruleset", None)
+        purged = manual.purge_ruleset_incoherent_encounters(
+            is_ruleset_module=bool(ruleset) and ruleset != "dial"
+        )
+        if purged:
+            manual.save()
+            logger.warning(
+                "monster_manual.stale_encounter_purged genre=%s world=%s ruleset=%s purged=%d",
+                sd.genre_slug,
+                sd.world_slug,
+                ruleset,
+                len(purged),
+            )
+            with Span.open(
+                SPAN_MONSTER_MANUAL_STALE_PURGED,
+                {
+                    "genre": sd.genre_slug,
+                    "world": sd.world_slug or "",
+                    "ruleset": ruleset or "",
+                    "purged": len(purged),
+                    "remaining_encounters": len(manual.encounters),
+                },
+            ):
+                pass
+
     source_dir = getattr(pack, "source_dir", None) if pack is not None else None
     if manual.needs_seeding() and source_dir is not None:
         # Late import — pregen pulls the encountergen CLI, which is

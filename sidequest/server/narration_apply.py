@@ -4166,6 +4166,59 @@ def _apply_narration_result_to_snapshot(
             _region_cart is not None
             and getattr(_region_cart, "navigation_mode", None) == NavigationMode.region
         )
+        # Story 153-24 (ADR-055): persist the ROOM axis as the dungeon graph is
+        # walked. The region axis above (discovered_regions / current_region) is
+        # healthy; the room axis (discovered_rooms / room_states /
+        # Character.current_room) was never written on a transition, so a save
+        # taken mid-crawl reloaded as an empty dungeon. Gate on room-graph
+        # navigation mode — NOT on ``discovered_rooms`` being non-empty (the
+        # playtest bug is precisely an empty list; the Story 71-15 side-effect
+        # block above uses that gate and so cannot start the room axis) — and on
+        # a genuine transition (old_loc set and != new). The write always fires
+        # in room-graph mode rather than silently skipping (No Silent Fallbacks).
+        _is_room_graph_world = (
+            _region_cart is not None
+            and getattr(_region_cart, "navigation_mode", None) == NavigationMode.room_graph
+        )
+        if (
+            _is_room_graph_world
+            and actor_for_location
+            and old_loc is not None
+            and result.location != old_loc
+        ):
+            # Story 153-24 rework (Reviewer SEC-1): apply the SAME structural
+            # hygiene the region axis uses (Story 45-16) BEFORE recording the
+            # room. A narrator aside / multiline / over-long heading must not
+            # pollute the discovered_rooms forensics accumulator — reject loudly
+            # (rejection span + warning, GM-panel visible) and skip, exactly as
+            # the region-axis filter does below. This is "fail loud on a
+            # malformed location", not the silent-skip-of-valid-moves bug this
+            # story fixes (Technical Note #5). ``old_loc`` is the actor's already-
+            # accepted current position, so only the new ``result.location`` is
+            # re-validated here.
+            is_valid_room, room_rejection_reason = validate_region_name(result.location)
+            if not is_valid_room:
+                with region_entry_rejected_span(
+                    entry=result.location,
+                    reason=room_rejection_reason or "unknown",
+                    caller_path="narration_apply.room_graph_discovery",
+                    player_name=player_name,
+                ):
+                    logger.warning(
+                        "room.entry_rejected reason=%s entry=%r player=%s caller=narration_apply.room_graph_discovery",
+                        room_rejection_reason,
+                        result.location,
+                        player_name,
+                    )
+            else:
+                from sidequest.game.room_movement import record_room_discovery
+
+                record_room_discovery(
+                    snapshot,
+                    character_id=actor_for_location,
+                    from_room=old_loc,
+                    to_room=result.location,
+                )
         # Story 45-16: filter narrator-emitted location before adding
         # to the region graph. Playtest 3 leaked
         # `(aside — narrator brief)` into discovered_regions because

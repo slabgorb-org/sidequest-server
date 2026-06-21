@@ -79,6 +79,13 @@ if TYPE_CHECKING:
 # heavy_metal — see test_psionics_dispatch_wiring_102_6), not SWN-only.
 PSIONIC_EFFORT_SOURCE = "psionic"
 
+# The canonical Without Number "assign, don't roll" standard array — the
+# "14-to-7 spread" (WWN p.11 / SWN §1.2): 14, 12, 11, 10, 9, 7. Shared by the
+# whole WN family. The three WWN packs already author it via
+# RulesConfig.standard_array; homed here so a WN-bound pack that did NOT author
+# one (the point-buy packs) still gets a shaped pool instead of a flat one.
+_WN_STANDARD_ARRAY = [14, 12, 11, 10, 9, 7]
+
 
 def is_dying_window_status(status: object) -> bool:
     """True for the WWN dying-window Mortal Injury status (story 108-6).
@@ -755,6 +762,43 @@ class WithoutNumberRulesetModule(RulesetModule):
     # Supersedes the native hint-derivation heuristic: every WN-bound pack
     # gets prime-aware placement regardless of race/mutation/training hints.
     # ------------------------------------------------------------------
+
+    def _generate_attribute_values(
+        self,
+        *,
+        method: str,
+        ability_names: list[str],
+        standard_array: list[int] | None,
+        point_buy_budget: int,
+        rolled_stats: list[tuple[str, int]] | None,
+        rng: random.Random,
+    ) -> list[int]:
+        """WN owns attribute generation (ADR-142 shaped-attribute retune; the
+        ADR-143 ruleset-owned chargen seam).
+
+        Point-buy is a DEAD surface under a WN binding: narrative chargen never
+        presents a point-buy UI, and a round-robin point-buy of budget 27 across
+        the six WN attributes collapses to ``[13, 13, 13, 12, 12, 12]`` — every
+        score in the 8-13 band, so EVERY modifier is +0. That is the "flat 13 who
+        dies in one hit" ADR-142 set out to delete. Supersede point-buy with the
+        shaped WWN/SWN SRD standard array (the pack-authored ``standard_array``
+        when present, else the WN default ``14, 12, 11, 10, 9, 7``);
+        ``assign_attributes`` then places it prime-aware.
+
+        Every other method (``standard_array``, the 3d6 rolls, roll-the-bones)
+        already carries a differentiated pool, so it passes straight through to
+        the base value-gen unchanged."""
+        if method == "point_buy":
+            array = standard_array if standard_array is not None else _WN_STANDARD_ARRAY
+            return list(array)
+        return super()._generate_attribute_values(
+            method=method,
+            ability_names=ability_names,
+            standard_array=standard_array,
+            point_buy_budget=point_buy_budget,
+            rolled_stats=rolled_stats,
+            rng=rng,
+        )
 
     def assign_attributes(
         self,

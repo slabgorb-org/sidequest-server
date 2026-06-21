@@ -5,10 +5,12 @@ Two distinct defects, both surfaced by the 2026-06-20/21 beneath_sunden
 playtest (see sprint/context/context-story-153-26.md):
 
 1. PERF — the curate stage curates the WHOLE expansion band in one bounded
-   call under a SINGLE ``asyncio.timeout(CURATE_DEADLINE_S)``, so the deadline
-   scales with band size: one slow region times out the whole band and EVERY
-   region Layer-2-degrades. The cap must be per-region (chunk / honest
-   per-region budget) so a slow region degrades ALONE, not its fast siblings.
+   call under a SINGLE FIXED ``asyncio.timeout(CURATE_DEADLINE_S)``, so the cap
+   did NOT scale with band size: once a band grew large enough that normal LLM
+   latency crossed the fixed cap, the WHOLE band Layer-2-degraded (the
+   30337ms-vs-25000ms beneath_sunden failure on exp001.r2..r5). Fix (honest
+   per-region budget — Keith's 2026-06-21 decision): scale the cap with region
+   count (``CURATE_DEADLINE_S * region_count``) so the budget tracks the work.
 
 2. CORRECTNESS — ``_degrade_region`` / ``_creatures_from_manifest`` translate
    only the procedural ``assemble_region`` manifest; they NEVER consult the
@@ -166,18 +168,18 @@ def _curate_inputs_world(
     return request, palette, expansion, fill_result, rid
 
 
-def _slow_for_region_sdk_client(*, slow_region: str, delay_s: float) -> Any:
-    """Returns a well-formed verdict, but sleeps ``delay_s`` whenever the curate
-    call's INPUT contains ``slow_region``.
+def _slow_proportional_sdk_client(*, per_region_s: float) -> Any:
+    """Returns a well-formed verdict after sleeping ``per_region_s`` times the
+    number of regions in this curate call's INPUT.
 
-    On develop the whole band is curated in ONE call, so any call containing
-    ``slow_region`` blocks the entire band -> the single wall-clock cap fires
-    and EVERY region degrades. After the per-region fix, only the chunk that
-    contains ``slow_region`` blocks; fast siblings stay curated.
+    Models "normal LLM latency that scales with band size". With the honest
+    per-region budget (`CURATE_DEADLINE_S * region_count`), an N-region band of
+    normal-latency regions completes; with a single FIXED cap it times out once
+    the band is large enough (the beneath_sunden 30s-vs-25s failure).
     """
     import asyncio as _asyncio
 
-    class _SlowForRegion:
+    class _SlowProportional:
         async def complete_with_tools(self, *a: Any, model: str, messages: Any, **k: Any) -> Any:
             prompt = messages[0].content
             _, _, input_blob = prompt.partition("INPUT:\n")
@@ -185,11 +187,11 @@ def _slow_for_region_sdk_client(*, slow_region: str, delay_s: float) -> Any:
                 payload = json.loads(input_blob)
             except json.JSONDecodeError:
                 payload = {}
-            if slow_region in payload:
-                await _asyncio.sleep(delay_s)
+            n = max(1, len(payload))
+            await _asyncio.sleep(per_region_s * n)
             return _tooling_result(_well_formed_verdict_text(messages), model)
 
-    return _SlowForRegion()
+    return _SlowProportional()
 
 
 # ---------------------------------------------------------------------------
@@ -268,17 +270,27 @@ async def test_degraded_region_surfaces_authored_encounter_creatures(
 
 
 # ---------------------------------------------------------------------------
-# AC1 — per-region curate budget: a slow region degrades ALONE, not the band
+# AC1 — honest per-region budget: the cap scales with band size, so a
+#        normal-latency multi-region band does NOT mass-degrade
 # ---------------------------------------------------------------------------
 
 
-async def test_one_slow_region_degrades_alone_not_the_whole_band() -> None:
-    """AC1 (RED on develop): with a two-region band where only the SECOND
-    region's curate is slow, the fast region must stay curated. On develop the
-    whole band is one bounded call under one wall-clock cap, so the slow region
-    times out the WHOLE band and BOTH degrade. The cap must be per-region
-    (chunk / honest per-region budget) — the deadline must not scale with band
-    size.
+async def test_band_curate_budget_scales_with_region_count() -> None:
+    """AC1 (honest per-region budget — Keith's 2026-06-21 decision): a 2-region
+    band whose per-region curate latency fits the per-region budget must NOT
+    degrade, even though the WHOLE-band latency (2 x per-region) exceeds a single
+    fixed cap. This pins the root-cause fix: the curate wall-clock cap must scale
+    with region count (`CURATE_DEADLINE_S * region_count`) so the deadline tracks
+    the work instead of degrading the whole band once it grows (the
+    30337ms-vs-25000ms beneath_sunden failure on exp001.r2..r5).
+
+    Without the fix (single fixed `CURATE_DEADLINE_S=0.4` cap) the 2-region call
+    sleeps 0.5s > 0.4s -> the whole band Layer-2-degrades. With the fix the band
+    cap is 0.4 x 2 = 0.8s > 0.5s -> curated.
+
+    (Per the Design Deviation in the session: this retunes the original
+    single-region-isolation test to the band-proportional-budget property the
+    honest-budget approach delivers; chunking-level isolation is explicitly out.)
     """
     bundle = _real_cookbook_bundle()
     request, palette, expansion, fill_result = _curate_inputs_two_regions(expansion_id=9)
@@ -287,7 +299,9 @@ async def test_one_slow_region_degrades_alone_not_the_whole_band() -> None:
 
     exporter, original_tracer_fn, _spans_mod = _setup_otel_task3()
     original_deadline = _mat.CURATE_DEADLINE_S
-    _mat.CURATE_DEADLINE_S = 0.2  # type: ignore[attr-defined]
+    # Per-region budget 0.4s; per-region work 0.25s. Band work = 0.5s.
+    # Fixed cap 0.4 < 0.5 -> would degrade; scaled cap 0.8 > 0.5 -> curated.
+    _mat.CURATE_DEADLINE_S = 0.4  # type: ignore[attr-defined]
     try:
         with dungeon_materialize_curate_span(expansion_id=request.expansion_id) as span:
             result = await _mat._stage_curate(
@@ -297,20 +311,25 @@ async def test_one_slow_region_degrades_alone_not_the_whole_band() -> None:
                 expansion=expansion,
                 fill_result=fill_result,
                 is_first_band_entry=True,
-                claude_client=_slow_for_region_sdk_client(slow_region=r1, delay_s=2.0),
+                claude_client=_slow_proportional_sdk_client(per_region_s=0.25),
                 span=span,
             )
     finally:
         _mat.CURATE_DEADLINE_S = original_deadline  # type: ignore[attr-defined]
         _spans_mod.tracer = original_tracer_fn
 
-    assert r0 not in result.uncurated_regions, (
-        "the FAST region must stay curated — the curate wall-clock cap must be "
-        "per-region, not a single whole-band cap that degrades the fast sibling "
-        "when one region is slow (the deadline must not scale with band size)"
+    assert result.curated is True, (
+        "an honest per-region budget must accommodate a normal-latency "
+        "multi-region band — the cap must scale with region count, not stay a "
+        "single fixed value that degrades the whole band once it grows"
     )
-    assert result.region_creatures[r0], "the fast region must ship curated creatures"
-    assert r1 in result.uncurated_regions, "the genuinely-slow region still degrades"
+    assert not result.uncurated_regions, "no region should degrade under the scaled budget"
+    assert result.region_creatures[r0] and result.region_creatures[r1], (
+        "both regions ship curated creatures"
+    )
+    assert not _spans_named(exporter, "dungeon.curate.degraded"), (
+        "a within-budget band must not emit a degrade span"
+    )
 
 
 # ---------------------------------------------------------------------------

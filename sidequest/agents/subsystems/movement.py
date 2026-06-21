@@ -831,6 +831,76 @@ def _resolve(
     return None, "depth_delta", False
 
 
+def _resolve_cartography_lateral(
+    *,
+    cart,
+    from_region: str,
+    exit_descriptor: str,
+    direction: str,
+    discovered_regions: list[str],
+) -> tuple[str | None, str, bool, list[str], str]:
+    """Resolve a LATERAL region-mode move against the current region's
+    cartography neighbors. Returns (target_id, resolved_via, ambiguous,
+    candidate_ids, surface).
+
+    The cartography-graph twin of ``_resolve`` (which resolves the procedural
+    room graph). The router emits only coarse directions
+    (deeper/back/toward_exit) plus the player's verbatim ``exit_descriptor``;
+    a lateral move carries its target in the descriptor (oz: "head to the
+    Emerald City"). Match the descriptor's tokens against each adjacent
+    region's id + display name; a unique top score wins, a top-2 tie is
+    ambiguous (fail loud), no overlap is a no-match (caller defers — this is
+    additive, Plan 1). ``back`` with no descriptor resolves to the
+    most-recently-prior discovered neighbor. NEVER guesses (No Silent
+    Fallbacks).
+    """
+    region = getattr(cart, "regions", {}).get(from_region)
+    if region is None:
+        return None, "region_lateral", False, [], ""
+    candidate_ids = sorted(n for n in (getattr(region, "adjacent", ()) or []))
+    if not candidate_ids:
+        return None, "region_lateral", False, [], ""
+
+    # "back" with no descriptor → most-recently-prior discovered neighbor.
+    if direction == "back" and not exit_descriptor.strip():
+        recency = {rid: i for i, rid in enumerate(discovered_regions)}
+        prior = [c for c in candidate_ids if c in recency]
+        if prior:
+            prior.sort(key=lambda c: -recency[c])
+            return prior[0], "region_back", False, candidate_ids, ""
+        return None, "region_lateral", False, candidate_ids, ""
+
+    if not exit_descriptor.strip():
+        return None, "region_lateral", False, candidate_ids, ""
+
+    want = _tokens(exit_descriptor)
+    scored: list[tuple[int, str]] = []
+    regions_map = getattr(cart, "regions", {})
+    for cid in candidate_ids:
+        neighbor = regions_map.get(cid)
+        surface_tokens = _tokens(cid)
+        if neighbor is not None:
+            surface_tokens = surface_tokens | _tokens(str(getattr(neighbor, "name", "") or ""))
+        score = len(want & surface_tokens)
+        if score > 0:
+            scored.append((score, cid))
+    if not scored:
+        return None, "region_lateral", False, candidate_ids, ""
+    scored.sort(key=lambda s: (-s[0], s[1]))
+    if len(scored) >= 2 and scored[0][0] == scored[1][0]:
+        ways = ", ".join(
+            str(getattr(regions_map.get(cid), "name", cid) or cid) for _, cid in scored
+        )
+        return (
+            None,
+            "region_lateral",
+            True,
+            candidate_ids,
+            f"{from_region} could go more than one way: {ways}. Which way?",
+        )
+    return scored[0][1], "region_lateral", False, candidate_ids, ""
+
+
 async def _sync_materialize(
     *,
     lookahead_handle: LookaheadWorkerHandle | None,

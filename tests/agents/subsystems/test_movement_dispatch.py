@@ -1209,3 +1209,280 @@ def test_unresolved_directive_forbids_advancing_the_room(capture_spans):
     assert "MOVEMENT REFUSED" in payload
     assert "has NOT moved" in payload
     assert "Do NOT change the location title" in payload
+
+
+# ===========================================================================
+# Story 153-22 — DUNGEON-MOVEMENT-RESOLVER-MISSES-EDGES
+#
+# sq-playtest 2026-06-20/21 (beneath_sunden): standing in exp002.r2 with
+# available edges ['entrance','exp002.r1','exp002.r1','exp002.r1'] — three
+# parallel passages converging on ONE neighbor. "move deeper into the next
+# chamber" → ambiguous_descriptor; "the leftmost of the three west passages"
+# → no_candidate_edges. The identical-neighbor edge list defeats
+# disambiguation: descriptor scoring sees three tied candidates and refuses,
+# even though all three lead to the SAME node (false ambiguity), and there is
+# no ordinal/positional bridge for "leftmost"/"first"/"middle".
+#
+# RED contract pinned below (drive run_movement_dispatch / run_dispatch_bank,
+# never _resolve in isolation):
+#   AC-1/AC-2 — a tie among parallel edges to the SAME node resolves
+#               (false ambiguity is not ambiguity).
+#   AC-3      — ordinal/positional descriptors bridge to a single edge.
+#   AC-4      — the same descriptor that resolves at a single-edge region
+#               also resolves at the parallel-edge region (consistency).
+#   AC-5      — a tie across DISTINCT neighbors still fails loud.
+#   AC-6      — the resolved/unresolved spans carry the lie-detector payload.
+#   AC-7      — reachability proven through the real dispatch bank.
+# ===========================================================================
+
+
+def test_parallel_edges_same_node_false_ambiguity_resolves_153_22(capture_spans):
+    """AC-1/AC-2/AC-6: 'the stairs' with three parallel stairs edges to ONE
+    deeper neighbor must RESOLVE to that neighbor — not refuse. All three
+    candidates lead to 'b', so there is no real choice to disambiguate.
+
+    RED today: descriptor scoring gives each of the three b-edges an equal
+    token score and `_resolve` returns ambiguous_descriptor (false
+    ambiguity), so the PC is stranded at 'a'."""
+    g = _graph_with(
+        [("entrance", 0.0), ("a", 1.0), ("b", 5.0)],
+        [
+            ("entrance", "a", "corridor", False),
+            ("a", "b", "stairs", False),
+            ("a", "b", "stairs", False),
+            ("a", "b", "stairs", False),
+        ],
+    )
+    store = _FakeStore(g)
+    snap = _snapshot({"Rux": "a"}, {"s1": "Rux"})
+    out = _run(
+        run_movement_dispatch(
+            _dispatch(exit_descriptor="the stairs"),
+            snapshot=snap,
+            player_name="Rux",
+            dungeon_store=store,
+            palette=_FakePalette(),
+        )
+    )
+    assert out.data.get("error") is None, (
+        f"false ambiguity refused an unambiguous destination: {out.data}"
+    )
+    assert out.data["to_region"] == "b"
+    assert snap.pc_regions["Rux"] == "b"
+    # AC-6: the lie-detector payload is present on the resolved span.
+    resolved = _spans_named(capture_spans, "movement.resolved")
+    assert len(resolved) == 1
+    assert resolved[0].attributes["edge_kind"] == "stairs"
+    assert resolved[0].attributes["resolved_via"], "resolved_via must be recorded"
+    assert "b" in list(resolved[0].attributes["candidate_exits"])
+    assert not _spans_named(capture_spans, "movement.unresolved")
+
+
+def test_descriptor_consistency_single_vs_parallel_corridor_153_22(capture_spans):
+    """AC-4: 'the corridor' resolves to 'b' whether 'a→b' is ONE corridor or
+    THREE parallel corridors. The regression the playtest caught was that the
+    identical-neighbor list silently turned a resolvable move into an
+    ambiguous one — same words, same destination, different answer.
+
+    Entrance is reached by a shaft so 'corridor' matches ONLY the a→b
+    edges (no spurious entrance match muddying the descriptor score)."""
+    # Control: a single corridor a→b resolves today.
+    g1 = _graph_with(
+        [("entrance", 0.0), ("a", 1.0), ("b", 5.0)],
+        [
+            ("entrance", "a", "shaft", False),
+            ("a", "b", "corridor", False),
+        ],
+    )
+    snap1 = _snapshot({"Rux": "a"}, {"s1": "Rux"})
+    out1 = _run(
+        run_movement_dispatch(
+            _dispatch(exit_descriptor="the corridor"),
+            snapshot=snap1,
+            player_name="Rux",
+            dungeon_store=_FakeStore(g1),
+            palette=_FakePalette(),
+        )
+    )
+    assert out1.data.get("to_region") == "b", f"control single-corridor failed: {out1.data}"
+    assert snap1.pc_regions["Rux"] == "b"
+
+    # Regression: three parallel corridors a→b must resolve to the SAME 'b'.
+    g3 = _graph_with(
+        [("entrance", 0.0), ("a", 1.0), ("b", 5.0)],
+        [
+            ("entrance", "a", "shaft", False),
+            ("a", "b", "corridor", False),
+            ("a", "b", "corridor", False),
+            ("a", "b", "corridor", False),
+        ],
+    )
+    snap3 = _snapshot({"Rux": "a"}, {"s1": "Rux"})
+    out3 = _run(
+        run_movement_dispatch(
+            _dispatch(exit_descriptor="the corridor"),
+            snapshot=snap3,
+            player_name="Rux",
+            dungeon_store=_FakeStore(g3),
+            palette=_FakePalette(),
+        )
+    )
+    assert out3.data.get("error") is None, (
+        f"parallel corridors made an otherwise-resolvable move ambiguous: {out3.data}"
+    )
+    assert out3.data["to_region"] == "b"
+    assert snap3.pc_regions["Rux"] == "b"
+
+
+def test_ordinal_descriptors_select_distinct_single_edges_153_22(capture_spans):
+    """AC-3: ordinal descriptors ('the first/second passage') bridge to a
+    single edge. With three DISTINCT corridor neighbors, 'the first passage'
+    and 'the second passage' must each resolve to ONE neighbor, and to
+    DIFFERENT neighbors — not refuse as ambiguous.
+
+    RED today: 'first'/'second' are not bearing words and the token 'passage'
+    ties all three corridors, so `_resolve` returns ambiguous_descriptor."""
+    nodes = [("entrance", 0.0), ("a", 1.0), ("b1", 5.0), ("b2", 5.0), ("b3", 5.0)]
+    edges = [
+        ("entrance", "a", "shaft", False),  # shaft → 'passage' matches only the corridors
+        ("a", "b1", "corridor", False),
+        ("a", "b2", "corridor", False),
+        ("a", "b3", "corridor", False),
+    ]
+
+    def _resolve_ordinal(phrase: str):
+        snap = _snapshot({"Rux": "a"}, {"s1": "Rux"})
+        out = _run(
+            run_movement_dispatch(
+                _dispatch(exit_descriptor=phrase),
+                snapshot=snap,
+                player_name="Rux",
+                dungeon_store=_FakeStore(_graph_with(nodes, edges)),
+                palette=_FakePalette(),
+            )
+        )
+        return out
+
+    first = _resolve_ordinal("the first passage")
+    second = _resolve_ordinal("the second passage")
+
+    assert first.data.get("error") is None, f"'first' did not bridge to an edge: {first.data}"
+    assert second.data.get("error") is None, f"'second' did not bridge to an edge: {second.data}"
+    assert first.data["to_region"] in {"b1", "b2", "b3"}
+    assert second.data["to_region"] in {"b1", "b2", "b3"}
+    # Distinct ordinals must index DISTINCT exits, not collapse to one.
+    assert first.data["to_region"] != second.data["to_region"], (
+        f"ordinals selected the same exit: first={first.data} second={second.data}"
+    )
+
+
+def test_ordinal_leftmost_resolves_single_edge_153_22(capture_spans):
+    """AC-3: 'the leftmost passage' (the playtest's positional descriptor)
+    bridges to a single edge instead of refusing. Design-agnostic about WHICH
+    edge 'leftmost' maps to — only that it resolves to exactly one real
+    neighbor, advances the PC, and records a resolved_via tag (AC-6).
+
+    'west' is deliberately omitted from the phrase: it is a bearing word and
+    would route through the bearing path, not the ordinal bridge under test."""
+    g = _graph_with(
+        [("entrance", 0.0), ("a", 1.0), ("b1", 5.0), ("b2", 5.0), ("b3", 5.0)],
+        [
+            ("entrance", "a", "shaft", False),
+            ("a", "b1", "corridor", False),
+            ("a", "b2", "corridor", False),
+            ("a", "b3", "corridor", False),
+        ],
+    )
+    snap = _snapshot({"Rux": "a"}, {"s1": "Rux"})
+    out = _run(
+        run_movement_dispatch(
+            _dispatch(exit_descriptor="the leftmost passage"),
+            snapshot=snap,
+            player_name="Rux",
+            dungeon_store=_FakeStore(g),
+            palette=_FakePalette(),
+        )
+    )
+    assert out.data.get("error") is None, f"'leftmost' refused to bridge: {out.data}"
+    assert out.data["to_region"] in {"b1", "b2", "b3"}
+    assert snap.pc_regions["Rux"] in {"b1", "b2", "b3"}
+    resolved = _spans_named(capture_spans, "movement.resolved")
+    assert len(resolved) == 1
+    assert resolved[0].attributes["resolved_via"], "resolved_via must record the ordinal bridge"
+
+
+def test_genuine_ambiguity_distinct_neighbors_still_refuses_153_22(capture_spans):
+    """AC-5: the fix must resolve FALSE ambiguity (parallel edges to one
+    node) WITHOUT papering over GENUINE ambiguity. Two parallel stairs to 'b'
+    plus one stairs to a DISTINCT 'c' is a real fork — 'the stairs' must
+    still refuse loudly, ask which way, and apply NO patch."""
+    g = _graph_with(
+        [("entrance", 0.0), ("a", 1.0), ("b", 5.0), ("c", 5.0)],
+        [
+            ("entrance", "a", "corridor", False),
+            ("a", "b", "stairs", False),
+            ("a", "b", "stairs", False),
+            ("a", "c", "stairs", False),
+        ],
+    )
+    store = _FakeStore(g)
+    snap = _snapshot({"Rux": "a"}, {"s1": "Rux"})
+    out = _run(
+        run_movement_dispatch(
+            _dispatch(exit_descriptor="the stairs"),
+            snapshot=snap,
+            player_name="Rux",
+            dungeon_store=store,
+            palette=_FakePalette(),
+        )
+    )
+    assert out.data["error"] == "ambiguous_descriptor", (
+        f"genuine fork between distinct neighbors must stay ambiguous: {out.data}"
+    )
+    assert snap.pc_regions["Rux"] == "a", "a refused move must not advance the PC"
+    unresolved = _spans_named(capture_spans, "movement.unresolved")
+    assert len(unresolved) == 1
+    assert unresolved[0].attributes["reason"] == "ambiguous_descriptor"
+
+
+def test_parallel_edge_resolution_wires_through_bank_153_22(capture_spans):
+    """AC-7: drive the false-ambiguity resolution through the REAL dispatch
+    bank (the production invocation path), not _resolve in isolation. Three
+    parallel stairs to one node + 'the stairs' → the bank advances the PC and
+    movement.resolved fires."""
+    g = _graph_with(
+        [("entrance", 0.0), ("a", 1.0), ("b", 5.0)],
+        [
+            ("entrance", "a", "corridor", False),
+            ("a", "b", "stairs", False),
+            ("a", "b", "stairs", False),
+            ("a", "b", "stairs", False),
+        ],
+    )
+    store = _FakeStore(g)
+    snap = _snapshot({"Rux": "a"}, {"s1": "Rux"})
+    package = DispatchPackage(
+        turn_id="t1",
+        per_player=[
+            PlayerDispatch(
+                player_id="Rux",
+                raw_action="I take the stairs down",
+                dispatch=[_dispatch(exit_descriptor="the stairs")],
+            )
+        ],
+        confidence_global=0.9,
+    )
+    _run(
+        run_dispatch_bank(
+            package,
+            context={
+                "snapshot": snap,
+                "player_name": "Rux",
+                "dungeon_store": store,
+                "palette": _FakePalette(),
+                "npcs_present": [],
+            },
+        )
+    )
+    assert snap.pc_regions["Rux"] == "b", "bank did not resolve the parallel-edge move"
+    assert _spans_named(capture_spans, "movement.resolved")

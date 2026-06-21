@@ -110,3 +110,41 @@ def test_requested_bearing_token_exact_not_substring():
     assert requested_bearing("go deeper") is None
     # not a spurious substring match: "upper" must not read as "up".
     assert requested_bearing("the upper vault") is None
+
+
+# ---------------------------------------------------------------------------
+# Story 153-22 (DUNGEON-MOVEMENT-RESOLVER-MISSES-EDGES): three parallel edges
+# to ONE neighbor must not project as three indistinguishable exits.
+# assign_bearings keys the bearing dict by to_region_id, so today all three
+# a→b edges collapse onto a single bearing and project_region emits three
+# identical RegionExits — the "name a bearing" prompt cannot tell them apart,
+# which is the false-ambiguity root cause the movement resolver trips over.
+# ---------------------------------------------------------------------------
+
+
+def test_parallel_edges_to_one_neighbor_are_distinguishable_153_22():
+    """AC-1: the projected exits for a region with three parallel corridors to
+    one neighbor must be tellable apart. Design-agnostic post-fix contract:
+    either each parallel exit carries a DISTINCT bearing/label, or the
+    parallel edges are collapsed to a single exit (materializer/projection
+    dedup). Either way, no two projected exits share the same
+    (to_region_id, bearing)."""
+    g = _graph(
+        [("entrance", 0.0), ("a", 1.0), ("b", 2.0)],
+        [
+            ("entrance", "a", "corridor"),
+            ("a", "b", "corridor"),
+            ("a", "b", "corridor"),
+            ("a", "b", "corridor"),
+        ],
+    )
+    proj = project_region(g, "a", _FakePalette())
+    keys = [(e.to_region_id, e.bearing) for e in proj.exits]
+    assert len(set(keys)) == len(keys), (
+        f"parallel edges projected as indistinguishable exits: {keys}"
+    )
+    # The three a→b passages specifically must be tellable apart (or deduped).
+    to_b = [e for e in proj.exits if e.to_region_id == "b"]
+    assert len({e.bearing for e in to_b}) == len(to_b), (
+        f"a→b parallel exits share a bearing: {[e.bearing for e in to_b]}"
+    )

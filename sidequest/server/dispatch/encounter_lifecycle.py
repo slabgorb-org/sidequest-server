@@ -320,44 +320,77 @@ def _seed_combat_hp_depletion_to_npcs(
             continue
         npc = by_name.get(actor.name)
         created = npc is None
+        pool_origin = ""
         if created:
-            # Item 3 wiring: no backing Npc.core for this opponent. Create
-            # one seeded with the content stats so find_creature_core can
-            # reach it and hp_depletion can resolve. The flavor fields are
-            # placeholders (the narrator owns prose); the mechanical surface
-            # (hp pool, AC) is the load-bearing part.
-            #
-            # 108-2 (MINTING-MAJOR): reaching here means the opponent name
-            # resolved to NEITHER a bound roster entry NOR a co-located statted
-            # adversary (the materialized-threat resolution upstream already
-            # tried). This is a genuine fabrication — a router-named free string
-            # with no backing (the "Arena Opponent" / "Hold-Dead" stubs). Mark it
-            # ``ephemeral`` so it is reaped with its resolved encounter and never
-            # persists as durable canon, and fire the loud lie-detector span so
-            # the GM panel sees the fabrication + the content gap (No Silent
-            # Fallbacks).
-            core = CreatureCore(
-                name=actor.name,
-                description="Combat opponent",
-                personality="Adversary",
-                inventory=Inventory(),
-                hp=hp_pool_from_hp(hp),
-                armor_class=ac,
+            # 153-10 ([WWN-OTHER-SEATING]): before fabricating a hollow stub, check
+            # ``snapshot.npc_pool`` for a scene-active PERSON antagonist the
+            # narrator established on a prior turn. The seater declined the ambient
+            # MM grab upstream (``_resolve_opponent_from_roster``), so a router-
+            # named pool antagonist reaches us un-backed. Promote it carrying its
+            # narrated identity + disposition (the native sibling of the Fate
+            # seeder's 126-32a promotion) instead of minting a phantom of the same
+            # name beside the cast member the player engaged — then seed the
+            # content hp/AC over the promotion's placeholder pool so hp_depletion
+            # still resolves. This is NOT a fabrication, so it does NOT fire the
+            # ``minted_stub`` lie-detector span; the ``pool_origin`` rides the
+            # edge-published span below so the GM panel sees the promotion.
+            pool_member = next(
+                (m for m in snapshot.npc_pool if m.name == actor.name and not m.is_creature),
+                None,
             )
-            npc = Npc(core=core, ephemeral=True)
-            snapshot.npcs.append(npc)
-            with encounter_opponent_minted_stub_span(
-                confrontation_type=str(getattr(cdef, "confrontation_type", "") or ""),
-                opponent=actor.name,
-                hp=int(hp),
-                armor_class=int(ac),
-                reason=(
-                    "router-named opponent has no backing roster/bestiary entry "
-                    "and no co-located bound adversary to resolve to — fabricated "
-                    "an ephemeral stub (author the encounter's adversary)"
-                ),
-            ):
-                pass
+            if pool_member is not None:
+                from sidequest.server.narration_apply import (
+                    _promote_pool_member_to_npc,
+                    _seed_invented_npc_identity,
+                )
+
+                npc = _promote_pool_member_to_npc(pool_member)
+                _seed_invented_npc_identity(
+                    npc=npc, member=pool_member, snapshot=snapshot, turn_num=turn
+                )
+                npc.core.hp = hp_pool_from_hp(hp)
+                npc.core.armor_class = ac
+                snapshot.npcs.append(npc)
+                pool_origin = pool_member.name
+            else:
+                # Item 3 wiring: no backing Npc.core for this opponent. Create
+                # one seeded with the content stats so find_creature_core can
+                # reach it and hp_depletion can resolve. The flavor fields are
+                # placeholders (the narrator owns prose); the mechanical surface
+                # (hp pool, AC) is the load-bearing part.
+                #
+                # 108-2 (MINTING-MAJOR): reaching here means the opponent name
+                # resolved to NEITHER a bound roster entry NOR a co-located statted
+                # adversary NOR a scene-active pool antagonist (the
+                # materialized-threat resolution + pool promotion upstream already
+                # tried). This is a genuine fabrication — a router-named free string
+                # with no backing (the "Arena Opponent" / "Hold-Dead" stubs). Mark
+                # it ``ephemeral`` so it is reaped with its resolved encounter and
+                # never persists as durable canon, and fire the loud lie-detector
+                # span so the GM panel sees the fabrication + the content gap (No
+                # Silent Fallbacks).
+                core = CreatureCore(
+                    name=actor.name,
+                    description="Combat opponent",
+                    personality="Adversary",
+                    inventory=Inventory(),
+                    hp=hp_pool_from_hp(hp),
+                    armor_class=ac,
+                )
+                npc = Npc(core=core, ephemeral=True)
+                snapshot.npcs.append(npc)
+                with encounter_opponent_minted_stub_span(
+                    confrontation_type=str(getattr(cdef, "confrontation_type", "") or ""),
+                    opponent=actor.name,
+                    hp=int(hp),
+                    armor_class=int(ac),
+                    reason=(
+                        "router-named opponent has no backing roster/bestiary entry "
+                        "and no co-located bound adversary to resolve to — fabricated "
+                        "an ephemeral stub (author the encounter's adversary)"
+                    ),
+                ):
+                    pass
         elif npc.creature_id is not None:
             # 108-2: a BOUND, statted bestiary creature (resolved upstream or
             # named directly). Its authored HP pool IS the WWN-balanced math the
@@ -391,6 +424,10 @@ def _seed_combat_hp_depletion_to_npcs(
             seed_source="opponent_default_stats",
             last_seen_turn=npc.last_seen_turn,
             last_seen_location=npc.last_seen_location or "",
+            # 153-10: non-empty when this opponent was PROMOTED from a pool
+            # antagonist (vs fabricated as an ephemeral stub) — lets the GM panel
+            # distinguish "seated the cast member" from "minted a phantom".
+            pool_origin=pool_origin,
         ):
             pass
         # BUG 1 (eh-opp-damage): flag a TOOTHLESS Other at INSTANTIATION. If this
@@ -929,6 +966,29 @@ def _resolve_opponent_from_roster(
         key=lambda n: (n.last_seen_turn, n.threat_level or 0, n.core.name),
         reverse=True,
     )
+    # 153-10 ([WWN-OTHER-SEATING]): the router named a scene-active antagonist the
+    # narrator established on a PRIOR turn that lives in ``snapshot.npc_pool`` — a
+    # PERSON, not yet promoted to ``snapshot.npcs``, so the candidate scan above
+    # (gated ``creature_id is not None`` over ``snapshot.npcs``) cannot see it. On
+    # a vague / non-roster target this is the "MM grab": an ambient bestiary mob
+    # wins by default over the cast member the player actually engaged (playtest
+    # 150-14 "Mistos Warden over the Daggereyes"). Prefer the pool antagonist —
+    # decline the conscription so the caller seats the router-named threat, and the
+    # hp seeder (``_seed_combat_hp_depletion_to_npcs``) promotes the pool member
+    # downstream carrying its narrated identity. This is the native/WN sibling of
+    # the Fate seater's 126-32a pool consultation. Applies in COMBAT too (unlike
+    # the 150-2 / 153-9 declines below): a NAMED scene antagonist always outranks
+    # an ambient mob, regardless of category. Emit the lie-detector span naming the
+    # refused bestiary mob (No Silent Fallbacks).
+    if any(m.name == threat_name and not m.is_creature for m in snapshot.npc_pool):
+        with encounter_roster_resolution_skipped_span(
+            router_name=threat_name,
+            declined_name=candidates[0].core.name,
+            confrontation_category=confrontation_category,
+            reason="pool_antagonist",
+        ):
+            pass
+        return None
     # Every candidate here is a bestiary monster (the filter is
     # ``creature_id is not None``). The 108-2 reconciliation exists to preserve a
     # bound creature's COMBAT hp stats (ADR-059) — so it is only correct for a

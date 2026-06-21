@@ -311,81 +311,142 @@ def _bind_current_region_from_opening(
     world_slug: str,
     opening: object,
 ) -> str | None:
-    """Bind ``snapshot.current_region`` to the opening's declared ``region_id``.
+    """Bind ``snapshot.current_region`` to the region the opening lands in.
 
-    The opening's ``setting.region_id`` is an authored binding to a real
-    cartography graph node (the free-text ``location_label`` is prose only and
-    is never a region id). When the opening declares a ``region_id``:
+    The opening picker can anchor the party in a region OTHER than
+    ``cartography.starting_region`` (oz: the Emerald City gate; burning_peace:
+    hakone). Region-resolution precedence — all DETERMINISTIC, never a fuzzy
+    prose match (CLAUDE.md No-Silent-Fallbacks):
 
-    - If it IS a declared cartography region, set ``snapshot.current_region``
-      to it (and dedup-append to ``discovered_regions``), emit a
-      ``current_region`` state-patch OTEL span, and return the bound id so the
-      caller can fire the opening LOCATION_DESCRIPTION for it. Only emits/
-      returns when the canonical id actually CHANGED — re-binding to the same
-      region is a silent no-op (no redundant patch).
-    - If it is NOT a declared region, FAIL LOUD: emit a
-      ``current_region.bind_failed`` ERROR span and raise. A bad binding is a
-      pack-authoring bug (per CLAUDE.md No-Silent-Fallbacks) — never fuzzy-
-      match the free-text label to a node, never leave the region Unknown.
+    1. ``setting.region_id`` — the authored binding to a real cartography graph
+       node. If declared but NOT a real region, FAIL LOUD: emit a
+       ``current_region.bind_failed`` ERROR span and raise (a pack-authoring
+       bug). Bound with ``source=opening.setting.region_id``.
+    2. ``setting.location_label`` when it is itself an EXACT match for a
+       declared cartography region id (the burning_peace ``location_label:
+       hakone`` authoring shape). An exact id match is deterministic — the
+       narrow, documented exception to "location_label is prose only", NOT a
+       fuzzy lookup. Bound with ``source=opening.location_label_region_match``
+       so the GM panel can tell it apart from an authored region_id.
 
-    Returns the bound region id when it changed, else ``None`` (no region_id
-    declared, or already bound to that region).
+    When a region is resolved, set ``snapshot.current_region`` (dedup-append to
+    ``discovered_regions``, seed per-PC regions), emit a
+    ``state_patch.current_region`` OTEL span, and return the bound id so the
+    caller can fire the opening LOCATION_DESCRIPTION for it — but only when the
+    canonical id actually CHANGED (re-binding to the same region is a silent
+    no-op, no redundant patch).
+
+    When NEITHER resolves but the opening anchors a real place in a
+    multi-region world (``location_label`` set + cartography declares regions —
+    the oz prose-label shape), the region cannot be safely inferred and stays
+    pinned to the static ``cartography.starting_region`` (possibly wrong). That
+    is the OPENING-REGION-NO-PROPAGATE bug class, so make the gap LOUD: emit an
+    ``opening.region_unbound`` WARNING span flagging that the opening needs an
+    authored ``region_id`` (No Silent Fallbacks + OTEL Observability).
+    Chassis-anchored / single-region / flavor-only-cartography openings have no
+    region to bind and stay silent.
+
+    Returns the bound region id when it changed, else ``None`` (no region
+    resolved, or already bound to that region).
     """
-    region_id = getattr(getattr(opening, "setting", None), "region_id", None)
-    if not region_id:
-        return None
+    setting = getattr(opening, "setting", None)
+    region_id = getattr(setting, "region_id", None)
+    location_label = getattr(setting, "location_label", None)
 
     world = pack.worlds.get(world_slug)
     cartography = getattr(world, "cartography", None) if world is not None else None
     regions = getattr(cartography, "regions", {}) or {}
     opening_id = getattr(opening, "id", "") or ""
 
-    if region_id not in regions:
-        _watcher_publish(
-            "current_region.bind_failed",
-            {
-                "opening_id": opening_id,
-                "declared_region_id": region_id,
-                "world": world_slug,
-                "declared_regions": sorted(regions),
-                "reason": "region_id_not_a_cartography_node",
-            },
-            component="opening_hook",
-            severity="error",
-        )
-        trace.get_current_span().add_event(
-            "current_region.bind_failed",
-            {
-                "event": "current_region.bind_failed",
-                "opening_id": opening_id,
-                "declared_region_id": region_id,
-                "world": world_slug,
-                "declared_regions": ",".join(sorted(regions)),
-            },
-        )
-        raise RegionInitError(
-            f"opening '{opening_id}' setting.region_id '{region_id}' is not a "
-            f"declared cartography region (declared: {sorted(regions)})"
-        )
+    resolved_region: str | None = None
+    source = ""
+    if region_id:
+        if region_id not in regions:
+            _watcher_publish(
+                "current_region.bind_failed",
+                {
+                    "opening_id": opening_id,
+                    "declared_region_id": region_id,
+                    "world": world_slug,
+                    "declared_regions": sorted(regions),
+                    "reason": "region_id_not_a_cartography_node",
+                },
+                component="opening_hook",
+                severity="error",
+            )
+            trace.get_current_span().add_event(
+                "current_region.bind_failed",
+                {
+                    "event": "current_region.bind_failed",
+                    "opening_id": opening_id,
+                    "declared_region_id": region_id,
+                    "world": world_slug,
+                    "declared_regions": ",".join(sorted(regions)),
+                },
+            )
+            raise RegionInitError(
+                f"opening '{opening_id}' setting.region_id '{region_id}' is not a "
+                f"declared cartography region (declared: {sorted(regions)})"
+            )
+        resolved_region = region_id
+        source = "opening.setting.region_id"
+    elif location_label and location_label in regions:
+        # Deterministic exact-id fallback: the opening authored its region as
+        # the location_label (burning_peace ``location_label: hakone``).
+        resolved_region = location_label
+        source = "opening.location_label_region_match"
+
+    if resolved_region is None:
+        # No region resolved. If the opening anchors a real place in a
+        # multi-region world but declared no usable region binding, that is the
+        # OPENING-REGION-NO-PROPAGATE gap — current_region stays at the static
+        # starting_region (possibly wrong). Make it loud so the GM panel flags
+        # the missing region_id.
+        if regions and location_label:
+            _watcher_publish(
+                "opening.region_unbound",
+                {
+                    "opening_id": opening_id,
+                    "location_label": location_label,
+                    "current_region": snapshot.current_region or "",
+                    "world": world_slug,
+                    "declared_regions": sorted(regions),
+                    "reason": "no_region_id_and_location_label_not_a_region",
+                },
+                component="opening_hook",
+                severity="warning",
+            )
+            trace.get_current_span().add_event(
+                "opening.region_unbound",
+                {
+                    "event": "opening.region_unbound",
+                    "opening_id": opening_id,
+                    "location_label": location_label,
+                    "current_region": snapshot.current_region or "",
+                    "world": world_slug,
+                    "declared_regions": ",".join(sorted(regions)),
+                },
+            )
+        return None
 
     prior_region = snapshot.current_region or ""
-    if prior_region == region_id:
+    if prior_region == resolved_region:
         return None  # already bound — no redundant patch
 
-    snapshot.current_region = region_id
-    if region_id not in snapshot.discovered_regions:
-        snapshot.discovered_regions.append(region_id)
+    snapshot.current_region = resolved_region
+    if resolved_region not in snapshot.discovered_regions:
+        snapshot.discovered_regions.append(resolved_region)
     # Movement subsystem §Q0: seed seated PCs' per-PC region (chargen complete,
     # seats known) so region_for(perspective=pc) resolves by movement time.
-    snapshot.seed_pc_regions(region_id)
+    snapshot.seed_pc_regions(resolved_region)
 
     _watcher_publish(
         "state_patch.current_region",
         {
             "opening_id": opening_id,
-            "current_region": region_id,
+            "current_region": resolved_region,
             "prior_current_region": prior_region,
-            "source": "opening.setting.region_id",
+            "source": source,
             "world": world_slug,
         },
         component="opening_hook",
@@ -396,13 +457,13 @@ def _bind_current_region_from_opening(
         {
             "event": "state_patch.current_region",
             "opening_id": opening_id,
-            "current_region": region_id,
+            "current_region": resolved_region,
             "prior_current_region": prior_region,
-            "source": "opening.setting.region_id",
+            "source": source,
             "world": world_slug,
         },
     )
-    return region_id
+    return resolved_region
 
 
 def _bootstrap_character_locations_from_opening(snapshot: GameSnapshot, opening: object) -> None:

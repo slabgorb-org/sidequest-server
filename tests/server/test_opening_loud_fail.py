@@ -326,6 +326,23 @@ def _opening_with_region(region_id: str | None) -> SimpleNamespace:
     )
 
 
+def _opening_with_setting(
+    region_id: str | None = None, location_label: str | None = None
+) -> SimpleNamespace:
+    """An opening exposing BOTH setting fields (region_id + location_label).
+
+    Mirrors the real ``OpeningSetting`` shape so the binder can fall back to
+    a location_label that is itself a declared region id (the burning_peace
+    ``location_label: hakone`` authoring shape) and so the unbound-prose-label
+    case (oz ``location_label: "The great gate of the Emerald City"``) can be
+    exercised.
+    """
+    return SimpleNamespace(
+        id="cold_open_under_test",
+        setting=SimpleNamespace(region_id=region_id, location_label=location_label),
+    )
+
+
 def _region_snapshot(current_region: str) -> SimpleNamespace:
     # Movement subsystem §Q0: _bind_current_region_from_opening now seeds the
     # per-PC region map after binding the anchor. Fit the lightweight mock to
@@ -422,3 +439,97 @@ def test_bind_region_fails_loud_on_dangling_region_id(captured_events) -> None:
     assert meta["severity"] == "error"
     # current_region untouched — no half-applied rebind.
     assert snap.current_region == "toods_dome"
+
+
+# ---- OPENING-REGION-NO-PROPAGATE (playtest 2026-06-20, oz + burning_peace) --
+#
+# The opening picker can land the party in a region OTHER than
+# cartography.starting_region, but the openings did not declare
+# setting.region_id, so the binder silently no-oped and current_region stayed
+# pinned to the static spawn region (oz: stuck at munchkin_country while the
+# party stood at the Emerald City gate; burning_peace: stuck at edo while the
+# party stood at hakone). Two engine-side resolutions:
+#   - burning_peace authored ``location_label: hakone``, and ``hakone`` IS a
+#     declared cartography region — a deterministic exact-id match the binder
+#     can use as a fallback (NOT a fuzzy prose match).
+#   - oz authored a prose ``location_label`` that matches no region — the
+#     binder cannot resolve it, so it must FLAG the gap loudly (the opening
+#     needs an authored region_id) rather than silently keep the wrong region.
+
+
+def test_bind_region_from_location_label_that_is_a_region_id(captured_events) -> None:
+    """No region_id, but location_label exactly matches a declared region
+    (the burning_peace ``location_label: hakone`` shape) → bind current_region
+    to it via the deterministic exact-id fallback, emit a
+    ``state_patch.current_region`` span whose ``source`` marks it as the
+    location_label fallback (so the GM panel can tell it apart from an
+    authored region_id bind)."""
+    snap = _region_snapshot("edo")
+    bound = _bind_current_region_from_opening(
+        snap,
+        _region_pack(["edo", "hakone"]),
+        "test_world",
+        _opening_with_setting(region_id=None, location_label="hakone"),
+    )
+    assert bound == "hakone"
+    assert snap.current_region == "hakone"
+    assert "hakone" in snap.discovered_regions
+
+    patches = [
+        (fields, meta) for et, fields, meta in captured_events if et == "state_patch.current_region"
+    ]
+    assert patches, f"expected state_patch.current_region span; captured: {captured_events}"
+    fields, meta = patches[0]
+    assert fields["current_region"] == "hakone"
+    assert fields["prior_current_region"] == "edo"
+    assert fields["source"] == "opening.location_label_region_match"
+    assert meta["component"] == "opening_hook"
+
+
+def test_bind_region_unbound_warns_when_label_is_not_a_region(captured_events) -> None:
+    """No region_id and a prose location_label that matches no declared region
+    (the oz ``"The great gate of the Emerald City"`` shape) → current_region is
+    NOT changed (we will not fuzzy-match prose to a node), but the silent gap
+    is made LOUD: an ``opening.region_unbound`` WARNING span fires so the GM
+    panel flags that this opening needs an authored region_id (No Silent
+    Fallbacks + OTEL Observability)."""
+    snap = _region_snapshot("munchkin_country")
+    bound = _bind_current_region_from_opening(
+        snap,
+        _region_pack(["munchkin_country", "the_emerald_city"]),
+        "test_world",
+        _opening_with_setting(
+            region_id=None,
+            location_label="The great gate of the Emerald City, the green hub of Oz",
+        ),
+    )
+    assert bound is None
+    # current_region untouched — no fuzzy guess.
+    assert snap.current_region == "munchkin_country"
+
+    unbound = [
+        (fields, meta) for et, fields, meta in captured_events if et == "opening.region_unbound"
+    ]
+    assert unbound, f"expected opening.region_unbound WARNING span; captured: {captured_events}"
+    fields, meta = unbound[0]
+    assert meta["severity"] == "warning"
+    assert meta["component"] == "opening_hook"
+    assert fields["opening_id"] == "cold_open_under_test"
+    assert fields["current_region"] == "munchkin_country"
+    assert "Emerald City" in fields["location_label"]
+
+
+def test_bind_region_chassis_anchored_stays_silent(captured_events) -> None:
+    """A chassis-anchored opening (no location_label, no region_id) is NOT a
+    region gap — it legitimately has no place-anchor, so the binder stays a
+    silent no-op (no spurious region_unbound warning)."""
+    snap = _region_snapshot("toods_dome")
+    bound = _bind_current_region_from_opening(
+        snap,
+        _region_pack(["toods_dome", "blind_reach"]),
+        "test_world",
+        _opening_with_setting(region_id=None, location_label=None),
+    )
+    assert bound is None
+    assert snap.current_region == "toods_dome"
+    assert captured_events == []

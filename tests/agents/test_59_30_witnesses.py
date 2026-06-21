@@ -580,16 +580,16 @@ def test_witnesses_count_is_nine_and_docstring_not_stale() -> None:
     """AC: the witness-count docstring is corrected to the actual registered
     count. Asserted via ``__doc__`` reflection (runtime object, NOT source-text
     grep). Story 59-30 added witnessed_act + movement (→8); story 117-3 (ADR-146
-    §4) added quest_offer (→9), the structurally-sound replacement for the
-    keyword unminted-objective detector."""
+    §4) added quest_offer (→9); story 153-5 (ADR-130) added course (→10), the
+    orbital course/clock engagement read."""
     from sidequest.agents.dispatch_engagement_watcher import (
         _WITNESSES,
         detect_dispatch_engagement_mismatch,
     )
 
-    assert len(_WITNESSES) == 9, (
-        f"expected 9 registered witnesses (6 original + witnessed_act + movement "
-        f"+ quest_offer); got {len(_WITNESSES)}: {sorted(_WITNESSES)}"
+    assert len(_WITNESSES) == 10, (
+        f"expected 10 registered witnesses (6 original + witnessed_act + movement "
+        f"+ quest_offer + course); got {len(_WITNESSES)}: {sorted(_WITNESSES)}"
     )
     doc = (detect_dispatch_engagement_mismatch.__doc__ or "").lower()
     assert "six" not in doc, "stale 'all six live-path subsystems' docstring not corrected"

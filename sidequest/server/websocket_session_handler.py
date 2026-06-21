@@ -978,6 +978,14 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         _dispatch_turn_number = intent_router_pass.effective_dispatch_turn_number(
                             snapshot.turn_manager, is_opening_turn=is_opening_turn
                         )
+                        # Orbital course/clock subsystem context (Story 153-5):
+                        # the world's orbits config lives on the Session, not the
+                        # snapshot. Thread it so the course handler can resolve a
+                        # travel intent; None for worlds with no orbital tier.
+                        _session = sd._room.session if sd._room is not None else None
+                        _orbital_content = (
+                            _session.orbital_content if _session is not None else None
+                        )
                         (
                             _dispatch_package,
                             _bank_result,
@@ -991,6 +999,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                             dungeon_store=_dungeon_store,
                             palette=_dungeon_palette,
                             lookahead_handle=_lookahead_handle,
+                            orbital_content=_orbital_content,
                             phase_timings=timings,
                             turn_number=_dispatch_turn_number,
                         )

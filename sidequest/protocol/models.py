@@ -1112,6 +1112,41 @@ class FatePendingCompel(BaseModel):
     offered_delta: int = 1
 
 
+class FateExchangeLine(BaseModel):
+    """One resolved action in the MOST RECENT Fate exchange — the legible
+    attack/defend math the player surface renders (FATE-CONFLICT-SEQUENCE-OPAQUE,
+    sq-playtest 2026-06-20).
+
+    The player reported that an attack→defend exchange "silently returns to my
+    turn" with no per-exchange outcome. This is the structured, deterministic
+    record the UI shows as a "Last Exchange" ledger so the result no longer depends
+    on the narrator surfacing it in prose. Totals are shown; the raw NPC 4dF faces
+    are NOT (ADR-148 keeps opponent dice hidden, but the derived total is fair).
+
+    ``actor`` / ``target`` are names; the UI localizes "You"/"you" when they match
+    the local PC. ``skill`` is the acting skill, ``defense_skill`` the defender's
+    skill (for an attack; "" for a passive action). ``opposition_total`` is the
+    defender's rolled/recorded ladder total (or a passive difficulty). ``outcome``
+    ∈ {``"miss"``, ``"tie"``, ``"absorbed"``, ``"taken_out"``, ``"conceded"``}
+    for an attack; {``"advantage"``, ``"boost"``, ``"fail"``} for create-advantage;
+    {``"overcome"``, ``"cost"``, ``"fail"``} for an overcome. ``detail`` is a short
+    human result line ("absorbed (3 shifts)", "no harm", "taken out").
+    """
+
+    model_config = {"extra": "forbid"}
+
+    actor: str
+    action: str
+    skill: str = ""
+    target: str = ""
+    defense_skill: str = ""
+    actor_total: int = 0
+    opposition_total: int = 0
+    shifts: int = 0
+    outcome: str = ""
+    detail: str = ""
+
+
 class FateConflictEntry(BaseModel):
     """The active Fate conflict's participants by side (ADR-144 F3a).
 
@@ -1120,6 +1155,11 @@ class FateConflictEntry(BaseModel):
     (Notice/Empathy) is computed at resolution and surfaces in the F3f overlay,
     not here. ``pending_compels`` (ADR-144 F3e) are the narrator's offered compels
     awaiting accept/refuse — the player surface gates its control on this list.
+
+    ``last_exchange`` (FATE-CONFLICT-SEQUENCE-OPAQUE, sq-playtest 2026-06-20) is the
+    most recent exchange's per-action resolution ledger — the legible attack/defend
+    math, replaced wholesale each exchange. Empty between exchanges and on a fresh
+    conflict; the UI treats it as optional.
     """
 
     model_config = {"extra": "forbid"}
@@ -1127,6 +1167,7 @@ class FateConflictEntry(BaseModel):
     active: bool = True
     participants: list[FateConflictParticipant] = Field(default_factory=list)
     pending_compels: list[FatePendingCompel] = Field(default_factory=list)
+    last_exchange: list[FateExchangeLine] = Field(default_factory=list)
     #: True when this encounter is a Fate Contest (``encounter.contest is not None``)
     #: rather than a Conflict (spec 2026-06-17 §2). A Contest has no stress/
     #: consequences and resolves goals, so ``attack`` is invalid in it — the server

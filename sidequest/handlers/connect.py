@@ -1787,6 +1787,37 @@ class ConnectHandler:
                     snapshot=snapshot,
                     emit_fn=lambda msg, _label: bootstrap_msgs.append(msg),
                 )
+                # FATE DEFEND barrier resume (Story 153-7, ADR-151). A round parked
+                # at the DEFEND barrier emits its FATE_DEFEND_REQUEST(s) ONCE; a
+                # reconnecting defender would otherwise never see the prompt again
+                # and the ledger would never fill. First sweep any ORPHANED pending
+                # defenses (a defender who left the conflict / table) so the barrier
+                # can resume; then RE-EMIT the reconnecting defender's own unfilled
+                # requests so they can throw. Both no-op off a Fate pack / with no
+                # parked barrier. Mirrors the FATE_STATE resume re-emit above.
+                if (
+                    snapshot is not None
+                    and snapshot.encounter is not None
+                    and snapshot.encounter.pending_defenses
+                ):
+                    from sidequest.server.dispatch.fate_conflict import (
+                        clear_orphaned_pending_defenses,
+                    )
+                    from sidequest.server.websocket_handlers.fate_defend_resume import (
+                        _maybe_reemit_pending_defenses,
+                    )
+
+                    if session._session_data.genre_pack.rules.ruleset == "fate":
+                        clear_orphaned_pending_defenses(
+                            encounter=snapshot.encounter, snapshot=snapshot
+                        )
+                    _maybe_reemit_pending_defenses(
+                        sd=session._session_data,
+                        snapshot=snapshot,
+                        defender_name=resume_char_name,
+                        player_id=player_id,
+                        emit_fn=lambda msg, _label: bootstrap_msgs.append(msg),
+                    )
                 # CHAPTER_MARKER — restore the running-header chapter title
                 # on resume so the saved location shows up immediately
                 # (not only after the next narration turn). Pingpong

@@ -2138,7 +2138,22 @@ def _resolve_world_dir(request: MaterializationRequest) -> Path | None:
 
     loader = GenreLoader(search_paths=DEFAULT_GENRE_PACK_SEARCH_PATHS)
     pack_root = loader.find(request.genre_slug)
-    return pack_root / "worlds" / request.world_slug
+    world_dir = pack_root / "worlds" / request.world_slug
+    # Only mirror rooms into a REAL authored world (one carrying a world.yaml).
+    # A resolved dir with no world.yaml is not a world: persisting rooms there
+    # mints a phantom ``worlds/<slug>/rooms`` dir that the genre loader then
+    # rejects on its next load. In production every bound world ships a
+    # world.yaml, so this never fires; it bites only the hermetic test fixture
+    # tree, where a genre symlink resolves a world the fixture pack does not
+    # author (and concurrent xdist workers race on that shared path). The
+    # in-memory dungeon is unaffected — only the optional on-disk YAML mirror is
+    # skipped. No Silent Fallbacks: we refuse to fabricate a world dir, we do not
+    # silently write into the wrong tree. Tests that exercise the room-YAML mirror
+    # itself pass an explicit world_dir to write_room_yaml/_stage_emit_room_yamls
+    # and never reach here.
+    if not (world_dir / "world.yaml").is_file():
+        return None
+    return world_dir
 
 
 # ---------------------------------------------------------------------------

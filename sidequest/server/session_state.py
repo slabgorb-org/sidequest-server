@@ -23,6 +23,7 @@ import asyncio
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from hashlib import blake2b
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from sidequest.agents.orchestrator import Orchestrator
@@ -285,6 +286,15 @@ class _SessionData:
     # game_slug rather than the legacy genre+world path.
     game_slug: str | None = None
     mode: GameMode | None = None
+    # Resolved ``<pack_root>/worlds/<world_slug>`` for this session, computed
+    # ONCE at connect from the session's own ``_search_paths`` (the handler's
+    # content root). Downstream world-tier loads (dungeon theme palette,
+    # region projection, map emit) MUST reuse this rather than re-resolving via
+    # ``DEFAULT_GENRE_PACK_SEARCH_PATHS`` — the global default and the session's
+    # content root are identical in production but diverge under the hermetic
+    # test fixtures guard, which made world-tier content resolve to the wrong
+    # tree. ``None`` only on pre-slug-connect legacy constructions.
+    world_dir: Path | None = None
     # Story 82-2 (ADR-049): player-chosen narrator tuning. The LIVE runtime
     # choice read every turn by ``_build_turn_context`` — ``None`` means the
     # player made no choice, so the builder falls back to
@@ -420,3 +430,29 @@ class _SessionData:
     weather_state: WeatherState | None = None
     world_demographics: dict[str, Any] | None = None
     world_calendar: dict[str, Any] | None = None
+
+
+def session_world_dir(sd: _SessionData) -> Path:
+    """Resolve ``<pack_root>/worlds/<world_slug>`` for a bound session.
+
+    Prefers ``sd.world_dir`` — recorded at connect from the session's own
+    ``_search_paths`` (the handler's content root). Falls back to
+    DEFAULT-based resolution only for legacy/pre-slug sessions that did not
+    record one. In production the two are identical; under the hermetic test
+    fixtures guard they diverge, so reusing the recorded dir keeps world-tier
+    content (dungeon themes, region projection, map emit) resolving from the
+    same tree the session was bound to.
+    """
+    # ``getattr`` + ``isinstance`` (not ``sd.world_dir is not None``): many tests
+    # pass a stub for ``sd`` — a SimpleNamespace that never sets this field
+    # (getattr → None) or a MagicMock whose attribute access auto-creates a Mock
+    # (never None). Only an honest recorded ``Path`` short-circuits; anything
+    # else falls through to DEFAULT-based resolution (the pre-threading behavior
+    # those stubs were written against).
+    recorded = getattr(sd, "world_dir", None)
+    if isinstance(recorded, Path):
+        return recorded
+    from sidequest.genre.loader import DEFAULT_GENRE_PACK_SEARCH_PATHS, GenreLoader
+
+    loader = GenreLoader(search_paths=DEFAULT_GENRE_PACK_SEARCH_PATHS)
+    return loader.find(sd.genre_slug) / "worlds" / sd.world_slug

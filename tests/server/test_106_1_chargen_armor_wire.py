@@ -216,12 +216,19 @@ async def test_chargen_confirm_fires_armor_derivation_through_real_wire(otel_cap
     if equipped:
         attrs = dict(equipped[0].attributes or {})
         assert attrs.get("pc_name") == char_name
-        assert attrs.get("ac_after") == LEATHER_AC, "leather roll derives the WWN-SRD AC 13"
+        assert attrs.get("ac_after") == LEATHER_AC, "the equipped roll derives the WWN-SRD AC 13"
         assert character.core.armor_class == LEATHER_AC, (
             "the derived AC must land on the built character's core, not just the span"
         )
-        leather = next(i for i in character.core.inventory.items if i.get("id") == "leather_armor")
-        assert leather["equipped"] is True, "the rolled leather armor must be equipped"
+        # warrior_kit rolls one AC-13 armor from the WWN-verbatim catalog
+        # (wwn_linothorax or wwn_small_shield, per the rolled seed). Cross-check
+        # the span's reported item_id actually landed equipped in inventory —
+        # end-to-end, not a hardcoded assumption about which piece rolled.
+        armor_item_id = attrs.get("item_id")
+        armor = next(
+            i for i in character.core.inventory.items if i.get("id") == armor_item_id
+        )
+        assert armor["equipped"] is True, "the rolled armor must be equipped"
     else:
         # shield_wood / helmet_iron — no catalog armor_class today: loud fail,
         # AC stays 10 (No-Silent-Fallback). See blocking delivery finding:

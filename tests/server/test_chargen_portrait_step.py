@@ -102,10 +102,10 @@ def handler_factory(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-async def _connect(handler: WebSocketSessionHandler) -> None:
+async def _connect(handler: WebSocketSessionHandler, *, world: str = "grimvault") -> None:
     from tests.server.conftest import attach_default_room_context, seed_slug_for_test
 
-    slug = seed_slug_for_test(handler._save_dir, genre="caverns_and_claudes", world="grimvault")
+    slug = seed_slug_for_test(handler._save_dir, genre="caverns_and_claudes", world=world)
     attach_default_room_context(handler)
     payload = SessionEventPayload(
         event="connect",
@@ -340,7 +340,13 @@ class TestPortraitRefAppliedAtCommit:
     def test_confirmation_commit_copies_ref_onto_built_character(self, handler_factory) -> None:
         async def body() -> None:
             handler = handler_factory()
-            await _connect(handler)
+            # Unlike the portrait-STEP tests (which need a genre-tier-only world
+            # with no pickers), this test sends phase="confirmation" — a full
+            # commit that runs the opening turn. Under the WWN binding that turn
+            # seeds the monster manual and fails loud on a world with no bestiary
+            # (90-1), so commit against the real beneath_sunden world (which ships
+            # a bestiary) rather than the bestiary-less genre-tier-only grimvault.
+            await _connect(handler, world="beneath_sunden")
             await _walk_to_confirmation(handler)
             sd = handler._session_data  # type: ignore[attr-defined]
 

@@ -58,6 +58,25 @@ def _pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch):
     db_pool.close_pool()
 
 
+def _fake_namegen(argv: list[str]) -> int:
+    """A namegen that returns instantly. The opening-turn monster-manual seed
+    otherwise trains a Markov chain on the_circuit's real cultures — the full
+    ~683k-word shared name corpus — which blows the 30s test timeout. NPC names
+    are irrelevant to this test's chargen-extraction assertions."""
+    import json
+
+    print(json.dumps({"name": "Stub NPC", "role": "drifter", "culture": ""}))
+    return 0
+
+
+@pytest.fixture(autouse=True)
+def _stub_namegen(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the opening-turn NPC namegen out of the hot path (see _fake_namegen)."""
+    from sidequest.server.dispatch import pregen
+
+    monkeypatch.setattr(pregen, "namegen_main", _fake_namegen)
+
+
 @pytest.fixture
 def handler(tmp_path: Path, _pg_isolation: None) -> WebSocketSessionHandler:
     if not (CONTENT_ROOT / "road_warrior" / "worlds" / "the_circuit").is_dir():

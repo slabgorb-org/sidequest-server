@@ -82,7 +82,7 @@ async def _connect(
     handler: WebSocketSessionHandler,
     *,
     player_name: str = "Sebastien",
-    world: str = "grimvault",
+    world: str = "beneath_sunden",
 ) -> SessionEventMessage:
     from tests.server.conftest import attach_default_room_context, seed_slug_for_test
 

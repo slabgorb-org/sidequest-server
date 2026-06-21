@@ -173,6 +173,24 @@ _SWN_ATTRIBUTE_MAP = {
 }
 
 
+def _strip_runtime_world_pollution(pack_dir: Path) -> None:
+    """Remove any ``worlds/<x>`` dir lacking a ``world.yaml``.
+
+    The dungeon materializer persists rooms into ``<world_dir>/rooms`` during
+    other tests; because the fixture genre slugs symlink to ``test_genre``, that
+    can leave a runtime ``worlds/beneath_sunden/rooms`` artifact (no world.yaml)
+    in the shared fixture tree. copytree-ing the fixture would then carry the
+    artifact, and the loader rejects a world dir with no world.yaml. A clean CI
+    checkout never has it; strip it from the copy so the test is pollution-proof.
+    """
+    worlds = pack_dir / "worlds"
+    if not worlds.is_dir():
+        return
+    for wd in worlds.iterdir():
+        if wd.is_dir() and not (wd / "world.yaml").is_file():
+            shutil.rmtree(wd)
+
+
 def _make_ruleset_module_pack(
     tmp_path: Path,
     *,
@@ -185,6 +203,7 @@ def _make_ruleset_module_pack(
     No shipped content involved."""
     dst = tmp_path / "test_genre"
     shutil.copytree(_DIAL_FIXTURE_PACK, dst)
+    _strip_runtime_world_pollution(dst)
 
     # Bind swn — drops the dial allowed_classes routing in main(). The swn
     # block needs a complete attribute_map (RulesConfig fail-loud, no default).
@@ -193,6 +212,14 @@ def _make_ruleset_module_pack(
     rules["ruleset"] = "swn"
     rules["swn"] = {"attribute_map": _SWN_ATTRIBUTE_MAP}
     rules_path.write_text(yaml.safe_dump(rules), encoding="utf-8")
+
+    # The test_genre fixture is a frozen mutant_wasteland (AWN), whose genre-tier
+    # inventory.yaml carries unprovenanced bespoke gear — legitimate under AWN
+    # but a load failure once rebound to swn (ADR-145 D3: a Without-Number genre
+    # catalog is the SRD rulebook, so every genre item must be mode=verbatim or
+    # derived). These tests exercise the BESTIARY seam, not the catalog, so drop
+    # the genre inventory to keep the swn rebind loadable.
+    (dst / "inventory.yaml").unlink(missing_ok=True)
 
     # main() checks worlds/<world>/creatures.yaml BEFORE the bestiary branch, so
     # remove it to exercise the bestiary path the seam owns.
@@ -226,6 +253,7 @@ def _make_dial_pack(tmp_path: Path) -> Path:
     namegen path resolves without shipped content."""
     dst = tmp_path / "test_genre"
     shutil.copytree(_DIAL_FIXTURE_PACK, dst)
+    _strip_runtime_world_pollution(dst)
     corpus_dir = dst / "corpus"
     corpus_dir.mkdir(exist_ok=True)
     for fname in _FIXTURE_CORPUS_FILES:

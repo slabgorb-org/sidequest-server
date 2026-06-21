@@ -73,9 +73,11 @@ def _combat_cdef(pack):
         None,
     )
     assert cdef is not None, "heavy_metal must expose a 'combat' confrontation"
-    assert any(b.id == "cast_spell" for b in cdef.beats), (
-        "heavy_metal combat must author a cast_spell beat"
-    )
+    # NB: 108-3 stripped cast_spell from WWN combat cdefs — the WWN engine owns
+    # the action set (ADR-143), so cast_spell is no longer authored on
+    # cdef.beats. It is SYNTHESIZED into the selectable beats for casters by
+    # beats_available_for / build_confrontation_payload (asserted below via
+    # payload["beats"]), so there is deliberately no cast_spell beat to find here.
     return cdef
 
 

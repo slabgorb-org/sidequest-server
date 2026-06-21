@@ -203,7 +203,7 @@ def _maybe_emit_tactical_grid(
     ``tactical_grid.load_failed`` on unexpected loader errors.
     """
     from sidequest.game.room_file_loader import RoomNotFoundError, load_room_payload
-    from sidequest.genre.loader import DEFAULT_GENRE_PACK_SEARCH_PATHS, GenreLoader
+    from sidequest.server.session_state import session_world_dir
 
     world = sd.genre_pack.worlds.get(sd.world_slug)
     if world is None:
@@ -218,8 +218,7 @@ def _maybe_emit_tactical_grid(
         return
 
     try:
-        loader = GenreLoader(search_paths=DEFAULT_GENRE_PACK_SEARCH_PATHS)
-        world_dir = loader.find(sd.genre_slug) / "worlds" / sd.world_slug
+        world_dir = session_world_dir(sd)
     except Exception as exc:  # noqa: BLE001 — non-fatal; world dir lookup must not crash a turn
         logger.warning(
             "tactical_grid.world_dir_lookup_failed genre=%s world=%s error=%s",
@@ -374,9 +373,9 @@ def _maybe_emit_location_description(
     (``LOCATION_OVERLAY_CHANGED``).
     """
     from sidequest.game.room_file_loader import RoomNotFoundError, load_room_payload
-    from sidequest.genre.loader import DEFAULT_GENRE_PACK_SEARCH_PATHS, GenreLoader
     from sidequest.protocol.messages import LocationDescriptionMessage
     from sidequest.protocol.models import LocationDescriptionPayload
+    from sidequest.server.session_state import session_world_dir
 
     world = sd.genre_pack.worlds.get(sd.world_slug)
     if world is None:
@@ -397,8 +396,7 @@ def _maybe_emit_location_description(
 
     # Path 1: per-room YAML via load_room_payload.
     try:
-        loader = GenreLoader(search_paths=DEFAULT_GENRE_PACK_SEARCH_PATHS)
-        world_dir = loader.find(sd.genre_slug) / "worlds" / sd.world_slug
+        world_dir = session_world_dir(sd)
     except Exception as exc:  # noqa: BLE001 — non-fatal; world dir lookup must not crash a turn
         logger.warning(
             "location_description.world_dir_lookup_failed genre=%s world=%s error=%s",
@@ -774,10 +772,7 @@ def _load_dungeon_map_context(
     from sidequest.dungeon.region_projection import applies_to
     from sidequest.dungeon.seed_bootstrap import ENTRANCE_ID
     from sidequest.dungeon.themes import load_theme_palette
-    from sidequest.genre.loader import (
-        DEFAULT_GENRE_PACK_SEARCH_PATHS,
-        GenreLoader,
-    )
+    from sidequest.server.session_state import session_world_dir
 
     if not applies_to(sd.genre_slug, sd.world_slug):
         return None  # the per-turn dungeon.region_projection span already
@@ -794,8 +789,7 @@ def _load_dungeon_map_context(
         logger.warning("dungeon.map_skipped empty dungeon_map")
         return None
 
-    loader = GenreLoader(search_paths=DEFAULT_GENRE_PACK_SEARCH_PATHS)
-    world_dir = loader.find(sd.genre_slug) / "worlds" / sd.world_slug
+    world_dir = session_world_dir(sd)
     # ADR-140 (story 113-1): themes/ is world-tier — resolve from the world dir,
     # not the genre-pack root (world_dir.parent.parent).
     palette = load_theme_palette(world_dir)

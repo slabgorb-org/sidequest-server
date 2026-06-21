@@ -46,12 +46,12 @@ def cc_pack():
 
 
 def _walk_chargen(pack, *, target_class: str = "Warrior", rng_seed: int = 42):
-    """Walk the WWN 4-scene point-buy C&C chargen flow; returns (character, walk_log).
+    """Walk the WWN point-buy C&C chargen flow; returns (character, walk_log).
 
-    WWN port (2026-06-12): the flow is the_calling → the_story → the_kit →
+    WWN port: the flow is the_calling → the_trade → the_story → the_kit →
     the_mouth (no the_roll / the_arrangement — stats come from the point-buy
-    budget). Only the_calling (a choice) and the_story (freeform) are answered
-    scenes; the_kit / the_mouth auto-advance.
+    budget). the_calling and the_trade (choices) and the_story (freeform) are
+    answered scenes; the_kit / the_mouth auto-advance.
 
     ``walk_log`` records the answered scenes as the walk makes them:
     [(scene_id, scene_title, kind, expected_value), ...] — ground truth
@@ -81,7 +81,17 @@ def _walk_chargen(pack, *, target_class: str = "Warrior", rng_seed: int = 42):
     assert idx is not None, f"{target_class!r} not among {scene.choices}"
     walk_log.append((scene.id, scene.title, "choice", scene.choices[idx].label))
     builder.apply_choice(idx)
-    # Scene 1: the_story — pronouns + freeform background/description.
+    # Scene 1: the_trade — WWN background pick (added in the chargen
+    # reconciliation). Choose the first option.
+    trade_scene = builder.current_scene()
+    assert trade_scene.id == "the_trade", (
+        f"expected the_trade second, got {trade_scene.id!r}"
+    )
+    walk_log.append(
+        (trade_scene.id, trade_scene.title, "choice", trade_scene.choices[0].label)
+    )
+    builder.apply_choice(0)
+    # Scene 2: the_story — pronouns + freeform background/description.
     story_scene = builder.current_scene()
     builder.apply_response(
         StoryInput(
@@ -91,7 +101,7 @@ def _walk_chargen(pack, *, target_class: str = "Warrior", rng_seed: int = 42):
         )
     )
     walk_log.append((story_scene.id, story_scene.title, "freeform", _STORY_BACKGROUND))
-    # Scenes 2-3: the_kit / the_mouth — auto-advance (not answers).
+    # Scenes 3-4: the_kit / the_mouth — auto-advance (not answers).
     builder.apply_auto_advance()
     builder.apply_auto_advance()
 

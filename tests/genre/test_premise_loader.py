@@ -39,11 +39,20 @@ def _write_minimal_world_with_premises(tmp_path: Path, premises_yaml: str) -> Pa
     """Copy the real wry_whimsy pack, overwrite only oz/premises.yaml.
 
     Proves a NEW premise loads with ZERO engine changes (the content boundary).
+
+    Mirrors the real content layout: wry_whimsy binds the Fate ruleset, whose
+    SRD reference tier lives at ``<content_root>/rulesets`` (sibling of
+    genre_packs) and is resolved by the loader via ``pack.parent.parent /
+    "rulesets"``. The copied pack is nested under ``genre_packs/`` and the
+    shared rulesets tier is copied alongside so that resolution still finds the
+    bound ruleset's SRD content (else load fails loud — No Silent Fallbacks).
     """
     import shutil
 
-    dst = tmp_path / "wry_whimsy"
+    content_root = tmp_path / "content"
+    dst = content_root / "genre_packs" / "wry_whimsy"
     shutil.copytree(_CONTENT, dst)
+    shutil.copytree(_CONTENT.parent.parent / "rulesets", content_root / "rulesets")
     (dst / "worlds" / "oz" / "premises.yaml").write_text(
         textwrap.dedent(premises_yaml), encoding="utf-8"
     )

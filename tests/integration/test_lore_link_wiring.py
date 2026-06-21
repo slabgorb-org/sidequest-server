@@ -68,9 +68,9 @@ def _walk_chargen_calling(pack, *, calling_idx: int, lobby: str, rng_seed: int =
         .with_equipment_tables(pack.equipment_tables)
         .with_classes(pack.classes)
     )
-    # WWN port (2026-06-12): point-buy 4-scene flow (the_calling → the_story →
-    # the_kit → the_mouth); no the_roll / the_arrangement (stats come from the
-    # point-buy budget).
+    # WWN port: point-buy flow (the_calling → the_trade → the_story → the_kit →
+    # the_mouth); no the_roll / the_arrangement (stats come from the point-buy
+    # budget).
     # Scene 0 the_calling — the differentiating pick.
     scene = builder.current_scene()
     assert scene.id == "the_calling", f"expected the_calling first, got {scene.id!r}"
@@ -79,7 +79,14 @@ def _walk_chargen_calling(pack, *, calling_idx: int, lobby: str, rng_seed: int =
     )
     chosen_label = scene.choices[calling_idx].label
     builder.apply_choice(calling_idx)
-    # Scene 1 the_story — freeform (not fragment-backed).
+    # Scene 1 the_trade — WWN background pick (added in the chargen
+    # reconciliation). Choose the first option.
+    trade_scene = builder.current_scene()
+    assert trade_scene.id == "the_trade", (
+        f"expected the_trade second, got {trade_scene.id!r}"
+    )
+    builder.apply_choice(0)
+    # Scene 2 the_story — freeform (not fragment-backed).
     builder.apply_response(
         StoryInput(
             pronouns="they/them",
@@ -87,7 +94,7 @@ def _walk_chargen_calling(pack, *, calling_idx: int, lobby: str, rng_seed: int =
             description="Soot-stained, steady-handed.",
         )
     )
-    # Scenes 2-3 the_kit / the_mouth — auto-advance.
+    # Scenes 3-4 the_kit / the_mouth — auto-advance.
     builder.apply_auto_advance()
     builder.apply_auto_advance()
 

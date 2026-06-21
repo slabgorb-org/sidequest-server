@@ -26,15 +26,13 @@ def test_create_app_uses_build_llm_client_by_default(monkeypatch):
     """
     monkeypatch.delenv("SIDEQUEST_LLM_BACKEND", raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    # The factory-resolution assertion needs an AnthropicSdkClient instance,
-    # not a live SDK: shadow the 93-1 hermeticity guard (which raises) with
-    # an inert object so construction succeeds without touching the real
-    # AsyncAnthropic (the client resolves the SDK late-bound through
-    # ``llm_factory.build_async_anthropic`` — the single construction site).
-    monkeypatch.setattr(
-        "sidequest.agents.llm_factory.build_async_anthropic",
-        lambda: object(),
-    )
+    # AnthropicSdkClient construction is hermetic by design (Story 119-3): it
+    # reads no ANTHROPIC_API_KEY and never touches the network — the SDK is
+    # late-bound through the module-level ``query`` seam at call time, not at
+    # construction. The factory therefore resolves to a real AnthropicSdkClient
+    # with no SDK shadowing needed. (The old ``llm_factory.build_async_anthropic``
+    # construction site this test used to patch was removed when 119-3 made
+    # __init__ inert.)
     app = create_app()
     from sidequest.agents.anthropic_sdk_client import AnthropicSdkClient
 

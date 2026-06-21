@@ -43,18 +43,30 @@ except Exception:
 def _clone_pack(src: Path, dst: Path) -> Path:
     """Deep-copy a pack so the test can mutate the copy safely.
 
+    Mirrors the real content layout: the pack is nested under ``genre_packs/``
+    and the shared ``rulesets/`` reference tier (sibling of genre_packs) is
+    copied alongside, so a pack binding a reference-bearing ruleset (Fate)
+    resolves its SRD content via the loader's ``pack.parent.parent /
+    "rulesets"`` (else load fails loud — No Silent Fallbacks). Returns the
+    nested pack dir; ``dst.name`` is preserved as the leaf so genre_key matches.
+
     Also updates lethality_policy.yaml genre_key to match the new directory
     name, since the loader validates genre_key matches the pack directory name.
     """
-    shutil.copytree(src, dst)
-    lethality_yaml = dst / "lethality_policy.yaml"
+    content_root = dst.parent / f"{dst.name}__content"
+    pack_dst = content_root / "genre_packs" / dst.name
+    shutil.copytree(src, pack_dst)
+    rulesets_src = src.parent.parent / "rulesets"
+    if rulesets_src.is_dir():
+        shutil.copytree(rulesets_src, content_root / "rulesets")
+    lethality_yaml = pack_dst / "lethality_policy.yaml"
     if lethality_yaml.exists():
         with lethality_yaml.open("r", encoding="utf-8") as f:
             policy_data = yaml.safe_load(f)
         policy_data["genre_key"] = dst.name
         with lethality_yaml.open("w", encoding="utf-8") as f:
             yaml.dump(policy_data, f, default_flow_style=False, sort_keys=False)
-    return dst
+    return pack_dst
 
 
 def _strip_class_filter_from_cast_spell(pack_dir: Path) -> None:

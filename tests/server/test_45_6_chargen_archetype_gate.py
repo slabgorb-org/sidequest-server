@@ -179,7 +179,7 @@ async def _connect(
     handler: WebSocketSessionHandler,
     *,
     player_name: str = "Pumblestone",
-    world: str = "grimvault",
+    world: str = "beneath_sunden",
 ) -> SessionEventMessage:
     """Send SESSION_EVENT.connect and confirm the handler entered Creating."""
     from tests.server.conftest import attach_default_room_context, seed_slug_for_test

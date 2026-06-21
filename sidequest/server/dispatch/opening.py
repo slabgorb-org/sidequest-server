@@ -78,7 +78,11 @@ def _render_directive_chassis(
         parts.append(f"Situation: {opening.setting.situation}")
 
     parts.append("")
-    parts.append("ESTABLISHING NARRATION (play this scene):")
+    parts.append(
+        "ESTABLISHING NARRATION (Story 153-2: this is ALREADY shown to the "
+        "player VERBATIM at cold-open — do NOT repeat or paraphrase it; continue "
+        "the scene forward from where it leaves off):"
+    )
     parts.append(opening.establishing_narration)
 
     if chassis.voice is not None:
@@ -306,7 +310,11 @@ def _render_directive_location(
         parts.append(f"Situation: {opening.setting.situation}")
 
     parts.append("")
-    parts.append("ESTABLISHING NARRATION (play this scene):")
+    parts.append(
+        "ESTABLISHING NARRATION (Story 153-2: this is ALREADY shown to the "
+        "player VERBATIM at cold-open — do NOT repeat or paraphrase it; continue "
+        "the scene forward from where it leaves off):"
+    )
     parts.append(opening.establishing_narration)
 
     if magic_register:

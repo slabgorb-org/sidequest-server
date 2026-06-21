@@ -224,6 +224,13 @@ class _SessionData:
     # opening-hook entries — the first turn runs without a directive.
     opening_seed: str | None = None
     opening_directive: str | None = None
+    # Story 153-2 ([SWN-OPENING-ESTABLISHING-NARRATION-DROPPED]): the resolved
+    # Opening's authored ``establishing_narration``, stashed alongside the seed
+    # so the cold-open turn can emit it to the player VERBATIM (the narrator no
+    # longer owns it — the directive previously said "play this scene" and the
+    # SWN narrator dropped it). Consumed + cleared with the seed/directive.
+    # ``None`` when no opening resolved (the field gates the verbatim emit).
+    opening_establishing_narration: str | None = None
     # Canned-openings Phase 4 (Task 19): id of the Opening picked at
     # chargen-completion. Read by ``record_opening_played`` at directive
     # consumption so the ``opening.played`` span carries opening_id for

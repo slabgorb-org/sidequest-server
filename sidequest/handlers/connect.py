@@ -1087,6 +1087,11 @@ class ConnectHandler:
                 audio_backend=audio_backend,
                 game_slug=slug,
                 mode=GameMode(row.mode),
+                # Carry the world dir resolved above from session._search_paths
+                # so downstream world-tier loads (dungeon themes, region
+                # projection, map emit) reuse the session's content root instead
+                # of re-resolving via DEFAULT_GENRE_PACK_SEARCH_PATHS.
+                world_dir=world_dir,
                 # ADR-050: pick the cooldown that matches the session mode.
                 # MP defaults to 60s because turns resolve faster in group
                 # play; solo gets the more responsive 30s window.

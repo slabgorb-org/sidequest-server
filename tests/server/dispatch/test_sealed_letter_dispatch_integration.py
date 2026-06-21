@@ -556,12 +556,12 @@ def test_legacy_beat_selection_path_still_works(
         f"{[(a.name, a.role) for a in enc.actors]}"
     )
 
-    # Pick a damage beat that exists on CAC combat. The WWN port (PR #429)
-    # renamed the attack beat to "strike" (ablative-HP damage channel).
-    beat_ids = {b.id for b in cdef.beats}
-    assert "strike" in beat_ids, (
-        f"CAC combat needs a 'strike' beat for this regression test; has {beat_ids}"
-    )
+    # The WWN port (PR #429) renamed the attack beat to "strike" (ablative-HP
+    # damage channel). 108-3 later stripped the WWN action beats from cdef.beats
+    # (the WWN engine owns the action set, ADR-143), so "strike" is no longer an
+    # authored cdef beat — the legacy opposed/narration-apply path below resolves
+    # it through the strike damage channel directly. The assertion that it was an
+    # authored cdef beat is therefore obsolete.
 
     starting_opp = enc.opponent_metric.current
 

@@ -83,3 +83,8 @@ artifacts/router_corpus.jsonl
 
 # 123-1 test-baseline census run logs — regenerable, see docs/test-baseline-manifest.json
 artifacts/123-1/
+
+# Runtime dungeon room caches written into the frozen fixture pack tree during
+# tests (the materializer emits <world_dir>/rooms/*.yaml; in tests world_dir
+# resolves to the test_genre symlink). Regenerable, never authored fixtures.
+tests/fixtures/packs/*/worlds/*/rooms/

@@ -64,6 +64,10 @@ def _stub_pack(*, ruleset: str, combat_encounters: bool = True) -> Any:
     pack.effective_cultures = lambda _world: ([], "stub")
     spawnable = SimpleNamespace(name="Drifter", named_individual=False)
     pack.effective_archetypes = lambda _world: ([spawnable], "stub")
+    # epic-157 faction/zone work: seed_manual resolves the world bestiary once
+    # for faction tagging. These tests drive the empty-encounter path, so a
+    # None bestiary (encounters seed untagged) is the right stand-in.
+    pack.effective_bestiary = lambda _world: (None, "stub")
     return pack
 
 

@@ -336,6 +336,26 @@ def beats_available_for(
             if prepared_spells is not None and not _has_any_prepared(prepared_spells):
                 continue
         pool.append(beat)
+    # WWN cast synthesis (story 152-2 / 89-5, ADR-143): 108-3 stripped cast_spell
+    # from WWN combat cdefs (cdef.beats == []), so the loop above can never
+    # surface it — the WWN engine OWNS the action set, so cast is a synthesized
+    # transient beat, not authored content. The resolution path (wn_round.py /
+    # dice.py) already synthesizes the same beat on commit; this is its
+    # selection-menu twin (without it, a WWN caster can resolve a forced cast but
+    # never SELECT one). Offer it to a WWN caster — a class carrying a wwn_magic
+    # block — whose WWN economy (a remaining cast + a prepared spell) permits a
+    # cast this turn, in hp_depletion combat. A Warrior (wwn_magic is None) never
+    # sees it even if a spellcasting state is wrongly supplied (gate must not
+    # loosen). ``spellcasting is not None`` is the WWN-arm signal.
+    if (
+        spellcasting is not None
+        and class_def.wwn_magic is not None
+        and confrontation.win_condition == "hp_depletion"
+        and spellcasting.casts_remaining >= 1
+        and spellcasting.prepared
+        and not any(b.id == WN_CAST_SPELL_BEAT_ID for b in pool)
+    ):
+        pool.append(wn_cast_beat())
     # Story 106-4 Part C: append transient item-use beats from the actor's
     # inventory, gated to hp_depletion combat — a heal consumable is only
     # usable where HP is the track (a chase/social cdef has no HP to restore,

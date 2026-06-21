@@ -455,10 +455,6 @@ def _project_current_region(sd: _SessionData, snapshot: GameSnapshot) -> object 
         from sidequest.dungeon.seed_bootstrap import ENTRANCE_ID
         from sidequest.dungeon.themes import load_theme_palette
         from sidequest.game.persistence import DatabaseError
-        from sidequest.genre.loader import (
-            DEFAULT_GENRE_PACK_SEARCH_PATHS,
-            GenreLoader,
-        )
 
         try:
             graph = sd.dungeon_repository.load_map(entrance_id=ENTRANCE_ID)
@@ -575,8 +571,12 @@ def _project_current_region(sd: _SessionData, snapshot: GameSnapshot) -> object 
             )
             current_region = entrance
 
-        loader = GenreLoader(search_paths=DEFAULT_GENRE_PACK_SEARCH_PATHS)
-        world_dir = loader.find(sd.genre_slug) / "worlds" / sd.world_slug
+        # Reuse the session's resolved world dir (computed at connect from the
+        # session's own _search_paths) so the theme palette loads from the same
+        # content root the session was bound to (see session_world_dir).
+        from sidequest.server.session_state import session_world_dir
+
+        world_dir = session_world_dir(sd)
         # ADR-140 (story 113-1): themes/ is world-tier — resolve from the world
         # dir, mirroring session_integration._theme_pack_root.
         palette = load_theme_palette(world_dir)

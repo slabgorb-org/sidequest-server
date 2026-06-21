@@ -38,6 +38,9 @@ def _stub_pack(*, combat_encounters: bool) -> Any:
             [SimpleNamespace(name="Guest", named_individual=False)],
             "genre",
         ),
+        # epic-157: seed_manual resolves the world bestiary once for faction
+        # tagging when combat is enabled. None → encounters seed untagged.
+        effective_bestiary=lambda _world: (None, "stub"),
     )
 
 

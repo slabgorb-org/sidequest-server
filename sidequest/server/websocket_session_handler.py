@@ -2903,6 +2903,9 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
             )
             sd.opening_seed = None
             sd.opening_directive = None
+            # Story 153-2: a suppressed MP joiner must not get the host's
+            # authored establishing scene either — clear it with the seed.
+            sd.opening_establishing_narration = None
 
         # Playtest 2026-04-29: on MP joiner-orientation the old generic fallback
         # gave the narrator an unattributed action and it narrated the host PC's
@@ -2997,6 +3000,30 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
         # `action` and continues from there) so the player sees hook + continuation
         # as one beat. Suppressed when the pack has no opening hook.
         cold_open_messages: list[object] = []
+        # Story 153-2 ([SWN-OPENING-ESTABLISHING-NARRATION-DROPPED]): emit the
+        # authored ``establishing_narration`` to the player VERBATIM, BEFORE the
+        # seed (the scene is set, then the invitation closes it). Previously this
+        # prose was only handed to the narrator as a "play this scene" directive
+        # and the SWN narrator dropped it. Riding the same ``cold_open_messages``
+        # list means it inherits the seed's MP author/visibility-sidecar rules.
+        if sd.opening_establishing_narration:
+            cold_open_messages.append(
+                NarrationMessage(
+                    payload=NarrationPayload(
+                        text=NonBlankString(sd.opening_establishing_narration),
+                    )
+                )
+            )
+            _watcher_publish(
+                "establishing_narration_emitted",
+                {
+                    "genre": sd.genre_slug,
+                    "world": sd.world_slug,
+                    "establishing_len": len(sd.opening_establishing_narration),
+                },
+                component="opening_hook",
+                severity="info",
+            )
         if sd.opening_seed:
             cold_open_messages.append(
                 NarrationMessage(
@@ -3108,6 +3135,8 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
         # Consume once — subsequent turns run directive- and seed-free.
         sd.opening_seed = None
         sd.opening_directive = None
+        # Story 153-2: the establishing prose is a one-shot cold-open emit too.
+        sd.opening_establishing_narration = None
 
         return messages
 

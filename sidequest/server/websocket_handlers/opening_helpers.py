@@ -205,6 +205,11 @@ def _populate_opening_directive_on_chargen_complete(
 
     session_data.opening_seed = opening.first_turn_invitation
     session_data.opening_directive = directive
+    # Story 153-2: stash the authored establishing_narration so the cold-open
+    # turn can emit it to the player VERBATIM (the narrator previously owned it
+    # via the "play this scene" directive and dropped it). Consumed + cleared
+    # with the seed/directive in ``_run_opening_turn_narration``.
+    session_data.opening_establishing_narration = opening.establishing_narration
     session_data._resolved_opening_id = opening.id
 
     # Story 117-3 (ADR-146): stash the resolved opening's authored quest_seed

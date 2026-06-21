@@ -35,7 +35,7 @@ from sidequest.server.watcher import (
 )
 from sidequest.server.websocket import ws_endpoint
 from sidequest.telemetry.validator import Validator
-from sidequest.telemetry.watcher_hub import publish_event
+from sidequest.telemetry.watcher_hub import no_watcher_enabled, publish_event
 
 logger = logging.getLogger(__name__)
 
@@ -190,11 +190,28 @@ def create_app(
 
         from sidequest.telemetry.setup import init_tracer
 
-        watcher_hub.bind_loop(asyncio.get_running_loop())
-
-        # Ensure the global tracer provider is a real SDK TracerProvider
-        # (not the default proxy) so add_span_processor is available.
+        # init_tracer ALWAYS runs — it wires the OTLP/console exporters and makes the
+        # global tracer provider a real SDK TracerProvider (not the default proxy) so
+        # add_span_processor is available. This is OTEL export, independent of the
+        # GM-dashboard WatcherHub, so it must NOT be gated by --no-watcher (story 125-9).
         init_tracer()
+
+        # Story 125-9: SIDEQUEST_NO_WATCHER=1 disables the GM-dashboard WatcherHub for
+        # this process — a headless harness run must not register its test-* sessions
+        # with the operator's live hub — WITHOUT touching OTLP/console export (handled
+        # by init_tracer above). Skip ONLY the loop bind (so publish drops) and the
+        # WatcherSpanProcessor registration (so watcher events never reach the hub).
+        # Loud, not silent — the operator sees WHY the GM dashboard is dark; OTLP/Jaeger
+        # is unaffected. Span-asserting harness runs leave the flag unset and use a
+        # separate port for the live hub.
+        if no_watcher_enabled():
+            logger.info(
+                "watcher.disabled reason=SIDEQUEST_NO_WATCHER — GM-dashboard hub not "
+                "wired (harness isolation, story 125-9); OTLP/console export unaffected"
+            )
+            return
+
+        watcher_hub.bind_loop(asyncio.get_running_loop())
 
         provider = trace.get_tracer_provider()
         if not isinstance(provider, TracerProvider):

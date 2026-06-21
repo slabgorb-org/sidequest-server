@@ -877,6 +877,7 @@ def _resolve_opponent_from_roster(
     threat_name: str,
     acting_character_name: str | None,
     confrontation_category: str,
+    is_fate: bool,
 ) -> Npc | None:
     """108-2: reconcile a router-named free-string opponent to a bound, statted
     adversary present in the scene BEFORE the seater fabricates a stub.
@@ -891,10 +892,13 @@ def _resolve_opponent_from_roster(
     ADR-059). The narrator knows the roster; the seater didn't consult it.
 
     Returns the co-located bound creature to seat in the router name's place, or
-    ``None`` to leave the router name as-is — either because it already matches a
-    roster entry (seat it directly; the seater dedups) or because no co-located
-    bound adversary exists (the truly-novel fight: the seater mints a loud,
-    ephemeral stub downstream).
+    ``None`` to leave the router name as-is — because it already matches a roster
+    entry (seat it directly; the seater dedups), because no co-located bound
+    adversary exists (the truly-novel fight: the seater mints a loud, ephemeral
+    stub downstream), or because the confrontation is one where conscription is
+    never right: a NON-combat confrontation (150-2) or ANY confrontation under a
+    FATE binding (153-9 — ``is_fate``; a Fate conflict resolves on FateSheet
+    stress, not the bound creature's hp, so there is nothing to preserve).
 
     A candidate is a ``creature_id``-statted, adversarial (``_npc_is_adversary``),
     non-friendly NPC at the acting PC's resolved location — the same room signal
@@ -925,22 +929,32 @@ def _resolve_opponent_from_roster(
         key=lambda n: (n.last_seen_turn, n.threat_level or 0, n.core.name),
         reverse=True,
     )
-    # 150-2 (Defect A): every candidate here is a bestiary monster (the filter is
+    # Every candidate here is a bestiary monster (the filter is
     # ``creature_id is not None``). The 108-2 reconciliation exists to preserve a
     # bound creature's COMBAT hp stats (ADR-059) — so it is only correct for a
-    # COMBAT confrontation. For a NON-combat confrontation (a Fate standoff /
-    # social duel / chase) a bestiary monster is never the right Other:
-    # dust_and_lead seated a "Western Diamondback" rattlesnake against a human
-    # drifter because the only co-located adversary was an ambient bestiary
-    # hazard. Decline the conscription and let the seater seat the router-named
-    # threat (a human stub) instead; emit a lie-detector span so the GM panel
-    # sees the engine refused the ambient hazard (No Silent Fallbacks). Combat
-    # keeps the 108-2 behavior untouched.
-    if confrontation_category != "combat":
+    # native (Without-Number / dial) COMBAT confrontation. Decline in two cases:
+    #
+    #   * 150-2 (Defect A) — NON-combat, any ruleset: a bestiary monster is never
+    #     the right Other for a standoff / social duel / chase. dust_and_lead
+    #     seated a "Western Diamondback" rattlesnake against a human drifter
+    #     because the only co-located adversary was an ambient bestiary hazard.
+    #   * 153-9 ([FATE-OTHER-SEATING]) — ANY category under a FATE binding: a Fate
+    #     conflict resolves against the Other's FateSheet stress, NOT hp_depletion
+    #     (ADR-143/144 "Bind the Ruleset"), so there is no bound-hp value to
+    #     preserve. Conscripting an ambient co-located adversary over the
+    #     narrator's NAMED scene-active antagonist is the bug: the router names
+    #     "Silas Vance" and the seater grabs the same-surname "Marguerite Vance".
+    #
+    # Either way: decline the conscription and let the seater seat the
+    # router-named threat instead; emit a lie-detector span so the GM panel sees
+    # the engine refused the ambient adversary (No Silent Fallbacks). Native
+    # (non-Fate) combat keeps the 108-2 behavior untouched.
+    if confrontation_category != "combat" or is_fate:
         with encounter_roster_resolution_skipped_span(
             router_name=threat_name,
             declined_name=candidates[0].core.name,
             confrontation_category=confrontation_category,
+            reason="fate_binding" if is_fate else "non_combat",
         ):
             pass
         return None
@@ -1370,6 +1384,11 @@ def instantiate_encounter_from_trigger(
     # ``encounter.no_opponent_available`` span below.
     location_available = True
     seating_source = "router_named"
+    # 153-9 (ADR-116/143/144): resolve the Fate binding ONCE here. The 108-2
+    # roster reconciliation below must DECLINE under a Fate binding (a Fate
+    # conflict resolves on FateSheet stress, not bound hp), and the Fate-seating
+    # de-nativization branch downstream (126-30) reuses the same flag.
+    is_fate = bool(pack and pack.rules and pack.rules.ruleset == "fate")
     if materialized_threat is not None:
         # Story 59-23 (#C3 / ADR-116): the narrator/router named a threat that is
         # not an existing NPC entity. Seat THAT as the Other — never the location
@@ -1391,6 +1410,7 @@ def instantiate_encounter_from_trigger(
             threat_name=materialized_threat.name,
             acting_character_name=player_name,
             confrontation_category=cdef.category,
+            is_fate=is_fate,
         )
         if resolved_opponent is not None:
             from sidequest.agents.orchestrator import NpcMention as _NpcMention
@@ -1667,8 +1687,8 @@ def instantiate_encounter_from_trigger(
         # alongside Fate (the upstream half of the #964 cleanup). A Fate Contest keeps its
         # OWN Fate path (``enc.contest``, below) with the metrics as its victory tally; a
         # sealed-letter duel is a commit-reveal table, not a conflict — both are excluded
-        # from the conflict de-nativization.
-        is_fate = bool(pack and pack.rules and pack.rules.ruleset == "fate")
+        # from the conflict de-nativization. (``is_fate`` is resolved once above,
+        # at the 108-2 roster-reconciliation gate — 153-9.)
         seat_as_fate_conflict = is_fate and cdef.resolution_mode not in (
             ResolutionMode.contest,
             ResolutionMode.sealed_letter_lookup,

@@ -244,6 +244,7 @@ def _build_state_summary(
     pack: GenrePack | None = None,
     dungeon_store: Any | None = None,
     palette: Any | None = None,
+    acting_player: str | None = None,
 ) -> dict[str, Any]:
     """Build the slimmed JSON-able state summary the router consumes.
 
@@ -434,24 +435,37 @@ def _build_state_summary(
     # exits — adjacency neighbors + seam routes. The 2026-06-12 dive's
     # turn-3 miss happened because the router was asked to recognize a
     # descent it was never told existed; this is the lexical bridge
-    # (59-27 precedent: authored vocabulary beats inference). Region
-    # resolved in party-consensus mode (no perspective) to match the
-    # room/NPC projections above. A split party (or any unseeded seat)
-    # makes region_for() return None, so the projection is OMITTED — the
-    # router gets NO exit vocabulary that turn. The warning below is the
-    # GM-panel evidence distinguishing "split party swallowed the exits"
-    # from "this world has no cartography" (which is silent by design).
+    # (59-27 precedent: authored vocabulary beats inference).
+    #
+    # Resolved with the ACTING PC's perspective (sq-playtest 2026-06-21,
+    # beneath_sunden). The original revision resolved party-consensus
+    # (``region_for()`` with no perspective) "to match the room/NPC
+    # projections" — but exits are a PER-PC fact, and consensus returns
+    # None the moment the party splits (the NORMAL state once one delver
+    # moves ahead of another in a dungeon). That consensus path silently
+    # omitted the seam vocabulary on every split-party turn: the router
+    # stayed blind to "Down the Rope", the descent never classified as
+    # movement, and the crossing limped through the narration seam-recovery
+    # fallback — which masked the dead deterministic path and (when the
+    # narrator's title named the seam region) stranded the player on the
+    # surface. Removing the consensus fallback: each acting seat gets ITS
+    # OWN region's exits. The warning below is now a genuine loud signal —
+    # an UNSEEDED acting seat — not the routine split-party case it used to
+    # swallow.
     if pack is not None:
         _worlds = getattr(pack, "worlds", None)
         _world = _worlds.get(snapshot.world_slug) if _worlds else None
         _cart = getattr(_world, "cartography", None)
         if _cart is not None:
-            _region_id = snapshot.region_for() or ""
+            _region_id = (
+                (snapshot.region_for(perspective=acting_player) or "") if acting_player else ""
+            )
             if not _region_id:
                 logger.warning(
                     "intent_router.region_exits projection_skipped "
-                    "reason=region_unresolved interaction=%d",
+                    "reason=region_unresolved interaction=%d acting_player=%s",
                     snapshot.turn_manager.interaction,
+                    acting_player or "(none)",
                 )
             _region = _cart.regions.get(_region_id) if _region_id else None
             region_exits: list[dict[str, str]] = []
@@ -769,7 +783,11 @@ async def execute_intent_router_pre_narrator_pass(
     _timings = phase_timings if phase_timings is not None else PhaseTimings.NULL
     with _timings.phase("intent_router_pass"):
         state_summary = _build_state_summary(
-            snapshot, pack=pack, dungeon_store=dungeon_store, palette=palette
+            snapshot,
+            pack=pack,
+            dungeon_store=dungeon_store,
+            palette=palette,
+            acting_player=player_name,
         )
         package = await intent_router.decompose(
             action=action,

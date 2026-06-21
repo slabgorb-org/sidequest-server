@@ -313,15 +313,21 @@ def project_region(
     # to_region_id (one bearing per neighbor), so the exit list is the only
     # place parallel edges still triple-list. Keep ONE exit per neighbor,
     # preferring a VISIBLE edge so a discovered route is never masked by a
-    # secret parallel; among same visibility a stable kind/bearing order keeps
-    # the projection deterministic. Logged (not silent) so a true materializer
-    # duplicate stays visible for investigation — No Silent Fallbacks.
+    # secret parallel, then a SHORTCUT edge so the distance-collapse flag
+    # survives the merge; among equals a stable kind/bearing order keeps the
+    # projection deterministic. Logged at INFO (not DEBUG) so a true
+    # materializer duplicate is actually visible in production logs for
+    # investigation — No Silent Fallbacks. It only fires when a region has
+    # parallel edges (ADR-106 flags those as possibly-legit loop geometry OR a
+    # materializer dup worth seeing), so it is not per-turn noise everywhere.
     if len({e.to_region_id for e in exits}) != len(exits):
-        ranked = sorted(exits, key=lambda e: (e.hidden, e.kind, e.bearing, e.to_region_id))
+        ranked = sorted(
+            exits, key=lambda e: (e.hidden, not e.shortcut, e.kind, e.bearing, e.to_region_id)
+        )
         collapsed: dict[str, RegionExit] = {}
         for e in ranked:
             collapsed.setdefault(e.to_region_id, e)
-        logger.debug(
+        logger.info(
             "project_region collapsed %d parallel exit(s) at region=%s neighbors=%s",
             len(exits) - len(collapsed),
             current_region,

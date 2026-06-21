@@ -102,10 +102,12 @@ _ORDINAL_INDEX: dict[str, int] = {
 # Positional words that pick the midpoint of the ordered exits.
 _MIDDLE_WORDS: frozenset[str] = frozenset({"middle", "middlemost", "centre", "center", "central"})
 
-# Left-to-right rank for positional ordering: west reads as "left", east as
-# "right"; verticals and bearing-less exits sit in the middle. Purely a
-# cosmetic ordering for ordinal selection — never affects a bearing or token
-# match, and deterministic so "leftmost" is stable turn-to-turn.
+# Left-to-right rank for positional ordering: west is leftmost (0), east is
+# rightmost (4); the NW/SW and NE/SE diagonals flank at 1 and 3; the
+# north/south cardinals, the up/down verticals, and bearing-less exits all
+# sit in the middle (rank 2). Purely a cosmetic ordering for ordinal
+# selection — never affects a bearing or token match, and deterministic so
+# "leftmost" is stable turn-to-turn.
 _BEARING_LR_RANK: dict[str, int] = {
     "west": 0,
     "northwest": 1,
@@ -162,7 +164,15 @@ def _resolve_ordinal(
     """
     toks = _tokens(exit_descriptor)
     is_middle = bool(toks & _MIDDLE_WORDS)
-    word = next((w for w in toks if w in _ORDINAL_INDEX), None)
+    # Pick the FIRST ordinal word in TEXT order, not set-iteration order: set
+    # iteration over strings is hash-seed-dependent, so a phrase carrying two
+    # ordinal words ("the second-to-last passage" → "second" + "last") would
+    # otherwise resolve nondeterministically across restarts. Text order makes
+    # it the position word the player wrote first, deterministically.
+    word = next(
+        (w for w in re.findall(r"[a-z]+", exit_descriptor.lower()) if w in _ORDINAL_INDEX),
+        None,
+    )
     if word is None and not is_middle:
         return None, False
 

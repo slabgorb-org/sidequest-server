@@ -148,3 +148,23 @@ def test_parallel_edges_to_one_neighbor_are_distinguishable_153_22():
     assert len({e.bearing for e in to_b}) == len(to_b), (
         f"a→b parallel exits share a bearing: {[e.bearing for e in to_b]}"
     )
+
+
+def test_dedup_prefers_visible_over_secret_parallel_153_22():
+    """AC-1 dedup invariant: when parallel edges to one neighbor mix a VISIBLE
+    edge with hidden/secret ones, the collapse must keep the visible edge —
+    never mask a real route behind a secret parallel."""
+    g = RegionGraph(entrance_id="entrance")
+    for nid, depth in [("entrance", 0.0), ("a", 1.0), ("b", 2.0)]:
+        g.add_node(RegionNode(id=nid, expansion_id=0, theme="t", depth_score=depth))
+    g.add_edge(RegionEdge(a="entrance", b="a", kind="corridor"))
+    # three parallel a→b edges: one VISIBLE corridor + two hidden secrets.
+    g.add_edge(RegionEdge(a="a", b="b", kind="corridor", hidden=False))
+    g.add_edge(RegionEdge(a="a", b="b", kind="secret", hidden=True))
+    g.add_edge(RegionEdge(a="a", b="b", kind="secret", hidden=True))
+
+    proj = project_region(g, "a", _FakePalette())
+    to_b = [e for e in proj.exits if e.to_region_id == "b"]
+    assert len(to_b) == 1, f"parallel edges to 'b' not deduped: {to_b}"
+    assert to_b[0].hidden is False, "dedup dropped the VISIBLE edge in favor of a secret"
+    assert to_b[0].kind == "corridor"

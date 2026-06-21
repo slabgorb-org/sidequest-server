@@ -1277,7 +1277,10 @@ def test_parallel_edges_same_node_false_ambiguity_resolves_153_22(capture_spans)
     resolved = _spans_named(capture_spans, "movement.resolved")
     assert len(resolved) == 1
     assert resolved[0].attributes["edge_kind"] == "stairs"
-    assert resolved[0].attributes["resolved_via"], "resolved_via must be recorded"
+    # After dedup the candidate list has one exit to 'b', so the descriptor
+    # token path resolves it — pin the exact lie-detector label (AC-6), not
+    # merely truthy.
+    assert resolved[0].attributes["resolved_via"] == "descriptor_match"
     assert "b" in list(resolved[0].attributes["candidate_exits"])
     assert not _spans_named(capture_spans, "movement.unresolved")
 
@@ -1354,7 +1357,7 @@ def test_ordinal_descriptors_select_distinct_single_edges_153_22(capture_spans):
         ("a", "b3", "corridor", False),
     ]
 
-    def _resolve_ordinal(phrase: str):
+    def _run_ordinal(phrase: str):
         snap = _snapshot({"Rux": "a"}, {"s1": "Rux"})
         out = _run(
             run_movement_dispatch(
@@ -1367,8 +1370,8 @@ def test_ordinal_descriptors_select_distinct_single_edges_153_22(capture_spans):
         )
         return out
 
-    first = _resolve_ordinal("the first passage")
-    second = _resolve_ordinal("the second passage")
+    first = _run_ordinal("the first passage")
+    second = _run_ordinal("the second passage")
 
     assert first.data.get("error") is None, f"'first' did not bridge to an edge: {first.data}"
     assert second.data.get("error") is None, f"'second' did not bridge to an edge: {second.data}"
@@ -1377,6 +1380,14 @@ def test_ordinal_descriptors_select_distinct_single_edges_153_22(capture_spans):
     # Distinct ordinals must index DISTINCT exits, not collapse to one.
     assert first.data["to_region"] != second.data["to_region"], (
         f"ordinals selected the same exit: first={first.data} second={second.data}"
+    )
+    # AC-6: each ordinal resolution stamps resolved_via="ordinal" on the
+    # movement.resolved span (one per call) so the GM panel sees the bridge
+    # engaged — the OTEL lie-detector, not merely a span that exists.
+    resolved = _spans_named(capture_spans, "movement.resolved")
+    assert len(resolved) == 2
+    assert all(s.attributes["resolved_via"] == "ordinal" for s in resolved), (
+        f"ordinal bridge must stamp resolved_via=ordinal: {[s.attributes['resolved_via'] for s in resolved]}"
     )
 
 
@@ -1412,7 +1423,9 @@ def test_ordinal_leftmost_resolves_single_edge_153_22(capture_spans):
     assert snap.pc_regions["Rux"] in {"b1", "b2", "b3"}
     resolved = _spans_named(capture_spans, "movement.resolved")
     assert len(resolved) == 1
-    assert resolved[0].attributes["resolved_via"], "resolved_via must record the ordinal bridge"
+    # AC-6: the ordinal bridge stamps resolved_via="ordinal" so the GM panel
+    # sees WHICH resolver fired — pin the exact label, not merely truthy.
+    assert resolved[0].attributes["resolved_via"] == "ordinal"
 
 
 def test_genuine_ambiguity_distinct_neighbors_still_refuses_153_22(capture_spans):
@@ -1489,4 +1502,89 @@ def test_parallel_edge_resolution_wires_through_bank_153_22(capture_spans):
         )
     )
     assert snap.pc_regions["Rux"] == "b", "bank did not resolve the parallel-edge move"
-    assert _spans_named(capture_spans, "movement.resolved")
+    # AC-7 proves reachability through the REAL bank — and AC-6 proves WHICH
+    # resolver engaged: the deduped single 'b' candidate resolves via the
+    # descriptor path, stamped on the span the GM panel reads.
+    resolved = _spans_named(capture_spans, "movement.resolved")
+    assert len(resolved) == 1
+    assert resolved[0].attributes["resolved_via"] == "descriptor_match"
+
+
+def _ordinal_corridor_graph():
+    """Three distinct corridor neighbors off 'a', reached via a shaft from the
+    entrance so 'passage' matches only the corridors."""
+    return _graph_with(
+        [("entrance", 0.0), ("a", 1.0), ("b1", 5.0), ("b2", 5.0), ("b3", 5.0)],
+        [
+            ("entrance", "a", "shaft", False),
+            ("a", "b1", "corridor", False),
+            ("a", "b2", "corridor", False),
+            ("a", "b3", "corridor", False),
+        ],
+    )
+
+
+def test_ordinal_middle_resolves_single_edge_153_22(capture_spans):
+    """AC-3: 'the middle passage' (a NAMED AC-3 example, _MIDDLE_WORDS path)
+    bridges to a single edge via the midpoint index — a distinct code branch
+    from the _ORDINAL_INDEX path. Resolves to one neighbor, advances the PC,
+    and stamps resolved_via=ordinal (AC-6)."""
+    snap = _snapshot({"Rux": "a"}, {"s1": "Rux"})
+    out = _run(
+        run_movement_dispatch(
+            _dispatch(exit_descriptor="the middle passage"),
+            snapshot=snap,
+            player_name="Rux",
+            dungeon_store=_FakeStore(_ordinal_corridor_graph()),
+            palette=_FakePalette(),
+        )
+    )
+    assert out.data.get("error") is None, f"'middle' refused to bridge: {out.data}"
+    assert out.data["to_region"] in {"b1", "b2", "b3"}
+    assert snap.pc_regions["Rux"] in {"b1", "b2", "b3"}
+    resolved = _spans_named(capture_spans, "movement.resolved")
+    assert len(resolved) == 1
+    assert resolved[0].attributes["resolved_via"] == "ordinal"
+
+
+def test_ordinal_last_resolves_single_edge_153_22(capture_spans):
+    """AC-3: 'the last passage' exercises the negative-index path
+    (_ORDINAL_INDEX['last'] == -1). Resolves to exactly one neighbor."""
+    snap = _snapshot({"Rux": "a"}, {"s1": "Rux"})
+    out = _run(
+        run_movement_dispatch(
+            _dispatch(exit_descriptor="the last passage"),
+            snapshot=snap,
+            player_name="Rux",
+            dungeon_store=_FakeStore(_ordinal_corridor_graph()),
+            palette=_FakePalette(),
+        )
+    )
+    assert out.data.get("error") is None, f"'last' refused to bridge: {out.data}"
+    assert out.data["to_region"] in {"b1", "b2", "b3"}
+    assert snap.pc_regions["Rux"] in {"b1", "b2", "b3"}
+    resolved = _spans_named(capture_spans, "movement.resolved")
+    assert len(resolved) == 1
+    assert resolved[0].attributes["resolved_via"] == "ordinal"
+
+
+def test_ordinal_out_of_range_refuses_loud_153_22(capture_spans):
+    """AC-3/AC-5: an ordinal that indexes PAST the exits ('the fifth passage'
+    with three) is an honest no-match — it must fail loud and NOT fall through
+    to token-overlap or silently pick one. The PC does not move."""
+    snap = _snapshot({"Rux": "a"}, {"s1": "Rux"})
+    out = _run(
+        run_movement_dispatch(
+            _dispatch(exit_descriptor="the fifth passage"),
+            snapshot=snap,
+            player_name="Rux",
+            dungeon_store=_FakeStore(_ordinal_corridor_graph()),
+            palette=_FakePalette(),
+        )
+    )
+    assert out.data.get("error") == "no_candidate_edges", (
+        f"an out-of-range ordinal must refuse loudly, not resolve/fall through: {out.data}"
+    )
+    assert snap.pc_regions["Rux"] == "a", "a refused move must not advance the PC"
+    assert _spans_named(capture_spans, "movement.unresolved")
+    assert not _spans_named(capture_spans, "movement.resolved")

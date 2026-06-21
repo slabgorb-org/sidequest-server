@@ -40,6 +40,14 @@ class BestiaryEntry(BaseModel):
     description: str = ""
     abilities: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
+    # Faction/zone-scoped content eligibility (epic-157, ADR-059 amendment).
+    # Each value is either an exact world ``controlled_by`` faction slug
+    # (e.g. ``the_houyhnhnm_assembly``) or the reserved sentinel ``"*"`` =
+    # all zones in this world (world-global content). Default empty →
+    # unzoned worlds and all existing content keep parsing unchanged; the
+    # strict load validator (story 157-7), NOT this field, enforces non-empty
+    # in a zoned world.
+    factions: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _validate(self) -> BestiaryEntry:

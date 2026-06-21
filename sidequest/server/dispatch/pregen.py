@@ -40,6 +40,7 @@ from sidequest.telemetry.spans.span import Span
 
 if TYPE_CHECKING:
     from sidequest.game.monster_manual import MonsterManual
+    from sidequest.genre.models.bestiary import Bestiary
 
 logger = logging.getLogger(__name__)
 
@@ -191,6 +192,40 @@ def _generate_encounter(
         argv += ["--tier", str(tier)]
 
     return _run_cli_capturing_json(encountergen_main, argv, label="encountergen")
+
+
+def _encounter_factions(data: dict[str, Any], bestiary: Bestiary | None) -> list[str]:
+    """Union the source bestiary entries' ``factions`` onto a seeded encounter.
+
+    Faction/zone-scoped eligibility (epic-157, ADR-059 amendment): the encounter
+    inherits the faction tag(s) of the bestiary creatures it is built from, so
+    Seam 1 (:func:`monster_manual_inject._npc_patches_for_encounters`) can scope
+    it to its zone.
+
+    The join key is the enemy **name**: ``encountergen.generate_enemy_from_bestiary``
+    copies ``entry.name`` verbatim into each enemy and carries no creature_id, so
+    the name (case-insensitive) is the only stable link back to the
+    :class:`~sidequest.genre.models.bestiary.BestiaryEntry`. A native pack (no
+    bestiary) or an unmatched enemy contributes nothing → empty list → eligible
+    everywhere at runtime (the permissive predicate). Returned sorted for stable
+    on-disk Manual JSON.
+    """
+    if bestiary is None:
+        return []
+    by_name = {entry.name.lower(): entry for entry in bestiary.entries}
+    factions: set[str] = set()
+    enemies = data.get("enemies") if isinstance(data, dict) else None
+    if isinstance(enemies, list):
+        for enemy in enemies:
+            if not isinstance(enemy, dict):
+                continue
+            name = enemy.get("name")
+            if not isinstance(name, str):
+                continue
+            entry = by_name.get(name.lower())
+            if entry is not None:
+                factions.update(entry.factions)
+    return sorted(factions)
 
 
 def _seed_authored_npcs(pack: Any, world: str, manual: MonsterManual) -> int:
@@ -450,6 +485,13 @@ def seed_manual(
     # ``seed_error`` attribute BEFORE the raise, so the GM panel records the
     # seeding-failure decision (the old raise-in-loop emitted no seeding span).
     seed_error: str | None = None
+    # Faction/zone-scoped eligibility (epic-157): resolve the world's bestiary
+    # ONCE so each seeded encounter inherits the faction tag(s) of the creatures
+    # it is built from (the union; see :func:`_encounter_factions`). None for a
+    # pack that failed to load → encounters seed untagged (eligible everywhere).
+    bestiary: Bestiary | None = None
+    if combat_encounters and pack is not None:
+        bestiary, _bestiary_source = pack.effective_bestiary(world)
     if combat_encounters:
         for tier in ENCOUNTER_TIERS:
             data = _generate_encounter(
@@ -460,8 +502,14 @@ def seed_manual(
                 count=ENCOUNTERS_PER_TIER,
             )
             if data is not None:
-                logger.info("pregen.encounter_generated (tier=%d, ruleset=%s)", tier, ruleset)
-                manual.add_encounter(data, tier, [])
+                factions = _encounter_factions(data, bestiary)
+                logger.info(
+                    "pregen.encounter_generated (tier=%d, ruleset=%s, factions=%s)",
+                    tier,
+                    ruleset,
+                    factions,
+                )
+                manual.add_encounter(data, tier, [], factions=factions)
             elif ruleset != "dial":
                 # Story 90-1: a ruleset-module pack seeds from its bestiary or
                 # fails LOUD — the old warning-only skip shipped silently-empty

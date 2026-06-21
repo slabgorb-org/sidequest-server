@@ -208,6 +208,11 @@ def _stub_pack(cultures: list[str], *, constraints: ArchetypeConstraints | None 
     # the stub one spawnable archetype so the mint loop stays exercised.
     spawnable = SimpleNamespace(name="Drifter", named_individual=False)
     pack.effective_archetypes = lambda _world: ([spawnable], "stub")
+    # seed_manual resolves the world bestiary via ``pack.effective_bestiary(world)``
+    # (epic-157) so each seeded encounter inherits its source creatures' faction
+    # tags. The stub has no bestiary layer → (None, "stub") → encounters seed
+    # untagged (eligible everywhere), the correct shape for a dial stub pack.
+    pack.effective_bestiary = lambda _world: (None, "stub")
     return pack
 
 

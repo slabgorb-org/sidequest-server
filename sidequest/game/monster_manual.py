@@ -92,6 +92,15 @@ class ManualNpc(BaseModel):
     Used to anchor NPCs geographically — they don't follow the player everywhere.
     """
 
+    factions: list[str] = Field(default_factory=list)
+    """Faction/zone-scoped eligibility tag (epic-157, ADR-059 amendment).
+
+    Each value is an exact world ``controlled_by`` faction slug or the reserved
+    sentinel ``"*"`` (all zones). Default empty. Generated walk-ons are
+    *origin-stamped* on activation (story 157-3), not authored — so this stays
+    empty for the namegen pool until the walk-on is born in a region.
+    """
+
 
 class ManualEncounter(BaseModel):
     """A pre-generated encounter block from sidequest-encountergen."""
@@ -109,6 +118,17 @@ class ManualEncounter(BaseModel):
 
     terrain_tags: list[str] = Field(default_factory=list)
     """Biome/terrain tags for future filtering."""
+
+    factions: list[str] = Field(default_factory=list)
+    """Faction/zone-scoped eligibility tag (epic-157, ADR-059 amendment).
+
+    The union of the source bestiary entries' ``factions`` (stamped at seed
+    time by :func:`sidequest.server.dispatch.pregen.seed_manual`). Each value
+    is an exact world ``controlled_by`` faction slug or the reserved sentinel
+    ``"*"``. Default empty → eligible everywhere at runtime (the permissive
+    predicate); Seam 1 (:func:`monster_manual_inject._npc_patches_for_encounters`)
+    drops a tagged-but-wrong-zone encounter.
+    """
 
     state: EntryState = EntryState.AVAILABLE
     """Lifecycle state."""
@@ -457,8 +477,15 @@ class MonsterManual(BaseModel):
         data: dict[str, Any],
         tier: int,
         terrain_tags: list[str],
+        factions: list[str] | None = None,
     ) -> None:
-        """Add a pre-generated encounter from encountergen JSON output."""
+        """Add a pre-generated encounter from encountergen JSON output.
+
+        ``factions`` (epic-157) is the union of the source bestiary entries'
+        faction tags, stamped by the seeding path so Seam 1 can scope the
+        encounter to its zone. Defaults to empty (unzoned worlds / native
+        packs with no bestiary) — empty means eligible everywhere at runtime.
+        """
         enemies_raw = data.get("enemies") or []
         enemy_names: list[str] = []
         if isinstance(enemies_raw, list):
@@ -480,6 +507,7 @@ class MonsterManual(BaseModel):
                 label=label,
                 tier=tier,
                 terrain_tags=terrain_tags,
+                factions=list(factions or []),
                 state=EntryState.AVAILABLE,
             )
         )

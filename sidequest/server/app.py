@@ -35,7 +35,7 @@ from sidequest.server.watcher import (
 )
 from sidequest.server.websocket import ws_endpoint
 from sidequest.telemetry.validator import Validator
-from sidequest.telemetry.watcher_hub import publish_event
+from sidequest.telemetry.watcher_hub import no_watcher_enabled, publish_event
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +189,21 @@ def create_app(
         from opentelemetry.sdk.trace import TracerProvider
 
         from sidequest.telemetry.setup import init_tracer
+
+        # Story 125-9: SIDEQUEST_NO_WATCHER=1 boots the server with the WatcherHub
+        # inert so a headless harness run never registers its test-* sessions with
+        # the operator's live hub. Skip BOTH the loop bind (so publish drops) and
+        # the span-processor registration (so spans never reach the hub). Loud, not
+        # silent — an operator who booted the live server with the flag set must see
+        # WHY the GM dashboard is deaf. Span-asserting harness runs leave the flag
+        # unset and use a separate port instead (the watcher stays fully live).
+        if no_watcher_enabled():
+            logger.info(
+                "watcher.disabled reason=SIDEQUEST_NO_WATCHER — hub not wired "
+                "(harness isolation, story 125-9); GM dashboard receives no events "
+                "from this process"
+            )
+            return
 
         watcher_hub.bind_loop(asyncio.get_running_loop())
 

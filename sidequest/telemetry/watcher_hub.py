@@ -73,6 +73,22 @@ def _watcher_as_spans_enabled() -> bool:
     return os.environ.get("SIDEQUEST_WATCHER_AS_SPANS") == "1"
 
 
+def no_watcher_enabled() -> bool:
+    """True when ``SIDEQUEST_NO_WATCHER=1`` — the server boots with the WatcherHub
+    disabled so a headless harness run (playtest driver / understudy) never
+    registers its ``test-*`` sessions with the operator's live hub (story 125-9,
+    the upstream root fix to 126-34's downstream dashboard filter).
+
+    Read LIVE (not cached at import) for the same reason ``_watcher_as_spans_enabled``
+    is: ``watcher_hub`` is imported very early in the app graph, sometimes before the
+    harness shell exports the flag. Exact ``"1"`` match — a typo'd value (``true``,
+    ``yes``) does NOT silently disable observability; the watcher stays on and the
+    operator keeps their dashboard (No Silent Fallbacks). Disabling the watcher is an
+    explicit, classified act.
+    """
+    return os.environ.get("SIDEQUEST_NO_WATCHER") == "1"
+
+
 # Diagnostic counter — incremented on every successful synthetic span
 # mint. Surfaced via :meth:`WatcherHub.stats` so the GM panel and ad-hoc
 # probes can confirm the bridge is firing during gameplay (vs. only at

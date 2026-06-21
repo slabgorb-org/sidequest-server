@@ -170,6 +170,7 @@ from sidequest.game.creature_core import HpPool, hp_pool_from_hp
 from sidequest.game.repository import DungeonRepository, DungeonTransaction
 from sidequest.game.session import GameSnapshot
 from sidequest.telemetry.spans.dungeon_materialize import (
+    dungeon_curate_authored_bind_failed_span,
     dungeon_curate_degraded_span,
     dungeon_curate_parse_failed_span,
     dungeon_materialize_attach_span,
@@ -189,6 +190,16 @@ logger = logging.getLogger(__name__)
 # a tiny value; the deadline path is otherwise unverifiable without a 25 s
 # test). The load-bearing no-multi-minute-freeze guarantee.
 CURATE_DEADLINE_S: float = 25.0
+
+# Story 153-26: the band cap is the per-region budget × region count (so the
+# deadline tracks the work — see _stage_curate), but it MUST stay bounded. The
+# bootstrap materialize() is awaited on the connect handler, so an unbounded
+# N×budget could hold the player-facing connect open for minutes on a large
+# expansion (up to JaquaysConfig.new_regions_per_expansion regions). This ceiling
+# restores the load-bearing no-multi-minute-freeze guarantee the old fixed cap
+# gave. Module-level so it is injectable (tests clamp it tiny). 120s ≈ the old
+# fixed cap times a generous band — honest, but never a multi-minute hang.
+MAX_BAND_DEADLINE_S: float = 120.0
 
 __all__ = [
     "AttachResult",
@@ -1008,6 +1019,103 @@ def _creatures_from_manifest(
     return creatures, big_bad
 
 
+def _append_authored_creatures(
+    creatures: list[CuratedCreature],
+    *,
+    region_id: str,
+    pack: Any,
+    world_slug: str,
+) -> list[CuratedCreature]:
+    """Story 153-26: even when a region Layer-2-degrades, surface its AUTHORED
+    ``rooms/<id>.yaml`` ``encounter_creatures`` binding.
+
+    ``_creatures_from_manifest`` translates only the PROCEDURAL
+    ``assemble_region`` manifest, so a degrade silently drops authored
+    encounters (``entrance`` → ``gnaw_swarm``). ``resolve_room_creatures`` is the
+    LLM-free authored-binding read shared with the runtime Monster Manual seam
+    (it emits ``monster_manual.room_bound``); consulting it here makes authored
+    content survive the degrade rather than vanish into the deterministic coal.
+
+    A region with no authored binding (the common procedural case) is returned
+    unchanged. ``pack=None`` / blank ``world_slug`` (test/bootstrap inputs with no
+    world context) is a no-op, preserving the prior packless degrade shape — NOT
+    a silent fallback, just an absent binding.
+
+    A binding referencing an unknown bestiary id (or a world with no bestiary at
+    all) is an AUTHORING error: ``resolve_room_creatures`` raises
+    ``RoomCreatureBindingError``. On THIS path that error must stay LOUD-but-
+    GRACEFUL (ADR-106 Amendment A degrade contract: "LOUD degrade, the turn
+    proceeds, no table freeze") — it is caught, logged at ERROR, and surfaced on
+    the ``dungeon.curate.authored_bind_failed`` span, then the degrade PROCEEDS
+    with the procedural coal. Letting it propagate would crash the player-facing
+    bootstrap ``await materialize()`` at connect for a single content typo
+    (Reviewer 153-26 HIGH).
+    """
+    if pack is None or not world_slug:
+        return creatures
+    # Local import: avoid an import-time cycle through the server.dispatch
+    # package (the same lazy-import idiom as monster_manual_inject's caller).
+    from sidequest.server.dispatch.room_creature_binding import (
+        RoomCreatureBindingError,
+        resolve_room_creatures,
+    )
+
+    try:
+        bound_ids = resolve_room_creatures(pack, world_slug, region_id)
+    except RoomCreatureBindingError as exc:
+        # Loud-but-graceful: the degrade is already shipping coal — a broken
+        # authored binding must NOT additionally crash the connect. Surface it
+        # (ERROR log + GM-panel span) and proceed with the procedural creatures.
+        logger.error(
+            "dungeon curate degrade: authored room binding for region=%s "
+            "world=%s could not be resolved (%s); shipping procedural coal only "
+            "— authored encounter dropped (ADR-106 Amendment A: loud, but the "
+            "turn proceeds, no table freeze)",
+            region_id,
+            world_slug,
+            exc,
+        )
+        with dungeon_curate_authored_bind_failed_span(
+            region_id=region_id, world_slug=world_slug, error=str(exc)
+        ):
+            pass
+        return creatures
+    if not bound_ids:
+        return creatures
+    bestiary, _ = pack.effective_bestiary(world_slug)
+    by_id = {entry.id: entry for entry in (bestiary.entries if bestiary else [])}
+    existing_names = {c.name for c in creatures}
+    merged = list(creatures)
+    for cid in bound_ids:
+        entry = by_id.get(cid)
+        if entry is None:
+            # resolve_room_creatures already validated referential integrity
+            # against this same effective_bestiary, so a miss here means the two
+            # reads diverged (effective_bestiary is pure — should be impossible).
+            # Log LOUD for observability rather than dropping it silently.
+            logger.error(
+                "dungeon curate degrade: authored binding id=%s for region=%s "
+                "resolved by resolve_room_creatures but is absent from the "
+                "effective bestiary — dropping (divergent bestiary read?)",
+                cid,
+                region_id,
+            )
+            continue
+        if entry.name in existing_names:
+            # A name match means the procedural manifest already shipped it.
+            continue
+        merged.append(
+            CuratedCreature(
+                name=entry.name,
+                creature_type=str(getattr(entry, "role", "") or "authored"),
+                telegraph=str(getattr(entry, "description", "") or ""),
+                hp=hp_pool_from_hp(int(entry.hp)),
+            )
+        )
+        existing_names.add(entry.name)
+    return merged
+
+
 def _degrade_region(
     *,
     region_id: str,
@@ -1017,13 +1125,19 @@ def _degrade_region(
     attempts: int,
     elapsed_ms: int,
     reason: str,
+    pack: Any = None,
+    world_slug: str = "",
 ) -> tuple[list[CuratedCreature], CuratedCreature | None]:
     """ADR-106 Amendment A Layer 2 — LOUD degrade for one region: an
     ERROR-level log (No-Silent-Fallbacks: never a swallowed except) + a
     routed ``dungeon.curate.degraded`` span (clause-12 GM-panel lie
     detector) + the deterministic manifest content. The region is honest
     coal stamped ``curated=false``, never a raw-manifest-stamped-curated
-    silent lie."""
+    silent lie.
+
+    Story 153-26: the degraded region ALSO surfaces its authored
+    ``encounter_creatures`` binding (``_append_authored_creatures``) so a
+    timeout/parse degrade no longer silently drops authored encounters."""
     logger.error(
         "dungeon curate degraded region=%s failure_kind=%s attempts=%d "
         "elapsed_ms=%d reason=%s — shipping the deterministic "
@@ -1042,7 +1156,11 @@ def _degrade_region(
         elapsed_ms=elapsed_ms,
     ):
         pass
-    return _creatures_from_manifest(manifest, bundle)
+    creatures, big_bad = _creatures_from_manifest(manifest, bundle)
+    creatures = _append_authored_creatures(
+        creatures, region_id=region_id, pack=pack, world_slug=world_slug
+    )
+    return creatures, big_bad
 
 
 async def _stage_curate(
@@ -1055,6 +1173,7 @@ async def _stage_curate(
     is_first_band_entry: bool,
     claude_client: Any,
     span: _otel_trace.Span,
+    pack: Any = None,
 ) -> RegionCuration:
     """Plan 7 Task 4: curate stage — assemble_region + one-shot SDK
     ``complete_with_tools`` + the owned CR→Edge seam.
@@ -1247,8 +1366,17 @@ async def _stage_curate(
     attempts = 0
     degrade_kind = "malformed"
     degrade_reason = "curate verdict never parsed"
+    # Story 153-26: an HONEST per-region budget. The whole band is curated in
+    # one bounded call, so a single FIXED cap degraded the ENTIRE band the
+    # instant the band grew large enough that normal LLM latency crossed it
+    # (the 30337ms-vs-25000ms beneath_sunden playtest failure on exp001.r2..r5).
+    # Scale the wall-clock cap with the region count so the budget tracks the
+    # work: CURATE_DEADLINE_S is now the per-region budget; the band gets N x it,
+    # BOUNDED by MAX_BAND_DEADLINE_S so a large band can never hold the connect
+    # open for minutes (the no-multi-minute-freeze guarantee — story 153-26).
+    band_deadline_s = min(CURATE_DEADLINE_S * max(1, len(manifests)), MAX_BAND_DEADLINE_S)
     try:
-        async with asyncio.timeout(CURATE_DEADLINE_S):
+        async with asyncio.timeout(band_deadline_s):
             for attempt in range(1, 3):  # Layer 1: exactly 1 retry
                 attempts = attempt
                 try:
@@ -1265,7 +1393,10 @@ async def _stage_curate(
                         pass
     except TimeoutError:
         degrade_kind = "deadline"
-        degrade_reason = f"curate exceeded the {CURATE_DEADLINE_S}s wall-clock cap"
+        degrade_reason = (
+            f"curate exceeded the {band_deadline_s}s band wall-clock cap "
+            f"({CURATE_DEADLINE_S}s/region x {len(manifests)} regions)"
+        )
         attempts = attempts or 1
 
     elapsed_ms = int((time.monotonic() - started) * 1000)
@@ -1286,6 +1417,8 @@ async def _stage_curate(
                 attempts=attempts,
                 elapsed_ms=elapsed_ms,
                 reason=degrade_reason,
+                pack=pack,
+                world_slug=request.world_slug,
             )
             region_creatures[region_id] = creatures
             region_big_bad[region_id] = big_bad
@@ -1311,6 +1444,8 @@ async def _stage_curate(
                         f"region {region_id!r} verdict is not an object with "
                         f"a wandering_table list (got {type(rv).__name__})"
                     ),
+                    pack=pack,
+                    world_slug=request.world_slug,
                 )
                 region_creatures[region_id] = creatures
                 region_big_bad[region_id] = big_bad
@@ -2022,6 +2157,7 @@ async def materialize(
     pack_tropes: Any,
     claude_client: Any,
     is_first_band_entry: bool = True,
+    pack: Any = None,
 ) -> None:
     """Run the five-stage materialisation pipeline for one expansion.
 
@@ -2124,6 +2260,7 @@ async def materialize(
                 is_first_band_entry=is_first_band_entry,
                 claude_client=curation_client,
                 span=curate_span,
+                pack=pack,
             )
 
         # Loud fresh-save detection (introspection, NOT an assumption): a save

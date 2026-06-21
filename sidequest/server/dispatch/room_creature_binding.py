@@ -64,7 +64,19 @@ def resolve_room_creatures(pack: Any, world_slug: str, room_id: str) -> list[str
         # room file; not a fallback, just an absent binding.
         return []
 
-    data = yaml.safe_load(room_path.read_text(encoding="utf-8"))
+    try:
+        data = yaml.safe_load(room_path.read_text(encoding="utf-8"))
+    except (yaml.YAMLError, OSError) as exc:
+        # A malformed (yaml.YAMLError) or unreadable (OSError/PermissionError)
+        # room file is the same class of authoring/content error as a dangling
+        # ref — surface it as a typed RoomCreatureBindingError, NOT a raw
+        # yaml.YAMLError/OSError. The materializer degrade path catches
+        # RoomCreatureBindingError to stay loud-but-graceful; an untyped error
+        # would slip that catch and crash the player-facing connect (153-26).
+        raise RoomCreatureBindingError(
+            f"room {room_id!r} (world {world_slug!r}) has an unreadable or "
+            f"malformed room file {room_path.name!r}: {exc}"
+        ) from exc
     raw = data.get("encounter_creatures") if isinstance(data, dict) else None
     if not isinstance(raw, list):
         return []
@@ -73,6 +85,18 @@ def resolve_room_creatures(pack: Any, world_slug: str, room_id: str) -> list[str
         return []
 
     bestiary, _ = pack.effective_bestiary(world_slug)
+    if bestiary is None:
+        # A declared binding against a world with NO effective bestiary at all is
+        # the same class of authoring error as a dangling ref — surface it as a
+        # typed RoomCreatureBindingError (No Silent Fallbacks), NOT a raw
+        # AttributeError from dereferencing None.entries. The materializer
+        # degrade path catches RoomCreatureBindingError to stay loud-but-graceful;
+        # a bare AttributeError would slip that catch and crash the connect (153-26).
+        raise RoomCreatureBindingError(
+            f"room {room_id!r} (world {world_slug!r}) binds encounter_creatures "
+            f"{bound} but the world has no effective bestiary; every binding id "
+            f"must resolve to a real bestiary entry (No Silent Fallbacks)"
+        )
     valid_ids = {entry.id for entry in bestiary.entries}
     dangling = [cid for cid in bound if cid not in valid_ids]
     if dangling:

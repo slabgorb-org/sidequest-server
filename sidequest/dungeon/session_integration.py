@@ -188,6 +188,9 @@ async def attach_dungeon_to_session(
                 snapshot=snapshot,
                 pack_tropes=genre_pack,
                 claude_client=claude_client,
+                # Story 153-26: thread the genre pack so a Layer-2 curate degrade
+                # still surfaces a room's authored encounter_creatures binding.
+                pack=genre_pack,
             )
             _span.set_attribute("outcome", "bootstrapped")
         else:

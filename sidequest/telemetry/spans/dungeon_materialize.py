@@ -36,6 +36,11 @@ SPAN_DUNGEON_MATERIALIZE_CURATE = "dungeon.materialize.curate"
 # ADR-106 Amendment A (story 50-26) — curate-stage robustness spans.
 SPAN_DUNGEON_CURATE_PARSE_FAILED = "dungeon.curate.parse_failed"
 SPAN_DUNGEON_CURATE_DEGRADED = "dungeon.curate.degraded"
+# Story 153-26 (rework) — a region's AUTHORED room binding could not be resolved
+# while preserving authored content on the Layer-2 degrade (a dangling/absent
+# bestiary id — an authoring error). LOUD-but-graceful: the degrade proceeds
+# with procedural coal rather than crashing the player-facing connect.
+SPAN_DUNGEON_CURATE_AUTHORED_BIND_FAILED = "dungeon.curate.authored_bind_failed"
 SPAN_DUNGEON_MATERIALIZE_ATTACH = "dungeon.materialize.attach"
 SPAN_DUNGEON_MATERIALIZE_COMMIT = "dungeon.materialize.commit"
 SPAN_FRONTIER_EXPAND = "frontier.expand"
@@ -186,6 +191,23 @@ SPAN_ROUTES[SPAN_DUNGEON_CURATE_DEGRADED] = SpanRoute(
         "failure_kind": _attr("failure_kind")(s),
         "attempts": _attr("attempts")(s),
         "elapsed_ms": _attr("elapsed_ms")(s),
+    },
+)
+
+SPAN_ROUTES[SPAN_DUNGEON_CURATE_AUTHORED_BIND_FAILED] = SpanRoute(
+    event_type="state_transition",
+    component="dungeon",
+    # Story 153-26 (rework): emitted when a degraded region's AUTHORED
+    # encounter_creatures binding cannot be resolved (a dangling/absent
+    # bestiary id). The GM-panel lie-detector for the loud-but-graceful catch:
+    # the authored content was DROPPED (procedural coal shipped instead) and
+    # the author's broken binding is surfaced rather than silently swallowed.
+    extract=lambda s: {
+        "field": "dungeon_map",
+        "op": "curate.authored_bind_failed",
+        "region_id": _attr("region_id")(s),
+        "world_slug": _attr("world_slug")(s),
+        "error": _attr("error")(s),
     },
 )
 
@@ -483,6 +505,33 @@ def dungeon_curate_degraded_span(
 
 
 @contextmanager
+def dungeon_curate_authored_bind_failed_span(
+    *,
+    region_id: str,
+    world_slug: str,
+    error: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Story 153-26 (rework): a degraded region's AUTHORED room binding could not
+    be resolved (a dangling/absent bestiary id — an authoring error). The
+    loud-but-graceful signal: the binding error is surfaced to the GM panel
+    rather than crashing the connect, and the degrade proceeds with procedural
+    coal. Closed immediately — a point event, not a nested stage."""
+    with Span.open(
+        SPAN_DUNGEON_CURATE_AUTHORED_BIND_FAILED,
+        {
+            "region_id": region_id,
+            "world_slug": world_slug,
+            "error": error,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
 def dungeon_materialize_attach_span(
     *,
     expansion_id: int,
@@ -595,6 +644,7 @@ def frontier_region_transition_span(
 
 
 __all__ = [
+    "SPAN_DUNGEON_CURATE_AUTHORED_BIND_FAILED",
     "SPAN_DUNGEON_CURATE_DEGRADED",
     "SPAN_DUNGEON_CURATE_PARSE_FAILED",
     "SPAN_DUNGEON_MATERIALIZE",
@@ -607,6 +657,7 @@ __all__ = [
     "SPAN_FRONTIER_EXPAND",
     "SPAN_FRONTIER_LOOKAHEAD",
     "SPAN_FRONTIER_REGION_TRANSITION",
+    "dungeon_curate_authored_bind_failed_span",
     "dungeon_curate_degraded_span",
     "dungeon_curate_parse_failed_span",
     "dungeon_materialize_attach_span",

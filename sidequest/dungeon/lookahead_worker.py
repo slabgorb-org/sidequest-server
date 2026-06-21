@@ -379,6 +379,10 @@ class LookaheadWorkerHandle:
                 snapshot=snapshot,
                 pack_tropes=self.pack_tropes,
                 claude_client=self.claude_client,
+                # Story 153-26: thread the genre pack so a Layer-2 curate degrade
+                # of a frontier region still surfaces its authored
+                # encounter_creatures binding (resolve_room_creatures).
+                pack=self.pack_tropes,
             )
 
     async def drain(self) -> None:

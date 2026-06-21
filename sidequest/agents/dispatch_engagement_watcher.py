@@ -376,6 +376,35 @@ def _check_quest_offer_engaged(
     return None
 
 
+def _check_course_engaged(
+    dispatch: SubsystemDispatch, snapshot: GameSnapshot, player_id: str | None
+) -> str | None:
+    """course witness — "course-was-plotted-or-arrived" (Story 153-5).
+
+    Router-claimed-but-engine-idle for the orbital course/clock: when the router
+    dispatched ``course`` for a named ``destination`` but neither a plotted
+    course to that body nor an arrival there landed on the post-turn snapshot,
+    the course/clock engine never engaged — a real mismatch (the narrator
+    improvised the burn). A committed ``plotted_course`` OR an arrival
+    (``party_body_id == destination``, the state after the course clears on
+    arrival) is honest engagement.
+    """
+    destination = _required_str_param(dispatch, "destination")
+    if destination is None:
+        return _MALFORMED_EVIDENCE.format(subsystem="course", key="destination")
+    plotted = snapshot.plotted_course
+    if plotted is not None and plotted.to_body_id == destination:
+        return None
+    if snapshot.party_body_id == destination:
+        return None  # arrived — the course committed then cleared on arrival.
+    return (
+        f"course dispatched to destination={destination!r} but no plotted_course "
+        f"to it and no arrival (plotted_course="
+        f"{plotted.to_body_id if plotted else None!r}, "
+        f"party_body_id={snapshot.party_body_id!r}) — engine idle"
+    )
+
+
 _DISPATCHED_TYPE_KEY: dict[str, str] = {
     "confrontation": "type",
     "magic_working": "actor",
@@ -386,6 +415,7 @@ _DISPATCHED_TYPE_KEY: dict[str, str] = {
     "witnessed_act": "act_id",
     "movement": "direction",
     "quest_offer": "quest_id",
+    "course": "destination",
 }
 
 
@@ -399,6 +429,7 @@ _WITNESSES = {
     "witnessed_act": _check_witnessed_act_engaged,
     "movement": _check_movement_engaged,
     "quest_offer": _check_quest_offer_engaged,
+    "course": _check_course_engaged,
 }
 
 
@@ -445,14 +476,15 @@ def detect_dispatch_engagement_mismatch(
     (``package=None`` or empty package) return ``[]``.
 
     Subsystems whose names are not in :data:`_WITNESSES` are *ignored* —
-    not every router subsystem is the watcher's concern. As of story 117-3,
-    nine live-path subsystems have witnesses: ``confrontation``,
+    not every router subsystem is the watcher's concern. As of story 153-5,
+    ten live-path subsystems have witnesses: ``confrontation``,
     ``magic_working``, ``scenario_clue``, ``npc_agency``,
     ``distinctive_detail_hint``, ``reflect_absence``, ``witnessed_act``
     (turn-scoped political-ledger read), ``movement`` (per-PC
-    relocation-occurred read), and ``quest_offer`` (accept-minted-a-quest read,
+    relocation-occurred read), ``quest_offer`` (accept-minted-a-quest read,
     ADR-146 §4 — the structurally-sound replacement for the keyword
-    unminted-objective detector).
+    unminted-objective detector), and ``course`` (course-plotted-or-arrived
+    read, ADR-130/153-5 — the orbital course/clock engine engaged).
     """
     if package is None:
         return []

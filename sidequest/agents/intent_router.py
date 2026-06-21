@@ -280,6 +280,21 @@ For each player action:
          scores LOW and degrades to a narrator hint, leaving the offer live for a
          clearer re-accept. When several offers are pending, use the title/giver
          context to pick which one the player's "yes" answers.
+       - course: the party plots a course / burns / sets out to travel to a
+         specific celestial body (a planet, moon, station, or gate). params={
+           "destination": "<the body the player named — a body id surfaced in the
+                           game_state <courses> block / orbital chart>"
+         }.
+         Emit course ONLY when the world has an orbital tier (a <courses> block is
+         present in game_state) AND the player declares travel to a NAMED body
+         ("we burn for the Red Prospect", "set a course for Tethys Watch", "jump
+         to the Gate", "head for the inner moon"). The engine computes the ETA and
+         Δv, plots the course, and advances the story clock by the travel time —
+         so this is travel, NOT looking at the chart, drilling the map, or asking
+         where something is. Name the destination as the body the player chose;
+         the engine resolves it against the world's bodies and refuses an unknown
+         body LOUDLY. A clear declaration of travel to a named body scores HIGH; a
+         vague "let's get moving" with no named destination scores LOW.
      Every dispatch carries a per-dispatch confidence (0.0-1.0): how certain you
      are that THIS specific mechanical engagement is what the player intended.
      Score the confidence for each dispatch honestly — a high score fires the

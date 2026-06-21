@@ -33,7 +33,10 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from sidequest.orbital.loader import OrbitalContent
 
 from sidequest.agents.dispatch_precondition_gate import (
     run_dispatch_precondition_gate,
@@ -748,6 +751,7 @@ async def execute_intent_router_pre_narrator_pass(
     dungeon_store: Any | None = None,
     palette: Any | None = None,
     lookahead_handle: Any | None = None,
+    orbital_content: OrbitalContent | None = None,
     phase_timings: PhaseTimings | None = None,
     turn_number: int = 0,
 ) -> tuple[DispatchPackage, BankResult]:
@@ -972,6 +976,14 @@ async def execute_intent_router_pre_narrator_pass(
                 "dungeon_store": dungeon_store,
                 "palette": palette,
                 "lookahead_handle": lookahead_handle,
+                # Orbital course/clock subsystem (Story 153-5): the world's
+                # orbits config (bodies + travel calibration) the course handler
+                # needs. Lives on the Session, NOT the snapshot; the caller
+                # threads ``session.orbital_content`` here. None for worlds with
+                # no orbital tier — the handler rejects loud (no_orbital_tier).
+                # Signature-filtered by the bank, so non-orbital subsystems are
+                # unaffected.
+                "orbital_content": orbital_content,
                 # Effective (post-record_interaction) turn number so the bank +
                 # equip spans grid to the same column turn_complete emits — see
                 # ``effective_dispatch_turn_number``. 0 (the default) means the

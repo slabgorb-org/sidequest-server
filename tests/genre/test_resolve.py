@@ -250,6 +250,45 @@ def test_merge_empty_child_tags_inherits_from_parent() -> None:
     assert resolved[0].tags == ["dark", "foreboding"]
 
 
+def test_merge_child_factions_overrides_parent() -> None:
+    # epic-157 (ADR-059 amendment): the `factions` zone-eligibility tag must
+    # survive trope inheritance. A world trope that `extends` a genre parent and
+    # declares its own factions — e.g. gulliver's the_petty_holy_war extends
+    # "Impossible Authority" and is scoped [the_lilliput_court] — must keep them.
+    # Without propagation the tag is silently dropped to [], the Seam-3 trope
+    # gate sees empty (permissive), and the Lilliput egg-war leaks into every
+    # voyage. This is the regression this story fixes.
+    genre = tropes_from_yaml("""
+- name: Base
+  abstract: true
+  category: conflict
+""")
+    world = tropes_from_yaml("""
+- name: Derived
+  extends: base
+  factions: [the_lilliput_court]
+""")
+    resolved = resolve_trope_inheritance(genre, world)
+    assert resolved[0].factions == ["the_lilliput_court"]
+
+
+def test_merge_empty_child_factions_inherits_from_parent() -> None:
+    # Consistent with the tags/triggers merge semantics: an untagged child
+    # inherits the parent's factions rather than silently resetting to empty.
+    genre = tropes_from_yaml("""
+- name: Base
+  abstract: true
+  category: conflict
+  factions: ["*"]
+""")
+    world = tropes_from_yaml("""
+- name: Derived
+  extends: base
+""")
+    resolved = resolve_trope_inheritance(genre, world)
+    assert resolved[0].factions == ["*"]
+
+
 def test_merge_resolution_hints_inherited_when_child_absent() -> None:
     genre = tropes_from_yaml("""
 - name: Base

@@ -147,6 +147,14 @@ def _merge_trope(parent: TropeDefinition, child: TropeDefinition) -> TropeDefini
             else parent.resolution_patterns
         ),
         "tags": child.tags if child.tags else parent.tags,
+        # Faction/zone-eligibility tag (epic-157, ADR-059 amendment). Same
+        # child-overrides / empty-inherits semantics as tags/triggers: a world
+        # trope that `extends` a parent and declares its own factions keeps them;
+        # an untagged child inherits the parent's. Omitting this drops the tag to
+        # [] (permissive) and the trope leaks across every zone — the Seam-3 gate
+        # then can't scope it. (Surfaced by gulliver's three `extends` tropes,
+        # story 157-5.)
+        "factions": child.factions if child.factions else parent.factions,
         "escalation": child.escalation if child.escalation else parent.escalation,
         "passive_progression": (
             child.passive_progression

@@ -747,3 +747,63 @@ def test_barsoom_journal_sentence_renders_clean():
     assert "four arms loose" in out and "four arm loose" not in out, repr(out)
     assert "ivory tusks catching" in out and "ivory tusk catching" not in out, repr(out)
     assert "turning its eyeless" in out and "turning it eyeless" not in out, repr(out)
+
+
+# ---------------------------------------------------------------------------
+# Story 153-14: PC-name as a fragment of a longer NPC proper noun
+# (NPC-NAME-PCSUBSTRING-SUBSTITUTION, sq-playtest 2026-06-20/21).
+#
+# When the PC's name is a substring of a multi-word NPC name, the existing
+# \b...\b word boundaries are NOT enough — "Kantos Vah" has an internal word
+# boundary, so \bKantos\b matched the "Kantos" token inside the NPC's full
+# name and the subject pass rewrote NPC "Kantos Vah" into "you Vah" on the
+# player's tab. The fix guards the name→"you" swap against firing on a token
+# that sits adjacent to another capitalized word (a proper-noun continuation).
+# ---------------------------------------------------------------------------
+
+
+def test_pc_name_prefix_of_npc_name_left_intact():
+    """Verbatim finding: PC "Kantos", NPC "Kantos Vah". The NPC's full name
+    must survive untouched — never become "you Vah"."""
+    text = "Kantos Vah studies the console without looking up."
+    out, count = swap_to_second_person(text, target_name="Kantos", pronouns="he/him")
+    assert out == text, repr(out)
+    assert count == 0
+
+
+def test_pc_name_standalone_still_swaps_despite_collision_name():
+    """The standalone PC reference must still swap even when an NPC whose name
+    contains the PC name appears in the same passage. First sentence is the
+    NPC ("Kantos Vah"); second is the PC ("Kantos") acting."""
+    text = "Kantos Vah studies the console. Kantos draws the blade."
+    out, _ = swap_to_second_person(text, target_name="Kantos", pronouns="he/him")
+    assert "Kantos Vah studies the console." in out, repr(out)
+    assert "You draw the blade." in out, repr(out)
+
+
+def test_pc_name_prefix_npc_possessive_left_intact():
+    """A longer NPC name in the possessive ("Kantos Vah's blade") must not be
+    partly swapped to "you Vah's blade"."""
+    text = "Kantos Vah's blade gleams on the rack."
+    out, count = swap_to_second_person(text, target_name="Kantos", pronouns="he/him")
+    assert out == text, repr(out)
+    assert count == 0
+
+
+def test_pc_possessive_still_swaps_with_collision_name():
+    """Possessive regression: the PC's own possessive ("Kantos's") must still
+    become "Your", even though "Kantos" is a prefix of an NPC name."""
+    text = "Kantos's grip tightens on the rail."
+    out, _ = swap_to_second_person(text, target_name="Kantos", pronouns="he/him")
+    assert out.startswith("Your grip tightens"), repr(out)
+    assert "Kantos" not in out
+
+
+def test_pc_name_suffix_of_npc_name_left_intact_mid_sentence():
+    """ "Embedded in a longer NPC name" generality — the PC name as the trailing
+    word of a compound proper noun mid-sentence ("the envoy Vah Kantos") is a
+    name fragment and must not swap to "Vah you"."""
+    text = "The envoy Vah Kantos bows to the council."
+    out, count = swap_to_second_person(text, target_name="Kantos", pronouns="he/him")
+    assert out == text, repr(out)
+    assert count == 0

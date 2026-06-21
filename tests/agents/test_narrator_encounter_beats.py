@@ -75,6 +75,88 @@ def _contest_enc() -> StructuredEncounter:
     return enc
 
 
+def _conflict_cdef() -> ConfrontationDef:
+    """A Fate Conflict (ADR-144, story 153-3) — the LETHAL sibling of a Contest.
+    Like a Contest its beats are DISPLAY-ONLY stubs (id + label, kind=None, no dial
+    fields): resolution runs through the 4dF Conflict engine against the Other's
+    FateSheet stress (``fate_conflict.py``), never native beat_selections. A combat
+    confrontation (the Jabberwock can kill you) — seats via ``seat_as_fate_conflict``
+    with ``win_condition='fate_conflict'``, so the narrator must NOT be offered a
+    native beat menu (it both crashes on ``b.kind.value`` and re-arms the dial)."""
+    return ConfrontationDef(
+        type="violence",
+        label="The Jabberwock",
+        category="combat",
+        resolution_mode="conflict",
+        beats=[
+            BeatDef(id="strike", label="Strike"),
+            BeatDef(id="parry", label="Parry"),
+        ],
+    )
+
+
+def _conflict_enc() -> StructuredEncounter:
+    """A seated Fate Conflict. Seating stamps ``win_condition='fate_conflict'``
+    (encounter_lifecycle.py:1757) and leaves ``contest`` None — the conflict
+    resolves off the opponent FateSheet stress, not a contest victory tally."""
+    return StructuredEncounter(
+        encounter_type="violence",
+        category="combat",
+        win_condition="fate_conflict",
+        player_metric=EncounterMetric(
+            name="fate_stress", current=0, starting=0, threshold=1_000_000
+        ),
+        opponent_metric=EncounterMetric(
+            name="fate_stress", current=0, starting=0, threshold=1_000_000
+        ),
+        actors=[
+            EncounterActor(name="Alice", role="hero", side="player"),
+            EncounterActor(name="Jabberwock", role="monster", side="opponent"),
+        ],
+    )
+
+
+def test_build_encounter_context_fate_conflict_does_not_render_native_beats() -> None:
+    """RED (story 153-3 RT1, Reviewer Finding 1): a Fate CONFLICT crashes the narrator.
+
+    The Fate-Contest crash fix (narrator.py ~391, #985 follow-on / glenross 150-6)
+    gave ``resolution_mode == contest`` a dedicated live zone that skips the native
+    beat menu. The new ``conflict`` mode (153-3) carries the SAME display-only stub
+    beats (kind=None) but falls into the generic ``elif`` (narrator.py ~418), whose
+    ``beat_lines`` does ``b.kind.value`` over every beat → ``AttributeError:
+    'NoneType' object has no attribute 'value'`` on EVERY Fate conflict turn (e.g.
+    wry_whimsy ``violence`` — the Jabberwock fight, the story's whole reason to exist).
+
+    Per SOUL "Bind the Ruleset, Don't Balance It" (ADR-144 REPLACE) the native
+    beat/dial machinery is REMOVED from the Fate path: build_encounter_context must
+    offer a Fate-Conflict live zone (no native beat menu) parallel to the contest
+    branch, and must NOT crash on the stub beats. Today it crashes — RED.
+    """
+    narrator = NarratorAgent()
+    reg = PromptRegistry()
+    # Was: AttributeError on the kind=None stub beat (the elif ~418 native menu).
+    narrator.build_encounter_context(
+        reg,
+        encounter=_conflict_enc(),
+        cdef=_conflict_cdef(),
+        encounter_summary="The Jabberwock's jaws close on empty air.",
+    )
+    composed = reg.compose(narrator.name())
+    # The resolved-exchange context still reaches the narrator (valley zone).
+    assert "The Jabberwock's jaws close on empty air." in composed
+    # Participants are still named so the narrator knows who is in the conflict.
+    assert "Alice" in composed
+    assert "Jabberwock" in composed
+    # The conflict is framed as Fate-resolved, not native-beat-resolved (parallel to
+    # the contest branch's "Fate Contest" framing — here the lethal sibling).
+    assert "Fate Conflict" in composed
+    assert "Do NOT emit beat_selections" in composed
+    # The native beat-selection menu must NOT be rendered for a Conflict (it both
+    # crashed on the kind=None stub and re-armed the parallel dial engine ADR-144
+    # forbids — the exact failure the contest branch was added to kill).
+    assert "beat_selections.beat_id MUST be one of" not in composed
+
+
 def test_build_encounter_context_fate_contest_does_not_render_native_beats() -> None:
     """Regression for the #985 follow-on Fate-Contest narrate-crash (playtest
     glenross 150-6, 2026-06-20).

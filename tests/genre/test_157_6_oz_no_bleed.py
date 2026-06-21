@@ -13,10 +13,13 @@ Munchkin meadows, and IS eligible in the Winkie country — the oz analog of the
 gulliver Yahoo-on-the-Lilliput-shore leak.
 
 Also guards the ``extends`` regression (the gulliver ``the_petty_holy_war``
-case): ``green_spectacles`` extends a genre-tier parent, so its ``[the_wizard]``
-scope only survives inheritance because ``resolve.py::_merge_trope`` propagates
-``factions`` (157-5). ``lost_princess`` extends a parent AND carries the ``"*"``
-sentinel, proving the merge preserves world-global tags too.
+case): ``incomplete_companion`` extends "Helpful Companion", so its
+``[open_country]`` scope only survives inheritance because
+``resolve.py::_merge_trope`` propagates ``factions`` (157-5). ``lost_princess``
+extends "Impossible Authority" AND carries the ``"*"`` sentinel, proving the merge
+preserves world-global tags too. (``green_spectacles`` is a standalone trope — no
+``extends:`` in its body — so it gets its own plain no-bleed test, not an
+extends-regression guard.)
 """
 
 from __future__ import annotations
@@ -102,8 +105,8 @@ def test_every_bestiary_entry_tagged_and_valid(oz, valid_factions) -> None:
 
 def test_every_resolved_trope_tagged_and_valid(oz, valid_factions) -> None:
     # ``oz.tropes`` is the RESOLVED list (inheritance applied) — the exact list
-    # the Seam-3 trope gate reads. The three ``extends`` tropes only pass here
-    # because _merge_trope propagates factions.
+    # the Seam-3 trope gate reads. The two ``extends`` tropes (incomplete_companion,
+    # lost_princess) only pass here because _merge_trope propagates factions.
     assert len(oz.tropes) == 7
     _assert_all_tagged(oz.tropes, "trope", valid_factions)
 
@@ -170,14 +173,24 @@ def test_deadly_desert_spine_eligible_in_every_zone(oz, valid_factions) -> None:
 
 
 def test_extends_trope_keeps_specific_faction_after_merge(oz) -> None:
-    # Regression guard for the _merge_trope factions-propagation fix. The Green
-    # Spectacles trope ``extends`` "The Seam Reveal"; without propagation its
-    # scope is lost to [] (permissive) and the Emerald-City illusion bleeds
-    # into every region.
-    spectacles = _trope(oz, "green_spectacles")
-    assert spectacles.factions == [THE_WIZARD], (
+    # Regression guard for the _merge_trope factions-propagation fix. The
+    # Incomplete Companion trope ``extends`` "Helpful Companion"; without
+    # propagation its [open_country] scope is lost to [] (permissive) and the
+    # road companions bleed into every region (the oz analog of gulliver's
+    # the_petty_holy_war guard).
+    companion = _trope(oz, "incomplete_companion")
+    assert companion.factions == [OPEN_COUNTRY], (
         "extends-trope lost its faction scope — _merge_trope must propagate factions"
     )
+    assert is_eligible(companion.factions, {WITCH_OF_THE_WEST}, zoned=True) is False
+    assert is_eligible(companion.factions, {OPEN_COUNTRY}, zoned=True) is True
+
+
+def test_green_spectacles_scoped_to_the_emerald_city(oz) -> None:
+    # green_spectacles is a STANDALONE trope (no ``extends:`` in its body),
+    # scoped to the Emerald City — a plain no-bleed check, not a merge guard.
+    spectacles = _trope(oz, "green_spectacles")
+    assert spectacles.factions == [THE_WIZARD]
     assert is_eligible(spectacles.factions, {MUNCHKINS}, zoned=True) is False
     assert is_eligible(spectacles.factions, {THE_WIZARD}, zoned=True) is True
 

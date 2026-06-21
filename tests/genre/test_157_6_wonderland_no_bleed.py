@@ -140,6 +140,20 @@ def test_card_seed_does_not_bleed_onto_the_looking_glass_side(wonderland) -> Non
     assert is_eligible(seed.factions, {QUEENS_TERROR}, zoned=True) is True
 
 
+def test_no_half_content_eligible_at_the_seam(wonderland) -> None:
+    # The seam (no_one) is the looking-glass threshold and holds no pooled
+    # content. Neither half's region-scoped content is eligible there — a player
+    # at the threshold has nothing from Card Country OR Looking-Glass Land. This
+    # guards the documented "no pooled content at the seam" invariant.
+    soldier = _bestiary_entry(wonderland, "card_soldier")
+    assert is_eligible(soldier.factions, {SEAM}, zoned=True) is False
+    race = _trope(wonderland, "run_to_stay_in_place")
+    assert is_eligible(race.factions, {SEAM}, zoned=True) is False
+    # ...but a world-global "*" spine (the way home) still reaches the seam.
+    spine = _trope(wonderland, "the_pack_of_cards")
+    assert is_eligible(spine.factions, {SEAM}, zoned=True) is True
+
+
 def test_way_home_spine_eligible_in_every_zone(wonderland, valid_factions) -> None:
     # the_pack_of_cards is "*" — the refusal that wakes the dreamer fires at both
     # the Card trial and the Looking-Glass feast (and at the seam home).

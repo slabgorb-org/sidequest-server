@@ -127,7 +127,7 @@ def test_entrance_node_lists_surface_exit(deep_world_kit):
     """AC3: at the entrance node, the projection lists the surface ascent exit so
     the router classifies a 'back up the rope' intent as movement."""
     kit = deep_world_kit
-    summary = _build_state_summary(kit.snapshot, pack=kit.pack)
+    summary = _build_state_summary(kit.snapshot, pack=kit.pack, acting_player="Groucho")
     assert "current_region_exits" in summary, (
         "entrance node must project its exits so departure intents route as movement"
     )
@@ -141,7 +141,7 @@ def test_no_seam_world_entrance_has_no_surface_exit(deep_oz_kit):
     """No silent fallback: a world with no registered seam route owns no surface
     crossing, so the entrance node must not project a fabricated seam exit."""
     kit = deep_oz_kit
-    summary = _build_state_summary(kit.snapshot, pack=kit.pack)
+    summary = _build_state_summary(kit.snapshot, pack=kit.pack, acting_player="Groucho")
     seam_exits = [e for e in summary.get("current_region_exits", []) if e.get("kind") == "seam"]
     assert seam_exits == [], (
         f"no-seam world must not invent a surface exit at the entrance, got: {seam_exits}"

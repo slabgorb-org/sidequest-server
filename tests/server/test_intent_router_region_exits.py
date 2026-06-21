@@ -179,14 +179,14 @@ def otel_capture():
 
 def test_seam_region_summary_names_the_exit(hybrid_world_kit):
     kit = hybrid_world_kit  # PC at the_dropmouth
-    summary = _build_state_summary(kit.snapshot, pack=kit.pack)
+    summary = _build_state_summary(kit.snapshot, pack=kit.pack, acting_player="Groucho")
     exits = summary["current_region_exits"]
     assert {"name": "Down the Rope", "kind": "seam"} in exits
 
 
 def test_adjacent_regions_listed(hybrid_world_kit_at_ropefoot):
     kit = hybrid_world_kit_at_ropefoot
-    summary = _build_state_summary(kit.snapshot, pack=kit.pack)
+    summary = _build_state_summary(kit.snapshot, pack=kit.pack, acting_player="Groucho")
     kinds = {(e["name"], e["kind"]) for e in summary["current_region_exits"]}
     assert ("The Dropmouth", "adjacent") in kinds  # cart region's display name
 
@@ -197,12 +197,17 @@ def test_no_cartography_no_projection(plain_snapshot_and_pack):
     assert "current_region_exits" not in summary
 
 
-def test_split_party_omits_projection(caplog):
-    """Disagreeing pc_regions → region_for() is None → projection OMITTED.
+def test_split_party_resolves_acting_pc_exits():
+    """A split party must NOT swallow the acting PC's exit vocabulary.
 
-    Pins the behavior the original comment misdescribed: the router gets no
-    exit vocabulary on a split party, and the skip is logged so the GM panel
-    can distinguish it from "no cartography".
+    Regression for the sq-playtest 2026-06-21 beneath_sunden stickiness. The
+    old revision resolved party-consensus (no perspective), so the moment one
+    delver moved ahead of another (Groucho at the_dropmouth, Harpo back at
+    ropefoot) ``region_for()`` returned None and the seam vocabulary was
+    OMITTED — the router never learned "Down the Rope", the descent never
+    classified as movement, and the crossing fell to the narration fallback.
+    Per-acting-PC perspective: Groucho gets the_dropmouth's seam even though
+    Harpo is elsewhere.
     """
     cart = _hybrid_cartography()
     pack = _pack_with_cartography("beneath_sunden", cart)
@@ -212,11 +217,33 @@ def test_split_party_omits_projection(caplog):
         pc_regions={"Groucho": "the_dropmouth", "Harpo": "ropefoot"},
         player_seats={"p1": "Groucho", "p2": "Harpo"},
     )
+    summary = _build_state_summary(snap, pack=pack, acting_player="Groucho")
+    assert {"name": "Down the Rope", "kind": "seam"} in summary["current_region_exits"]
+
+    # And Harpo, acting from ropefoot the same split turn, sees ropefoot's
+    # adjacency — each seat resolves to its OWN region, no consensus needed.
+    summary_harpo = _build_state_summary(snap, pack=pack, acting_player="Harpo")
+    harpo_kinds = {(e["name"], e["kind"]) for e in summary_harpo["current_region_exits"]}
+    assert ("The Dropmouth", "adjacent") in harpo_kinds
+
+
+def test_no_acting_player_omits_projection(caplog):
+    """No acting PC supplied → no per-PC region → projection OMITTED, loud.
+
+    The consensus fallback is gone: without an acting seat the projection
+    cannot be resolved per-PC, so it is skipped and logged (No Silent
+    Fallbacks) rather than silently falling back to a party heuristic.
+    """
+    cart = _hybrid_cartography()
+    pack = _pack_with_cartography("beneath_sunden", cart)
+    snap = _snapshot("the_dropmouth")
     with caplog.at_level("WARNING", logger="sidequest.server.intent_router_pass"):
-        summary = _build_state_summary(snap, pack=pack)
+        summary = _build_state_summary(snap, pack=pack)  # acting_player omitted
     assert "current_region_exits" not in summary
     assert any(
-        "intent_router.region_exits projection_skipped" in r.getMessage() for r in caplog.records
+        "intent_router.region_exits projection_skipped" in r.getMessage()
+        and "reason=region_unresolved" in r.getMessage()
+        for r in caplog.records
     )
 
 
@@ -233,7 +260,11 @@ def test_dungeon_node_pc_projects_graph_exits(hybrid_world_kit):
     kit = hybrid_world_kit
     kit.snapshot.pc_regions["Groucho"] = ENTRANCE_ID
     summary = _build_state_summary(
-        kit.snapshot, pack=kit.pack, dungeon_store=_StoreWithDeepGraph(), palette=_FakePalette()
+        kit.snapshot,
+        pack=kit.pack,
+        dungeon_store=_StoreWithDeepGraph(),
+        palette=_FakePalette(),
+        acting_player="Groucho",
     )
     exits = summary["current_region_exits"]
     assert {"name": "exp001.r0", "kind": "shaft"} in exits
@@ -245,14 +276,22 @@ def test_dungeon_hidden_exit_omitted_unless_discovered(hybrid_world_kit):
     kit = hybrid_world_kit
     kit.snapshot.pc_regions["Groucho"] = ENTRANCE_ID
     summary = _build_state_summary(
-        kit.snapshot, pack=kit.pack, dungeon_store=_StoreWithDeepGraph(), palette=_FakePalette()
+        kit.snapshot,
+        pack=kit.pack,
+        dungeon_store=_StoreWithDeepGraph(),
+        palette=_FakePalette(),
+        acting_player="Groucho",
     )
     names = {e["name"] for e in summary["current_region_exits"]}
     assert "exp001.r1" not in names
 
     kit.snapshot.discovered_routes.append("exp001.r1")
     summary = _build_state_summary(
-        kit.snapshot, pack=kit.pack, dungeon_store=_StoreWithDeepGraph(), palette=_FakePalette()
+        kit.snapshot,
+        pack=kit.pack,
+        dungeon_store=_StoreWithDeepGraph(),
+        palette=_FakePalette(),
+        acting_player="Groucho",
     )
     names = {e["name"] for e in summary["current_region_exits"]}
     assert "exp001.r1" in names
@@ -271,7 +310,7 @@ def test_dungeon_node_pc_without_store_logs_skip(caplog, hybrid_world_kit):
     kit = hybrid_world_kit
     kit.snapshot.pc_regions["Groucho"] = "exp001.r1"
     with caplog.at_level("WARNING", logger="sidequest.server.intent_router_pass"):
-        summary = _build_state_summary(kit.snapshot, pack=kit.pack)
+        summary = _build_state_summary(kit.snapshot, pack=kit.pack, acting_player="Groucho")
     assert "current_region_exits" not in summary
     assert any(
         "intent_router.region_exits projection_skipped" in r.getMessage() for r in caplog.records
@@ -282,7 +321,11 @@ def test_dungeon_projection_emits_span(otel_capture, hybrid_world_kit):
     kit = hybrid_world_kit
     kit.snapshot.pc_regions["Groucho"] = ENTRANCE_ID
     _build_state_summary(
-        kit.snapshot, pack=kit.pack, dungeon_store=_StoreWithDeepGraph(), palette=_FakePalette()
+        kit.snapshot,
+        pack=kit.pack,
+        dungeon_store=_StoreWithDeepGraph(),
+        palette=_FakePalette(),
+        acting_player="Groucho",
     )
     spans = [s for s in otel_capture.get_finished_spans() if s.name == "intent_router.region_exits"]
     assert len(spans) == 1
@@ -297,7 +340,7 @@ def test_dungeon_projection_emits_span(otel_capture, hybrid_world_kit):
 
 def test_projection_emits_span(otel_capture, hybrid_world_kit):
     kit = hybrid_world_kit
-    _build_state_summary(kit.snapshot, pack=kit.pack)
+    _build_state_summary(kit.snapshot, pack=kit.pack, acting_player="Groucho")
     spans = [s for s in otel_capture.get_finished_spans() if s.name == "intent_router.region_exits"]
     assert len(spans) == 1, "expected exactly one region_exits span"
     attrs = spans[0].attributes or {}

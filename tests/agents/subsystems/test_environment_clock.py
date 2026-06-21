@@ -22,6 +22,7 @@ from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore, Inventory
 from sidequest.game.resource_pool import ResourcePool, ResourceThreshold
 from sidequest.game.session import GameSnapshot
+from sidequest.game.status import StatusSeverity
 from sidequest.protocol.dispatch import SubsystemDispatch, VisibilityTag
 
 
@@ -153,6 +154,30 @@ async def test_reaching_zero_applies_darkness_penalty_once():
     await run_environment_clock_dispatch(_dispatch(lit=False), snapshot=snap)
     dark = [s for s in core.statuses if s.text == DARKNESS_STATUS_TEXT]
     assert len(dark) == 1
+
+
+@pytest.mark.asyncio
+async def test_darkness_penalty_is_not_a_wound_and_stamps_current_turn():
+    """153-31: the environmental darkness penalty is a cosmetic ambient status,
+    not a bodily injury — it must NOT tier as ``Wound`` — and it stamps the real
+    current turn (``turn_manager.interaction``), not the implicit ``created_turn=0``.
+    The −2 ``roll_modifier`` and ``source`` are unchanged (cosmetic-fields-only)."""
+    snap = _snap_with_light(1.0)
+    snap.turn_manager.interaction = 3  # apply the penalty on a real (non-zero) turn
+    await run_environment_clock_dispatch(_dispatch(lit=False), snapshot=snap)
+    core = snap.find_creature_core("Delver")
+    assert core is not None
+    dark = [s for s in core.statuses if s.source == DARKNESS_STATUS_SOURCE]
+    assert len(dark) == 1
+    status = dark[0]
+    # AC-1: no longer an injury tier; carries the lightest non-injury, scene-bounded tier.
+    assert status.severity != StatusSeverity.Wound
+    assert status.severity is StatusSeverity.Scratch
+    # AC-2: created_turn reflects the real turn at application time, not 0.
+    assert status.created_turn == 3
+    # AC-3: the mechanical effect is unchanged.
+    assert status.roll_modifier == DARKNESS_PENALTY
+    assert status.source == DARKNESS_STATUS_SOURCE
 
 
 @pytest.mark.asyncio

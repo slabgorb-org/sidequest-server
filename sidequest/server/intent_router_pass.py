@@ -48,7 +48,11 @@ from sidequest.game.ruleset.fate_projection import (
     build_fate_projection,
     trim_fate_projection_for_router,
 )
-from sidequest.game.seams import seam_route_for, surface_owner_for_entrance
+from sidequest.game.seams import (
+    seam_route_for,
+    seam_route_via_adjacency,
+    surface_owner_for_entrance,
+)
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.pack import GenrePack
 from sidequest.protocol.dispatch import (
@@ -481,7 +485,18 @@ def _build_state_summary(
                             "kind": "adjacent",
                         }
                     )
-                seam = seam_route_for(_cart, _region_id)
+                # The seam owned by THIS region (the_dropmouth), OR — when this
+                # region owns none but sits one step from the owner — the seam
+                # reachable by descending from here (ropefoot → the_dropmouth's
+                # "Down the Rope"). Surfacing the seam at the adjacent camp is
+                # what lets the router's movement nudge classify "down the rope"
+                # as a descent (direction "deeper") instead of a vague adjacency
+                # step; without it the descent fell through to the narration
+                # seam-recovery, which stranded the party on the surface
+                # (sq-playtest 2026-06-21, beneath_sünden MP).
+                seam = seam_route_for(_cart, _region_id) or seam_route_via_adjacency(
+                    _cart, _region_id
+                )
                 if seam is not None:
                     region_exits.append({"name": seam.name, "kind": "seam"})
                 if region_exits:

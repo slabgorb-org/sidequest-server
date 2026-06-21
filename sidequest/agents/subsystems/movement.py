@@ -36,6 +36,7 @@ from sidequest.game.seams import (
     SeamCrossingError,
     get_seam_resolver,
     seam_route_for,
+    seam_route_via_adjacency,
     surface_owner_for_entrance,
 )
 from sidequest.game.seams.deep_descent import resolve_deep_descent
@@ -298,6 +299,53 @@ async def run_movement_dispatch(
                     "resolved_via": "surface_descent",
                 }
             )
+
+        # --- sq-playtest 2026-06-21: descend from one step off the seam. ---
+        # The PC's region owns no seam, but sits directly adjacent to the
+        # region that does (beneath_sünden: 'ropefoot', the waiting-camp, is
+        # adjacent to 'the_dropmouth', which owns the deep_descent seam). The
+        # rope and winch are at the camp's lip, not a separate journey — a
+        # player who says "down the rope" at the camp means to descend, not to
+        # first walk to the shaft mouth and descend on a SECOND turn. Cross
+        # the adjacent owner's seam in one deliberate action.
+        #
+        # Gated on direction == "deeper" (the descent signal the router emits
+        # once the seam is surfaced at this region — see intent_router_pass
+        # _build_state_summary), NOT the broad ``!= "back"`` used for the
+        # owned-seam case: a surface camp has lateral intra-region movement
+        # ("walk to the board") that must NOT teleport the party into the deep.
+        # The router only assigns "deeper" to an actual descent.
+        if seam_route is None and direction == "deeper":
+            adjacent_seam = seam_route_via_adjacency(cart, from_region)
+            if adjacent_seam is not None:
+                try:
+                    crossing = get_seam_resolver(str(adjacent_seam.to_id))(
+                        snapshot=snapshot,
+                        player_name=player_name,
+                        route=adjacent_seam,
+                        resolved_via="surface_descent_adjacent",
+                        dungeon_store=dungeon_store,
+                        direction=direction,
+                        exit_descriptor=exit_descriptor,
+                    )
+                except SeamCrossingError as err:
+                    return _unresolved(
+                        snapshot=snapshot,
+                        player_name=player_name,
+                        reason=err.reason,
+                        from_region=from_region,
+                        direction=direction,
+                        exit_descriptor=exit_descriptor,
+                        available=[],
+                        surface=err.surface,
+                    )
+                return SubsystemOutput(
+                    data={
+                        "to_region": crossing.to_region,
+                        "from_region": from_region,
+                        "resolved_via": "surface_descent_adjacent",
+                    }
+                )
 
         # --- Story 105-3: the reverse seam — leaving the Deep. ---
         # A PC standing on the dungeon entrance node is at the static→procedural

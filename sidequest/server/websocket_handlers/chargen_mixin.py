@@ -2022,6 +2022,44 @@ class CharGenMixin:
                             "inherited_from": inherited_from or "",
                         },
                     )
+
+            # Per-PC GRAPH region inheritance — the structural sibling of the
+            # character_locations inheritance above. The host's opening seeds
+            # ``pc_regions`` via ``_bind_current_region_from_opening``, but the
+            # MP joiner's opening is SUPPRESSED
+            # (``mp_joiner_opening_suppressed_at_consume``). Without this the
+            # joiner has NO pc_regions entry, so ``region_for(perspective=joiner)``
+            # returns None and the joiner is stranded out of every region-aware
+            # engine path: the intent router's region-exit projection skips
+            # (``region_unresolved``), the movement subsystem fail-louds on
+            # ``no_pc_region``, and the narration seam-recovery sees an empty
+            # region — so the joiner can never descend the dungeon seam
+            # (sq-playtest 2026-06-21, beneath_sünden MP: pc_regions held only
+            # the host). Inherit the seated peer's region; fall back to the spawn
+            # anchor via the ONE seeding mechanism (idempotent, only_missing).
+            if character.core.name not in sd.snapshot.pc_regions:
+                inherited_region_from: str | None = None
+                for seated_name in sd.snapshot.player_seats.values():
+                    if not seated_name or seated_name == character.core.name:
+                        continue
+                    candidate_region = sd.snapshot.pc_regions.get(seated_name)
+                    if candidate_region:
+                        sd.snapshot.pc_regions[character.core.name] = candidate_region
+                        inherited_region_from = seated_name
+                        break
+                if character.core.name not in sd.snapshot.pc_regions and sd.snapshot.current_region:
+                    sd.snapshot.seed_pc_regions(sd.snapshot.current_region)
+                if character.core.name in sd.snapshot.pc_regions:
+                    span.add_event(
+                        "snapshot.pc_region_inherited",
+                        {
+                            "event": "snapshot.pc_region_inherited",
+                            "joiner": character.core.name,
+                            "inherited_from": inherited_region_from or "current_region",
+                            "region": sd.snapshot.pc_regions[character.core.name],
+                        },
+                    )
+
             span.add_event(
                 "session.player_seat_bound",
                 {

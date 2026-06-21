@@ -120,11 +120,13 @@ def _hybrid_cartography() -> CartographyConfig:
                 name="Ropefoot",
                 summary="Surface camp.",
                 description="The waiting camp above the shaft.",
+                adjacent=["the_dropmouth"],
             ),
             "the_dropmouth": Region(
                 name="The Dropmouth",
                 summary="The lip of the shaft.",
                 description="The mouth of the descent.",
+                adjacent=["ropefoot"],
             ),
         },
         routes=[
@@ -233,6 +235,18 @@ def in_dungeon_kit():
 
 
 @pytest.fixture
+def surface_adjacent_kit():
+    """Region-mode hybrid world with the PC on the surface CAMP (ropefoot),
+    one step from the seam-owner (the_dropmouth). The sq-playtest 2026-06-21
+    repro: the party starts at ropefoot, never the_dropmouth, so the descent
+    must cross from one step off the seam."""
+    cart = _hybrid_cartography()
+    pack = _pack_with_cartography("beneath_sunden", cart)
+    snap = _snapshot({"Groucho": "ropefoot"}, {"p1": "Groucho"})
+    return _HybridKit(snap, pack, _StoreWithEntrance(), _FakePalette())
+
+
+@pytest.fixture
 def oz_shaped_kit():
     cart = _oz_cartography()
     pack = _pack_with_cartography("oz", cart)
@@ -290,6 +304,58 @@ def test_seam_region_movement_crosses_to_entrance(
     resolved = [s for s in capture_spans.get_finished_spans() if s.name == "movement.resolved"]
     assert len(resolved) == 1, "expected exactly one movement.resolved span for the crossing"
     assert (resolved[0].attributes or {})["seam_kind"] == "deep_descent"
+
+
+def test_surface_adjacent_descent_crosses_to_entrance(capture_spans, surface_adjacent_kit):
+    """sq-playtest 2026-06-21: a PC on the surface camp (ropefoot), one step from
+    the seam-owner (the_dropmouth), descends in ONE deliberate action. The party
+    starts here, never on the_dropmouth — so without this the dungeon was
+    unreachable (three descents, still current_region='ropefoot')."""
+    kit = surface_adjacent_kit
+    out = _run(
+        run_movement_dispatch(
+            _movement("deeper", "down the rope"),
+            snapshot=kit.snapshot,
+            player_name="Groucho",
+            dungeon_store=kit.store,
+            palette=kit.palette,
+            pack=kit.pack,
+        )
+    )
+    assert out.data["resolved_via"] == "surface_descent_adjacent", (
+        f"expected adjacent-seam crossing, got: {out.data}"
+    )
+    assert out.data["to_region"] == ENTRANCE_ID
+    assert kit.snapshot.region_for(perspective="Groucho") == ENTRANCE_ID, (
+        f"PC not rebound to entrance; still at {kit.snapshot.region_for(perspective='Groucho')!r}"
+    )
+    resolved = [s for s in capture_spans.get_finished_spans() if s.name == "movement.resolved"]
+    assert len(resolved) == 1, "expected exactly one movement.resolved span for the crossing"
+    assert (resolved[0].attributes or {})["seam_kind"] == "deep_descent"
+
+
+@pytest.mark.parametrize("direction", ["back", "toward_exit", ""])
+def test_surface_adjacent_non_deeper_does_not_cross(capture_spans, surface_adjacent_kit, direction):
+    """The adjacency descent is gated on direction == "deeper". Lateral or
+    descriptor-only intra-camp movement ("walk to the board") must NOT teleport
+    the party into the deep — it defers like any other surface region move."""
+    kit = surface_adjacent_kit
+    out = _run(
+        run_movement_dispatch(
+            _movement(direction, "over to the board"),
+            snapshot=kit.snapshot,
+            player_name="Groucho",
+            dungeon_store=kit.store,
+            palette=kit.palette,
+            pack=kit.pack,
+        )
+    )
+    assert out.data["resolved_via"] == "region_mode_deferred", (
+        f"non-deeper surface move must defer, not cross, got: {out.data}"
+    )
+    assert kit.snapshot.region_for(perspective="Groucho") == "ropefoot", (
+        "a non-descent intent must not move the PC off the camp"
+    )
 
 
 def test_seam_region_back_does_not_cross(capture_spans, hybrid_world_kit):

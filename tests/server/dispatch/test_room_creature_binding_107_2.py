@@ -130,6 +130,31 @@ def test_resolve_raises_on_dangling_bestiary_ref(tmp_path: Path) -> None:
         resolve_room_creatures(pack, "sunken", "bad")
 
 
+def test_resolve_raises_binding_error_not_attribute_error_on_none_bestiary(
+    tmp_path: Path,
+) -> None:
+    """153-26 rework (HIGH): a declared binding against a world whose
+    ``effective_bestiary`` is ``None`` (no bestiary authored at all) must raise
+    :class:`RoomCreatureBindingError` — the SAME loud-but-typed authoring-error
+    signal as a dangling ref — NOT a raw ``AttributeError`` from dereferencing
+    ``None.entries``. The materializer degrade path catches
+    ``RoomCreatureBindingError`` to stay loud-but-graceful; a bare
+    ``AttributeError`` would slip that catch and crash the player-facing
+    connect (Reviewer HIGH finding)."""
+    rooms_dir = tmp_path / "worlds" / "sunken" / "rooms"
+    rooms_dir.mkdir(parents=True)
+    (rooms_dir / "den.yaml").write_text(
+        yaml.safe_dump({"encounter_creatures": ["real_beast"]}),
+        encoding="utf-8",
+    )
+    pack = SimpleNamespace(
+        source_dir=tmp_path,
+        effective_bestiary=lambda world: (None, "world"),
+    )
+    with pytest.raises(RoomCreatureBindingError):
+        resolve_room_creatures(pack, "sunken", "den")
+
+
 def test_resolve_emits_room_bound_span(tmp_path: Path) -> None:
     """AC5 lie-detector: resolving a room's binding emits monster_manual.room_bound
     naming the room and the bound creature, so the GM panel can confirm the

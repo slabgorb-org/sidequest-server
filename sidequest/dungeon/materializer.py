@@ -170,6 +170,7 @@ from sidequest.game.creature_core import HpPool, hp_pool_from_hp
 from sidequest.game.repository import DungeonRepository, DungeonTransaction
 from sidequest.game.session import GameSnapshot
 from sidequest.telemetry.spans.dungeon_materialize import (
+    dungeon_curate_authored_bind_failed_span,
     dungeon_curate_degraded_span,
     dungeon_curate_parse_failed_span,
     dungeon_materialize_attach_span,
@@ -189,6 +190,16 @@ logger = logging.getLogger(__name__)
 # a tiny value; the deadline path is otherwise unverifiable without a 25 s
 # test). The load-bearing no-multi-minute-freeze guarantee.
 CURATE_DEADLINE_S: float = 25.0
+
+# Story 153-26: the band cap is the per-region budget × region count (so the
+# deadline tracks the work — see _stage_curate), but it MUST stay bounded. The
+# bootstrap materialize() is awaited on the connect handler, so an unbounded
+# N×budget could hold the player-facing connect open for minutes on a large
+# expansion (up to JaquaysConfig.new_regions_per_expansion regions). This ceiling
+# restores the load-bearing no-multi-minute-freeze guarantee the old fixed cap
+# gave. Module-level so it is injectable (tests clamp it tiny). 120s ≈ the old
+# fixed cap times a generous band — honest, but never a multi-minute hang.
+MAX_BAND_DEADLINE_S: float = 120.0
 
 __all__ = [
     "AttachResult",
@@ -1028,17 +1039,47 @@ def _append_authored_creatures(
     A region with no authored binding (the common procedural case) is returned
     unchanged. ``pack=None`` / blank ``world_slug`` (test/bootstrap inputs with no
     world context) is a no-op, preserving the prior packless degrade shape — NOT
-    a silent fallback, just an absent binding. A binding referencing an unknown
-    bestiary id still fails loud inside ``resolve_room_creatures`` (an authoring
-    error, surfaced even on the degrade path).
+    a silent fallback, just an absent binding.
+
+    A binding referencing an unknown bestiary id (or a world with no bestiary at
+    all) is an AUTHORING error: ``resolve_room_creatures`` raises
+    ``RoomCreatureBindingError``. On THIS path that error must stay LOUD-but-
+    GRACEFUL (ADR-106 Amendment A degrade contract: "LOUD degrade, the turn
+    proceeds, no table freeze") — it is caught, logged at ERROR, and surfaced on
+    the ``dungeon.curate.authored_bind_failed`` span, then the degrade PROCEEDS
+    with the procedural coal. Letting it propagate would crash the player-facing
+    bootstrap ``await materialize()`` at connect for a single content typo
+    (Reviewer 153-26 HIGH).
     """
     if pack is None or not world_slug:
         return creatures
     # Local import: avoid an import-time cycle through the server.dispatch
     # package (the same lazy-import idiom as monster_manual_inject's caller).
-    from sidequest.server.dispatch.room_creature_binding import resolve_room_creatures
+    from sidequest.server.dispatch.room_creature_binding import (
+        RoomCreatureBindingError,
+        resolve_room_creatures,
+    )
 
-    bound_ids = resolve_room_creatures(pack, world_slug, region_id)
+    try:
+        bound_ids = resolve_room_creatures(pack, world_slug, region_id)
+    except RoomCreatureBindingError as exc:
+        # Loud-but-graceful: the degrade is already shipping coal — a broken
+        # authored binding must NOT additionally crash the connect. Surface it
+        # (ERROR log + GM-panel span) and proceed with the procedural creatures.
+        logger.error(
+            "dungeon curate degrade: authored room binding for region=%s "
+            "world=%s could not be resolved (%s); shipping procedural coal only "
+            "— authored encounter dropped (ADR-106 Amendment A: loud, but the "
+            "turn proceeds, no table freeze)",
+            region_id,
+            world_slug,
+            exc,
+        )
+        with dungeon_curate_authored_bind_failed_span(
+            region_id=region_id, world_slug=world_slug, error=str(exc)
+        ):
+            pass
+        return creatures
     if not bound_ids:
         return creatures
     bestiary, _ = pack.effective_bestiary(world_slug)
@@ -1047,9 +1088,21 @@ def _append_authored_creatures(
     merged = list(creatures)
     for cid in bound_ids:
         entry = by_id.get(cid)
-        if entry is None or entry.name in existing_names:
-            # resolve_room_creatures already validated referential integrity;
-            # a name match means the procedural manifest already shipped it.
+        if entry is None:
+            # resolve_room_creatures already validated referential integrity
+            # against this same effective_bestiary, so a miss here means the two
+            # reads diverged (effective_bestiary is pure — should be impossible).
+            # Log LOUD for observability rather than dropping it silently.
+            logger.error(
+                "dungeon curate degrade: authored binding id=%s for region=%s "
+                "resolved by resolve_room_creatures but is absent from the "
+                "effective bestiary — dropping (divergent bestiary read?)",
+                cid,
+                region_id,
+            )
+            continue
+        if entry.name in existing_names:
+            # A name match means the procedural manifest already shipped it.
             continue
         merged.append(
             CuratedCreature(
@@ -1318,8 +1371,10 @@ async def _stage_curate(
     # instant the band grew large enough that normal LLM latency crossed it
     # (the 30337ms-vs-25000ms beneath_sunden playtest failure on exp001.r2..r5).
     # Scale the wall-clock cap with the region count so the budget tracks the
-    # work: CURATE_DEADLINE_S is now the per-region budget; the band gets N x it.
-    band_deadline_s = CURATE_DEADLINE_S * max(1, len(manifests))
+    # work: CURATE_DEADLINE_S is now the per-region budget; the band gets N x it,
+    # BOUNDED by MAX_BAND_DEADLINE_S so a large band can never hold the connect
+    # open for minutes (the no-multi-minute-freeze guarantee — story 153-26).
+    band_deadline_s = min(CURATE_DEADLINE_S * max(1, len(manifests)), MAX_BAND_DEADLINE_S)
     try:
         async with asyncio.timeout(band_deadline_s):
             for attempt in range(1, 3):  # Layer 1: exactly 1 retry

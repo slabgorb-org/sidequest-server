@@ -49,7 +49,10 @@ from sidequest.dungeon.region_graph import Expansion
 from sidequest.dungeon.region_graph.model import RegionNode
 from sidequest.dungeon.themes import ThemePalette
 from sidequest.genre.models.bestiary import Bestiary, BestiaryEntry
-from sidequest.telemetry.spans.dungeon_materialize import dungeon_materialize_curate_span
+from sidequest.telemetry.spans.dungeon_materialize import (
+    SPAN_DUNGEON_CURATE_AUTHORED_BIND_FAILED,
+    dungeon_materialize_curate_span,
+)
 
 # Reuse the established materializer test harness (real cookbook bundle, OTEL
 # in-memory capture, the slow/valid SDK fakes, the curate-input builders).
@@ -333,6 +336,162 @@ async def test_band_curate_budget_scales_with_region_count() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Rework (Reviewer HIGH) — a broken authored binding on the DEGRADE path is
+#   loud-but-GRACEFUL: it must NOT crash the (player-facing) connect/bootstrap.
+# ---------------------------------------------------------------------------
+
+
+def _authored_pack_dangling(
+    source_root: Path,
+    *,
+    world_slug: str,
+    region_ids: list[str],
+) -> Any:
+    """A duck-typed pack whose rooms bind an id ABSENT from the bestiary — a
+    fat-fingered authoring error (``gnaw_swarm`` -> ``gnaw_swrm``).
+    ``resolve_room_creatures`` raises ``RoomCreatureBindingError`` for it."""
+    rooms_dir = source_root / "worlds" / world_slug / "rooms"
+    rooms_dir.mkdir(parents=True, exist_ok=True)
+    for rid in region_ids:
+        (rooms_dir / f"{rid}.yaml").write_text(
+            f"id: {rid}\nencounter_creatures:\n- gnaw_swrm\n",  # typo: not in bestiary
+            encoding="utf-8",
+        )
+    bestiary = Bestiary(
+        entries=[
+            BestiaryEntry(
+                id="gnaw_swarm",  # the REAL id — the room's 'gnaw_swrm' is dangling
+                name="Gnaw Swarm",
+                level=1,
+                hp=8,
+                armor_class=12,
+                attack_bonus=1,
+            )
+        ]
+    )
+
+    class _DanglingPack:
+        source_dir = source_root
+
+        def effective_bestiary(self, world: str | None) -> tuple[Bestiary, str]:
+            return bestiary, (world or "")
+
+    return _DanglingPack()
+
+
+async def test_degrade_with_bad_authored_binding_stays_loud_but_graceful(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Reviewer HIGH (RED): a Layer-2 degrade whose region has a BROKEN authored
+    binding (a dangling bestiary id — the ``gnaw_swarm`` -> ``gnaw_swrm`` typo)
+    must stay loud-but-GRACEFUL: log ERROR + emit
+    ``dungeon.curate.authored_bind_failed``, then let the degrade PROCEED with
+    the procedural coal. It must NOT propagate ``RoomCreatureBindingError`` out
+    of ``_stage_curate`` — that crashes the player-facing connect (the bootstrap
+    ``await materialize()``), contradicting the ADR-106 Amendment A degrade
+    contract ("LOUD degrade, the turn proceeds, no table freeze").
+    """
+    world = "beneath_test"
+    bundle = _real_cookbook_bundle()
+    request, palette, expansion, fill_result, rid = _curate_inputs_world(
+        world_slug=world, expansion_id=2
+    )
+    pack = _authored_pack_dangling(tmp_path, world_slug=world, region_ids=[rid])
+
+    exporter, original_tracer_fn, _spans_mod = _setup_otel_task3()
+    original_deadline = _mat.CURATE_DEADLINE_S
+    _mat.CURATE_DEADLINE_S = 0.05  # type: ignore[attr-defined]
+    try:
+        with (
+            caplog.at_level(logging.ERROR),
+            dungeon_materialize_curate_span(expansion_id=request.expansion_id) as span,
+        ):
+            # MUST NOT raise — the broken binding is caught and the degrade proceeds.
+            result = await _mat._stage_curate(
+                request,
+                bundle=bundle,
+                palette=palette,
+                expansion=expansion,
+                fill_result=fill_result,
+                is_first_band_entry=True,
+                claude_client=_slow_then_valid_sdk_client(2.0),
+                span=span,
+                pack=pack,
+            )
+    finally:
+        _mat.CURATE_DEADLINE_S = original_deadline  # type: ignore[attr-defined]
+        _spans_mod.tracer = original_tracer_fn
+
+    # The degrade still completed loudly — no crash, region marked uncurated.
+    assert result.curated is False
+    assert rid in result.uncurated_regions
+    assert _spans_named(exporter, "dungeon.curate.degraded"), "degrade must stay loud"
+
+    # The broken binding is surfaced LOUD (GM-panel lie detector + ERROR log)…
+    assert _spans_named(exporter, SPAN_DUNGEON_CURATE_AUTHORED_BIND_FAILED), (
+        "a broken authored binding caught on the degrade path must emit "
+        "dungeon.curate.authored_bind_failed so the GM panel SEES the dropped "
+        "authored content rather than it vanishing silently"
+    )
+    assert any(
+        "authored" in r.getMessage().lower() and "region" in r.getMessage().lower()
+        for r in caplog.records
+        if r.levelno >= logging.ERROR
+    ), "the caught binding error must log LOUD at ERROR level"
+
+    # …but the region still ships its procedural coal (graceful — not an empty
+    # crash). The dangling authored creature simply is not present.
+    assert rid in result.region_creatures
+    names = {c.name for c in result.region_creatures[rid]}
+    assert "Gnaw Swarm" not in names, "the dangling-bound creature must not appear"
+
+
+# ---------------------------------------------------------------------------
+# Rework (Reviewer MEDIUM) — the per-region budget is bounded: the band cap
+#   never grows past MAX_BAND_DEADLINE_S, so a large band cannot hold the
+#   player-facing connect open for minutes.
+# ---------------------------------------------------------------------------
+
+
+async def test_band_deadline_is_bounded_by_max_ceiling(monkeypatch: Any) -> None:
+    """Reviewer MEDIUM (RED): ``band_deadline_s`` must be capped at
+    ``MAX_BAND_DEADLINE_S``. With per-region budget 0.4s and a 2-region band the
+    UNbounded budget is 0.8s; a 0.3s ceiling clamps it to 0.3s. A band whose
+    work (0.5s) fits the unbounded budget (0.8s) but exceeds the ceiling (0.3s)
+    must therefore DEGRADE — proving the ceiling, not the unbounded product,
+    governs the wall-clock cap (no multi-minute connect freeze on a big band)."""
+    bundle = _real_cookbook_bundle()
+    request, palette, expansion, fill_result = _curate_inputs_two_regions(expansion_id=11)
+
+    exporter, original_tracer_fn, _spans_mod = _setup_otel_task3()
+    monkeypatch.setattr(_mat, "CURATE_DEADLINE_S", 0.4, raising=False)
+    monkeypatch.setattr(_mat, "MAX_BAND_DEADLINE_S", 0.3, raising=False)
+    try:
+        with dungeon_materialize_curate_span(expansion_id=request.expansion_id) as span:
+            result = await _mat._stage_curate(
+                request,
+                bundle=bundle,
+                palette=palette,
+                expansion=expansion,
+                fill_result=fill_result,
+                is_first_band_entry=True,
+                claude_client=_slow_proportional_sdk_client(per_region_s=0.25),
+                span=span,
+            )
+    finally:
+        _spans_mod.tracer = original_tracer_fn
+
+    assert result.curated is False, (
+        "the band budget must be clamped to MAX_BAND_DEADLINE_S (0.3s); the "
+        "0.5s band work exceeds the ceiling and must degrade — an unbounded "
+        "0.8s budget would have (wrongly) let it curate"
+    )
+    degraded = _spans_named(exporter, "dungeon.curate.degraded")
+    assert degraded, "the ceiling-clamped timeout must Layer-2 degrade loudly"
+    assert dict(degraded[0].attributes or {}).get("failure_kind") == "deadline"
+
+
+# ---------------------------------------------------------------------------
 # AC3 — loudness regression guard (PASSES on develop; guards GREEN)
 # ---------------------------------------------------------------------------
 
@@ -412,6 +571,17 @@ async def test_materialize_degrade_preserves_authored_content_end_to_end(
     from tests.dungeon.conftest import build_pg_dungeon_repo
 
     _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+
+    # Isolation: the commit stage emits one rooms/<id>.yaml per region to the
+    # resolved world dir (ADR-109 / Story 55-1). With genre_slug
+    # "caverns_and_claudes" + a synthetic world_slug, _resolve_world_dir would
+    # resolve the REAL content pack and deposit (gitignored) test rooms into
+    # it — polluting caverns_and_claudes/worlds/test_world/ and breaking sibling
+    # load_genre_pack tests that run in the same session. Redirect the emit to a
+    # tmp dir: AC5 asserts on emitted SPANS (degrade + room_bound), never on the
+    # written YAMLs, so this preserves the test's intent while keeping it hermetic.
+    emit_root = tmp_path / "emitted_world_dirs"
+    monkeypatch.setattr(_mat, "_resolve_world_dir", lambda request: emit_root / request.world_slug)
 
     bundle = _real_cookbook_bundle()
     theme_id = "authored_crypt_153_26"

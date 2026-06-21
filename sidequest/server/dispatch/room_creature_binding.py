@@ -73,6 +73,18 @@ def resolve_room_creatures(pack: Any, world_slug: str, room_id: str) -> list[str
         return []
 
     bestiary, _ = pack.effective_bestiary(world_slug)
+    if bestiary is None:
+        # A declared binding against a world with NO effective bestiary at all is
+        # the same class of authoring error as a dangling ref — surface it as a
+        # typed RoomCreatureBindingError (No Silent Fallbacks), NOT a raw
+        # AttributeError from dereferencing None.entries. The materializer
+        # degrade path catches RoomCreatureBindingError to stay loud-but-graceful;
+        # a bare AttributeError would slip that catch and crash the connect (153-26).
+        raise RoomCreatureBindingError(
+            f"room {room_id!r} (world {world_slug!r}) binds encounter_creatures "
+            f"{bound} but the world has no effective bestiary; every binding id "
+            f"must resolve to a real bestiary entry (No Silent Fallbacks)"
+        )
     valid_ids = {entry.id for entry in bestiary.entries}
     dangling = [cid for cid in bound if cid not in valid_ids]
     if dangling:

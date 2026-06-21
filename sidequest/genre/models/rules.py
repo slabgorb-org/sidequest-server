@@ -27,6 +27,14 @@ OPPONENT_RESERVED_STAT_KEYS: frozenset[str] = frozenset(
     {"hp", "armor_class", "dexterity", "armor", "pilot_skill", "attack_bonus"}
 )
 
+# Without Number ruleset slugs (swn/cwn/wwn/awn). Under a WN binding the
+# ``point_buy`` chargen method is DEAD — WithoutNumberRulesetModule supersedes it
+# with the shaped SRD standard array (ADR-142/143) — so a WN ``point_buy`` pack
+# that authors no ``standard_array`` falls back to the fixed-length WN default
+# spread, which must cover every declared ability score (see
+# ``RulesConfig._validate_default_spread_covers_abilities``).
+_WITHOUT_NUMBER_RULESETS: frozenset[str] = frozenset({"swn", "cwn", "wwn", "awn"})
+
 
 class MoraleTrigger(StrEnum):
     """B/X morale check triggers. Per spec §2.2."""
@@ -1362,6 +1370,50 @@ class RulesConfig(BaseModel):
                 f"rules.standard_array has {len(self.standard_array)} entries but "
                 f"{needed} ability scores are declared ({self.ability_score_names}); "
                 "author one value per ability score — no silent padding"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_default_spread_covers_abilities(self) -> RulesConfig:
+        """No-Silent-Fallbacks companion to ``_validate_standard_array``: when a
+        pack authors NO ``standard_array``, the attribute engine falls back to a
+        fixed-length default spread — the WN ``_WN_STANDARD_ARRAY`` for a WN-bound
+        ``point_buy`` pack (point_buy is superseded by the shaped spread under a WN
+        binding, ADR-142/143), or the base ``_DEFAULT_STANDARD_ARRAY`` for the
+        ``standard_array`` method. ``_validate_standard_array`` only guards an
+        *authored* array; nothing guarded this *default*. A pack declaring more
+        ability scores than the default spread has entries would otherwise
+        ``IndexError`` deep in ``assign_attributes`` at chargen (a player-facing
+        crash with an opaque traceback) instead of failing loud here at pack load
+        (Story 153-34).
+        """
+        if self.standard_array is not None:
+            # Authored array — already length-checked by _validate_standard_array.
+            return self
+        needed = len(self.ability_score_names)
+        if not needed:
+            return self
+        # Local import avoids a genre.models <-> game.ruleset load-time import
+        # cycle (mirrors loader.py's get_ruleset_module local import).
+        from sidequest.game.ruleset.base import _DEFAULT_STANDARD_ARRAY
+        from sidequest.game.ruleset.without_number import _WN_STANDARD_ARRAY
+
+        if self.ruleset in _WITHOUT_NUMBER_RULESETS and self.stat_generation == "point_buy":
+            default_spread = _WN_STANDARD_ARRAY
+        elif self.stat_generation == "standard_array":
+            default_spread = _DEFAULT_STANDARD_ARRAY
+        else:
+            # Generative methods (point-buy under the dial engine, the 3d6 rolls,
+            # roll-the-bones) produce one value per ability — there is no
+            # fixed-length default to underflow.
+            return self
+        if needed > len(default_spread):
+            raise ValueError(
+                f"rules.stat_generation {self.stat_generation!r} falls back to the "
+                f"{len(default_spread)}-entry default standard array, but {needed} "
+                f"ability scores are declared ({self.ability_score_names}); author an "
+                f"explicit rules.standard_array with one value per ability score "
+                f"(no silent padding)"
             )
         return self
 

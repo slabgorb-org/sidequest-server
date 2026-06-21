@@ -36,7 +36,9 @@ def world_is_zoned(cartography: CartographyConfig | None) -> bool:
 
     True iff ANY region declares a ``controlled_by`` faction. The 11 worlds with
     no ``controlled_by`` → ``False`` → every predicate short-circuits to eligible
-    (zero behavior change). Computed once per loaded world by callers and cached.
+    (zero behavior change). Cheap (a single pass over the region dict); callers
+    compute it per ``inject()`` and pass the result downstream — there is no
+    persistent cache today.
     """
     if cartography is None:
         return False

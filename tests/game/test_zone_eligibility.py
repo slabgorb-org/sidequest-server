@@ -1,15 +1,13 @@
-"""RED tests for the faction/zone-scoped content eligibility core (story 157-2).
+"""Tests for the faction/zone-scoped content eligibility core (story 157-2).
 
-Pins the pure-logic contract of the new ``sidequest.game.zone_eligibility``
-module plus the additive ``factions`` content tag, per the design spec
+Pins the pure-logic contract of ``sidequest.game.zone_eligibility`` plus the
+additive ``factions`` content tag, per the design spec
 ``docs/superpowers/specs/2026-06-20-faction-zone-content-eligibility-design.md``
 (ADR-059 amendment).
 
-These tests are deliberately fixture/behavior-driven and import the spec'd
-public names directly — they FAIL today because the module does not exist yet
-and the ``factions`` field is not on the models. The Seam-1 wiring (the
-``inject()`` filter + ``zone_eligibility.filtered`` OTEL span) lives in
-``tests/server/dispatch/test_zone_eligibility_seam.py``.
+These tests are fixture/behavior-driven and import the spec'd public names
+directly. The Seam-1 wiring (the ``inject()`` filter + ``zone_eligibility.filtered``
+OTEL span) lives in ``tests/server/dispatch/test_zone_eligibility_seam.py``.
 
 Contract summary (from the spec):
 
@@ -31,16 +29,9 @@ import pytest
 from sidequest.game.monster_manual import ManualEncounter, ManualNpc
 from sidequest.game.session import GameSnapshot
 from sidequest.game.turn import TurnManager
+from sidequest.game.zone_eligibility import active_factions, is_eligible, world_is_zoned
 from sidequest.genre.models.bestiary import BestiaryEntry
 from sidequest.genre.models.world import CartographyConfig, Region
-
-# Spec'd public API — import at module scope so a missing module fails the whole
-# file LOUD (the RED signal), not silently per-test.
-from sidequest.game.zone_eligibility import (  # noqa: E402  (intentional: RED import)
-    active_factions,
-    is_eligible,
-    world_is_zoned,
-)
 
 # Two worlds' worth of faction slugs from the gulliver proof case.
 LILLIPUT = "the_lilliput_court"
@@ -116,6 +107,12 @@ def test_world_is_zoned_false_when_no_region_has_controlled_by() -> None:
 
 def test_world_is_zoned_false_for_empty_cartography() -> None:
     assert world_is_zoned(CartographyConfig()) is False
+
+
+def test_world_is_zoned_false_for_none_cartography() -> None:
+    """``cartography_for`` returns None for a pre-bind/stub session; the production
+    inject() path passes that straight into ``world_is_zoned`` → must be False."""
+    assert world_is_zoned(None) is False
 
 
 # ---------------------------------------------------------------------------

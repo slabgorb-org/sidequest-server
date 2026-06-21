@@ -548,15 +548,19 @@ def inject(
     combat_encounters = getattr(rules, "combat_encounters", True)
 
     # Seam 1 zone-eligibility context (epic-157, ADR-059 amendment): resolve the
-    # world's zoned-ness and the party's active faction set ONCE, from the
-    # canonical region (``snapshot.region_for``) — NOT the free-text
-    # ``current_location`` (which may be a POI/scene string, not a region slug).
-    # An unzoned world / unresolvable region yields ``zoned=False`` / ``active=∅``
-    # → the predicate is permissive → zero behavior change for the 11 single-zone
-    # worlds and for any pre-bind turn.
-    zone_active = zone_eligibility.active_factions(snapshot, pack)
+    # world's zoned-ness from the canonical region (``snapshot.region_for``) —
+    # NOT the free-text ``current_location`` (which may be a POI/scene string).
+    # The active-faction set + region id are resolved ONLY for a zoned world that
+    # will actually field encounters this turn; an unzoned world (the 11 single-
+    # zone packs), a non-combat pack, or a manual-less pre-bind turn skips the
+    # region query entirely (Cost Scales with Drama). ``is_eligible`` is permissive
+    # on ``zoned=False``, so the empty defaults below are a behavioral no-op.
     zoned = zone_eligibility.world_is_zoned(zone_eligibility.cartography_for(snapshot, pack))
-    region = snapshot.region_for() or ""
+    zone_active: set[str] = set()
+    region = ""
+    if zoned and combat_encounters and manual is not None:
+        zone_active = zone_eligibility.active_factions(snapshot, pack)
+        region = snapshot.region_for() or ""
 
     all_patches: list[NpcPatch] = []
     active_capped = 0

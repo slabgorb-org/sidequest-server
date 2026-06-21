@@ -1,4 +1,4 @@
-"""RED tests — Seam 1: faction/zone-scoped creature injection (story 157-2).
+"""Tests — Seam 1: faction/zone-scoped creature injection (story 157-2).
 
 The headline fix for the gulliver bleed (session ``2026-06-20-gulliver-e721409c``):
 a 4th-voyage **Yahoo** (faction ``the_houyhnhnm_assembly``) must NOT surface on
@@ -12,8 +12,7 @@ injection. The active faction is resolved from the canonical region
 
 These tests drive the REAL public ``inject()`` seam and assert on emitted state
 + the ``zone_eligibility.filtered`` OTEL span (CLAUDE.md: fixture-driven behavior
-+ span assertions — never grep production source for wiring). They FAIL today
-because ``inject()`` does no zone filtering and the span does not exist.
++ span assertions — never grep production source for wiring).
 """
 
 from __future__ import annotations
@@ -21,13 +20,15 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
 from sidequest.game.monster_manual import EntryState, ManualEncounter, MonsterManual
 from sidequest.game.session import GameSnapshot
 from sidequest.game.turn import TurnManager
 from sidequest.genre.models.world import CartographyConfig, Region
 from sidequest.server.dispatch import monster_manual_inject
-
-SPAN_ZONE_ELIGIBILITY_FILTERED = "zone_eligibility.filtered"
+from sidequest.telemetry.spans import FLAT_ONLY_SPANS
+from sidequest.telemetry.spans.zone_eligibility import SPAN_ZONE_ELIGIBILITY_FILTERED
 
 LILLIPUT = "the_lilliput_court"
 HOUYHNHNM = "the_houyhnhnm_assembly"
@@ -94,18 +95,12 @@ def _names(snap: GameSnapshot) -> list[str]:
     return [n.core.name for n in snap.npcs]
 
 
-def _filtered_spans(otel_capture: Any) -> list[Any]:
+def _filtered_spans(otel_capture: InMemorySpanExporter) -> list[Any]:
     return [
         s
         for s in otel_capture.get_finished_spans()
         if s.name == SPAN_ZONE_ELIGIBILITY_FILTERED
     ]
-
-
-def _attrs_mention(span: Any, needle: str) -> bool:
-    """Whether any attribute value on the span stringifies to contain ``needle``
-    (robust to list/set serialization of the faction attrs)."""
-    return any(needle in str(v) for v in dict(span.attributes or {}).values())
 
 
 # ---------------------------------------------------------------------------
@@ -196,10 +191,11 @@ def test_inject_unresolvable_region_does_not_suppress() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_inject_emits_filtered_span_on_exclusion(otel_capture) -> None:  # type: ignore[no-untyped-def]
+def test_inject_emits_filtered_span_on_exclusion(otel_capture: InMemorySpanExporter) -> None:
     """Per the OTEL Observability Principle: each exclusion is a subsystem
     decision the GM panel must see — proof the engine engaged, not that the
-    narrator merely didn't mention a Yahoo by luck."""
+    narrator merely didn't mention a Yahoo by luck. Pins the FULL forensic
+    attribute shape the GM panel depends on, by key (a key rename = test failure)."""
     sd = _FakeSessionData(_zoned_pack({"lilliput_shore": LILLIPUT, "houyhnhnm_land": HOUYHNHNM}))
     sd.monster_manual = _manual(_encounter("Yahoo Brute", factions=[HOUYHNHNM]))
     snap = _snapshot(region="lilliput_shore")
@@ -211,14 +207,13 @@ def test_inject_emits_filtered_span_on_exclusion(otel_capture) -> None:  # type:
     attrs = dict(fired[0].attributes or {})
     assert attrs.get("subsystem") == "creature"
     assert attrs.get("region") == "lilliput_shore"
-    # The excluded faction is carried for forensics (key/serialization may vary;
-    # assert its presence in some attribute value rather than coupling to a shape).
-    assert _attrs_mention(fired[0], HOUYHNHNM), (
-        "filtered span must carry the excluded content's faction for forensics"
-    )
+    assert attrs.get("content_id") == "1x Yahoo Brute (tier 2)"
+    # OTEL serializes a list attribute as a tuple — compare by membership/contents.
+    assert list(attrs.get("content_factions") or []) == [HOUYHNHNM]
+    assert list(attrs.get("active_factions") or []) == [LILLIPUT]
 
 
-def test_inject_no_filtered_span_when_eligible(otel_capture) -> None:  # type: ignore[no-untyped-def]
+def test_inject_no_filtered_span_when_eligible(otel_capture: InMemorySpanExporter) -> None:
     """An in-zone encounter is NOT an exclusion — no ``zone_eligibility.filtered``
     span should fire (it would be a false positive on the lie-detector)."""
     sd = _FakeSessionData(_zoned_pack({"lilliput_shore": LILLIPUT, "houyhnhnm_land": HOUYHNHNM}))
@@ -230,7 +225,7 @@ def test_inject_no_filtered_span_when_eligible(otel_capture) -> None:  # type: i
     assert _filtered_spans(otel_capture) == []
 
 
-def test_inject_no_filtered_span_in_unzoned_world(otel_capture) -> None:  # type: ignore[no-untyped-def]
+def test_inject_no_filtered_span_in_unzoned_world(otel_capture: InMemorySpanExporter) -> None:
     """Unzoned worlds never reach the predicate — no exclusion span fires."""
     sd = _FakeSessionData(_zoned_pack({"the_dome": None}))
     sd.monster_manual = _manual(_encounter("Yahoo Brute", factions=[HOUYHNHNM]))
@@ -239,3 +234,56 @@ def test_inject_no_filtered_span_in_unzoned_world(otel_capture) -> None:  # type
     monster_manual_inject.inject(sd, snap, current_location="The Dome", in_combat=True)
 
     assert _filtered_spans(otel_capture) == []
+
+
+# ---------------------------------------------------------------------------
+# Coverage added in review rework (round-trip 1): "*" sentinel at the seam,
+# out-of-combat filter-before-cap ordering, and the FLAT_ONLY_SPANS routing
+# contract.
+# ---------------------------------------------------------------------------
+
+
+def test_inject_star_sentinel_is_eligible_everywhere() -> None:
+    """``factions=["*"]`` (world-global content) must surface in ANY zone of a
+    zoned world and never trip the exclusion span."""
+    sd = _FakeSessionData(_zoned_pack({"lilliput_shore": LILLIPUT, "houyhnhnm_land": HOUYHNHNM}))
+    sd.monster_manual = _manual(_encounter("Sea Serpent", factions=["*"]))
+    snap = _snapshot(region="lilliput_shore")
+
+    monster_manual_inject.inject(sd, snap, current_location="The Shore", in_combat=True)
+
+    assert "Sea Serpent" in _names(snap)
+
+
+def test_inject_out_of_combat_limit_applied_after_filter() -> None:
+    """The out-of-combat cap (`_OUT_OF_COMBAT_ENCOUNTER_LIMIT`) must apply to the
+    POST-filter eligible list, not the raw available list — otherwise wrong-zone
+    encounters ahead of an in-zone one would consume the cap and starve it. This
+    pins the documented filter-before-cap ordering (a regression to cap-first
+    would silently drop the in-zone encounter)."""
+    from sidequest.server.dispatch.monster_manual_inject import _OUT_OF_COMBAT_ENCOUNTER_LIMIT
+
+    wrong = [
+        _encounter(f"Wrong{i}", factions=[HOUYHNHNM]) for i in range(_OUT_OF_COMBAT_ENCOUNTER_LIMIT + 1)
+    ]
+    right = _encounter("Lilliput Guard", factions=[LILLIPUT])
+    sd = _FakeSessionData(_zoned_pack({"lilliput_shore": LILLIPUT, "houyhnhnm_land": HOUYHNHNM}))
+    sd.monster_manual = _manual(*wrong, right)  # in-zone encounter is LAST
+    snap = _snapshot(region="lilliput_shore")
+
+    monster_manual_inject.inject(sd, snap, current_location="The Shore", in_combat=False)
+
+    names = _names(snap)
+    assert "Lilliput Guard" in names, (
+        "in-zone encounter starved — the out-of-combat cap was applied before the "
+        "zone filter (regression to cap-first ordering)"
+    )
+    assert not any(n.startswith("Wrong") for n in names)
+
+
+def test_filtered_span_is_flat_only_registered() -> None:
+    """The persistence-routing contract: the exclusion span must be registered in
+    FLAT_ONLY_SPANS so it persists as a flat game-engine event for forensics. A
+    behavior test asserts emission; only this guards the routing if the
+    `FLAT_ONLY_SPANS.add(...)` registration is ever dropped."""
+    assert SPAN_ZONE_ELIGIBILITY_FILTERED in FLAT_ONLY_SPANS

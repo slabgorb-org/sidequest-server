@@ -1335,6 +1335,99 @@ def _emit_world_spell_catalog_loaded(*, world_slug: str, source: Path, spell_cou
     )
 
 
+def _validate_zone_tagged_content(
+    cartography: CartographyConfig | None,
+    bestiary: Bestiary | None,
+    tropes: list[TropeDefinition],
+    seed_tropes: list[SeedTrope],
+    *,
+    world_slug: str,
+) -> None:
+    """Strict fail-loud validator for faction/zone-scoped content (story 157-7).
+
+    In a *zoned* world — one where at least one ``Region.controlled_by`` is set —
+    every pooled, home-less authored item (each bestiary entry, trope, and
+    seed-trope) MUST carry a non-empty ``factions`` list whose every value is
+    either ``"*"`` (world-global) or a real ``controlled_by`` slug present in this
+    world's cartography. Any untagged item, or any item tagged with a faction that
+    is not a real ``controlled_by`` slug (a typo), raises ``GenreLoadError`` naming
+    every offender and the world.
+
+    Why fail loud at load: the runtime predicate (``zone_eligibility.is_eligible``,
+    story 157-2) is deliberately PERMISSIVE — untagged content stays eligible and a
+    typo'd slug silently never matches. That would make content quietly disappear
+    instead of erroring. This validator closes that gap per "No Silent Fallbacks":
+    a missing or misspelled tag is a loud load failure, not a silent runtime ghost.
+
+    Runs on RESOLVED tropes (post :func:`resolve_trope_inheritance`) so a child
+    trope that inherits its ``factions`` from a genre parent is judged on the
+    merged value. Exempt (NOT validated): authored cartography NPCs (their zone is
+    region-derived) and runtime walk-ons (don't exist at load) — only the three
+    pooled types above are checked.
+
+    Unzoned worlds (no ``controlled_by`` anywhere, incl. ``cartography is None``)
+    short-circuit and validate nothing — the 11 single-zone worlds load unchanged.
+    """
+    if cartography is None:
+        return
+    valid_slugs = {r.controlled_by for r in cartography.regions.values() if r.controlled_by}
+    if not valid_slugs:
+        # Unzoned world → no faction scoping applies; validate nothing.
+        return
+    allowed = valid_slugs | {"*"}
+
+    # Lazy import (matches the loader's _emit_* telemetry idiom) — keeps the
+    # genre layer from importing the telemetry span registry at module load.
+    from sidequest.telemetry.spans import Span
+    from sidequest.telemetry.spans.zone_eligibility import (
+        SPAN_ZONE_ELIGIBILITY_VALIDATOR_FAILURE,
+    )
+
+    bestiary_entries = list(bestiary.entries) if bestiary is not None else []
+    pools: tuple[tuple[str, list], ...] = (
+        ("bestiary", bestiary_entries),
+        ("trope", list(tropes)),
+        ("seed", list(seed_tropes)),
+    )
+
+    offenders: list[str] = []
+    for subsystem, items in pools:
+        for item in items:
+            factions = list(getattr(item, "factions", []) or [])
+            content_id = getattr(item, "id", None) or getattr(item, "name", "<unknown>")
+            if not factions:
+                reason = "untagged"
+            else:
+                bad = [f for f in factions if f not in allowed]
+                if not bad:
+                    continue
+                reason = f"unknown faction(s) {sorted(bad)}"
+            offenders.append(f"{subsystem}:{content_id} ({reason})")
+            # OTEL lie-detector: one persisted span per rejected item, fired
+            # BEFORE the raise so forensics see every rejection (ADR-031/090).
+            with Span.open(
+                SPAN_ZONE_ELIGIBILITY_VALIDATOR_FAILURE,
+                {
+                    "subsystem": subsystem,
+                    "content_id": str(content_id),
+                    "content_factions": sorted(factions),
+                    "world": world_slug,
+                    "reason": reason,
+                },
+            ):
+                pass
+
+    if offenders:
+        raise GenreLoadError(
+            path=f"worlds/{world_slug}",
+            detail=(
+                f"zoned world {world_slug!r}: pooled content must carry a non-empty "
+                f'`factions` of "*" or a real controlled_by slug '
+                f"{sorted(valid_slugs)} — offenders: " + "; ".join(offenders)
+            ),
+        )
+
+
 def _load_single_world(
     world_path: Path,
     genre_tropes: list[TropeDefinition],
@@ -1662,6 +1755,19 @@ def _load_single_world(
             source=world_path / "seed_tropes.yaml",
             seed_count=len(world_seed_tropes),
         )
+
+    # Strict fail-loud zone-tagging validator (story 157-7): a zoned world must
+    # not load with untagged or mis-tagged pooled content. Runs AFTER trope
+    # inheritance (``tropes`` is resolved, so inherited factions are present) and
+    # after all three pools + cartography are loaded. Unzoned worlds short-circuit
+    # inside the validator — zero behavior change for the single-zone worlds.
+    _validate_zone_tagged_content(
+        cartography,
+        world_bestiary,
+        tropes,
+        world_seed_tropes,
+        world_slug=world_path.name,
+    )
 
     # === World-tier classes.yaml — OPTIONAL (epic 94) ===
     # Genre/world boundary correction (supersedes ADR-120 "mechanics-in-genre"):

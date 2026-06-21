@@ -83,6 +83,41 @@ def test_no_watcher_flag_skips_loop_binding_at_startup(
         assert after["dropped"] >= before["dropped"] + 1
 
 
+def test_no_watcher_preserves_otlp_export_at_startup(
+    monkeypatch: pytest.MonkeyPatch, reset_hub_loop: None, pg_env: None
+) -> None:
+    """OTLP-preserve (round-2 rework): ``--no-watcher`` disables ONLY the GM-dashboard
+    hub, NOT OTEL export. ``init_tracer()`` (the sole production OTLP/console exporter
+    setup) MUST still run at startup with the flag set; only ``bind_loop`` + the
+    ``WatcherSpanProcessor`` registration are skipped.
+
+    We spy on ``init_tracer`` rather than inspect ``trace.get_tracer_provider()``:
+    the global provider is process-global and sticky (``set_tracer_provider`` is
+    once-per-process), so a prior test's ``init_tracer`` would make a provider-type
+    assertion vacuous. The spy proves THIS startup ran the OTLP setup. The local
+    ``from sidequest.telemetry.setup import init_tracer`` inside ``_wire_watcher``
+    resolves the patched module attribute at call time."""
+    import sidequest.telemetry.setup as setup_mod
+
+    calls: list[int] = []
+    real_init = setup_mod.init_tracer
+
+    def _spy(*args: object, **kwargs: object) -> None:
+        calls.append(1)
+        real_init(*args, **kwargs)
+
+    monkeypatch.setattr(setup_mod, "init_tracer", _spy)
+    monkeypatch.setenv("SIDEQUEST_NO_WATCHER", "1")
+
+    with TestClient(create_app()):
+        assert calls, (
+            "init_tracer() must still run with SIDEQUEST_NO_WATCHER=1 — --no-watcher "
+            "disables only the GM-dashboard hub, NOT OTLP/console export"
+        )
+        # The hub itself stays disabled: no loop bound, so a publish still drops.
+        assert wh.watcher_hub._loop is None  # noqa: SLF001
+
+
 def test_watcher_live_by_default_when_flag_unset(
     monkeypatch: pytest.MonkeyPatch, reset_hub_loop: None, pg_env: None
 ) -> None:

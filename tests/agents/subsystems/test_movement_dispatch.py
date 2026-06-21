@@ -855,7 +855,11 @@ def test_wiring_intent_router_pass_threads_context(capture_spans, monkeypatch):
     monkeypatch.setattr(
         intent_router_pass,
         "_build_state_summary",
-        lambda snapshot, *, pack, dungeon_store=None, palette=None: "summary",
+        # acting_player was added to the real _build_state_summary signature
+        # (intent_router_pass.py); the stub must accept it or the production
+        # call raises TypeError. (153-22 baseline-restore — unrelated to the
+        # movement resolver; see Dev Delivery Findings.)
+        lambda snapshot, *, pack, dungeon_store=None, palette=None, acting_player=None: "summary",
     )
 
     _run(

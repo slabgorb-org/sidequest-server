@@ -82,6 +82,44 @@ _DEEPER_KIND_RANK: dict[str, int] = {
     "secret": 4,
 }
 
+# §153-22: ordinal / positional descriptor vocabulary. The router passes the
+# player's words through verbatim, so "the leftmost passage" / "the first
+# corridor" / "the middle one" name a POSITION in the visible exit list — not
+# a bearing and not a kind token. Map each word to an index into the exits
+# ordered left-to-right by bearing (west reads as "left"). A negative index
+# counts from the right ("last"/"rightmost" → -1).
+_ORDINAL_INDEX: dict[str, int] = {
+    "first": 0,
+    "leftmost": 0,
+    "second": 1,
+    "third": 2,
+    "fourth": 3,
+    "fifth": 4,
+    "last": -1,
+    "rightmost": -1,
+}
+
+# Positional words that pick the midpoint of the ordered exits.
+_MIDDLE_WORDS: frozenset[str] = frozenset({"middle", "middlemost", "centre", "center", "central"})
+
+# Left-to-right rank for positional ordering: west reads as "left", east as
+# "right"; verticals and bearing-less exits sit in the middle. Purely a
+# cosmetic ordering for ordinal selection — never affects a bearing or token
+# match, and deterministic so "leftmost" is stable turn-to-turn.
+_BEARING_LR_RANK: dict[str, int] = {
+    "west": 0,
+    "northwest": 1,
+    "southwest": 1,
+    "north": 2,
+    "south": 2,
+    "up": 2,
+    "down": 2,
+    "": 2,
+    "northeast": 3,
+    "southeast": 3,
+    "east": 4,
+}
+
 
 def _tokens(text: str) -> set[str]:
     """Lowercased alpha tokens for descriptor token-overlap scoring."""
@@ -101,6 +139,47 @@ def _way_phrase(e: RegionExit) -> str:
     if e.bearing:
         return f"the {e.bearing} {e.kind}"
     return f"the {e.kind}"
+
+
+def _resolve_ordinal(
+    ordered: list[RegionExit], exit_descriptor: str
+) -> tuple[RegionExit | None, bool]:
+    """§153-22 positional/ordinal descriptor bridge.
+
+    "the leftmost passage" / "the first corridor" / "the middle one" name a
+    POSITION in the visible exit list, which the bearing- and token-match
+    paths cannot read (a shared kind word like "passage" ties every corridor
+    and refuses). Bridge the position to a single edge.
+
+    Returns ``(exit, matched)``. ``matched`` is True iff the descriptor named
+    a position — when it did, the caller must NOT fall through to
+    token-overlap: an out-of-range position is an honest no-match
+    (``exit=None, matched=True``, the caller fails loud), never a different way
+    to read the same words. ``secret`` exits are never offered by position
+    (reverse-Illusionism), mirroring the descriptor path. When the descriptor
+    also names a kind ("passage"/"stair"), the position indexes only exits of
+    that kind ("the first passage" is the first CORRIDOR, not the first way).
+    """
+    toks = _tokens(exit_descriptor)
+    is_middle = bool(toks & _MIDDLE_WORDS)
+    word = next((w for w in toks if w in _ORDINAL_INDEX), None)
+    if word is None and not is_middle:
+        return None, False
+
+    selectable = [e for e in ordered if e.kind != "secret"]
+    desc_kinds = {k for k, syns in _KIND_SYNONYMS.items() if k != "secret" and (toks & syns)}
+    if desc_kinds:
+        kind_filtered = [e for e in selectable if e.kind in desc_kinds]
+        if kind_filtered:
+            selectable = kind_filtered
+    if not selectable:
+        return None, True
+
+    lr = sorted(selectable, key=lambda e: (_BEARING_LR_RANK.get(e.bearing, 2), e.to_region_id))
+    idx = len(lr) // 2 if word is None else _ORDINAL_INDEX[word]
+    if -len(lr) <= idx < len(lr):
+        return lr[idx], True
+    return None, True
 
 
 def _cartography_for(*, pack: GenrePack | None, world_slug: str):
@@ -553,8 +632,19 @@ def _resolve(
         if len(matched) == 1:
             return matched[0], "bearing", False
 
-    # --- exit_descriptor present → token-overlap match. ---
+    # --- exit_descriptor present → ordinal bridge, then token-overlap. ---
     if exit_descriptor.strip():
+        # §153-22 ordinal/positional bridge runs BEFORE token-overlap so a
+        # shared kind word ("the first passage" → three corridors all match
+        # "passage") cannot tie and refuse. A positional word that is present
+        # but indexes past the exits is an honest no-match (fail loud below),
+        # never reinterpreted as a token query.
+        ordinal_pick, ordinal_matched = _resolve_ordinal(ordered, exit_descriptor)
+        if ordinal_pick is not None:
+            return ordinal_pick, "ordinal", False
+        if ordinal_matched:
+            return None, "ordinal", False
+
         want = _tokens(exit_descriptor)
         scored: list[tuple[int, RegionExit]] = []
         for e in ordered:

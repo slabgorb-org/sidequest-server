@@ -34,11 +34,14 @@ materialization/seed bug, never a quiet empty projection.
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from dataclasses import dataclass, field
 
 from sidequest.dungeon.region_graph.model import RegionGraph
 from sidequest.dungeon.themes import ThemePalette
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "BEARING_SYNONYMS",
@@ -301,6 +304,30 @@ def project_region(
                 bearing=bearings.get(other, ""),
             )
         )
+    # Story 153-22: collapse parallel edges to the SAME neighbor into one
+    # exit. Three corridors that all converge on exp002.r1 are
+    # indistinguishable for navigation (every one of them lands in exp002.r1)
+    # and defeat descriptor/bearing disambiguation — the "name a bearing"
+    # prompt offered three identical exp002.r1 ways and none resolved
+    # (sq-playtest 2026-06-20/21). assign_bearings already keys bearings by
+    # to_region_id (one bearing per neighbor), so the exit list is the only
+    # place parallel edges still triple-list. Keep ONE exit per neighbor,
+    # preferring a VISIBLE edge so a discovered route is never masked by a
+    # secret parallel; among same visibility a stable kind/bearing order keeps
+    # the projection deterministic. Logged (not silent) so a true materializer
+    # duplicate stays visible for investigation — No Silent Fallbacks.
+    if len({e.to_region_id for e in exits}) != len(exits):
+        ranked = sorted(exits, key=lambda e: (e.hidden, e.kind, e.bearing, e.to_region_id))
+        collapsed: dict[str, RegionExit] = {}
+        for e in ranked:
+            collapsed.setdefault(e.to_region_id, e)
+        logger.debug(
+            "project_region collapsed %d parallel exit(s) at region=%s neighbors=%s",
+            len(exits) - len(collapsed),
+            current_region,
+            sorted(collapsed),
+        )
+        exits = list(collapsed.values())
     # Deterministic ordering: visible before hidden, then by id, so the
     # prompt section and the wire frame are stable turn-to-turn (an
     # unstable exit list reads as the dungeon "shifting" to a career GM).

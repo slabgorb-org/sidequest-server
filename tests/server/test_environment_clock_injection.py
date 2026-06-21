@@ -360,12 +360,14 @@ async def _run_pass_with_llm_emitted_relight():
         {"id": "torch", "name": "Torch", "tags": ["light_source"], "quantity": 2}
     )
     # Seat a darkness penalty the relight must clear (keyed on the structured
-    # source, exactly as the burn path mints it).
+    # source, exactly as the burn path mints it: the lightest non-injury
+    # ``Scratch`` tier, stamped with the real current turn — not ``Wound``/0).
     core.statuses.append(
         Status(
             text="Plunged into darkness — every action is harder.",
             source=DARKNESS_STATUS_SOURCE,
-            severity=StatusSeverity.Wound,
+            severity=StatusSeverity.Scratch,
+            created_turn=snap.turn_manager.interaction,
             roll_modifier=-2,
         )
     )

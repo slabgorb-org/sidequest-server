@@ -42,10 +42,13 @@ def _light_pool(current: float) -> ResourcePool:
 
 
 def _darkness_status() -> Status:
+    # Mirror the burn path's mint: the lightest non-injury ``Scratch`` tier
+    # (an ambient light penalty is not a bodily wound), stamped with a real turn.
     return Status(
         text=DARKNESS_STATUS_TEXT,
         source=DARKNESS_STATUS_SOURCE,
-        severity=StatusSeverity.Wound,
+        severity=StatusSeverity.Scratch,
+        created_turn=3,
         roll_modifier=-2,
     )
 

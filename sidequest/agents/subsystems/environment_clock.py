@@ -42,22 +42,32 @@ DARKNESS_STATUS_SOURCE = "environment_clock"
 DARKNESS_PENALTY = -2  # spec §9 default N; tunable later via threshold metadata
 
 
-def _ensure_darkness_penalty(core: CreatureCore) -> bool:
+def _ensure_darkness_penalty(core: CreatureCore, *, created_turn: int) -> bool:
     """Ensure exactly one darkness penalty status is present. Returns True
     when one was newly added (False when already present — idempotent).
 
-    Identity is by ``source`` (structured marker), not ``text``. The status is
-    ``StatusSeverity.Wound``, which a narrator-explicit clear or rest could
-    remove — that is fine: this penalty is environment-derived and re-asserted
-    against current state on every tick, so a premature clear heals only until
-    the next unlit tick re-applies it."""
+    Identity is by ``source`` (structured marker), not ``text``. Severity is
+    ``StatusSeverity.Scratch`` — the lightest, scene-bounded, NON-injury tier:
+    an ambient light-state penalty is not a bodily wound, so it must not read
+    as ``Wound`` (the injury tier) on the player's status surface. A scene-end
+    sweep (``status_clear.clear_scratch_on_scene_end``) or narrator-explicit
+    clear removing it is harmless — this penalty is environment-derived and
+    re-asserted against current state on every tick, so a premature clear heals
+    only until the next unlit tick re-applies it. The authoritative clear
+    (relight / lit region / above-floor reconcile) keys on ``source``, NOT
+    severity, so the Scratch tier never affects when the penalty lifts.
+
+    ``created_turn`` is the caller's current turn (``turn_manager.interaction``)
+    stamped on the status, mirroring the other status-creation sites — never the
+    implicit ``0`` default."""
     if any(s.source == DARKNESS_STATUS_SOURCE for s in core.statuses):
         return False
     core.statuses.append(
         Status(
             text=DARKNESS_STATUS_TEXT,
             source=DARKNESS_STATUS_SOURCE,
-            severity=StatusSeverity.Wound,
+            severity=StatusSeverity.Scratch,
+            created_turn=created_turn,
             roll_modifier=DARKNESS_PENALTY,
         )
     )
@@ -264,7 +274,7 @@ async def run_environment_clock_dispatch(
     # Reconcile penalty against state (handles enter-at-0 with no crossing).
     if core is not None:
         if result.new_value <= pool.min:
-            if _ensure_darkness_penalty(core):
+            if _ensure_darkness_penalty(core, created_turn=snapshot.turn_manager.interaction):
                 data["penalty_applied"] = True
         elif _clear_darkness_penalty(core):
             data["penalty_cleared"] = True

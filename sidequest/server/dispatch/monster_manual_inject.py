@@ -34,6 +34,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from sidequest.game import zone_eligibility
 from sidequest.game.monster_manual import EntryState, MonsterManual
 from sidequest.game.session import NpcPatch, WorldStatePatch
 from sidequest.genre.names.generator import sanitize_display_name
@@ -42,6 +43,7 @@ from sidequest.telemetry.spans.monster_manual import (
     SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL,
     SPAN_MONSTER_MANUAL_INJECTED,
 )
+from sidequest.telemetry.spans.zone_eligibility import SPAN_ZONE_ELIGIBILITY_FILTERED
 
 if TYPE_CHECKING:
     from sidequest.game.session import GameSnapshot
@@ -318,15 +320,31 @@ def _human_patch(npc: Any, *, location: str | None) -> NpcPatch:
 
 
 def _npc_patches_for_encounters(
-    manual: MonsterManual, in_combat: bool, current_location: str
+    manual: MonsterManual,
+    in_combat: bool,
+    current_location: str,
+    *,
+    zoned: bool,
+    active: set[str],
+    region: str,
 ) -> list[NpcPatch]:
     """Build creature patches from Available encounters.
 
     In combat: every Available encounter's enemy roster lands in
-    ``snap.npcs`` so the narrator (and Sebastien's GM panel) sees the
-    real creatures the encounter intends.  Out of combat: cap at the
-    first :data:`_OUT_OF_COMBAT_ENCOUNTER_LIMIT` encounters to avoid
-    materializing eight monsters around a calm scene.
+    ``snap.npcs`` so the narrator (and the GM panel) sees the real creatures
+    the encounter intends.  Out of combat: cap at the first
+    :data:`_OUT_OF_COMBAT_ENCOUNTER_LIMIT` encounters to avoid materializing
+    eight monsters around a calm scene.
+
+    Seam 1 of faction/zone-scoped eligibility (epic-157, ADR-059 amendment):
+    each candidate encounter is gated by
+    :func:`sidequest.game.zone_eligibility.is_eligible` BEFORE the out-of-combat
+    limit slice, so a Houyhnhnm-tagged Yahoo is dropped on the Lilliput shore
+    (and an in-zone encounter beyond the slice is never starved by a wrong-zone
+    one ahead of it). Each exclusion fires the ``zone_eligibility.filtered`` span
+    (the GM-panel lie-detector that the engine actively suppressed it, not that
+    the narrator merely didn't mention it). ``active`` / ``zoned`` / ``region``
+    are resolved once by :func:`inject` from the snapshot's canonical region.
 
     Stamps ``location=current_location`` on every creature patch so the
     projection layer's ``in_same_zone()`` matches them (playtest
@@ -336,10 +354,35 @@ def _npc_patches_for_encounters(
     available = manual.available_encounters()
     if not available:
         return []
-    limit = len(available) if in_combat else _OUT_OF_COMBAT_ENCOUNTER_LIMIT
+
+    eligible: list[Any] = []
+    for encounter in available:
+        if zone_eligibility.is_eligible(encounter.factions, active, zoned=zoned):
+            eligible.append(encounter)
+            continue
+        # Tagged-but-wrong-zone → drop it and emit the lie-detector span.
+        logger.info(
+            "zone_eligibility.filtered subsystem=creature content=%r region=%r factions=%s",
+            encounter.label,
+            region,
+            encounter.factions,
+        )
+        with Span.open(
+            SPAN_ZONE_ELIGIBILITY_FILTERED,
+            {
+                "subsystem": "creature",
+                "content_id": encounter.label,
+                "content_factions": sorted(encounter.factions),
+                "active_factions": sorted(active),
+                "region": region,
+            },
+        ):
+            pass
+
+    limit = len(eligible) if in_combat else _OUT_OF_COMBAT_ENCOUNTER_LIMIT
     creature_location = current_location or None
     patches: list[NpcPatch] = []
-    for encounter in available[:limit]:
+    for encounter in eligible[:limit]:
         enemies = encounter.data.get("enemies") if isinstance(encounter.data, dict) else None
         if not isinstance(enemies, list):
             continue
@@ -500,8 +543,24 @@ def inject(
     # injection seam must suppress them too (playtest 2026-06-01, blackthorn_moor).
     # Absent pack/rules (test stubs) default to combat-enabled = the model
     # default, preserving legacy behavior.
-    rules = getattr(getattr(sd, "genre_pack", None), "rules", None)
+    pack = getattr(sd, "genre_pack", None)
+    rules = getattr(pack, "rules", None)
     combat_encounters = getattr(rules, "combat_encounters", True)
+
+    # Seam 1 zone-eligibility context (epic-157, ADR-059 amendment): resolve the
+    # world's zoned-ness from the canonical region (``snapshot.region_for``) —
+    # NOT the free-text ``current_location`` (which may be a POI/scene string).
+    # The active-faction set + region id are resolved ONLY for a zoned world that
+    # will actually field encounters this turn; an unzoned world (the 11 single-
+    # zone packs), a non-combat pack, or a manual-less pre-bind turn skips the
+    # region query entirely (Cost Scales with Drama). ``is_eligible`` is permissive
+    # on ``zoned=False``, so the empty defaults below are a behavioral no-op.
+    zoned = zone_eligibility.world_is_zoned(zone_eligibility.cartography_for(snapshot, pack))
+    zone_active: set[str] = set()
+    region = ""
+    if zoned and combat_encounters and manual is not None:
+        zone_active = zone_eligibility.active_factions(snapshot, pack)
+        region = snapshot.region_for() or ""
 
     all_patches: list[NpcPatch] = []
     active_capped = 0
@@ -515,7 +574,14 @@ def inject(
             available_placed_eligible,
         ) = _npc_patches_for_available_humans(manual, current_location)
         creature_patches = (
-            _npc_patches_for_encounters(manual, in_combat, current_location)
+            _npc_patches_for_encounters(
+                manual,
+                in_combat,
+                current_location,
+                zoned=zoned,
+                active=zone_active,
+                region=region,
+            )
             if combat_encounters
             else []
         )

@@ -208,6 +208,11 @@ def _stub_pack(cultures: list[str], *, constraints: ArchetypeConstraints | None 
     # the stub one spawnable archetype so the mint loop stays exercised.
     spawnable = SimpleNamespace(name="Drifter", named_individual=False)
     pack.effective_archetypes = lambda _world: ([spawnable], "stub")
+    # seed_manual resolves the world bestiary via ``pack.effective_bestiary(world)``
+    # (epic-157) so each seeded encounter inherits its source creatures' faction
+    # tags. The stub has no bestiary layer → (None, "stub") → encounters seed
+    # untagged (eligible everywhere), the correct shape for a dial stub pack.
+    pack.effective_bestiary = lambda _world: (None, "stub")
     return pack
 
 
@@ -449,3 +454,111 @@ def test_e2e_seed_fixture_world_populates_manual(tmp_path: Path) -> None:
     for enc in manual.encounters:
         assert "enemies" in enc.data
         assert isinstance(enc.data["enemies"], list)
+
+
+# ---------------------------------------------------------------------------
+# _encounter_factions — the faction/zone union-stamp (epic-157, ADR-059
+# amendment). This is the seed-time mechanism that POPULATES
+# ``ManualEncounter.factions`` (the data Seam 1 filters on). The join key is the
+# enemy NAME (encountergen carries no creature_id), so a regression here silently
+# untags content and re-opens the cross-zone bleed — pin it directly.
+# ---------------------------------------------------------------------------
+
+
+def _bestiary(*entries: tuple[str, list[str]]):  # type: ignore[no-untyped-def]
+    """Build a Bestiary from (name, factions) pairs with minimal valid stat blocks."""
+    from sidequest.genre.models.bestiary import Bestiary, BestiaryEntry
+
+    return Bestiary(
+        entries=[
+            BestiaryEntry(
+                id=name.lower().replace(" ", "_"),
+                name=name,
+                level=1,
+                hp=4,
+                armor_class=12,
+                attack_bonus=1,
+                factions=list(factions),
+            )
+            for name, factions in entries
+        ]
+    )
+
+
+def _enc_data(*enemy_names: str) -> dict[str, Any]:
+    return {"enemies": [{"name": n, "class": "creature", "hp": 4} for n in enemy_names]}
+
+
+def test_encounter_factions_includes_matched_entry_factions() -> None:
+    from sidequest.server.dispatch.pregen import _encounter_factions
+
+    bestiary = _bestiary(("Yahoo Brute", ["the_houyhnhnm_assembly"]))
+    assert _encounter_factions(_enc_data("Yahoo Brute"), bestiary) == ["the_houyhnhnm_assembly"]
+
+
+def test_encounter_factions_match_is_case_insensitive() -> None:
+    """encountergen copies entry.name verbatim, but the join lowercases defensively."""
+    from sidequest.server.dispatch.pregen import _encounter_factions
+
+    bestiary = _bestiary(("Yahoo Brute", ["the_houyhnhnm_assembly"]))
+    assert _encounter_factions(_enc_data("yahoo brute"), bestiary) == ["the_houyhnhnm_assembly"]
+
+
+def test_encounter_factions_unions_across_enemies_and_sorts() -> None:
+    from sidequest.server.dispatch.pregen import _encounter_factions
+
+    bestiary = _bestiary(
+        ("Yahoo Brute", ["the_houyhnhnm_assembly", "no_one"]),
+        ("Lilliput Guard", ["the_lilliput_court"]),
+    )
+    result = _encounter_factions(_enc_data("Yahoo Brute", "Lilliput Guard"), bestiary)
+    # Union of both enemies' factions, sorted (stable on-disk Manual JSON).
+    assert result == ["no_one", "the_houyhnhnm_assembly", "the_lilliput_court"]
+
+
+def test_encounter_factions_empty_when_no_name_match() -> None:
+    """An enemy whose name matches no bestiary entry contributes nothing — and
+    must NOT silently inherit some other entry's factions."""
+    from sidequest.server.dispatch.pregen import _encounter_factions
+
+    bestiary = _bestiary(("Yahoo Brute", ["the_houyhnhnm_assembly"]))
+    assert _encounter_factions(_enc_data("Unknown Beast"), bestiary) == []
+
+
+def test_encounter_factions_empty_for_none_bestiary() -> None:
+    """Native packs (no bestiary) → empty → eligible everywhere (permissive)."""
+    from sidequest.server.dispatch.pregen import _encounter_factions
+
+    assert _encounter_factions(_enc_data("Anything"), None) == []
+
+
+def test_encounter_factions_tolerates_malformed_enemy_rows() -> None:
+    from sidequest.server.dispatch.pregen import _encounter_factions
+
+    bestiary = _bestiary(("Yahoo Brute", ["the_houyhnhnm_assembly"]))
+    data = {"enemies": ["not-a-dict", {"no_name": True}, {"name": 123}, {"name": "Yahoo Brute"}]}
+    # Only the well-formed matching row contributes; the junk rows are skipped.
+    assert _encounter_factions(data, bestiary) == ["the_houyhnhnm_assembly"]
+
+
+def test_encounter_factions_empty_when_entry_untagged() -> None:
+    """A matched entry with no factions contributes nothing (not a crash)."""
+    from sidequest.server.dispatch.pregen import _encounter_factions
+
+    bestiary = _bestiary(("Yahoo Brute", []))
+    assert _encounter_factions(_enc_data("Yahoo Brute"), bestiary) == []
+
+
+def test_add_encounter_threads_factions_onto_manual_encounter() -> None:
+    """The seed path passes the union through ``add_encounter(factions=...)`` →
+    it must land on ``ManualEncounter.factions`` (the value Seam 1 reads)."""
+    manual = MonsterManual(genre="wry_whimsy", world="gulliver")
+    manual.add_encounter(_enc_data("Yahoo Brute"), tier=2, terrain_tags=[], factions=["the_houyhnhnm_assembly"])
+    assert manual.encounters[0].factions == ["the_houyhnhnm_assembly"]
+
+
+def test_add_encounter_defaults_factions_empty_when_omitted() -> None:
+    """Backward-compat: existing callers omit ``factions`` → empty (eligible everywhere)."""
+    manual = MonsterManual(genre="wry_whimsy", world="gulliver")
+    manual.add_encounter(_enc_data("Field Mouse"), tier=1, terrain_tags=[])
+    assert manual.encounters[0].factions == []

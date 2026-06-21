@@ -378,36 +378,51 @@ class NarratorAgent(BaseAgent):
 
         from sidequest.genre.models.rules import ResolutionMode
 
-        # A Fate Contest (resolution_mode=contest, ADR-144) resolves via the 4dF
-        # exchange engine, NOT native beat_selections. Its ConfrontationDef beats
-        # are display-only stubs (kind=None) for the UI class-Abilities surface
-        # (BeatDef docstring; spec 2026-06-17 §2). Rendering them in the native beat
-        # menu both crashed on ``b.kind.value`` (#985 follow-on, playtest glenross
-        # 150-6) and invited the narrator to re-arm the parallel dial engine ADR-144
-        # forbids. Per SOUL "Bind the Ruleset, Don't Balance It", the native
-        # beat/dial machinery is REMOVED from the Fate path: emit a contest-only
-        # live zone and skip the native body. The resolved-exchange context reaches
-        # the narrator through ``encounter_summary`` (the valley zone below).
+        # A Fate Contest (resolution_mode=contest) and a Fate Conflict
+        # (resolution_mode=conflict, story 153-3 — the lethal sibling) both resolve
+        # via the 4dF Fate engine, NOT native beat_selections. Their ConfrontationDef
+        # beats are display-only stubs (kind=None) for the UI class-Abilities surface
+        # (BeatDef docstring; spec 2026-06-17 §2; ADR-144). Rendering them in the
+        # native beat menu both crashed on ``b.kind.value`` (#985 follow-on, playtest
+        # glenross 150-6 for Contest; 153-3 RT1 for Conflict) and invited the narrator
+        # to re-arm the parallel dial engine ADR-144 forbids. Per SOUL "Bind the
+        # Ruleset, Don't Balance It", the native beat/dial machinery is REMOVED from
+        # the Fate path: emit a Fate-only live zone and skip the native body. The
+        # resolved-exchange context reaches the narrator through ``encounter_summary``
+        # (the valley zone below).
         if (
             encounter is not None
             and cdef is not None
-            and cdef.resolution_mode == ResolutionMode.contest
+            and cdef.resolution_mode in (ResolutionMode.contest, ResolutionMode.conflict)
         ):
-            participants = "\n".join(
-                f"  - {a.name} (side={a.side})" for a in encounter.actors
-            )
+            participants = "\n".join(f"  - {a.name} (side={a.side})" for a in encounter.actors)
+            if cdef.resolution_mode == ResolutionMode.contest:
+                # No-harm competition: first-to-N victories, no stress/consequences.
+                kind_label = "Fate Contest"
+                resolution_line = (
+                    "Resolution is by Fate exchanges (Overcome / Create an "
+                    "Advantage), already rolled and applied by the engine. "
+                )
+            else:
+                # Lethal Fate Conflict: 4dF + ladder, ablative stress toward
+                # consequences and Taken Out, read off the Other's FateSheet.
+                kind_label = "Fate Conflict"
+                resolution_line = (
+                    "Resolution is by the Fate Conflict engine (4dF attacks, "
+                    "ablative stress toward consequences and Taken Out), already "
+                    "rolled and applied by the engine. "
+                )
             registry.register_section(
                 self.name(),
                 PromptSection.new(
                     "narrator_encounter_live",
                     (
                         "<encounter-live>\n"
-                        f"Active Fate Contest: {cdef.label} ({cdef.confrontation_type})\n"
-                        "Resolution is by Fate exchanges (Overcome / Create an "
-                        "Advantage), already rolled and applied by the engine. Do "
-                        "NOT emit beat_selections and do NOT invent dice outcomes — "
-                        "narrate the resolved exchange described in the encounter "
-                        "state.\n"
+                        f"Active {kind_label}: {cdef.label} ({cdef.confrontation_type})\n"
+                        + resolution_line
+                        + "Do NOT emit beat_selections and do NOT invent dice "
+                        "outcomes — narrate the resolved exchange described in the "
+                        "encounter state.\n"
                         "Participants:\n" + participants + "\n"
                         "</encounter-live>"
                     ),

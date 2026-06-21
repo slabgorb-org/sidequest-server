@@ -1012,12 +1012,15 @@ def _resolve_cartography_lateral(
         ways = ", ".join(
             str(getattr(regions_map.get(cid), "name", cid) or cid) for _, cid in scored
         )
+        from_region_display = str(
+            getattr(regions_map.get(from_region), "name", from_region) or from_region
+        )
         return (
             None,
             "region_lateral",
             True,
             candidate_ids,
-            f"{from_region} could go more than one way: {ways}. Which way?",
+            f"{from_region_display} could go more than one way: {ways}. Which way?",
         )
     return scored[0][1], "region_lateral", False, candidate_ids, ""
 

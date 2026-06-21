@@ -101,6 +101,41 @@ def test_lateral_resolver_back_uses_recency():
     assert ambiguous is False
 
 
+def test_lateral_resolver_back_picks_most_recent_of_multiple_neighbors():
+    """back-recency sort must discriminate when more than one adjacent neighbor is discovered.
+
+    With a single candidate the sort is vacuous — this fixture provides TWO discovered
+    neighbors so the -recency key actually selects. arrival order: alpha first (index 0),
+    beta second (index 1) → recency={alpha:0, beta:1, hub:2}; sort by -recency puts beta
+    first, so beta wins.
+    """
+    cart = CartographyConfig(
+        starting_region="hub",
+        navigation_mode=NavigationMode.region,
+        regions={
+            "hub": Region(
+                name="Hub",
+                summary="",
+                description="",
+                adjacent=["alpha", "beta"],
+            ),
+            "alpha": Region(name="Alpha", summary="", description=""),
+            "beta": Region(name="Beta", summary="", description=""),
+        },
+        routes=[],
+    )
+    target, via, ambiguous, _candidates, _surface = _resolve_cartography_lateral(
+        cart=cart,
+        from_region="hub",
+        exit_descriptor="",
+        direction="back",
+        discovered_regions=["alpha", "beta", "hub"],  # beta is the most-recent prior neighbor
+    )
+    assert target == "beta"  # most-recently-arrived prior adjacent neighbor wins
+    assert via == "region_back"
+    assert ambiguous is False
+
+
 def test_lateral_resolver_ambiguous_two_way_tie_fails_loud():
     cart = CartographyConfig(
         starting_region="crossroads",

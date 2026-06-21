@@ -31,3 +31,18 @@ FLAT_ONLY_SPANS.add(SPAN_ZONE_ELIGIBILITY_FILTERED)
 SPAN_ZONE_ELIGIBILITY_CAST_STAGED = "zone_eligibility.cast_staged"
 
 FLAT_ONLY_SPANS.add(SPAN_ZONE_ELIGIBILITY_CAST_STAGED)
+
+# ``zone_eligibility.validator_failure`` (story 157-7, the strict load validator)
+# fires once per rejected item when a ZONED world is loaded with pooled content
+# (a bestiary entry / trope / seed-trope) that is untagged or carries a faction
+# slug that is not a real ``Region.controlled_by`` value. The runtime predicate
+# is permissive (157-2), so such content would silently never match at runtime;
+# the load validator turns that silent disappearance into a loud ``GenreLoadError``.
+# This span is the GM-panel lie-detector for the validator: it proves the
+# load-time check engaged and names WHICH item was rejected and WHY. Carries
+# ``subsystem`` (bestiary/trope/seed), ``content_id``, ``content_factions``,
+# ``world`` and ``reason`` (untagged / unknown faction). Persisted flat-only,
+# like its siblings.
+SPAN_ZONE_ELIGIBILITY_VALIDATOR_FAILURE = "zone_eligibility.validator_failure"
+
+FLAT_ONLY_SPANS.add(SPAN_ZONE_ELIGIBILITY_VALIDATOR_FAILURE)

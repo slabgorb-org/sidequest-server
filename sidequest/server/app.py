@@ -157,6 +157,31 @@ def create_app(
             logger.info("validator.shutdown_wired")
 
     @app.on_event("startup")
+    async def _wire_region_cast_staging() -> None:
+        # Seam 2 (epic-157, story 157-3): register the authored-cast staging
+        # observer on the process-global frontier_hook registry so a real region
+        # transition surfaces that region's authored NPC cast. Idempotent —
+        # register_frontier_observer no-ops a repeat, so the uvicorn --reload
+        # re-run of this hook does not double-register.
+        from sidequest.game.region_cast_staging import register_cast_staging_observer
+
+        register_cast_staging_observer()
+        logger.info("region_cast_staging.startup_wired")
+
+    @app.on_event("shutdown")
+    async def _unwire_region_cast_staging() -> None:
+        # Symmetric teardown (every other startup handler here has one): the
+        # frontier_hook registry is process-global, so leaving the observer
+        # registered after the app lifespan ends would leak across other
+        # sessions/tests sharing the process. Unregister is a safe no-op if it
+        # was never registered.
+        from sidequest.dungeon.frontier_hook import unregister_frontier_observer
+        from sidequest.game.region_cast_staging import stage_region_cast
+
+        unregister_frontier_observer(stage_region_cast)
+        logger.info("region_cast_staging.shutdown_unwired")
+
+    @app.on_event("startup")
     async def _wire_watcher() -> None:
         import asyncio
 

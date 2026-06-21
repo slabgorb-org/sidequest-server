@@ -219,6 +219,42 @@ def _is_skippable_adverb(word: str) -> bool:
     return lower == "then" or (lower.endswith("ly") and len(lower) > 2)
 
 
+def _is_proper_noun_fragment(text: str, name_start: int, name_end: int) -> bool:
+    """Whether the PC-name token spanning ``[name_start, name_end)`` is part
+    of a longer multi-word proper noun (an NPC's full name) rather than a
+    standalone reference to the PC.
+
+    The ``\\b...\\b`` boundaries on the name passes are necessary but not
+    sufficient: a multi-word NPC name like "Kantos Vah" carries an *internal*
+    word boundary, so ``\\bKantos\\b`` still matches the "Kantos" token inside
+    it. Without this guard the subject passes rewrote NPC "Kantos Vah" into
+    "you Vah" on the player's tab (NPC-NAME-PCSUBSTRING-SUBSTITUTION,
+    sq-playtest 2026-06-20/21).
+
+    A multi-word proper noun is a run of capitalized words. Two adjacency
+    signals mark the matched name as a fragment of one:
+
+    * **Following word capitalized** — "Kantos Vah". A real subject-verb
+      construction puts a lowercase verb after the name ("Kantos draws"), so a
+      capitalized following token is a name continuation. Covers the
+      documented prefix/infix case.
+    * **Preceding word capitalized and not itself a sentence start** —
+      "the envoy Vah Kantos" mid-clause. The sentence-start exclusion keeps an
+      ordinary capitalized opener ("Then Kantos moves.") from being read as a
+      name fragment — that opener is capitalized for position, not because it
+      is a proper noun. (A trailing name fragment that *is* sentence-initial,
+      e.g. "Vah Kantos …" opening a sentence, is genuinely ambiguous without a
+      name list and is left to swap; the documented finding is prefix.)
+    """
+    after = re.match(r"\s+(\w)", text[name_end:])
+    if after and after.group(1).isupper():
+        return True
+    before = re.search(r"(\w+)\s+$", text[:name_start])
+    return bool(
+        before and before.group(1)[0].isupper() and not _is_sentence_start_in(text, before.start(1))
+    )
+
+
 def _split_by_dialogue(text: str) -> list[tuple[str, str]]:
     """Split text into alternating prose / dialogue regions.
 
@@ -348,6 +384,10 @@ def _rewrite_sentence(
     def _name_subj_sub(m: re.Match) -> str:
         nonlocal count, had_subject_swap, subj_swapped_at_start
         nonlocal pass2_found_adjacent_verb
+        # The PC name as a fragment of a longer NPC proper noun ("Kantos Vah")
+        # must not swap — leave the full NPC name intact (Story 153-14).
+        if _is_proper_noun_fragment(text, m.start(), m.start() + len(target_name)):
+            return m.group(0)
         had_subject_swap = True
         verb = m.group(1)
         at_start = (m.start() == 0) or _is_sentence_start_in(text, m.start())
@@ -377,6 +417,10 @@ def _rewrite_sentence(
     # ------------------------------------------------------------------
     def _name_bare_sub(m: re.Match) -> str:
         nonlocal count, subj_swapped_at_start
+        # Same fragment guard as Pass 2: a bare PC-name token inside a longer
+        # NPC proper noun ("Kantos Vah") must not swap to "you" (Story 153-14).
+        if _is_proper_noun_fragment(text, m.start(), m.end()):
+            return m.group(0)
         count += 1
         at_start = (m.start() == 0) or _is_sentence_start_in(text, m.start())
         # A sentence-initial bare name is the grammatical subject. Pass 2

@@ -124,9 +124,16 @@ _BEARING_LR_RANK: dict[str, int] = {
 }
 
 
-# Common English function words that carry no geographic/region meaning and
-# must NOT influence token-overlap scoring (otherwise "I look around the
-# meadow" matches "The Emerald City" via the shared stopword "the").
+# Common English function words stripped ONLY in ``_resolve_cartography_lateral``
+# when matching a player's exit descriptor against region DISPLAY NAMES (e.g.
+# "head to the Emerald City" should not score a hit on "the" in "The Meadow").
+# Scoped to the lateral resolver — NOT used in the shared ``_tokens`` helper —
+# so ``_resolve`` (room-graph) and ``_resolve_ordinal`` are unaffected.
+#
+# Directional words (up, down, out, around, over, under, back) are deliberately
+# EXCLUDED: even in lateral display-name matching, a directional word could be
+# the only discriminating token in a region's name ("The Down Below", "The
+# Overpass"), and silently dropping it would violate No-Silent-Fallbacks.
 _STOPWORDS: frozenset[str] = frozenset(
     {
         "a",
@@ -175,25 +182,13 @@ _STOPWORDS: frozenset[str] = frozenset(
         "those",
         "there",
         "here",
-        "up",
-        "down",
-        "out",
-        "around",
-        "over",
-        "under",
-        "back",
     }
 )
 
 
 def _tokens(text: str) -> set[str]:
-    """Lowercased alpha tokens for descriptor token-overlap scoring.
-
-    Stopwords (articles, prepositions, pronouns, common verbs) are stripped
-    so that e.g. "I look around the meadow" does not match "The Emerald City"
-    via the shared article "the".
-    """
-    return {t for t in re.findall(r"[a-z]+", (text or "").lower()) if t not in _STOPWORDS}
+    """Lowercased alpha tokens for descriptor token-overlap scoring."""
+    return set(re.findall(r"[a-z]+", (text or "").lower()))
 
 
 def _exit_sort_key(e: RegionExit) -> tuple[str, str]:
@@ -997,14 +992,16 @@ def _resolve_cartography_lateral(
     if not exit_descriptor.strip():
         return None, "region_lateral", False, candidate_ids, ""
 
-    want = _tokens(exit_descriptor)
+    want = _tokens(exit_descriptor) - _STOPWORDS
     scored: list[tuple[int, str]] = []
     regions_map = getattr(cart, "regions", {})
     for cid in candidate_ids:
         neighbor = regions_map.get(cid)
-        surface_tokens = _tokens(cid)
+        surface_tokens = _tokens(cid) - _STOPWORDS
         if neighbor is not None:
-            surface_tokens = surface_tokens | _tokens(str(getattr(neighbor, "name", "") or ""))
+            surface_tokens = surface_tokens | (
+                _tokens(str(getattr(neighbor, "name", "") or "")) - _STOPWORDS
+            )
         score = len(want & surface_tokens)
         if score > 0:
             scored.append((score, cid))

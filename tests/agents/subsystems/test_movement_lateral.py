@@ -18,7 +18,11 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 import sidequest.telemetry.spans as spans_module
-from sidequest.agents.subsystems.movement import _resolve_cartography_lateral, run_movement_dispatch
+from sidequest.agents.subsystems.movement import (
+    _resolve_cartography_lateral,
+    _tokens,
+    run_movement_dispatch,
+)
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.world import CartographyConfig, NavigationMode, Region, Route
 from sidequest.protocol.dispatch import SubsystemDispatch, VisibilityTag
@@ -232,3 +236,44 @@ def test_dispatch_unmatched_lateral_still_defers(capture_spans):
     assert snap.region_for(perspective="Dorothy") == "munchkin_country", (
         "an unmatched intent must not move the PC (additive: defer, don't fail)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Stopword scope pin: _tokens is article-clean; lateral resolver strips them.
+# ---------------------------------------------------------------------------
+
+
+def test_tokens_does_not_filter_stopwords():
+    """The shared _tokens helper must NOT strip stopwords.
+
+    Stopword filtering belongs ONLY in _resolve_cartography_lateral, not in
+    the shared helper. Room-graph navigation (_resolve) and ordinal resolution
+    (_resolve_ordinal) both use _tokens; stripping "down"/"back" would silently
+    remove discriminating navigation tokens from exit descriptors.
+    """
+    result = _tokens("the emerald city")
+    assert result == {"the", "emerald", "city"}, (
+        "_tokens must include 'the' — stopwords are only stripped in the lateral resolver"
+    )
+
+
+def test_lateral_resolver_ignores_leading_article():
+    """The lateral resolver must resolve through leading articles in display names.
+
+    "to the Emerald City" should match region the_emerald_city (display name
+    "The Emerald City") even though the shared _tokens now includes 'the'. The
+    lateral resolver applies _STOPWORDS locally to both sides before scoring.
+    """
+    cart = _oz_cartography_with_road()
+    target, via, ambiguous, _candidates, _surface = _resolve_cartography_lateral(
+        cart=cart,
+        from_region="munchkin_country",
+        exit_descriptor="to the Emerald City",
+        direction="deeper",
+        discovered_regions=["munchkin_country"],
+    )
+    assert target == "the_emerald_city", (
+        "lateral resolver must match 'to the Emerald City' → the_emerald_city "
+        "after applying local stopword filter to both sides"
+    )
+    assert not ambiguous

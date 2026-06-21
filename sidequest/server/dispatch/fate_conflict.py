@@ -570,6 +570,59 @@ def resume_fate_exchange(
     return result
 
 
+def clear_orphaned_pending_defenses(
+    *,
+    encounter: StructuredEncounter,
+    snapshot: GameSnapshot,
+    _tracer: trace.Tracer | None = None,
+) -> list[FatePendingDefense]:
+    """Concede every UNFILLED pending defense whose defender is no longer a live
+    seated PC, so a parked DEFEND barrier can resume instead of wedging forever
+    (Story 153-7, ADR-151).
+
+    An entry the barrier waits on is "orphaned" when its defender has withdrawn from
+    the conflict or left ``snapshot.characters`` entirely — they can never throw, so
+    ``ledger_full`` (every entry filled or conceded) stays False and the exchange
+    never resumes. The sweep marks each orphan ``conceded`` (NOT deleted: the NPC's
+    sealed attack still resolves against the abandoned character — No Silent
+    Fallbacks) and fires a ``fate.defend_phase`` lie-detector span tagged
+    ``reason=orphaned`` so the GM panel sees it.
+
+    Load-bearing safety invariant: a present, still-seated defender who simply has
+    not thrown yet is NOT orphaned — they are the re-emit-on-reconnect case
+    (``_maybe_reemit_pending_defenses``). Filled entries are already resolved and are
+    left untouched. Returns the cleared entries.
+    """
+    pc_names = _seated_pc_names(snapshot)
+    cleared: list[FatePendingDefense] = []
+    for entry in encounter.pending_defenses:
+        if entry.defense_total is not None or entry.conceded:
+            continue  # already answered — not blocking, never re-concede
+        actor = encounter.find_actor(entry.defender)
+        present = entry.defender in pc_names and actor is not None and not actor.withdrawn
+        if present:
+            continue  # still here, just silent — the re-emit path serves them
+        entry.conceded = True
+        fate_defend_phase_span(
+            defender=entry.defender,
+            attacker=entry.attacker,
+            request_id=entry.request_id,
+            responded=False,
+            conceded=True,
+            reason="orphaned",
+            _tracer=_tracer,
+        )
+        cleared.append(entry)
+
+    if cleared:
+        logger.info(
+            "fate.defend.orphans_cleared count=%d request_ids=%s",
+            len(cleared),
+            ",".join(c.request_id for c in cleared),
+        )
+    return cleared
+
+
 def _opposition_total(
     *,
     ruleset: FateRulesetModule,

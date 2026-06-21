@@ -27,6 +27,9 @@ if TYPE_CHECKING:
     from sidequest.magic.confrontations import ConfrontationDefinition
     from sidequest.server.session_room import SessionRoom
 
+# Story 153-21: the procedural dungeon entrance anchor — the don't-clobber guard
+# re-anchors a same-turn deep_descent crossing onto this node.
+from sidequest.dungeon.seed_bootstrap import ENTRANCE_ID
 from sidequest.game.alias_accretion import (
     accrete_npc_aliases,
     extract_epithets_for_npc,
@@ -64,8 +67,14 @@ from sidequest.game.region_validation import (
 )
 from sidequest.game.ruleset.registry import get_ruleset_module
 
-# Story 105-2: seam registry — static→procedural crossing recovery.
-from sidequest.game.seams import SeamCrossingError, get_seam_resolver, seam_route_for
+# Seam registry — static→procedural crossing recovery (Story 105-2) and the
+# same-turn-crossing don't-clobber guard's seam-owner lookup (Story 153-21).
+from sidequest.game.seams import (
+    SeamCrossingError,
+    get_seam_resolver,
+    seam_route_for,
+    surface_owner_for_entrance,
+)
 from sidequest.game.session import (
     _ACTIVE_STAKES_GUARDRAIL,  # re-exported; canonical home is session.py (Story 77-2)
     ContainerState,
@@ -110,6 +119,7 @@ from sidequest.telemetry.spans import (
     location_drift_repaired_span,
     lore_established_span,
     magic_working_span,
+    movement_resolved_span,
     npc_auto_registered_span,
     npc_creature_bestiary_draw_span,
     npc_creature_preserved_span,
@@ -243,6 +253,49 @@ def _reanchor_location_ledger(
                 continue
             if snapshot.character_locations.get(seated_name) == confabulated:
                 snapshot.character_locations[seated_name] = replacement
+
+
+def _honors_same_turn_seam_crossing(
+    *,
+    snapshot: GameSnapshot,
+    player_name: str,
+    known_region_id: str,
+    is_region_mode_world: bool,
+    region_cart: Any,
+) -> bool:
+    """Story 153-21: True when apply must NOT clobber a same-turn seam crossing.
+
+    The movement subsystem crosses the ``deep_descent`` seam EARLIER in the turn
+    (ADR-113 engine-first), leaving a receipt on the snapshot: the PC stands on
+    the procedural ``entrance`` node and a this-turn ``region_transitions`` entry
+    records the crossing. When the narrator then re-titles the surface seam region
+    and the heading resolves BACK to that seam owner, the static latch would drag
+    the PC out of the dungeon. This predicate detects that exact case so the
+    caller can decline the clobber.
+
+    All three clauses must hold (non-text signal, no widening):
+      * region-mode world, AND
+      * the PC is already on ``ENTRANCE_ID`` AND a this-turn ``region_transitions``
+        entry to ``ENTRANCE_ID`` exists for this player (the movement receipt), AND
+      * ``known_region_id`` is the surface owner of that entrance seam
+        (``surface_owner_for_entrance(...).from_id``) — never hardcoded.
+
+    A pure re-title (no crossing this turn) fails the entrance/receipt clauses, so
+    the drift-strip / latch keep owning that case (AC5 fail-loud unchanged).
+    """
+    if not is_region_mode_world:
+        return False
+    if snapshot.region_for(perspective=player_name) != ENTRANCE_ID:
+        return False
+    this_turn = snapshot.turn_manager.interaction
+    has_receipt = any(
+        t.to_region == ENTRANCE_ID and t.turn == this_turn and t.pc_name == player_name
+        for t in snapshot.region_transitions
+    )
+    if not has_receipt:
+        return False
+    owner = surface_owner_for_entrance(region_cart)
+    return owner is not None and owner.from_id == known_region_id
 
 
 def _resolve_innate_cast_for_beat(
@@ -4260,7 +4313,72 @@ def _apply_narration_result_to_snapshot(
             # region — not a new region to fork into discovered_regions. Room-graph
             # (dungeon) worlds manage current_region via the room graph / frontier
             # hook and legitimately fork narrator-invented sub-areas (Story 45-17).
-            if known_region_id is not None:
+            if known_region_id is not None and _honors_same_turn_seam_crossing(
+                snapshot=snapshot,
+                player_name=player_name,
+                known_region_id=known_region_id,
+                is_region_mode_world=_is_region_mode_world,
+                region_cart=_region_cart,
+            ):
+                # Story 153-21 — don't-clobber a same-turn deep_descent crossing.
+                # The movement subsystem already crossed the seam EARLIER this
+                # turn (ADR-113 engine-first dispatch runs before the narrator):
+                # the PC stands on the procedural ``entrance`` node via a
+                # this-turn ``region_transitions`` receipt. The narrator then
+                # re-titled the surface seam region ("The Dropmouth — First
+                # Chamber" → ``the_dropmouth`` via the leading-segment match), so
+                # ``known_region_id`` resolves BACK to the seam owner and the
+                # latch below ("entrance" != "the_dropmouth") would drag the PC
+                # out of the dungeon. Refuse the clobber: leave current_region /
+                # pc_regions on ``entrance``, re-anchor the SCENE to the authored
+                # entrance room so prose follows the engine (AC3), and emit the
+                # apply-decision spans (AC6). Do NOT re-cross — the resolver
+                # already advanced the region and fired its own crossing span.
+                _crossed_room = _entrance_room_name(
+                    crossing_region=ENTRANCE_ID,
+                    lookahead_handle=lookahead_handle,
+                )
+                _reanchor_location_ledger(
+                    snapshot,
+                    confabulated=result.location,
+                    replacement=_crossed_room,
+                    actor_for_location=actor_for_location,
+                )
+                result.location = _crossed_room
+                # AC6: the apply decision is observable — record that apply
+                # HONORED the same-turn crossing (narration-driven) rather than
+                # clobbering it. Reuse the 105-2 ``narration_seam_recovery``
+                # resolved_via vocabulary; the static-latch
+                # ``region.entry_resolved_to_cartography`` is NOT emitted (we do
+                # not fall through to it). The movement-advance lane carries
+                # ``entrance`` so the GM panel sees the engine honor the crossing.
+                with movement_resolved_span(
+                    pc_name=player_name,
+                    from_region=known_region_id,
+                    to_region=ENTRANCE_ID,
+                    resolved_via="narration_seam_recovery",
+                ):
+                    logger.info(
+                        "region.same_turn_crossing_honored pc=%s seam_owner=%s "
+                        "entrance=%s — narrator re-title resolved back to the "
+                        "seam owner; declined to clobber the same-turn crossing "
+                        "(Story 153-21)",
+                        player_name,
+                        known_region_id,
+                        ENTRANCE_ID,
+                    )
+                _watcher_publish(
+                    "region_current_advanced",
+                    {
+                        "old_region": known_region_id,
+                        "new_region": ENTRANCE_ID,
+                        "player_name": player_name,
+                        "turn_number": snapshot.turn_manager.interaction,
+                    },
+                    component="location",
+                )
+                _same_region_drift = False
+            elif known_region_id is not None:
                 canonical_slug = canonicalize_region_name(known_region_id)
                 already_present = any(
                     canonicalize_region_name(existing) == canonical_slug

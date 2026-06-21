@@ -280,8 +280,17 @@ class MonsterManual(BaseModel):
 
     # ── Lifecycle ───────────────────────────────────────────────
 
-    def mark_active(self, name: str, location: str) -> None:
-        """Mark an NPC as Active by name (case-insensitive, fuzzy)."""
+    def mark_active(self, name: str, location: str, *, faction: str | None = None) -> None:
+        """Mark an NPC as Active by name (case-insensitive, fuzzy).
+
+        ``faction`` (epic-157 Seam 2, story 157-3): generated walk-on
+        origin-stamp. When provided AND the matched entry carries no ``factions``
+        yet, stamp it with the activating region's ``controlled_by`` faction — a
+        walk-on born in Lilliput is a Lilliputian and cannot later resurface in
+        Houyhnhnm-land. Only an EMPTY ``factions`` is stamped (a walk-on already
+        born in a zone keeps its origin); a falsy ``faction`` (unzoned world /
+        unowned region) never stamps, leaving the legacy activation untouched.
+        """
         name_lower = name.lower()
         for npc in self.npcs:
             npc_lower = npc.name.lower()
@@ -289,6 +298,8 @@ class MonsterManual(BaseModel):
                 npc.state = EntryState.ACTIVE
                 if npc.activated_location is None:
                     npc.activated_location = location
+                if faction and not npc.factions:
+                    npc.factions = [faction]
                 return
 
     def mark_all_dormant(self) -> None:

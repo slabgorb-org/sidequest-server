@@ -21,3 +21,13 @@ from ._core import FLAT_ONLY_SPANS
 SPAN_ZONE_ELIGIBILITY_FILTERED = "zone_eligibility.filtered"
 
 FLAT_ONLY_SPANS.add(SPAN_ZONE_ELIGIBILITY_FILTERED)
+
+# ``zone_eligibility.cast_staged`` (Seam 2, story 157-3) fires when authored
+# cartography NPC cast is push-staged into the snapshot on region entry — the
+# "right cast appears" complement to ``filtered``. Carries ``region`` and the
+# staged ``npc_names`` so the GM panel sees the engine surfaced the Emperor /
+# Reldresal on entering Mildendo rather than the narrator naming them by luck.
+# Persisted, round-stamped game-engine event (flat-only, like its sibling).
+SPAN_ZONE_ELIGIBILITY_CAST_STAGED = "zone_eligibility.cast_staged"
+
+FLAT_ONLY_SPANS.add(SPAN_ZONE_ELIGIBILITY_CAST_STAGED)

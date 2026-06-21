@@ -4348,10 +4348,12 @@ def _apply_narration_result_to_snapshot(
                 # AC6: the apply decision is observable — record that apply
                 # HONORED the same-turn crossing (narration-driven) rather than
                 # clobbering it. Reuse the 105-2 ``narration_seam_recovery``
-                # resolved_via vocabulary; the static-latch
-                # ``region.entry_resolved_to_cartography`` is NOT emitted (we do
-                # not fall through to it). The movement-advance lane carries
-                # ``entrance`` so the GM panel sees the engine honor the crossing.
+                # resolved_via vocabulary; the static-latch OTEL span
+                # ``region.entry_canonicalized_dedup`` (and its
+                # ``region.entry_resolved_to_cartography`` log line) are NOT
+                # emitted — we do not fall through to them. The movement-advance
+                # lane carries ``entrance`` so the GM panel sees the engine honor
+                # the crossing.
                 with movement_resolved_span(
                     pc_name=player_name,
                     from_region=known_region_id,

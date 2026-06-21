@@ -585,10 +585,8 @@ def test_seam_receipt_precondition_holds(hybrid_apply_kit):
     assert ENTRANCE_ID in kit.snapshot.discovered_regions
 
 
-def test_resolved_seam_heading_honors_same_turn_crossing(
-    hybrid_apply_kit, captured_watcher_events
-):
-    """153-21 AC1/AC2/AC3/AC4/AC6 — the don't-clobber guard.
+def test_resolved_seam_heading_honors_same_turn_crossing(hybrid_apply_kit, captured_watcher_events):
+    """153-21 AC1/AC3/AC4/AC6/AC7 — the don't-clobber guard.
 
     Given a same-turn deep_descent crossing receipt (PC already at the
     procedural ``entrance``), a sticky narrator heading that resolves BACK to
@@ -634,8 +632,7 @@ def test_resolved_seam_heading_honors_same_turn_crossing(
     # AC4: the discovered counter reflects deep entry on THIS descent (the
     # crossing's frontier hook added it). Apply must not regress it.
     assert ENTRANCE_ID in kit.snapshot.discovered_regions, (
-        "AC4: the deep entrance must be in discovered_regions after the "
-        "first descent"
+        "AC4: the deep entrance must be in discovered_regions after the first descent"
     )
 
     # AC6: the apply decision is observable — a movement.resolved span fired
@@ -652,7 +649,7 @@ def test_resolved_seam_heading_honors_same_turn_crossing(
         and (s.attributes or {}).get("existing_surface_form") == "the_dropmouth"
     ]
     assert not cartography_latches, (
-        "AC6: region.entry_resolved_to_cartography (the static latch) must "
+        "AC6: region.entry_canonicalized_dedup (the static-latch span) must "
         f"NOT fire for the crossed descent; got {cartography_latches!r}"
     )
 

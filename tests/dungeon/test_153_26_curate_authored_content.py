@@ -446,6 +446,95 @@ async def test_degrade_with_bad_authored_binding_stays_loud_but_graceful(
     assert "Gnaw Swarm" not in names, "the dangling-bound creature must not appear"
 
 
+def _authored_pack_malformed_yaml(
+    source_root: Path,
+    *,
+    world_slug: str,
+    region_ids: list[str],
+) -> Any:
+    """A duck-typed pack whose room files are MALFORMED YAML (an unterminated
+    flow sequence — a plausible hand-edit typo). ``resolve_room_creatures``'
+    ``yaml.safe_load`` raises ``yaml.YAMLError`` for it."""
+    rooms_dir = source_root / "worlds" / world_slug / "rooms"
+    rooms_dir.mkdir(parents=True, exist_ok=True)
+    for rid in region_ids:
+        (rooms_dir / f"{rid}.yaml").write_text(
+            "encounter_creatures: [gnaw_swarm, broken\n",  # unterminated → YAMLError
+            encoding="utf-8",
+        )
+    bestiary = Bestiary(
+        entries=[
+            BestiaryEntry(
+                id="gnaw_swarm", name="Gnaw Swarm", level=1, hp=8, armor_class=12, attack_bonus=1
+            )
+        ]
+    )
+
+    class _MalformedPack:
+        source_dir = source_root
+
+        def effective_bestiary(self, world: str | None) -> tuple[Bestiary, str]:
+            return bestiary, (world or "")
+
+    return _MalformedPack()
+
+
+async def test_degrade_with_malformed_room_yaml_stays_loud_but_graceful(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Reviewer round-2 HIGH (RED): a Layer-2 degrade whose region has a MALFORMED
+    ``rooms/<id>.yaml`` (a homebrew YAML typo) must stay loud-but-GRACEFUL — NOT
+    crash. ``resolve_room_creatures``' ``yaml.safe_load`` raises ``yaml.YAMLError``;
+    the degrade path must surface it (``dungeon.curate.authored_bind_failed`` +
+    ERROR log) and PROCEED with the procedural coal, exactly like the dangling-id
+    case. Letting ``yaml.YAMLError`` propagate out of ``_stage_curate`` crashes the
+    player-facing bootstrap ``await materialize()`` at connect — the same failure
+    mode round-1 rejected, via a sibling exception."""
+    world = "beneath_test"
+    bundle = _real_cookbook_bundle()
+    request, palette, expansion, fill_result, rid = _curate_inputs_world(
+        world_slug=world, expansion_id=3
+    )
+    pack = _authored_pack_malformed_yaml(tmp_path, world_slug=world, region_ids=[rid])
+
+    exporter, original_tracer_fn, _spans_mod = _setup_otel_task3()
+    original_deadline = _mat.CURATE_DEADLINE_S
+    _mat.CURATE_DEADLINE_S = 0.05  # type: ignore[attr-defined]
+    try:
+        with (
+            caplog.at_level(logging.ERROR),
+            dungeon_materialize_curate_span(expansion_id=request.expansion_id) as span,
+        ):
+            # MUST NOT raise — the malformed YAML is caught and the degrade proceeds.
+            result = await _mat._stage_curate(
+                request,
+                bundle=bundle,
+                palette=palette,
+                expansion=expansion,
+                fill_result=fill_result,
+                is_first_band_entry=True,
+                claude_client=_slow_then_valid_sdk_client(2.0),
+                span=span,
+                pack=pack,
+            )
+    finally:
+        _mat.CURATE_DEADLINE_S = original_deadline  # type: ignore[attr-defined]
+        _spans_mod.tracer = original_tracer_fn
+
+    assert result.curated is False
+    assert rid in result.uncurated_regions
+    assert _spans_named(exporter, "dungeon.curate.degraded"), "degrade must stay loud"
+    assert _spans_named(exporter, SPAN_DUNGEON_CURATE_AUTHORED_BIND_FAILED), (
+        "a malformed room YAML caught on the degrade path must emit "
+        "dungeon.curate.authored_bind_failed (not crash the connect)"
+    )
+    assert any(r.levelno >= logging.ERROR for r in caplog.records), (
+        "the caught YAML error must log LOUD at ERROR level"
+    )
+    # The region still ships its procedural coal — graceful, no crash.
+    assert rid in result.region_creatures
+
+
 # ---------------------------------------------------------------------------
 # Rework (Reviewer MEDIUM) — the per-region budget is bounded: the band cap
 #   never grows past MAX_BAND_DEADLINE_S, so a large band cannot hold the

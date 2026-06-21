@@ -155,6 +155,28 @@ def test_resolve_raises_binding_error_not_attribute_error_on_none_bestiary(
         resolve_room_creatures(pack, "sunken", "den")
 
 
+def test_resolve_raises_binding_error_not_yaml_error_on_malformed_room_yaml(
+    tmp_path: Path,
+) -> None:
+    """153-26 rework round 2 (HIGH): a MALFORMED ``rooms/<id>.yaml`` (a fat-fingered
+    homebrew edit — unterminated flow sequence here) must raise the typed
+    :class:`RoomCreatureBindingError`, NOT leak a raw ``yaml.YAMLError``. The
+    materializer degrade path catches ``RoomCreatureBindingError`` to stay
+    loud-but-graceful; a bare ``yaml.YAMLError`` would slip that catch and crash
+    the player-facing connect on degrade — the same failure mode as a dangling
+    ref, via a sibling exception."""
+    # Build a valid pack first (creates the rooms dir + bestiary), then drop a
+    # malformed sibling room file in.
+    pack = _synthetic_pack(tmp_path, room_id="other", encounter_creatures=["real_beast"])
+    rooms_dir = tmp_path / "worlds" / "sunken" / "rooms"
+    # Unterminated YAML flow sequence → yaml.safe_load raises yaml.YAMLError.
+    (rooms_dir / "broken.yaml").write_text(
+        "encounter_creatures: [real_beast, ghost\n", encoding="utf-8"
+    )
+    with pytest.raises(RoomCreatureBindingError):
+        resolve_room_creatures(pack, "sunken", "broken")
+
+
 def test_resolve_emits_room_bound_span(tmp_path: Path) -> None:
     """AC5 lie-detector: resolving a room's binding emits monster_manual.room_bound
     naming the room and the bound creature, so the GM panel can confirm the

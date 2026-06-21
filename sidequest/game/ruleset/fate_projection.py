@@ -282,6 +282,12 @@ def build_fate_state_payload(snapshot: GameSnapshot) -> FateStatePayload:
             # player surface gates its action rack (Overcome + Create Advantage +
             # Concede, never Attack) instead of offering a verb the server rejects.
             is_contest=enc.contest is not None,
+            # FATE-CONFLICT-SEQUENCE-OPAQUE (sq-playtest 2026-06-20): the most recent
+            # exchange's per-action resolution ledger — the legible attack/defend math
+            # the player surface renders so the result no longer depends on the
+            # narrator. Engine-authored display text (skills sanitized at the seal/
+            # defend sites; the UI escapes the rest).
+            last_exchange=list(enc.fate_resolution_log),
         )
         if enc is not None and not enc.resolved
         else None

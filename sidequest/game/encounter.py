@@ -16,7 +16,7 @@ from sidequest.game.encounter_tag import EncounterTag
 from sidequest.game.fate_sheet import Aspect
 from sidequest.game.table.types import TableState
 from sidequest.game.taunt import TauntState
-from sidequest.protocol.models import EncounterLocationOverlay, InitiativeEntry
+from sidequest.protocol.models import EncounterLocationOverlay, FateExchangeLine, InitiativeEntry
 
 
 class RigType(StrEnum):
@@ -207,6 +207,12 @@ class FatePendingDefense(BaseModel):
     mental: bool = False
     defense_total: int | None = None
     conceded: bool = False
+    #: FATE-CONFLICT-SEQUENCE-OPAQUE (sq-playtest 2026-06-20): the skill the PC chose
+    #: to defend with (free-pick — the Zork Problem), recorded from the player's throw
+    #: in ``dispatch_fate_defense`` so the resolution ledger can show "you defend Will
+    #: = N". Empty until the defense is thrown (or on a concession, which carries no
+    #: skill).
+    defense_skill: str = ""
 
 
 class ContestState(BaseModel):
@@ -365,6 +371,14 @@ class StructuredEncounter(BaseModel):
     resolved: bool = False
     mood_override: str | None = None
     narrator_hints: list[str] = Field(default_factory=list)
+    fate_resolution_log: list[FateExchangeLine] = Field(default_factory=list)
+    """FATE-CONFLICT-SEQUENCE-OPAQUE (sq-playtest 2026-06-20): the per-action
+    resolution ledger for the MOST RECENT Fate exchange — the legible attack/defend
+    math the player surface renders. ``run_fate_exchange`` clears + repopulates it
+    every walk (last-exchange semantics, never an ever-growing stack);
+    ``build_fate_state_payload`` projects it onto ``FateConflictEntry.last_exchange``
+    so the result reaches the player deterministically, not via narrator prose.
+    Always empty for native/WN encounters and Fate Contests (Conflict-only)."""
     # B/X morale tracking (Task 9 — C&C class-beats + morale).
     # ``morale_events`` records "trigger:side_label" strings so the
     # deduplication logic in ``_emit_morale_triggers`` can prevent

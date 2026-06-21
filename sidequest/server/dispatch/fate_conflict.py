@@ -39,9 +39,11 @@ from sidequest.game.ruleset.fate import FateRulesetModule
 from sidequest.game.ruleset.fate_resolution import FateOutcome, Opposition
 from sidequest.game.session import GameSnapshot
 from sidequest.protocol.fate import FateActionPayload, FateDefendRequestPayload
+from sidequest.protocol.models import FateExchangeLine
 from sidequest.protocol.sanitize import sanitize_player_text
 from sidequest.telemetry.spans import (
     fate_aspect_created_span,
+    fate_attack_resolved_span,
     fate_conceded_span,
     fate_defend_phase_span,
     fate_exchange_committed_span,
@@ -434,6 +436,10 @@ def run_fate_exchange(
     span and watcher payload carry it for GM-panel telemetry.
     """
     mental = encounter.category == "social"
+    # FATE-CONFLICT-SEQUENCE-OPAQUE: this walk REPLACES the prior exchange's ledger
+    # (last-exchange semantics — the player surface shows the latest exchange, never
+    # an ever-growing stack). The resolvers below append one line per resolved action.
+    encounter.fate_resolution_log.clear()
     _seat_opponent_commits(
         encounter=encounter,
         snapshot=snapshot,
@@ -587,6 +593,50 @@ def _opposition_total(
     return commit.difficulty
 
 
+def _record_attack_resolution(
+    *,
+    encounter: StructuredEncounter,
+    commit: FateSealedCommit,
+    track: str,
+    defense_skill: str,
+    defense_total: int,
+    shifts: int,
+    outcome: str,
+    detail: str,
+    _tracer: trace.Tracer | None = None,
+) -> None:
+    """Append one attack to the player-facing resolution ledger AND emit the
+    ``fate.attack.resolved`` GM-panel span (FATE-CONFLICT-SEQUENCE-OPAQUE +
+    FATE-ATTACK-RESOLUTION-UNOBSERVABLE, sq-playtest 2026-06-20). Both surfaces read
+    the SAME derived math so the player and the lie detector can never drift. Fires
+    for EVERY outcome — miss/tie included — which is the whole point: a non-landing
+    attack used to leave no evidence at all."""
+    encounter.fate_resolution_log.append(
+        FateExchangeLine(
+            actor=commit.actor,
+            action="attack",
+            skill=commit.skill,
+            target=commit.target or "",
+            defense_skill=defense_skill,
+            actor_total=commit.ladder_total,
+            opposition_total=defense_total,
+            shifts=shifts,
+            outcome=outcome,
+            detail=detail,
+        )
+    )
+    fate_attack_resolved_span(
+        attacker=commit.actor,
+        defender=commit.target or "",
+        track=track,
+        attacker_total=commit.ladder_total,
+        defender_total=defense_total,
+        shifts=shifts,
+        outcome=outcome,
+        _tracer=_tracer,
+    )
+
+
 def _resolve_attack(
     *,
     encounter: StructuredEncounter,
@@ -604,6 +654,7 @@ def _resolve_attack(
     target_core = snapshot.find_creature_core(commit.target)
     if target_core is None or target_core.fate_sheet is None:
         raise FateConflictError(f"attack target {commit.target!r} has no Fate sheet to defend with")
+    track = "mental" if mental else "physical"
     # ADR-148/151 (Story 126-8 §7): a PC defender's number comes from the DEFEND
     # ledger (the player THREW it — physics-is-the-roll), never a server roll. An
     # NPC defender (no ledger entry) is still server-rolled. A conceded entry folds
@@ -614,11 +665,24 @@ def _resolve_attack(
         if target_actor is not None:
             target_actor.withdrawn = True
         fate_taken_out_span(actor=commit.target, by=commit.actor, shifts=0, _tracer=_tracer)
+        # Folded before any shift math, so there is no defender total to show.
+        _record_attack_resolution(
+            encounter=encounter,
+            commit=commit,
+            track=track,
+            defense_skill="",
+            defense_total=0,
+            shifts=0,
+            outcome="conceded",
+            detail=f"{commit.target} concedes",
+            _tracer=_tracer,
+        )
         hints.append(f"{commit.target} concedes to {commit.actor} (fold at defend).")
         _maybe_resolve_side_cleared(encounter)
         return
     if recorded is not None and recorded.defense_total is not None:
         defense_total = recorded.defense_total  # PC defense from the client (ADR-148)
+        defense_skill = recorded.defense_skill  # the PC's chosen defense skill
     elif recorded is not None:
         # A PC defender's entry reached RESOLVE unfilled (no defense_total, not
         # conceded). The ledger_full gate in _finish_defense makes this unreachable
@@ -638,8 +702,8 @@ def _resolve_attack(
             rng=rng,
             _tracer=_tracer,
         )
+        defense_skill = _DEFENSE_SKILL[track]  # the SRD default defense skill for the track
     shifts = commit.ladder_total - defense_total
-    track = "mental" if mental else "physical"
     if shifts <= 0:
         if shifts == 0:
             boost = Aspect(text=f"Momentum vs {commit.actor}", kind="boost", free_invokes=1)
@@ -647,11 +711,33 @@ def _resolve_attack(
             fate_aspect_created_span(
                 actor=commit.target, aspect=boost.text, free_invokes=1, _tracer=_tracer
             )
+            _record_attack_resolution(
+                encounter=encounter,
+                commit=commit,
+                track=track,
+                defense_skill=defense_skill,
+                defense_total=defense_total,
+                shifts=shifts,
+                outcome="tie",
+                detail=f"no harm — {commit.target} gains a boost",
+                _tracer=_tracer,
+            )
             hints.append(
                 f"{commit.actor}'s attack on {commit.target} tied — "
                 f"{commit.target} gains a boost ({boost.text})."
             )
         else:
+            _record_attack_resolution(
+                encounter=encounter,
+                commit=commit,
+                track=track,
+                defense_skill=defense_skill,
+                defense_total=defense_total,
+                shifts=shifts,
+                outcome="miss",
+                detail="no harm",
+                _tracer=_tracer,
+            )
             hints.append(f"{commit.actor}'s attack on {commit.target} missed (shifts={shifts}).")
         return
     # Story 126-1: record the harm-routing decision (GM-panel lie detector) BEFORE
@@ -670,6 +756,18 @@ def _resolve_attack(
         _tracer=_tracer,
     )
     if survived:
+        plural = "s" if shifts != 1 else ""
+        _record_attack_resolution(
+            encounter=encounter,
+            commit=commit,
+            track=track,
+            defense_skill=defense_skill,
+            defense_total=defense_total,
+            shifts=shifts,
+            outcome="absorbed",
+            detail=f"absorbed ({shifts} shift{plural})",
+            _tracer=_tracer,
+        )
         hints.append(
             f"{commit.target} absorbs {commit.actor}'s {shifts}-shift hit (stress/consequences)."
         )
@@ -679,8 +777,52 @@ def _resolve_attack(
         raise FateConflictError(f"attack target {commit.target!r} is not seated in this encounter")
     target_actor.withdrawn = True
     fate_taken_out_span(actor=commit.target, by=commit.actor, shifts=shifts, _tracer=_tracer)
+    _record_attack_resolution(
+        encounter=encounter,
+        commit=commit,
+        track=track,
+        defense_skill=defense_skill,
+        defense_total=defense_total,
+        shifts=shifts,
+        outcome="taken_out",
+        detail=f"{commit.target} taken out",
+        _tracer=_tracer,
+    )
     hints.append(f"{commit.target} is TAKEN OUT by {commit.actor} ({shifts} unabsorbed shifts).")
     _maybe_resolve_side_cleared(encounter)
+
+
+def _record_action_line(
+    *,
+    encounter: StructuredEncounter,
+    commit: FateSealedCommit,
+    mental: bool,
+    opposition: int,
+    shifts: int,
+    outcome: str,
+    detail: str,
+) -> None:
+    """Append a non-attack action (create-advantage / overcome) to the player-facing
+    resolution ledger (FATE-CONFLICT-SEQUENCE-OPAQUE). No ``fate.attack.resolved``
+    span — these are not attacks and already emit their own ``fate.aspect.created``
+    span; the ledger line is purely the player-legibility surface. ``defense_skill``
+    is the SRD default for an active (targeted) action, blank for a passive one
+    (resolved against a set difficulty, not a defender)."""
+    track = "mental" if mental else "physical"
+    encounter.fate_resolution_log.append(
+        FateExchangeLine(
+            actor=commit.actor,
+            action=commit.action,
+            skill=commit.skill,
+            target=commit.target or "",
+            defense_skill=_DEFENSE_SKILL[track] if commit.target is not None else "",
+            actor_total=commit.ladder_total,
+            opposition_total=opposition,
+            shifts=shifts,
+            outcome=outcome,
+            detail=detail,
+        )
+    )
 
 
 def _resolve_create_advantage(
@@ -722,6 +864,15 @@ def _resolve_create_advantage(
         # reach the narrator prompt UNSANITIZED via render_encounter_summary — apply
         # the ADR-047 boundary here, exactly as build_fate_projection does for the
         # parallel scene_aspects path (116-4 review [HIGH][SEC]).
+        _record_action_line(
+            encounter=encounter,
+            commit=commit,
+            mental=mental,
+            opposition=opposition,
+            shifts=shifts,
+            outcome="advantage",
+            detail=f"advantage created ({free} free invoke(s))",
+        )
         hints.append(
             f"{commit.actor} created an advantage: "
             f"{sanitize_player_text(aspect.text)} ({free} free invoke(s))."
@@ -738,11 +889,29 @@ def _resolve_create_advantage(
         )
         # F2c (116-4): a tie still places a boost (1 free invoke) — surface it too.
         # Same ADR-047 sanitization as the success branch (116-4 review [HIGH][SEC]).
+        _record_action_line(
+            encounter=encounter,
+            commit=commit,
+            mental=mental,
+            opposition=opposition,
+            shifts=shifts,
+            outcome="boost",
+            detail="fleeting boost (1 free invoke)",
+        )
         hints.append(
             f"{commit.actor} created an advantage: "
             f"{sanitize_player_text(boost.text)} (1 free invoke(s))."
         )
     else:
+        _record_action_line(
+            encounter=encounter,
+            commit=commit,
+            mental=mental,
+            opposition=opposition,
+            shifts=shifts,
+            outcome="fail",
+            detail="no advantage",
+        )
         hints.append(f"{commit.actor}'s create-advantage failed (shifts={shifts}).")
 
 
@@ -766,6 +935,21 @@ def _resolve_overcome(
         _tracer=_tracer,
     )
     shifts = commit.ladder_total - opposition
+    if shifts >= 1:
+        outcome, detail = "overcome", "overcame the obstacle"
+    elif shifts == 0:
+        outcome, detail = "cost", "overcame at a minor cost"
+    else:
+        outcome, detail = "fail", "failed to overcome"
+    _record_action_line(
+        encounter=encounter,
+        commit=commit,
+        mental=mental,
+        opposition=opposition,
+        shifts=shifts,
+        outcome=outcome,
+        detail=detail,
+    )
     if shifts >= 1:
         hints.append(f"{commit.actor} overcomes the obstacle (shifts={shifts}).")
     elif shifts == 0:
@@ -1245,6 +1429,11 @@ def dispatch_fate_defense(
             _tracer=_tracer,
         )
         entry.defense_total = outcome.ladder_total
+        # FATE-CONFLICT-SEQUENCE-OPAQUE: store the PC's CHOSEN defense skill so the
+        # resolution ledger can show "you defend Will = N". The rating lookup above
+        # keyed on the raw value (dict-key match); the stored display value is
+        # sanitized to match the seal-site posture (skill is client free text, ADR-047).
+        entry.defense_skill = sanitize_player_text(skill)
 
     fate_defend_phase_span(
         defender=entry.defender,

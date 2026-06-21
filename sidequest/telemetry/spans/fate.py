@@ -410,6 +410,45 @@ def fate_harm_routed_span(
         pass
 
 
+def fate_attack_resolved_span(
+    *,
+    attacker: str,
+    defender: str,
+    track: str,
+    attacker_total: int,
+    defender_total: int,
+    shifts: int,
+    outcome: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit ``fate.attack.resolved`` — the full attack→defense resolution
+    (FATE-ATTACK-RESOLUTION-UNOBSERVABLE, sq-playtest 2026-06-20).
+
+    Fires ONCE per resolved attack in ``run_fate_exchange`` for EVERY ``outcome``
+    (``miss`` / ``tie`` / ``absorbed`` / ``taken_out`` / ``conceded``) — unlike
+    ``fate.harm.routed``, which fires only on a LANDED hit (``shifts`` >= 1). That
+    gap is the bug: a missed / tied / fully-absorbed attack left NO span, so the GM
+    panel could not tell "the NPC defended legitimately" (``shifts`` <= 0) from "the
+    shifts never committed" (no evidence at all). This span carries the derived math
+    the per-mark stress/consequence spans cannot: ``attacker_total`` vs
+    ``defender_total`` → ``shifts`` → ``outcome``. NPC dice stay hidden (ADR-148);
+    the totals do not."""
+    attributes: dict[str, Any] = {
+        "field": "attack_resolved",
+        "attacker": attacker,
+        "defender": defender,
+        "track": track,
+        "attacker_total": attacker_total,
+        "defender_total": defender_total,
+        "shifts": shifts,
+        "outcome": outcome,
+        **attrs,
+    }
+    with Span.open("fate.attack.resolved", attributes, tracer_override=_tracer):
+        pass
+
+
 # --- F1c: conflict exchange spans (GM panel = lie detector) ------------------
 SPAN_ROUTES["fate.exchange.committed"] = SpanRoute(
     event_type="state_transition",
@@ -456,6 +495,24 @@ SPAN_ROUTES["fate.taken_out"] = SpanRoute(
         "actor": (span.attributes or {}).get("actor", ""),
         "by": (span.attributes or {}).get("by", ""),
         "shifts": (span.attributes or {}).get("shifts", 0),
+    },
+)
+# FATE-ATTACK-RESOLUTION-UNOBSERVABLE (sq-playtest 2026-06-20): the full
+# attacker-vs-defender resolution, for EVERY outcome (the lie detector that tells a
+# legitimate NPC defense from a never-committed attack). Literal key (no SPAN_*
+# constant) — the routing-completeness lint only inspects SPAN_* module constants.
+SPAN_ROUTES["fate.attack.resolved"] = SpanRoute(
+    event_type="state_transition",
+    component="fate",
+    extract=lambda span: {
+        "field": "attack_resolved",
+        "attacker": (span.attributes or {}).get("attacker", ""),
+        "defender": (span.attributes or {}).get("defender", ""),
+        "track": (span.attributes or {}).get("track", ""),
+        "attacker_total": (span.attributes or {}).get("attacker_total", 0),
+        "defender_total": (span.attributes or {}).get("defender_total", 0),
+        "shifts": (span.attributes or {}).get("shifts", 0),
+        "outcome": (span.attributes or {}).get("outcome", ""),
     },
 )
 SPAN_ROUTES["fate.conceded"] = SpanRoute(
@@ -1404,6 +1461,7 @@ __all__ = [
     "SPAN_FATE_PROJECTION_EMITTED",
     "fate_action_classified_span",
     "fate_action_resolved_span",
+    "fate_attack_resolved_span",
     "fate_defend_phase_span",
     "fate_chargen_archetype_selected_span",
     "fate_chargen_aspects_authored_span",

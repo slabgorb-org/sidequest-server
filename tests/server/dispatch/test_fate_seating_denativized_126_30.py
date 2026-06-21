@@ -57,6 +57,7 @@ from sidequest.genre.models.rules import (
     ConfrontationDef,
     FateConfig,
     MetricDef,
+    ResolutionMode,
     RulesConfig,
     WinCondition,
 )
@@ -67,11 +68,12 @@ from sidequest.telemetry.setup import init_tracer
 _SKILLS = {"Shoot": 4, "Fight": 2, "Provoke": 3, "Athletics": 1, "Will": 2, "Notice": 3}
 
 
-def _standoff_cdef() -> ConfrontationDef:
-    """A standoff in the REAL spaghetti_western shape: pre_combat category, native
-    ascending ``tension`` dials, and native beats carrying ``stat_check`` (the dial
-    surface). This is the exact authored shape that leaks the native dial under Fate.
-    """
+def _native_standoff_cdef() -> ConfrontationDef:
+    """A standoff in the NATIVE dial shape: pre_combat category, native ascending
+    ``tension`` dials, and native beats carrying ``stat_check`` (the dial surface).
+    Legal only on a NON-Fate (dial) pack — story 153-3's loud guard rejects a native
+    ``beat_selection`` confrontation on a Fate pack, so the Fate fixture below is a
+    ``conflict``-mode def instead (which seats through the same Fate-conflict path)."""
     return ConfrontationDef(
         type="standoff",
         label="Standoff",
@@ -91,18 +93,35 @@ def _standoff_cdef() -> ConfrontationDef:
     )
 
 
+def _fate_standoff_cdef() -> ConfrontationDef:
+    """A standoff authored as a Fate Conflict (story 153-3): ``resolution_mode:
+    conflict``, display-only beats, no native dial metrics. Seats through the same
+    ``seat_as_fate_conflict`` path the native beat_selection def used to (the
+    de-nativization invariant this file pins is unchanged) — but it is a VALID Fate
+    def under the loud Fate-mode guard."""
+    return ConfrontationDef(
+        type="standoff",
+        label="Standoff",
+        category="pre_combat",
+        resolution_mode=ResolutionMode.conflict,
+        beats=[BeatDef(id="size_up", label="Size Up"), BeatDef(id="draw", label="Draw")],
+    )
+
+
 def _fate_pack() -> SimpleNamespace:
     return SimpleNamespace(
         rules=RulesConfig(
             ruleset="fate",
             fate=FateConfig(skills=dict(_SKILLS), refresh=3),
-            confrontations=[_standoff_cdef()],
+            confrontations=[_fate_standoff_cdef()],
         )
     )
 
 
 def _dial_pack() -> SimpleNamespace:
-    return SimpleNamespace(rules=RulesConfig(ruleset="dial", confrontations=[_standoff_cdef()]))
+    return SimpleNamespace(
+        rules=RulesConfig(ruleset="dial", confrontations=[_native_standoff_cdef()])
+    )
 
 
 def _snapshot() -> GameSnapshot:

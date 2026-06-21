@@ -744,10 +744,19 @@ def _requires_opponent(cdef) -> bool:
        raises if no opponent is seated, so the Other MUST be opponent-side
        regardless of category (ADR-116). A contest with nobody on the other
        side cannot resolve.
+    4. ``resolution_mode: conflict`` (story 153-3) — a Fate Conflict resolves
+       attacks/defenses against the Other's ``FateSheet`` stress, so it always
+       needs an opponent-side Other regardless of category. The combat-category
+       conflicts in play are already covered by (1); folding ``conflict`` in here
+       closes the gap for a future mental/social Conflict.
     """
     if _is_adversarial(cdef.category):
         return True
-    return cdef.resolution_mode in (ResolutionMode.opposed_check, ResolutionMode.contest)
+    return cdef.resolution_mode in (
+        ResolutionMode.opposed_check,
+        ResolutionMode.contest,
+        ResolutionMode.conflict,
+    )
 
 
 def _npc_is_adversary(npc: Npc) -> bool:

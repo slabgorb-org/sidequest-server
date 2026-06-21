@@ -47,37 +47,35 @@ def _pack():
 
 
 # ---------------------------------------------------------------------------
-# AC3 — single-beat resolvability: every social confrontation a world menace can
-# auto-enter must carry a ``resolution: true`` beat, so a soft menace ends in one
-# beat instead of grinding the dials (SOUL "Cut the Dull Bits").
+# wry_whimsy social confrontations are Fate Contests (story 153-3). The native
+# single-beat ``resolution: true`` affordance (59-27 AC3) was SUPERSEDED by the
+# Fate Contest port: a social confrontation now resolves via the 4dF first-to-N
+# exchange and its beats are display-only stubs (no dial ``resolution`` flag).
+# The well-formedness invariant is now "every social type is a contest with
+# display-only beats" — pacing ("Cut the Dull Bits") is the contest's first-to-N
+# target, not a native single-beat exit.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("ctype", _SOCIAL_TYPES)
-def test_social_confrontation_is_single_beat_resolvable(ctype: str) -> None:
-    """AC3 content invariant: each social type the auto-enter rule can instantiate
-    offers a single-beat exit (a beat with ``resolution: true``)."""
+def test_social_confrontation_is_fate_contest(ctype: str) -> None:
+    """story 153-3 content invariant: each social type is a Fate Contest with
+    display-only beats (no native dial ``kind``/``stat_check``)."""
     cdef = find_confrontation_def(_pack().rules.confrontations, ctype)
     assert cdef is not None, f"wry_whimsy must define a {ctype!r} confrontation"
-    resolution_beats = [b.id for b in cdef.beats if getattr(b, "resolution", False)]
-    assert resolution_beats, (
-        f"{ctype!r} must carry a resolution:true beat so an auto-entered soft "
-        f"menace can resolve in a single beat; found none among "
-        f"{[b.id for b in cdef.beats]}"
+    mode = (
+        cdef.resolution_mode.value
+        if hasattr(cdef.resolution_mode, "value")
+        else cdef.resolution_mode
     )
-
-
-def test_wonder_shock_look_away_resolves_in_one_beat() -> None:
-    """AC3 (poppy-field turn-5 shape): the world-pushed Wonder-Shock the engine
-    auto-enters must be escapable in one beat via ``look_away`` — the single-beat
-    out the Operator chose over a new weight mechanic."""
-    cdef = find_confrontation_def(_pack().rules.confrontations, "wonder_shock")
-    assert cdef is not None
-    look_away = next((b for b in cdef.beats if b.id == "look_away"), None)
-    assert look_away is not None, "wonder_shock must define a 'look_away' beat"
-    assert getattr(look_away, "resolution", False) is True, (
-        "look_away must carry resolution:true so a soft wonder-shock ends in one beat"
+    assert mode == "contest", (
+        f"{ctype!r} must be a Fate Contest under the Fate binding (got {mode!r})"
     )
+    for beat in cdef.beats:
+        assert beat.kind is None and beat.stat_check is None, (
+            f"{ctype!r} beat {beat.id!r} must be a display-only Contest stub "
+            f"(no dial kind/stat_check); got kind={beat.kind!r}, stat_check={beat.stat_check!r}"
+        )
 
 
 # ---------------------------------------------------------------------------

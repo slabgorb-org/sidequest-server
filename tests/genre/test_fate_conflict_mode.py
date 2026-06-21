@@ -85,7 +85,9 @@ def _native_conf(ctype: str = "thug_fight", category: str = "social") -> dict:
         "resolution_mode": "beat_selection",
         "player_metric": {"name": "momentum", "starting": 0, "threshold": 10},
         "opponent_metric": {"name": "momentum", "starting": 0, "threshold": 10},
-        "beats": [{"id": "swing", "label": "Swing", "kind": "strike", "stat_check": "Resolve", "base": 2}],
+        "beats": [
+            {"id": "swing", "label": "Swing", "kind": "strike", "stat_check": "Resolve", "base": 2}
+        ],
     }
 
 

@@ -29,11 +29,15 @@ import logging
 from typing import TYPE_CHECKING
 
 from sidequest.dungeon.frontier_hook import register_frontier_observer
+from sidequest.dungeon.seed_bootstrap import is_procedural_region_id
 from sidequest.game import zone_eligibility
 from sidequest.game.npc_pool import NpcPoolMember
 from sidequest.genre.loader import load_genre_pack_cached
 from sidequest.telemetry.spans import Span
-from sidequest.telemetry.spans.zone_eligibility import SPAN_ZONE_ELIGIBILITY_CAST_STAGED
+from sidequest.telemetry.spans.zone_eligibility import (
+    SPAN_ZONE_ELIGIBILITY_CAST_STAGED,
+    SPAN_ZONE_ELIGIBILITY_PROCEDURAL_REGION,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from sidequest.game.session import GameSnapshot
@@ -76,6 +80,24 @@ def stage_region_cast(
         return
     region = cartography.regions.get(to_region)
     if region is None:
+        if is_procedural_region_id(to_region):
+            # A runtime-generated ADR-106 dungeon region (entrance / expNNN.rN) is
+            # legitimate but has NO authored cartography cast by design — the deep's
+            # per-room content is owned by the curate/monster_manual pipeline, not
+            # Seam 2 (story 153-27). Recognize it and skip quietly — NOT the
+            # unknown_region misconfiguration path — and emit the recognition span so
+            # the GM panel sees the engine classified it rather than silently dropping it.
+            logger.debug(
+                "zone_eligibility.procedural_region world=%r to_region=%r",
+                snapshot.world_slug,
+                to_region,
+            )
+            with Span.open(
+                SPAN_ZONE_ELIGIBILITY_PROCEDURAL_REGION,
+                {"region": to_region, "reason": "procedural_region"},
+            ):
+                pass
+            return
         # An actionable discrepancy: the transition names a region that is not in
         # the world's cartography (e.g. a narrator-authored / misspelled region id
         # from a WorldStatePatch, which the load-time validator in 157-7 does not

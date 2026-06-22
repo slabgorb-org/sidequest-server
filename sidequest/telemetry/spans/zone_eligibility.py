@@ -32,6 +32,19 @@ SPAN_ZONE_ELIGIBILITY_CAST_STAGED = "zone_eligibility.cast_staged"
 
 FLAT_ONLY_SPANS.add(SPAN_ZONE_ELIGIBILITY_CAST_STAGED)
 
+# ``zone_eligibility.procedural_region`` (story 153-27) fires when the cast-staging
+# seam enters a runtime-generated dungeon region (ADR-106: ``entrance`` / ``expNNN.rN``)
+# that — by design — has no authored cartography entry. It is the recognition
+# counterpart to the ``unknown_region`` *warning*: a procedural region is legitimate,
+# not a misconfiguration, so the engine recognizes it and stages no cast (the deep's
+# per-room content is owned by the curate/``monster_manual`` pipeline, not Seam 2).
+# Per the OTEL Observability Principle the GM panel must see the engine *recognized*
+# the region rather than silently skipping it. Carries ``region`` (the procedural id)
+# and ``reason``. Persisted flat-only, like its ``filtered`` / ``cast_staged`` siblings.
+SPAN_ZONE_ELIGIBILITY_PROCEDURAL_REGION = "zone_eligibility.procedural_region"
+
+FLAT_ONLY_SPANS.add(SPAN_ZONE_ELIGIBILITY_PROCEDURAL_REGION)
+
 # ``zone_eligibility.validator_failure`` (story 157-7, the strict load validator)
 # fires once per rejected item when a ZONED world is loaded with pooled content
 # (a bestiary entry / trope / seed-trope) that is untagged or carries a faction

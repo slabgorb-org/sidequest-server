@@ -3841,6 +3841,16 @@ class Orchestrator:
             len(tool_calls_ledger),
         )
 
+        # Story 153-11 — empty-prose-on-continuation root-cause signal, UPSTREAM
+        # of the degraded-stall guard. The SDK tool-loop can converge with WRITE
+        # tools fired but no final text block (the "tool-only response"); today
+        # that empty prose flows on silently and only the downstream
+        # ``_guard_empty_narration`` symptom net reacts. Categorize + loudly
+        # surface the CAUSE here, while the tool-call context is in hand, so the
+        # GM panel can tell WHY the prose was empty (tool-only vs no-output) —
+        # not just THAT it stalled. The guard is unchanged; this is additive.
+        self._emit_empty_prose_upstream_signal(result=result, context=context)
+
         with context.phase_timings.phase("narrator_extraction"):
             extraction = extract_structured_from_response(raw_response)
 
@@ -3914,6 +3924,70 @@ class Orchestrator:
             )
 
         return assembled
+
+    def _emit_empty_prose_upstream_signal(
+        self,
+        *,
+        result: ToolingResult,
+        context: TurnContext,
+    ) -> None:
+        """Loudly categorize empty final prose at the SDK seam — UPSTREAM of the guard.
+
+        Story 153-11 (sq-playtest NARRATOR-EMPTY-NARRATION-DEGRADED, defect #2). The
+        downstream :meth:`_guard_empty_narration` owns the player-facing harm (it trips
+        the in-fiction stall so the client never hangs) but it cannot explain WHY the
+        prose came back empty — it runs after assembly with only the assembled result in
+        hand. Here, at the SDK assembler, the raw tool-call context is still available, so
+        we name the cause:
+
+        * ``tool_only_response`` — the tool-use loop fired WRITE tools then converged
+          (``end_turn``) with no final text block: the model acted but narrated nothing.
+          This is the continuation case the playtest hit.
+        * ``no_output`` — empty final prose with no tool calls at all.
+
+        Emits the ``narrator.empty_prose_upstream`` OTEL span + the
+        ``narrator_empty_prose_upstream`` GM-panel watcher event (CLAUDE.md OTEL
+        Observability Principle — the empty-text path was previously SILENT). Keys on the
+        STRIPPED text so a whitespace-only residual trips it too, matching the guard.
+
+        This is purely additive: it does NOT mutate ``result`` and does NOT recover the
+        turn — the degraded-stall guard remains the recovery path. SDK-path-only; the
+        synchronous path has no tool-use continuation to categorize.
+        """
+        raw = result.text or ""
+        if raw.strip():
+            return  # real prose — nothing to categorize
+
+        tool_call_count = len(result.tool_calls or [])
+        cause = "tool_only_response" if tool_call_count else "no_output"
+        fields = {
+            "cause": cause,
+            "tool_call_count": tool_call_count,
+            "raw_len": len(raw),
+            "turn_number": context.turn_number,
+        }
+
+        from sidequest.telemetry.spans.span import Span
+        from sidequest.telemetry.watcher_hub import publish_event
+
+        with Span.open("narrator.empty_prose_upstream", fields):
+            pass
+        logger.warning(
+            "narrator.empty_prose_upstream cause=%s tool_call_count=%d raw_len=%d "
+            "turn=%s — SDK narrator returned empty final prose; the degraded-stall "
+            "guard will still recover the player surface, but the cause is now logged "
+            "UPSTREAM (was a silent empty-text path)",
+            cause,
+            tool_call_count,
+            len(raw),
+            context.turn_number,
+        )
+        publish_event(
+            "narrator_empty_prose_upstream",
+            fields,
+            component="orchestrator",
+            severity="warn",
+        )
 
     async def _run_narration_turn_synchronous(
         self,

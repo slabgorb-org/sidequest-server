@@ -61,7 +61,18 @@ def seed_quest_spine(snapshot: GameSnapshot, character: Character) -> None:
         )
         return
 
-    source = (character.drive or "").strip() or (character.calling_label or "").strip()
+    # Seed source is the drive, falling back to the calling_label (story 77-1).
+    # BUT a calling_label that is merely the bare class identifier ("Channeler")
+    # is not a stakes source — the Character model treats calling_label as empty
+    # when it IS the archetype (character.py), yet some WWN chargen paths populated
+    # it with the class name, which then surfaced as `active_stakes: "Channeler"`
+    # (Story 153-19 oddity 3). Drop that case so it degrades loudly below rather
+    # than seeding a meaningless class-name stake. A flavorful calling that differs
+    # from char_class is unaffected.
+    calling = (character.calling_label or "").strip()
+    if calling and calling.casefold() == (character.char_class or "").strip().casefold():
+        calling = ""
+    source = (character.drive or "").strip() or calling
 
     if not source:
         # No authored spine, and no drive/calling to seed from. Degrade LOUDLY

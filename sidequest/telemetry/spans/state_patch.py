@@ -61,6 +61,22 @@ SPAN_ROUTES[SPAN_QUEST_SEEDED_AT_CREATION] = SpanRoute(
         "deferred": (span.attributes or {}).get("deferred", False),
     },
 )
+# Story 153-19 (oddity 2) — character_locations orphan-key cleanup span. Fires
+# once at chargen finalization when the discarded "Adventurer" placeholder's stale
+# key is pruned from character_locations. Always fires (even pruned_count=0) so the
+# GM panel sees the cleanup ran — never a silent skip (CLAUDE.md "No Silent
+# Fallbacks" + OTEL Observability Principle).
+SPAN_CHARACTER_LOCATIONS_PRUNED = "character_locations.orphan_pruned"
+SPAN_ROUTES[SPAN_CHARACTER_LOCATIONS_PRUNED] = SpanRoute(
+    event_type="state_transition",
+    component="character_locations",
+    extract=lambda span: {
+        "field": "character_locations",
+        "op": "orphan_pruned",
+        "pruned_count": (span.attributes or {}).get("pruned_count", 0),
+        "pruned_keys": (span.attributes or {}).get("pruned_keys", ""),
+    },
+)
 # Story 77-2 (ADR-137 §OTEL) — typed quest/stakes tool spans. The GM panel is
 # the lie-detector for the campaign-spine substrate: each routes to a
 # state_transition event the WatcherSpanProcessor re-emits, exactly like
@@ -404,4 +420,26 @@ def quest_seeded_at_creation_span(
         **attrs,
     }
     with Span.open(SPAN_QUEST_SEEDED_AT_CREATION, attributes, tracer_override=_tracer):
+        pass
+
+
+def character_locations_pruned_span(
+    *,
+    pruned_count: int,
+    pruned_keys: list[str] | None = None,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """Emit the Story 153-19 character_locations orphan-prune span (point event).
+
+    Always fires — including ``pruned_count=0`` — so the GM panel can confirm the
+    finalization cleanup ran rather than inferring it from absence (No Silent
+    Fallbacks). ``pruned_keys`` is comma-joined for the flat span attribute.
+    """
+    attributes: dict[str, Any] = {
+        "pruned_count": pruned_count,
+        "pruned_keys": ", ".join(pruned_keys) if pruned_keys else "",
+        **attrs,
+    }
+    with Span.open(SPAN_CHARACTER_LOCATIONS_PRUNED, attributes, tracer_override=_tracer):
         pass

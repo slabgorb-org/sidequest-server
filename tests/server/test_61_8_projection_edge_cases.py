@@ -453,3 +453,94 @@ def test_is_npc_anchored_by_encounter_returns_false_for_empty_actors() -> None:
         "function as a blanket in-scene grant; the predicate must "
         "require explicit actor membership."
     )
+
+
+# ---------------------------------------------------------------------------
+# Story 153-19 — Oddity 4: literal ``None`` rows in the ``npcs`` payload.
+#
+# Playtest (shattered_accord + burning_peace, both WWN region-mode worlds with
+# ``authored_npcs_seeded=0``) surfaced the narrator ``state_summary`` carrying
+# ``npcs: [None, None, ... 7×]`` — phantom serialization artifacts (empty MM-patch
+# slots) that ``model_dump()`` rendered as literal ``None``.
+#
+# These reach the narrator precisely on the §D4 DEGRADED-LOCATION skip path:
+# region-mode worlds have no ``current_room`` early, so ``current_room_id`` is
+# empty and the whole in-scene ``npcs`` projection is SKIPPED (the gaslighting-
+# doctrine pass-through above) — which passes the raw payload, ``None`` rows and
+# all, straight through. (With ``current_room_id`` SET, the in-scene loop instead
+# CRASHES on ``None.get("core")`` — a literal None is not the dict the §D1
+# falsy-name branch handles.)
+#
+# Contract (AC-4, TEA-defined for Dev): literal ``None`` entries must be filtered
+# from the ``npcs`` payload BEFORE exposure, REGARDLESS of ``current_room_id`` —
+# i.e. unconditionally, outside the room-gated in-scene block. The count of
+# filtered ``None`` rows is reported in a dedicated ``npcs_none_dropped`` counter
+# (mirrors the §D1 ``npcs_unresolvable_name_dropped`` split, so a serialization
+# regression is GM-panel-visible and never masquerades as a legitimate off-scene
+# drop). Real NPC dicts — including legitimately off-scene ones the §D4 doctrine
+# preserves — must NOT be dropped.
+# ---------------------------------------------------------------------------
+
+
+def test_literal_none_npc_rows_filtered_on_degraded_location_skip_path() -> None:
+    """AC-4 (the live repro): on the degraded-location skip path
+    (``current_room_id`` None — region-mode WWN at session start), literal
+    ``None`` rows must be filtered out, the real NPC dict preserved, and the
+    drop reported in ``npcs_none_dropped``."""
+    from sidequest.server.session_helpers import _apply_phase_c_projections
+
+    snap = _make_snapshot(acting_pc="Alice", pc_room=None, npcs=[])
+    payload: dict[str, Any] = {
+        "npcs": [{"core": {"name": "RealNpc"}, "disposition": 0}, *([None] * 7)],
+        "characters": [],
+    }
+
+    counts = _apply_phase_c_projections(snap, payload, current_room_id=None)
+
+    assert None not in payload["npcs"], (
+        "literal None npc rows survived into the exposed payload on the "
+        "degraded-location skip path (153-19 oddity 4) — the narrator's "
+        "state_summary would carry `npcs: [..., None, None]`."
+    )
+    assert any(
+        isinstance(e, dict) and (e.get("core") or {}).get("name") == "RealNpc"
+        for e in payload["npcs"]
+    ), (
+        "the real NPC dict was dropped along with the None rows — the filter "
+        "must remove ONLY None, never legitimate (even off-scene) NPCs (§D4 "
+        "gaslighting-doctrine)."
+    )
+    assert counts["npcs_none_dropped"] == 7, (
+        f"expected 7 None rows reported in npcs_none_dropped; got "
+        f"{counts.get('npcs_none_dropped')!r}. The drop must be surfaced in a "
+        "dedicated counter for GM-panel visibility (OTEL Observability Principle), "
+        "not silently swallowed."
+    )
+
+
+def test_literal_none_npc_row_does_not_crash_room_scoped_projection() -> None:
+    """AC-4 sibling: with ``current_room_id`` SET, a literal ``None`` entry must
+    be filtered before the in-scene loop dereferences ``entry.get('core')`` —
+    today that loop raises ``AttributeError`` on ``None``. The in-scene NPC is
+    still kept."""
+    from sidequest.server.session_helpers import _apply_phase_c_projections
+
+    npc_in_scene = _npc("InScene", current_room="main_hall")
+    snap = _make_snapshot(acting_pc="Alice", pc_room="main_hall", npcs=[npc_in_scene])
+    payload: dict[str, Any] = {
+        "npcs": [{"core": {"name": "InScene"}}, None],
+        "room_states": {"main_hall": {"room_id": "main_hall"}},
+        "characters": [],
+    }
+
+    counts = _apply_phase_c_projections(snap, payload, current_room_id="main_hall")
+
+    assert None not in payload["npcs"], "literal None npc row survived the room-scoped projection"
+    assert any(
+        isinstance(e, dict) and (e.get("core") or {}).get("name") == "InScene"
+        for e in payload["npcs"]
+    ), "the in-scene NPC was dropped — the None filter must not affect real NPCs"
+    assert counts["npcs_none_dropped"] == 1, (
+        f"expected 1 None row reported in npcs_none_dropped; got "
+        f"{counts.get('npcs_none_dropped')!r}."
+    )

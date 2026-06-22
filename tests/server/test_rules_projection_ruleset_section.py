@@ -21,13 +21,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from sidequest.server.reference_projection import build_rules_projection
 from sidequest.server.reference_routes import create_reference_router
-
 
 # ---------------------------------------------------------------------------
 # Shared SRD content seeder

@@ -81,11 +81,10 @@ def otel_capture() -> Iterator:
 
 
 def test_reemits_unfilled_request_for_reconnecting_defender():
+    from sidequest.protocol.messages import FateDefendRequestMessage
     from sidequest.server.websocket_handlers.fate_defend_resume import (
         _maybe_reemit_pending_defenses,
     )
-
-    from sidequest.protocol.messages import FateDefendRequestMessage
 
     snap, _enc = parked_conflict(defender="Rux", attacker="Bandit", request_id="d1", attack_total=4)
     sink = _Sink()
@@ -264,11 +263,10 @@ def test_idempotent_across_repeated_reconnects():
 
 
 def test_no_encounter_is_silent_noop():
+    from sidequest.game.session import GameSnapshot
     from sidequest.server.websocket_handlers.fate_defend_resume import (
         _maybe_reemit_pending_defenses,
     )
-
-    from sidequest.game.session import GameSnapshot
 
     snap = GameSnapshot(genre_slug="pulp_noir")  # no encounter at all
     sink = _Sink()

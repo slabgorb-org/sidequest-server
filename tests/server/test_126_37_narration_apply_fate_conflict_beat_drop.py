@@ -28,7 +28,6 @@ dial_threshold encounter applies the same beat unchanged.
 
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest

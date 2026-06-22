@@ -1814,11 +1814,14 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                 # world with no scenario clue graph, a forensics snapshot showing a
                 # populated UI Journal but EMPTY characters[].known_facts is the
                 # system working as designed, not a half-wired pipeline — the GM panel
-                # can already tell the two channels apart via the state.footnotes_
-                # forwarded span (this feed) vs tool.write.commit_known_fact /
-                # SPAN_SCENARIO_ADVANCE (durable mints). Cold-reload rehydration of the
-                # full Journal rides ADR-100 Seam C (JOURNAL_RESPONSE; feeder stories
-                # 50-14..50-17), NOT a footnote dump here.
+                # can already tell the two channels apart: the feed emits the
+                # state_transition (field=footnotes) watcher event via _watcher_publish
+                # above (plus state.footnote_fact_id_minted), while durable mints emit
+                # the tool.write.commit_known_fact dispatch span / SPAN_SCENARIO_ADVANCE.
+                # (NB: state.footnotes_forwarded is a logger.info label, not a watcher
+                # event — the panel reads _watcher_publish, not logs.) Cold-reload
+                # rehydration of the full Journal rides ADR-100 Seam C (JOURNAL_RESPONSE;
+                # feeder stories 50-14..50-17), NOT a footnote dump here.
                 # Story 50-8 / ADR-053 AC-5: AccusationEvaluator dispatch
                 # sibling. Imported so the evaluator is reachable on demand;
                 # per-turn invocation is deferred until an accusation trigger

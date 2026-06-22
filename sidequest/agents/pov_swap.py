@@ -17,11 +17,21 @@ the legacy helper carried antecedent-blind PRONOUN passes — every "he" /
 pronouns. In any scene with an NPC who shares the PC's pronouns ("the
 man with Le Figaro folds his paper… He doesn't hurry."), the pronoun
 passes turned NPC actions into PC actions. Regex has no antecedent
-resolution; the only safe rewrites are NAME-driven. The 2nd-person voice
-contract for non-name pronouns has been shifted to the narrator side
-(see ``narrator_prompts/pov_rules.md`` — narrator writes the PC's actions
-using the PC's NAME, never a pronoun, so this rewriter has unambiguous
-input to swap).
+resolution, so the passes were removed and the 2nd-person voice contract
+for non-name pronouns shifted to the narrator side (see
+``narrator_prompts/pov_rules.md`` — narrator writes the PC's actions
+using the PC's NAME, never a pronoun).
+
+ANTECEDENT-GATED PRONOUN RE-INTRODUCTION (Story 153-29, 2026-06-22
+MP-PRONOUN-LOCALIZATION-INCOMPLETE): the narrator-side discipline alone
+left possessive / subject / object pronouns for the SAME just-swapped PC
+in third person — "Vesna presses her palm" localized to "You press her
+palm" (want "your palm"), and worse, single combat sentences mixing 2nd +
+3rd person for one character. The pronoun passes return GATED: a pronoun
+is agreed only inside a ``;``-delimited CLAUSE that already had a
+name-driven swap of the target PC. The clause-local gate is what makes
+this safe — the 2026-05-23 NPC-bleed lived in a clause that never named
+the PC, and that clause is now never armed.
 
 Reflexives ("himself"/"herself"/"themself") survive but only fire when
 the sentence already had a name-driven subject swap — without that gate
@@ -321,21 +331,33 @@ def _split_into_sentences(prose: str) -> list[str]:
     return sentences
 
 
-def _rewrite_sentence(
-    sentence: str,
+def _rewrite_clause(
+    clause: str,
     *,
     target_name: str,
     forms: dict,
+    is_first_clause: bool,
 ) -> tuple[str, int]:
-    """Apply all POV substitutions to a single sentence.
+    """Apply all POV substitutions to a single ``;``-delimited clause.
 
-    Returns ``(rewritten_sentence, count)`` where ``count`` is the total
+    ``clause`` is one segment of an engine-sentence split on ``;`` (see
+    :func:`_rewrite_sentence`). Processing per-clause makes the Story 153-29
+    pronoun-agreement gate CLAUSE-local: ``name_swap_occurred`` is a flag
+    scoped to THIS clause, so a name swap here never licenses pronoun
+    rewrites in a sibling clause about a different subject.
+
+    Returns ``(rewritten_clause, count)`` where ``count`` is the total
     number of substitutions performed (used for the OTEL swap_count
     attribute).
     """
     count = 0
-    text = sentence
+    text = clause
     had_subject_swap = False
+    # Story 153-29 pronoun gate: armed by ANY name-driven swap of the target
+    # PC in this clause — Pass 1 (possessive name), Pass 2 (subject+verb), or
+    # Pass 3 (bare name). Gates the re-introduced possessive/subject/object
+    # pronoun passes so they only agree pronouns that co-refer with the PC.
+    name_swap_occurred = False
     # Pass 2b gating: whether the sentence subject was swapped to "You"
     # (Pass 2 fired, or Pass 3 swapped a sentence-initial bare name), and
     # whether Pass 2 actually found the real verb immediately adjacent to
@@ -360,9 +382,10 @@ def _rewrite_sentence(
     # conjunction (and/or/but/nor/so/yet).  Anything else is attributive.
     # ------------------------------------------------------------------
     def _pos_name_sub(m: re.Match) -> str:
-        nonlocal count
+        nonlocal count, name_swap_occurred
         count += 1
-        at_start = (m.start() == 0) or _is_sentence_start_in(text, m.start())
+        name_swap_occurred = True
+        at_start = _is_sentence_start_in(text, m.start(), clause_is_sentence_start=is_first_clause)
         rest = text[m.end() :]
         stripped = rest.lstrip()
         is_predicate = (
@@ -383,14 +406,15 @@ def _rewrite_sentence(
     # ------------------------------------------------------------------
     def _name_subj_sub(m: re.Match) -> str:
         nonlocal count, had_subject_swap, subj_swapped_at_start
-        nonlocal pass2_found_adjacent_verb
+        nonlocal pass2_found_adjacent_verb, name_swap_occurred
         # The PC name as a fragment of a longer NPC proper noun ("Kantos Vah")
         # must not swap — leave the full NPC name intact (Story 153-14).
         if _is_proper_noun_fragment(text, m.start(), m.start() + len(target_name)):
             return m.group(0)
         had_subject_swap = True
+        name_swap_occurred = True
         verb = m.group(1)
-        at_start = (m.start() == 0) or _is_sentence_start_in(text, m.start())
+        at_start = _is_sentence_start_in(text, m.start(), clause_is_sentence_start=is_first_clause)
         if at_start:
             subj_swapped_at_start = True
         # If the token immediately after the name is itself a 3rd-person
@@ -416,13 +440,14 @@ def _rewrite_sentence(
     # vocative or trailing-clause uses like "...nodded at Carl."
     # ------------------------------------------------------------------
     def _name_bare_sub(m: re.Match) -> str:
-        nonlocal count, subj_swapped_at_start
+        nonlocal count, subj_swapped_at_start, name_swap_occurred
         # Same fragment guard as Pass 2: a bare PC-name token inside a longer
         # NPC proper noun ("Kantos Vah") must not swap to "you" (Story 153-14).
         if _is_proper_noun_fragment(text, m.start(), m.end()):
             return m.group(0)
         count += 1
-        at_start = (m.start() == 0) or _is_sentence_start_in(text, m.start())
+        name_swap_occurred = True
+        at_start = _is_sentence_start_in(text, m.start(), clause_is_sentence_start=is_first_clause)
         # A sentence-initial bare name is the grammatical subject. Pass 2
         # was blocked here (a comma/dash appositive defeats its ``\s+``),
         # so record the subject swap for Pass 2b. Mid-sentence bare names
@@ -496,21 +521,12 @@ def _rewrite_sentence(
             count = count_before + n
 
     # ------------------------------------------------------------------
-    # Passes 5/6/7 RETIRED (2026-05-23, sq-playtest pulp_noir/annees_folles).
-    #
-    # Pass 5 (subject pronoun "He"/"She"/"They" → "You"),
-    # Pass 6 (possessive pronoun "his"/"her"/"their" → "your"), and
-    # Pass 7 (object pronoun "him"/"her"/"them" → "you") are removed.
-    #
-    # All three were antecedent-blind: they fired on every matching pronoun
-    # in the anchored prose regardless of who that pronoun actually referred
-    # to. In a scene with an NPC who shared the PC's pronouns (the man with
-    # Le Figaro folds *his* paper… *He* doesn't hurry) the passes converted
-    # the NPC's actions into PC actions on the player's tab ("You doesn't
-    # hurry"). Regex has no antecedent resolution; the fix is to constrain
-    # the narrator-side input (see ``narrator_prompts/pov_rules.md``: write
-    # the PC's actions using the PC's NAME, never a pronoun) and let the
-    # surviving name-driven passes do the rest.
+    # Passes 5/6/7 (subject / possessive / object pronoun agreement) were
+    # RETIRED 2026-05-23 (antecedent-blind NPC bleed) and RE-INTRODUCED
+    # antecedent-gated by Story 153-29 — see the gated block AFTER Pass 9,
+    # which runs once the name-driven passes have armed ``name_swap_occurred``
+    # for this clause. (They run last so the subject/object/possessive forms
+    # are matched against text the name passes have already settled.)
     # ------------------------------------------------------------------
 
     # ------------------------------------------------------------------
@@ -633,16 +649,150 @@ def _rewrite_sentence(
 
         text = re.sub(r",\s+(\w+)(?:\s+(\w+))?", _comma_verb_sub, text)
 
+    # ------------------------------------------------------------------
+    # Passes 5/6/7 RE-INTRODUCED, ANTECEDENT-GATED (Story 153-29,
+    # MP-PRONOUN-LOCALIZATION-INCOMPLETE, sq-playtest 2026-06-20/21).
+    #
+    # The name + adjacent-verb swap (Passes 1-3) leaves possessive / subject /
+    # object pronouns for the SAME just-swapped PC in third person, so the
+    # localized player reads person-disagreement on their OWN tab:
+    #   "Vesna presses her palm"  ->  "You press her palm"   (want "your palm")
+    # and, worse, a single combat sentence mixing 2nd + 3rd person for one
+    # character ("…lands on your back and something rakes across his shoulders").
+    #
+    # These three pronoun passes were RETIRED 2026-05-23 because they were
+    # antecedent-blind — they rewrote NPC pronouns too ("You doesn't hurry").
+    # They return GATED on ``name_swap_occurred``: a pronoun is only agreed
+    # when THIS clause already had a name-driven swap of the target PC (armed
+    # by Pass 1 possessive-name OR Pass 2/3 subject-name). Because
+    # ``_rewrite_clause`` runs per ``;``-delimited clause, the gate is
+    # CLAUSE-local — a same-pronoun NPC in a later ``;``-clause that never
+    # named the PC stays fully third-person (preserves the 2026-05-23 fix —
+    # AC 4: "Carl plants a boot; the moth shudders against him" keeps "him").
+    #
+    # Forms come from ``_PRONOUN_FORMS`` so we only ever convert the PC's OWN
+    # pronoun set; an unrelated set in the clause is left alone. For she/her
+    # the possessive and object surface forms are both "her" — split by a
+    # following-noun lookahead (possessive governs a noun; object does not).
+    # ------------------------------------------------------------------
+    if name_swap_occurred:
+        subj_form = forms["subject"]
+        obj_form = forms["object"]
+        poss_form = forms["possessive"]
+        her_is_ambiguous = poss_form == obj_form  # she/her: "her" is both
+
+        # --- Pass 6: possessive pronoun -> "your" / "Your" ---
+        poss_pat = (
+            rf"\b{re.escape(poss_form)}\b(?=\s+\w)"
+            if her_is_ambiguous
+            else rf"\b{re.escape(poss_form)}\b"
+        )
+
+        def _poss_pron_sub(m: re.Match) -> str:
+            nonlocal count
+            count += 1
+            at_start = _is_sentence_start_in(
+                text, m.start(), clause_is_sentence_start=is_first_clause
+            )
+            return "Your" if at_start else "your"
+
+        text = re.sub(poss_pat, _poss_pron_sub, text)
+
+        # --- Pass 5: subject pronoun -> "you" / "You" (+ conjugate the verb) ---
+        # The follow-on subject pronoun co-refers with the swapped "You", so its
+        # verb takes the 2nd-person form exactly like Pass 2 ("she strikes" ->
+        # "you strike"). A non-verb / modal ("he can raise") just converts the
+        # pronoun. ``_is_pronoun`` guards against de-pluralizing a trailing
+        # pronoun mistaken for a verb.
+        def _subj_pron_sub(m: re.Match) -> str:
+            nonlocal count
+            at_start = _is_sentence_start_in(
+                text, m.start(), clause_is_sentence_start=is_first_clause
+            )
+            you = "You" if at_start else "you"
+            count += 1
+            following = m.group(1)
+            if following is None:
+                return you
+            if _looks_like_verb(following) and not _is_pronoun(following):
+                conjugated = _conjugate(following)
+                if conjugated != following:
+                    count += 1
+                    return f"{you} {conjugated}"
+            return f"{you} {following}"
+
+        text = re.sub(rf"\b{re.escape(subj_form)}\b(?:\s+(\w+))?", _subj_pron_sub, text)
+
+        # --- Pass 7: object pronoun -> "you" / "You" ---
+        # For she/her the object "her" is the one NOT governing a noun (the
+        # possessive pass already consumed the noun-governing occurrences).
+        obj_pat = (
+            rf"\b{re.escape(obj_form)}\b(?!\s+\w)"
+            if her_is_ambiguous
+            else rf"\b{re.escape(obj_form)}\b"
+        )
+
+        def _obj_pron_sub(m: re.Match) -> str:
+            nonlocal count
+            count += 1
+            at_start = _is_sentence_start_in(
+                text, m.start(), clause_is_sentence_start=is_first_clause
+            )
+            return "You" if at_start else "you"
+
+        text = re.sub(obj_pat, _obj_pron_sub, text)
+
     return text, count
 
 
-def _is_sentence_start_in(text: str, idx: int) -> bool:
+def _rewrite_sentence(
+    sentence: str,
+    *,
+    target_name: str,
+    forms: dict,
+) -> tuple[str, int]:
+    """Apply all POV substitutions to one engine-sentence, clause by clause.
+
+    The sentence is split on ``;`` so the antecedent-gated pronoun passes
+    (Story 153-29) stay CLAUSE-local: a name swap in one clause never licenses
+    pronoun agreement in a later ``;``-clause about a different subject (the
+    2026-05-23 NPC-bleed bug lived inside one engine "sentence" — the splitter
+    only breaks on ``.!?``). ``;`` separators are preserved verbatim so the
+    rejoin reproduces the input exactly.
+
+    Returns ``(rewritten_sentence, count)``.
+    """
+    total = 0
+    out: list[str] = []
+    is_first = True
+    for part in re.split(r"(;)", sentence):
+        if part == ";":
+            out.append(part)
+            continue
+        new_part, n = _rewrite_clause(
+            part,
+            target_name=target_name,
+            forms=forms,
+            is_first_clause=is_first,
+        )
+        out.append(new_part)
+        total += n
+        is_first = False
+    return "".join(out), total
+
+
+def _is_sentence_start_in(text: str, idx: int, *, clause_is_sentence_start: bool = True) -> bool:
     """Return True if position ``idx`` in ``text`` is the start of a
     sentence.
 
     A position counts as a sentence start when any of these hold:
 
-    * It is the beginning of the string.
+    * It is the beginning of the string AND ``clause_is_sentence_start``.
+      ``text`` here is a single ``;``-delimited clause (Story 153-29); only
+      the FIRST clause of an engine-sentence opens a sentence, so a name
+      swapped at the start of a later ``;``-clause must NOT capitalize
+      (``…; Carl steps`` → ``…; you step``, lowercase). The caller passes
+      ``clause_is_sentence_start=False`` for non-first clauses.
     * The preceding non-space char is terminal punctuation (``.!?``) or
       a Unicode ellipsis (``…``).
     * A paragraph break (``\\n\\n`` or more) sits between ``idx`` and
@@ -655,7 +805,7 @@ def _is_sentence_start_in(text: str, idx: int) -> bool:
       ``.!?`` check.)
     """
     if idx == 0:
-        return True
+        return clause_is_sentence_start
     # Paragraph break — if the prior content contains a blank line and
     # everything between that line and idx is whitespace, we are at the
     # start of a new paragraph (and therefore a new sentence).

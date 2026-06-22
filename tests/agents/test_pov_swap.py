@@ -235,14 +235,18 @@ def test_comma_continuation_with_she_her():
 def test_adverb_between_subject_and_verb_conjugates():
     """The verbatim playtest repro: an adverb strands the main verb.
     "Carl steadily works the drum with his hands, checking the rope."
-    must become "You steadily work the drum with his hands, checking the
-    rope." — not "You steadily works…". Under the retired-pronoun-passes
-    contract, the possessive "his" survives (NPC-disambiguation cost);
-    the narrator should be writing "Carl's hands" in well-formed prose.
+    must become "You steadily work the drum with your hands, checking the
+    rope." — not "You steadily works…".
+
+    UPDATED by Story 153-29 (was "…with his hands…" under the retired-
+    pronoun-passes contract): the possessive "his" now AGREES to "your"
+    because this clause already had a name-driven swap of the PC (the
+    antecedent gate). The primary assertion this test exists for — the
+    adverb-stranded main verb conjugates ("works" -> "work") — is unchanged.
     """
     text = "Carl steadily works the drum with his hands, checking the rope."
     out, _ = swap_to_second_person(text, target_name="Carl", pronouns="he/him")
-    assert out == "You steadily work the drum with his hands, checking the rope.", out
+    assert out == "You steadily work the drum with your hands, checking the rope.", out
     assert "works" not in out
 
 
@@ -266,11 +270,15 @@ def test_parenthetical_between_subject_and_verb_conjugates():
 
 def test_interrupter_conjugation_they_them_parity():
     """The defect is pronoun-set-agnostic — it must also be fixed for a
-    they/them PC (the playgroup's Katia profile). The possessive "their"
-    survives under the retired-pronoun-passes contract."""
+    they/them PC (the playgroup's Katia profile).
+
+    UPDATED by Story 153-29 (was "…with their hands…" under the retired-
+    pronoun-passes contract): the possessive "their" now AGREES to "your"
+    via the antecedent-gated pronoun pass. The primary assertion — the
+    interrupter main verb conjugates ("works" -> "work") — is unchanged."""
     text = "Sam carefully works the drum with their hands."
     out, _ = swap_to_second_person(text, target_name="Sam", pronouns="they/them")
-    assert out == "You carefully work the drum with their hands.", out
+    assert out == "You carefully work the drum with your hands.", out
     assert "works" not in out
 
 
@@ -736,11 +744,16 @@ def test_possessive_its_after_comma_not_de_pluralized():
 
 
 def test_possessive_his_after_comma_not_de_pluralized():
-    """[#708 retro] ', his copper face' — the possessive 'his' must survive
-    the comma-continuation pass intact, not be stripped to 'hi'."""
+    """[#708 retro] ', his copper face' — the comma-continuation (Pass 9)
+    must never strip the possessive 'his' to 'hi'.
+
+    UPDATED by Story 153-29 (was asserting 'his copper face' survives): in
+    this armed clause 'his' now AGREES to 'your' via the antecedent-gated
+    possessive pass — NOT 'hi'. The load-bearing #708 guard (the possessive
+    is never de-pluralized to 'hi') is preserved by the negative assert."""
     text = "Zanzibar Jones turns, his copper face hard."
     out, _ = swap_to_second_person(text, target_name="Zanzibar Jones", pronouns="he/him")
-    assert "his copper face" in out, repr(out)
+    assert "your copper face" in out, repr(out)
     assert "hi copper" not in out
 
 
@@ -999,9 +1012,9 @@ def test_localized_combat_sentence_has_no_residual_third_person_pronoun():
     must never mix 2nd + 3rd person for the same character."""
     text = "Vesna grits her teeth, pain flooding her arm, the world tilting under her."
     out, _ = swap_to_second_person(text, target_name="Vesna", pronouns="she/her")
-    assert out == (
-        "You grit your teeth, pain flooding your arm, the world tilting under you."
-    ), repr(out)
+    assert out == ("You grit your teeth, pain flooding your arm, the world tilting under you."), (
+        repr(out)
+    )
     residual = _THIRD_PERSON_PRONOUN_RE.search(out)
     assert residual is None, (
         f"localized sentence must contain NO residual 3rd-person pronoun for the "

@@ -180,6 +180,7 @@ def _register_defaults() -> None:
     from sidequest.agents.subsystems.confrontation import run_confrontation_dispatch
     from sidequest.agents.subsystems.course import run_course_dispatch
     from sidequest.agents.subsystems.distinctive_detail import run_distinctive_detail
+    from sidequest.agents.subsystems.dogfight import run_dogfight_dispatch
     from sidequest.agents.subsystems.environment_clock import run_environment_clock_dispatch
     from sidequest.agents.subsystems.equip import run_equip_dispatch
     from sidequest.agents.subsystems.fate_action import run_fate_action_dispatch
@@ -206,6 +207,7 @@ def _register_defaults() -> None:
         ("fate_action", run_fate_action_dispatch),
         ("quest_offer", run_quest_offer_dispatch),
         ("course", run_course_dispatch),
+        ("dogfight", run_dogfight_dispatch),
     ):
         _REGISTRY.pop(name, None)
         _REGISTRY[name] = fn

@@ -840,23 +840,40 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         if isinstance(turn_context.current_location, str)
                         else ""
                     )
+                    # Story 153-23 (DUNGEON-ROOM-POPULATION-INERT): thread the
+                    # entered room id into the injection seam so a room's authored
+                    # ``encounter_creatures`` binding (107-2 / ADR-059) is placed on
+                    # entry under its real name instead of left to the narrator to
+                    # improvise. The id is the per-PC GRAPH region truth
+                    # (``region_for`` over ``pc_regions``, 107-1's key) — NOT the
+                    # free-text scene string ``mm_location`` and NEVER the
+                    # spawn-anchor ``current_region`` (No Silent Fallbacks).
+                    # ``region_for()`` returns None on a split/unseeded party, which
+                    # ``inject`` treats exactly as the legacy ``room_id=None`` path
+                    # (the binding branch is strictly additive and gated on a
+                    # resolved room id) — so a party with no consensus region places
+                    # no binding and the handler never fabricates a room id.
+                    mm_room_id = snapshot.region_for()
                     mm_injected = monster_manual_inject.inject(
                         sd,
                         snapshot,
                         current_location=mm_location,
                         in_combat=bool(turn_context.in_combat),
+                        room_id=mm_room_id,
                     )
                     # Plain-text proof (CLAUDE.md OTEL principle): log the actual
-                    # patch count so a GM reading server.log can tell the Manual
-                    # materialized vs. the narrator improvising creatures.
+                    # patch count + resolved room so a GM reading server.log can tell
+                    # the Manual materialized (and which authored room bound) vs. the
+                    # narrator improvising creatures.
                     logger.info(
                         "monster_manual.injected genre=%s world=%s "
-                        "player_id=%s turn=%s in_combat=%s patches=%d",
+                        "player_id=%s turn=%s in_combat=%s room_id=%s patches=%d",
                         sd.genre_slug,
                         sd.world_slug,
                         sd.player_id,
                         turn_context.turn_number,
                         bool(turn_context.in_combat),
+                        mm_room_id or "",
                         mm_injected,
                     )
                     turn_context.npcs = list(snapshot.npcs)

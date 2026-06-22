@@ -3,7 +3,8 @@ and the ``_collect_poi_slugs`` helper (Epic 66, story 66-Task-6).
 
 Covers:
 - picker missing required fields → warning mentions "player_picker" and field names
-- picker with dangling backdrop_poi → warning contains the bad slug
+- picker with dangling backdrop_poi (non-empty slug set) → ERROR with the bad slug (153-36)
+- dangling backdrop_poi with an EMPTY slug set → no error (guard, 153-36)
 - complete picker with valid backdrop_poi → no errors
 - npc_major entry with no picker fields → no errors
 """
@@ -75,9 +76,12 @@ class TestPickerFieldValidation:
         for field in ("id", "culture", "archetype", "sex"):
             assert field in msg, f"Expected missing field '{field}' in message: {msg}"
 
-    def test_picker_dangling_backdrop_poi_warns(self, tmp_path: Path) -> None:
-        """A player_picker entry whose backdrop_poi is not in known_poi_slugs
-        produces a warning containing the dangling slug."""
+    def test_picker_dangling_backdrop_poi_errors(self, tmp_path: Path) -> None:
+        """A player_picker entry whose backdrop_poi is not in a NON-EMPTY
+        known_poi_slugs set produces a hard ERROR (not a warning) containing the
+        dangling slug. (153-36: promoted from warning so the slugified-name-vs-
+        explicit-slug trap fails pack validation at authoring time, not at
+        render time as CatalogMissError.)"""
         manifest_path = _write_manifest(
             tmp_path,
             [
@@ -93,14 +97,45 @@ class TestPickerFieldValidation:
             ],
         )
 
-        _errors, warnings = _validate_portrait_manifest(
+        errors, warnings = _validate_portrait_manifest(
             manifest_path,
             "pack 'test_pack'",
             known_poi_slugs={"customs_concourse"},
         )
 
-        assert len(warnings) == 1, f"Expected 1 warning, got: {warnings}"
-        assert "nonexistent_poi" in warnings[0], f"Expected dangling slug in message: {warnings[0]}"
+        assert len(errors) == 1, f"Expected 1 error, got: {errors}"
+        assert "nonexistent_poi" in errors[0], f"Expected dangling slug in error: {errors[0]}"
+        assert warnings == [], f"Dangling backdrop_poi must be an error, not a warning: {warnings}"
+
+    def test_dangling_backdrop_poi_with_empty_slug_set_does_not_error(self, tmp_path: Path) -> None:
+        """When known_poi_slugs is an EMPTY set (POI collection yielded nothing —
+        e.g. an unreadable history.yaml), the cross-ref check must NOT fire: we
+        cannot reliably distinguish a dangling ref from a transient collection
+        failure, so erroring every picker would be a false-positive cascade.
+        (153-36 guard: error only when we have a non-empty slug set to check.)"""
+        manifest_path = _write_manifest(
+            tmp_path,
+            [
+                {
+                    "name": "Picker With Backdrop, No POI Context",
+                    "type": "player_picker",
+                    "id": "picker_a",
+                    "culture": "voidborn",
+                    "archetype": "drifter",
+                    "sex": "female",
+                    "backdrop_poi": "some_poi",
+                },
+            ],
+        )
+
+        errors, warnings = _validate_portrait_manifest(
+            manifest_path,
+            "pack 'test_pack'",
+            known_poi_slugs=set(),
+        )
+
+        assert errors == [], f"Empty slug set must not error every picker: {errors}"
+        assert warnings == [], f"Empty slug set must not warn either: {warnings}"
 
     def test_complete_picker_with_valid_backdrop_no_errors(self, tmp_path: Path) -> None:
         """A fully-specified player_picker with a valid backdrop_poi is clean."""
@@ -153,8 +188,9 @@ class TestPickerFieldValidation:
 
     def test_backdrop_poi_not_checked_without_known_slugs(self, tmp_path: Path) -> None:
         """A picker with backdrop_poi set, validated WITHOUT known_poi_slugs
-        (None), produces no backdrop warning — the cross-ref check only fires
-        when the caller supplies a slug set (the ``is not None`` conditional)."""
+        (None), produces no backdrop finding — the cross-ref check only fires
+        for a non-empty slug set (153-36 truthiness guard; None and an empty
+        set both skip)."""
         manifest_path = _write_manifest(
             tmp_path,
             [
@@ -186,7 +222,8 @@ class TestPickerValidationWiring:
 
     def test_history_slugs_feed_manifest_validation(self, tmp_path: Path) -> None:
         """End-to-end through the production composition: a dangling backdrop_poi
-        warns; a valid one (resolved from the same history.yaml) does not."""
+        ERRORS (153-36); a valid one (resolved from the same history.yaml) does
+        not."""
         history_path = _write_history(tmp_path, ["vaskov_centrum", "mendes_post"])
         manifest_path = _write_manifest(
             tmp_path,
@@ -221,10 +258,10 @@ class TestPickerValidationWiring:
             known_poi_slugs=poi_slugs,
         )
 
-        assert errors == [], f"Expected no errors, got: {errors}"
-        assert len(warnings) == 1, f"Expected exactly 1 warning, got: {warnings}"
-        assert "no_such_poi" in warnings[0], f"Expected dangling slug in warning: {warnings[0]}"
-        assert "vaskov_centrum" not in warnings[0], f"Valid backdrop must not warn: {warnings[0]}"
+        assert warnings == [], f"Expected no warnings, got: {warnings}"
+        assert len(errors) == 1, f"Expected exactly 1 error, got: {errors}"
+        assert "no_such_poi" in errors[0], f"Expected dangling slug in error: {errors[0]}"
+        assert "vaskov_centrum" not in errors[0], f"Valid backdrop must not error: {errors[0]}"
 
 
 class TestCollectPoiSlugs:

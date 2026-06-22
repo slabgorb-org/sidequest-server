@@ -245,6 +245,53 @@ async def test_raised_query_maps_to_typed_auth_unavailable(
         await _drive(_new_client())
 
 
+async def test_raised_max_turns_maps_to_loop_exceeded_not_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """sq-playtest 2026-06-22 (BUG-LOW): a max_turns exhaustion can surface as a
+    *raised* ``query()`` (the SDK throwing "Reached maximum number of turns (N)")
+    rather than a terminal ``error_max_turns`` ResultMessage. That is a tool-loop
+    non-convergence, NOT auth/transport — it must raise the accurate
+    ``AnthropicSdkLoopExceeded`` and emit NO ``narrator.auth_unavailable`` event.
+    The old code mapped it to ``AgentSdkAuthUnavailable`` with "subscription login
+    absent/expired or a transport error", sending the operator chasing auth while
+    the embedded string already named the real cause."""
+    from sidequest.agents import anthropic_sdk_client
+    from sidequest.agents.anthropic_sdk_client import (
+        AgentSdkAuthUnavailable,
+        AnthropicSdkLoopExceeded,
+    )
+
+    events: list[tuple[str, dict[str, Any]]] = []
+    _patch_all_watchers(monkeypatch, events)
+
+    fake = RaisingFakeQuery(
+        RuntimeError("Claude Code returned an error result: Reached maximum number of turns (8)")
+    )
+    monkeypatch.setattr(anthropic_sdk_client, "query", fake, raising=False)
+
+    with pytest.raises(AnthropicSdkLoopExceeded) as excinfo:
+        await _drive(_new_client())
+
+    raised = excinfo.value
+    # 1) Must NOT be coerced into the auth lie. LoopExceeded is a sibling of
+    #    AgentSdkAuthUnavailable (both AnthropicSdkClientError), never a subclass.
+    assert not isinstance(raised, AgentSdkAuthUnavailable), (
+        "a raised max_turns exhaustion must not be re-raised as "
+        f"AgentSdkAuthUnavailable; got {raised!r}"
+    )
+    # 2) The loud error must name the true cause (max_turns), not auth/transport.
+    assert "max_turns" in str(raised).lower(), (
+        f"the loud error must name max_turns as the cause; got {raised!r}"
+    )
+    # 3) The GM-panel lie detector must NOT show an auth event for a loop
+    #    exhaustion — that false signal is the exact misdirection this fixes.
+    assert not any(name == _AUTH_FAILURE_EVENT for name, _ in events), (
+        f"{_AUTH_FAILURE_EVENT!r} must NOT fire for a max_turns exhaustion; "
+        f"events seen: {[n for n, _ in events]!r}"
+    )
+
+
 async def test_auth_failure_emits_watcher_event_before_raise(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

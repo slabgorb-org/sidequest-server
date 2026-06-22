@@ -1323,6 +1323,7 @@ def _resolve_wn_committed_action(
     beat: BeatDef,
     beat_id: str,
     slug: str,
+    outcome_tier: RollOutcome,
     damage_resolver: Callable[[], int] | None,
     edge_resolver: Callable[[str], object | None],
 ) -> ApplyResult:
@@ -1339,6 +1340,18 @@ def _resolve_wn_committed_action(
     engine used, and a 0-HP drop fires the hp_depletion win condition via
     ``check_hp_depletion`` — the exact HP-resolution tail of
     ``beat_kinds.apply_beat``, with every native dial/tag rider cut.
+
+    Story 153-12 — the ✦ resolution-beat exit: the native ``apply_beat``
+    resolution branch (which ends the confrontation on a ✦ beat) is one of the
+    riders cut above, so under ``hp_depletion`` a succeeded Fall Back / Disengage
+    no-op'd and combat had no voluntary exit (aureate_span playtest). We
+    re-introduce ONLY the WN-SRD-faithful result — a successful Disengage / Full
+    Retreat dissolves the engagement — NOT a native dial: a ✦-marked beat
+    (``beat.resolution``) that SUCCEEDS (``Success``/``CritSuccess``) ends the
+    confrontation non-lethally (``outcome="resolution_beat:<id>"``, distinct from
+    an hp_depletion win — nobody was defeated). Tier-gated: a FAILED disengage
+    (``Fail``/``CritFail``) leaves combat live — the ✦ beat has a DC, a botched
+    withdrawal is a failed skill check, not a free exit.
 
     Emits ``{slug}.native_scaffolding_suppressed`` (the GM-panel lie-detector
     that the native engine is OFF) and returns an ``ApplyResult`` with
@@ -1374,6 +1387,48 @@ def _resolve_wn_committed_action(
                 )
 
     resolved = check_hp_depletion(encounter, edge_resolver, beat_id=beat_id) is not None
+
+    # Story 153-12 — succeeded ✦ resolution beat ends the confrontation as a
+    # non-lethal exit (WN SRD Disengage / Full Retreat). HP depletion above takes
+    # precedence (a kill wins over a withdrawal in the same beat); this only fires
+    # when the engagement is still live. Gate: the ✦ marker (beat.resolution) AND a
+    # successful outcome — a failed disengage leaves combat live (153-12 AC2). The
+    # outcome is "resolution_beat:<id>", NOT a player/opponent victory: the fight
+    # dissolved, nobody was defeated, so downstream win handlers stay clear (AC3).
+    # No dial is moved (AC4 — the inert hp_depletion dials are untouched; ADR-143).
+    if (
+        not resolved
+        and not encounter.resolved
+        and getattr(beat, "resolution", False)
+        and outcome_tier in (RollOutcome.Success, RollOutcome.CritSuccess)
+    ):
+        encounter.resolved = True
+        encounter.outcome = f"resolution_beat:{beat_id}"
+        encounter.structured_phase = EncounterPhase.Resolution
+        resolved = True
+        # OTEL lie-detector (AC5): the GM panel must distinguish a resolution-beat
+        # disengage from an hp_depletion kill. The downstream encounter.resolved
+        # close carries outcome="resolution_beat:<id>"; this marks the decision itself.
+        _watcher_publish(
+            "state_transition",
+            {
+                "field": "encounter",
+                "op": "wn_resolution_beat_exit",
+                "actor": actor.name,
+                "beat_id": beat_id,
+                "outcome_tier": outcome_tier.value
+                if hasattr(outcome_tier, "value")
+                else str(outcome_tier),
+                "reason": "resolution_beat",
+                "rationale": (
+                    "win_condition=hp_depletion — a succeeded ✦ resolution beat is the "
+                    "WN SRD Disengage/Full Retreat result; the engagement dissolved "
+                    "non-lethally (no kill, no dial victory)"
+                ),
+            },
+            component="encounter",
+            severity="info",
+        )
 
     wn_native_scaffolding_suppressed_span(
         slug=slug,
@@ -1692,6 +1747,7 @@ def _apply_committed_player_beat(
             beat=beat,
             beat_id=beat_id,
             slug=ruleset.slug,
+            outcome_tier=outcome_tier,
             damage_resolver=damage_resolver_fn,
             edge_resolver=snapshot.find_creature_core,
         )

@@ -307,6 +307,7 @@ class NarratorAgent(BaseAgent):
         statuses_by_actor: dict[str, list] | None = None,
         resolution_signal: object | None = None,
         pc_classes_by_name: dict[str, tuple[ClassDef, float]] | None = None,
+        suppress_native_combat: bool = False,
     ) -> None:
         """Inject encounter-specific narration rules + live encounter state.
 
@@ -423,6 +424,51 @@ class NarratorAgent(BaseAgent):
                         + "Do NOT emit beat_selections and do NOT invent dice "
                         "outcomes — narrate the resolved exchange described in the "
                         "encounter state.\n"
+                        "Participants:\n" + participants + "\n"
+                        "</encounter-live>"
+                    ),
+                    AttentionZone.Early,
+                    SectionCategory.State,
+                ),
+            )
+        elif suppress_native_combat and encounter is not None and cdef is not None:
+            # sq-playtest 2026-06-22 (WWN combat de-nativization — mirrors the
+            # Fate branch above). Under a WN binding the ruleset OWNS the round
+            # (ADR-143): combat resolves on the player's DICE_THROW via
+            # run_wn_round (epic 108), and the opponent's reprisal is rolled
+            # server-side. The native beat menu + "emit a beat_selection for
+            # every actor" instruction is REMOVED here — handing it to the
+            # narrator made it grind roll/apply/advance tools past max_turns and
+            # the turn died before any beat resolved. The narrator narrates the
+            # seated state; the player throws to resolve. The combat-resolution
+            # tools are also withheld at the orchestrator tool-assembly site, so
+            # this is the prompt half of the same gate (is_live_wn_combat).
+            participants = "\n".join(f"  - {a.name} (side={a.side})" for a in encounter.actors)
+            from sidequest.telemetry.spans.span import Span as _DenativizeSpan
+
+            with _DenativizeSpan.open(
+                "narrator.wn_combat.native_suppressed",
+                {
+                    "confrontation_type": cdef.confrontation_type,
+                    "win_condition": str(encounter.win_condition),
+                    "actor_count": len(encounter.actors),
+                },
+            ):
+                pass
+            registry.register_section(
+                self.name(),
+                PromptSection.new(
+                    "narrator_encounter_live",
+                    (
+                        "<encounter-live>\n"
+                        f"Active combat: {cdef.label} ({cdef.confrontation_type})\n"
+                        "Resolution is by the Without Number engine on the player's die "
+                        "throw — the 3D dice tray is mounted; the player throws to resolve "
+                        "their attack and the engine rolls the opponent's reprisal. Do NOT "
+                        "emit beat_selections, do NOT call dice/damage/status/beat tools, "
+                        "and do NOT invent dice outcomes or HP changes. Narrate the combat "
+                        "as it currently stands — the seated actors, the stakes, the moment "
+                        "before the blow lands — and let the player's throw resolve it.\n"
                         "Participants:\n" + participants + "\n"
                         "</encounter-live>"
                     ),

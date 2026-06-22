@@ -5956,6 +5956,11 @@ def _apply_narration_result_to_snapshot(
             if cdef is None:
                 raise ValueError(f"active encounter type {enc.encounter_type!r} not in pack")
 
+            # sq-playtest 2026-06-22: shared predicate for the WN-combat drop
+            # branch below — kept identical to the narrator tool-filter / prompt
+            # gate so all three agree on when WN combat is engine-owned.
+            from sidequest.game.encounter import is_live_wn_combat
+
             # ---- Fate-conflict drop branch (Story 126-37, ADR-143/144 REPLACE) ----
             # A Fate conflict — seated by 126-30 with win_condition="fate_conflict" —
             # resolves EXCLUSIVELY through the 4dF conflict engine (FATE_ACTION →
@@ -6438,6 +6443,51 @@ def _apply_narration_result_to_snapshot(
                         enc.encounter_type,
                         len(gated_selections),
                     )
+                _legacy_beat_path = False
+            elif is_live_wn_combat(
+                enc, pack.rules.ruleset if (pack is not None and pack.rules) else None
+            ):
+                # ---- WN combat drop branch (sq-playtest 2026-06-22, ADR-143) ----
+                # A live WN hp_depletion combat resolves ONLY on the player's
+                # DICE_THROW via run_wn_round (epic 108) plus the server-rolled
+                # opponent reprisal. The narrator is de-nativized for it (no beat
+                # menu; combat-resolution tools withheld at tool-assembly). But the
+                # narrator is an LLM and could still hallucinate a stray
+                # beat_selection — without this guard it falls into the native
+                # ``else`` apply_beat arm below and double-applies HP OUTSIDE the
+                # WN round (the phantom-HP-write class the playtest also caught).
+                # Mirror the Fate contest/conflict drops: drop the stray selections
+                # and surface the block LOUDLY on the GM panel (No Silent Fallbacks
+                # — the legacy dial engine was actively prevented from resolving WN
+                # combat). The throw still resolves; the player's turn does not error.
+                # NOTE: dogfight (sealed_letter_lookup) and table_resolution are
+                # earlier elifs, so this branch only catches the native-beat WN case.
+                for sel in gated_selections:
+                    _watcher_publish(
+                        "state_transition",
+                        {
+                            "field": "encounter",
+                            "op": "wn_combat_beat_dropped_engine_owns_round",
+                            "actor": sel.actor,
+                            "beat_id": sel.beat_id,
+                            "encounter_type": enc.encounter_type,
+                            "reason": (
+                                "WN hp_depletion resolves only via the player's "
+                                "DICE_THROW (run_wn_round)"
+                            ),
+                        },
+                        component="confrontation",
+                        severity="warning",
+                    )
+                logger.warning(
+                    "encounter.wn_combat_beat_dropped_engine_owns_round "
+                    "encounter=%r dropped %d stray narrator beat selection(s) — a WN "
+                    "hp_depletion combat resolves only on the player's DICE_THROW "
+                    "(run_wn_round); the legacy dial apply_beat engine was blocked "
+                    "(ADR-143)",
+                    enc.encounter_type,
+                    len(gated_selections),
+                )
                 _legacy_beat_path = False
             else:
                 _legacy_beat_path = True

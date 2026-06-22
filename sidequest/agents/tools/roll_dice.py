@@ -42,6 +42,10 @@ class RollDiceArgs(BaseModel):
         "`reason` is a one-line label for the OTEL span."
     ),
     category=ToolCategory.GENERATE,
+    # WN combat resolution belongs to run_wn_round on the player's DICE_THROW
+    # (ADR-143/074); withheld from the narrator on a live WN combat so it cannot
+    # grind a roll inside its own tool loop. sq-playtest 2026-06-22.
+    combat_resolution=True,
 )
 async def roll_dice(args: RollDiceArgs, ctx: ToolContext) -> ToolResult:
     m = _NOTATION_RE.match(args.notation.strip())

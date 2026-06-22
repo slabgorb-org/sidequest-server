@@ -1,11 +1,13 @@
-"""Dogfight sealed-letter resolution spans.
+"""Dogfight sealed-letter resolution + dispatch spans.
 
-ADR-077 (per the dogfight × SWN resolution work). Five spans live below:
-confrontation_started, maneuver_committed, cell_resolved, plus shot_attempted
-(hit resolution) and shot_damage (damage ablation). Four remain deferred —
-gun_solution_fired, energy_depleted, skill_tier_resolved, ace_instinct_used —
-because they need subsystems that don't exist yet. The two SWN shot spans are
-additions to the live set; the deferred list is unchanged.
+ADR-077 (per the dogfight × SWN resolution work). Eight spans live below:
+the engine spans confrontation_started, maneuver_committed, cell_resolved,
+shot_attempted (hit resolution), shot_damage (damage ablation), and
+weapon_resolved (ship-weapon provenance, story 114-15); plus the dispatch-level
+pair dispatch and dispatch.rejected (the IntentRouter dogfight handler,
+story 153-6). Four remain deferred — gun_solution_fired, energy_depleted,
+skill_tier_resolved, ace_instinct_used — because they need subsystems that
+don't exist yet.
 """
 
 from __future__ import annotations

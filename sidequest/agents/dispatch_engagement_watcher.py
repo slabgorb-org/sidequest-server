@@ -507,15 +507,17 @@ def detect_dispatch_engagement_mismatch(
     (``package=None`` or empty package) return ``[]``.
 
     Subsystems whose names are not in :data:`_WITNESSES` are *ignored* —
-    not every router subsystem is the watcher's concern. As of story 153-5,
-    ten live-path subsystems have witnesses: ``confrontation``,
+    not every router subsystem is the watcher's concern. As of story 153-6,
+    eleven live-path subsystems have witnesses: ``confrontation``,
     ``magic_working``, ``scenario_clue``, ``npc_agency``,
     ``distinctive_detail_hint``, ``reflect_absence``, ``witnessed_act``
     (turn-scoped political-ledger read), ``movement`` (per-PC
     relocation-occurred read), ``quest_offer`` (accept-minted-a-quest read,
     ADR-146 §4 — the structurally-sound replacement for the keyword
-    unminted-objective detector), and ``course`` (course-plotted-or-arrived
-    read, ADR-130/153-5 — the orbital course/clock engine engaged).
+    unminted-objective detector), ``course`` (course-plotted-or-arrived
+    read, ADR-130/153-5 — the orbital course/clock engine engaged), and
+    ``dogfight`` (dogfight-encounter-seated read, ADR-077/153-6 — the
+    ship-combat dogfight engine engaged).
     """
     if package is None:
         return []

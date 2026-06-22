@@ -278,8 +278,11 @@ def _validate_portrait_manifest(
     - Pydantic ``PortraitManifestEntry`` failures → **errors**
     - ``type=player_picker`` missing required fields (``id``, ``culture``,
       ``archetype``, ``sex``) → **warnings** (content-gap signal; pack still loads)
-    - ``backdrop_poi`` slug not in ``known_poi_slugs`` → **warnings** when
-      ``known_poi_slugs`` is provided
+    - ``backdrop_poi`` slug not in a **non-empty** ``known_poi_slugs`` set →
+      **errors** (153-36; promoted from a warning so the slugified-name-vs-
+      explicit-``slug`` trap fails validation rather than render). An empty or
+      ``None`` ``known_poi_slugs`` skips the check (no POI context to validate
+      against — avoids false-positive cascades).
 
     NPC entries (any other type) are completely unaffected by the picker checks.
     """
@@ -317,12 +320,20 @@ def _validate_portrait_manifest(
                     f"{label}: {path.name} entry [{idx}] player_picker is missing required"
                     f" fields: {', '.join(missing)}"
                 )
+            # 153-36: a dangling backdrop_poi (slug not among the world's POI
+            # slugs) is a hard ERROR. Left as a warning it only surfaced at
+            # render time as a daemon CatalogMissError — the slugified-name-vs-
+            # explicit-`slug` authoring trap (153-18/153-35) sailed past pack
+            # validation. Guard on a NON-EMPTY slug set: an empty set means POI
+            # collection yielded nothing (e.g. an unreadable history.yaml), and
+            # erroring every picker on a collection gap we can't attribute would
+            # be a false-positive cascade — so skip rather than fail loud there.
             if (
                 parsed.backdrop_poi
-                and known_poi_slugs is not None
+                and known_poi_slugs
                 and parsed.backdrop_poi not in known_poi_slugs
             ):
-                warnings.append(
+                errors.append(
                     f"{label}: {path.name} entry [{idx}] player_picker backdrop_poi"
                     f" '{parsed.backdrop_poi}' does not match any known POI slug"
                 )

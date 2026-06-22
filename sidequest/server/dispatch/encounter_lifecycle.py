@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import random as _random
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from sidequest.agents.orchestrator import NpcMention
@@ -25,6 +25,7 @@ from sidequest.game.encounter import (
 from sidequest.game.lore_store import LoreStore
 from sidequest.game.resource_pool import ResourceThreshold
 from sidequest.game.ruleset.registry import get_ruleset_module
+from sidequest.game.ruleset.without_number import WithoutNumberRulesetModule
 from sidequest.game.session import GameSnapshot, Npc
 from sidequest.game.table.types import TablePot, TableSeat, TableState
 from sidequest.genre.models.pack import GenrePack
@@ -228,11 +229,11 @@ def _stamp_encounter_presence(npc, *, turn: int, location: str | None) -> None:
         npc.last_seen_location = location
 
 
-def _opponent_reprisal_damage_resolvable(cdef, opponent_core) -> bool:
-    """BUG 1 (eh-opp-damage): can the seated opponent's reprisal resolve ANY
-    damage spec? Mirrors the reprisal damage-resolution priority in
-    ``dispatch.dice._resolve_opponent_reprisal`` so the at-seat detector agrees
-    with the runtime path EXACTLY (no drift):
+def _has_authored_reprisal_source(cdef, opponent_core) -> bool:
+    """Slots 1-3 of the reprisal damage-resolution priority: an AUTHORED damage
+    source on the confrontation or the opponent itself (NOT the ruleset's unarmed
+    floor). Mirrors the runtime resolver in ``dispatch.dice._resolve_opponent_reprisal``
+    so the at-seat detector agrees with it EXACTLY (no drift):
 
     1. ``cdef.opponent_damage`` — the authored enemy weapon (space_opera's fix).
     2. The opponent's STRIKE beat ``damage_override`` — a natural-attack spec on
@@ -243,9 +244,8 @@ def _opponent_reprisal_damage_resolvable(cdef, opponent_core) -> bool:
     Catalog-id weapon resolution (priority 3 of the runtime resolver) is NOT
     re-checked here: a seeded/materialized mook carries no catalog-id inventory,
     and threading the pack catalog into the seating seam to cover a case the
-    seeded opponent never has would over-couple the detector. The conservative
-    bias is correct — a false "toothless" flag is a visible nudge to author
-    ``opponent_damage``, never a silent miss.
+    seeded opponent never has would over-couple the detector. Absence of an
+    authored source is the content gap the seating diagnostic surfaces.
     """
     if getattr(cdef, "opponent_damage", None) is not None:
         return True
@@ -267,6 +267,29 @@ def _opponent_reprisal_damage_resolvable(cdef, opponent_core) -> bool:
     return False
 
 
+def _opponent_reprisal_damage_resolvable(cdef, opponent_core, ruleset) -> bool:
+    """BUG 1 (eh-opp-damage) + Story 153-20: can the seated opponent's reprisal
+    resolve ANY damage at all?
+
+    True when the opponent has an authored damage source
+    (``_has_authored_reprisal_source`` — slots 1-3) OR — Story 153-20 — when the
+    bound ruleset is a Without Number binding (``swn``/``wwn``/``cwn``/``awn``),
+    whose SRD gives a weaponless strike a real unarmed floor
+    (``WithoutNumberRulesetModule.SRD_UNARMED_DICE``, mirroring
+    ``without_number.resolve_damage``'s last resort — story 153-1). A weaponless
+    WN opponent is therefore NOT toothless/invulnerable.
+
+    WN-gated (SOUL "Bind the Ruleset, Don't Balance It", ADR-143): off the WN path
+    there is no SRD unarmed guarantee, so the conservative false-toothless bias is
+    preserved (No Silent Fallbacks — a false "toothless" flag is a visible nudge to
+    author ``opponent_damage``, never a silent miss). The unarmed value is taken
+    DIRECTLY from the ruleset binding — never authored or invented here.
+    """
+    if _has_authored_reprisal_source(cdef, opponent_core):
+        return True
+    return isinstance(ruleset, WithoutNumberRulesetModule)
+
+
 def _seed_combat_hp_depletion_to_npcs(
     *,
     snapshot: GameSnapshot,
@@ -275,6 +298,7 @@ def _seed_combat_hp_depletion_to_npcs(
     turn: int,
     source: str,
     acting_character_name: str,
+    ruleset: RulesetModule,
 ) -> None:
     """Seed opponent ``Npc.core`` HP + AC from content for hp_depletion combats.
 
@@ -430,23 +454,55 @@ def _seed_combat_hp_depletion_to_npcs(
             pool_origin=pool_origin,
         ):
             pass
-        # BUG 1 (eh-opp-damage): flag a TOOTHLESS Other at INSTANTIATION. If this
-        # seated opponent has no resolvable reprisal damage source, every enemy
-        # reprisal will land for 0 HP (the player is invulnerable — playtest
-        # elemental_harmony/burning_peace). Surface it here, at seating, so the GM
-        # panel catches it immediately instead of only via the per-turn
-        # ``dice.opponent_reprisal_damage_spec_missing`` warning six rounds deep.
-        if not _opponent_reprisal_damage_resolvable(cdef, npc.core):
+        # BUG 1 (eh-opp-damage) + Story 153-20: flag the seating CONTENT GAP at
+        # INSTANTIATION. When this opponent has no AUTHORED reprisal damage source
+        # (cdef.opponent_damage / strike damage_override / inventory weapon), every
+        # enemy reprisal would land for 0 HP absent the ruleset's unarmed floor.
+        # Surface it here, at seating, so the GM panel catches it immediately
+        # instead of only via the per-turn ``dice.opponent_reprisal_damage_spec_missing``
+        # warning six rounds deep.
+        #
+        # 153-20: a weaponless Without Number opponent is NOT actually toothless —
+        # the SRD unarmed floor rescues it. ``reprisal_resolvable`` rides the WN-aware
+        # detector verdict onto the span, and ``unarmed_floor`` (taken DIRECTLY from
+        # the ruleset binding, never invented) is set only under a WN binding, so the
+        # GM panel can tell "floor resolved" apart from a genuine (non-WN) toothless
+        # flag. The span still fires on the content gap either way — author
+        # ``opponent_damage`` to make the intent explicit (No Silent Fallbacks).
+        opponent_core = npc.core
+        if not _has_authored_reprisal_source(cdef, opponent_core):
+            resolvable = _opponent_reprisal_damage_resolvable(cdef, opponent_core, ruleset)
+            unarmed_floor = (
+                ruleset.SRD_UNARMED_DICE if isinstance(ruleset, WithoutNumberRulesetModule) else None
+            )
+            # ``ruleset`` (always) + WN-only ``unarmed_floor`` discriminate
+            # "floor resolved" from a genuine toothless flag; ``reprisal_resolvable``
+            # rides the WN-aware verdict. Built as dict[str, Any] so the **spread
+            # doesn't trip pyright's _tracer overload check on the span helper.
+            span_attrs: dict[str, Any] = {
+                "ruleset": str(getattr(ruleset, "slug", "") or ""),
+                "reprisal_resolvable": resolvable,
+            }
+            if unarmed_floor:
+                span_attrs["unarmed_floor"] = unarmed_floor
             with encounter_opponent_toothless_span(
                 confrontation_type=str(getattr(cdef, "confrontation_type", "") or ""),
                 opponent=actor.name,
                 rationale=(
-                    "hp_depletion combat seated this opponent with no resolvable "
+                    "hp_depletion combat seated this opponent with no AUTHORED "
                     "reprisal damage source: cdef.opponent_damage is unset, no "
                     "strike beat carries damage_override, and the opponent core "
-                    "has no inventory weapon with a damage spec — author "
-                    "opponent_damage under the confrontation (No Silent Fallbacks)"
+                    "has no inventory weapon with a damage spec. "
+                    + (
+                        f"The {getattr(ruleset, 'slug', '')} SRD unarmed floor "
+                        f"({unarmed_floor}) gives it a real reprisal — author "
+                        "opponent_damage to make the intent explicit."
+                        if unarmed_floor
+                        else "No ruleset unarmed floor applies — the opponent is "
+                        "toothless; author opponent_damage (No Silent Fallbacks)."
+                    )
                 ),
+                **span_attrs,
             ):
                 pass
 
@@ -1945,6 +2001,12 @@ def instantiate_encounter_from_trigger(
                 # from content opponent_default_stats. Creates a backing Npc
                 # for any opponent lacking one so find_creature_core reaches
                 # it and the SWN attack/hp_depletion pipeline resolves.
+                # 153-20: resolve the bound ruleset (fail-loud, never a silent
+                # 'dial' default) so the seater can consult the WN SRD unarmed
+                # floor at seat time and stamp the discriminating span fields.
+                ruleset_slug = (
+                    pack.rules.ruleset if pack and pack.rules else _raise_missing_ruleset("hp_depletion_seating")
+                )
                 _seed_combat_hp_depletion_to_npcs(
                     snapshot=snapshot,
                     actors=actors,
@@ -1952,6 +2014,7 @@ def instantiate_encounter_from_trigger(
                     turn=turn_no,
                     source="encounter_handshake",
                     acting_character_name=player_name,
+                    ruleset=get_ruleset_module(ruleset_slug),
                 )
                 _roll_and_persist_initiative(
                     snapshot=snapshot,

@@ -50,6 +50,7 @@ from sidequest.agents.orchestrator import NpcMention
 from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.game.encounter import EncounterActor, EncounterMetric
+from sidequest.game.ruleset.registry import get_ruleset_module
 from sidequest.game.session import GameSnapshot, Npc
 from sidequest.game.turn import TurnManager
 from sidequest.genre.loader import load_genre_pack
@@ -188,6 +189,7 @@ def test_hp_depletion_seam_stamps_presence() -> None:
         turn=6,
         source="encounter_handshake",
         acting_character_name="Vesh",
+        ruleset=get_ruleset_module("swn"),
     )
 
     assert npc.last_seen_turn == 6

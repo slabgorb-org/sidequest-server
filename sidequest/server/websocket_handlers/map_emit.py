@@ -796,6 +796,44 @@ def _load_dungeon_map_context(
     return graph, palette, ENTRANCE_ID
 
 
+def _descent_phase(sd: _SessionData, snapshot: GameSnapshot) -> str:
+    """Which map projection owns THIS connection's turn for a hybrid
+    surface+deep world (beneath_sunden).
+
+    beneath_sunden carries TWO region graphs that both project to the UI's
+    single ``mapData`` slot every turn: the authored surface cartography
+    (``ropefoot``/``the_dropmouth``, region-mode MAP_UPDATE) and the ADR-106
+    procedural deep (``entrance``/``expNNN.rN``, DUNGEON_MAP). The cartography
+    emit is dispatched second, so without a gate it CLOBBERS the DUNGEON_MAP and
+    the player sees the surface no matter how deep they stand (playtest
+    2026-06-22, session ``697cbc14``). This phase makes the two emits mutually
+    exclusive — exactly one map per connection per turn.
+
+    Per-connection (§Q-map): the phase reads THIS connection's PC region, so a
+    split party (one PC on the surface, one in the deep) gets the right map each.
+
+      - ``"n/a"``     — not a dungeon world (or empty/unloadable dungeon map);
+                        ``_load_dungeon_map_context`` returns ``None``. Cartography
+                        owns the map exactly as before and the dungeon emit no-ops
+                        the same way. EVERY non-beneath_sunden world lands here
+                        (``applies_to`` is a pure slug check — no IO).
+      - ``"deep"``    — the PC's region is a node in the procedural graph:
+                        DUNGEON_MAP owns the map, cartography stands down.
+      - ``"surface"`` — dungeon world, PC above the rope (a cartography region,
+                        not a dungeon node) or PC unresolved: cartography owns the
+                        map, the dungeon emit stands down rather than ship a
+                        0-discovered frame the cartography emit would overwrite.
+    """
+    ctx = _load_dungeon_map_context(sd)
+    if ctx is None:
+        return "n/a"
+    graph, _palette, _entrance = ctx
+    _pc_name, pc_region = _resolve_connection_pc_region(snapshot, getattr(sd, "player_id", ""))
+    if pc_region and pc_region in graph.nodes:
+        return "deep"
+    return "surface"
+
+
 def _build_dungeon_map_payload(
     *,
     graph: RegionGraph,
@@ -922,6 +960,30 @@ def _maybe_emit_dungeon_map(
         return  # other-world no-op or map_skipped already emitted by loader.
     graph, palette, entrance_id = ctx
 
+    # Descent-phase gate (mirror of _descent_phase, reusing the graph + pc_region
+    # already in hand): the PC is ABOVE the rope — their region is an authored
+    # surface cartography region (ropefoot/the_dropmouth), not a node in the
+    # procedural graph. The surface map is the cartography MAP_UPDATE's job; a
+    # 0-discovered dungeon frame here would just be overwritten by it and orient
+    # nobody. Stand down loudly so the GM panel shows the cartography emit owns
+    # this turn (playtest 2026-06-22 frozen-surface bug). Not a warning — a PC on
+    # the surface is a normal, expected state.
+    if pc_region not in graph.nodes:
+        _watcher_publish(
+            "dungeon.map_skipped",
+            {
+                "world": sd.world_slug,
+                "reason": "surface_phase",
+                "pc_name": pc_name or "",
+                "pc_region": pc_region,
+            },
+            component="dungeon",
+        )
+        logger.info(
+            "dungeon.map_skipped surface_phase pc=%s region=%s", pc_name, pc_region
+        )
+        return
+
     payload = _build_dungeon_map_payload(
         graph=graph,
         palette=palette,
@@ -981,6 +1043,24 @@ def _maybe_emit_cartography_map(
     success / ``cartography.map_skipped`` (with a reason) otherwise, so the GM
     panel sees the Map-tab seam engaged — never a silent skip (CLAUDE.md OTEL
     principle; the prior inline emit carried no span at all)."""
+    # Descent-phase gate: for a hybrid surface+deep world (beneath_sunden) this
+    # connection's PC is BELOW the rope, inside the ADR-106 procedural graph. The
+    # DUNGEON_MAP emit owns the map there; the authored surface cartography would
+    # clobber it in the UI's single mapData slot (the 2026-06-22 frozen-surface
+    # bug — both emits fire every turn and this one is dispatched second). Stand
+    # down loudly. Clean no-op for every non-dungeon world (_descent_phase "n/a").
+    if _descent_phase(sd, snapshot) == "deep":
+        _watcher_publish(
+            "cartography.map_skipped",
+            {
+                "world": getattr(sd, "world_slug", ""),
+                "reason": "deep_phase",
+                "current_region": snapshot.current_region or "",
+            },
+            component="location",
+        )
+        return
+
     from sidequest.server.session_helpers import _build_cartography_map_message
 
     location = snapshot.current_region or snapshot.party_location(perspective=acting_perspective)

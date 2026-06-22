@@ -495,6 +495,32 @@ class AnthropicSdkClient:
                     # Already the typed, GM-panel-visible auth error — as-is.
                     raise
                 except Exception as exc:
+                    # max_turns exhaustion can surface HERE as a *raised* query
+                    # (the SDK throwing "Reached maximum number of turns (N)")
+                    # rather than as a terminal is_error ResultMessage. That is a
+                    # tool-loop non-convergence, NOT an auth/transport fault — so
+                    # branch on the SDK's documented signal and raise the accurate
+                    # type, mirroring the terminal ``error_max_turns`` branch
+                    # below. Mapping it to AgentSdkAuthUnavailable actively
+                    # misdirects debugging (sq-playtest 2026-06-22: a combat-starve
+                    # max_turns error read as "subscription login absent/expired"
+                    # and sent the operator chasing auth before the embedded
+                    # "Reached maximum number of turns" string revealed the real
+                    # cause). This is NOT auth — emit NO auth-unavailable event.
+                    if "maximum number of turns" in str(exc).lower():
+                        with narrator_tool_loop_span(
+                            iterations_used=max(2, max_iterations),
+                            max_iterations=max_iterations,
+                            caller=caller,
+                            loop_exceeded=True,
+                        ):
+                            pass
+                        raise AnthropicSdkLoopExceeded(
+                            "agent-sdk tool loop did not converge — max_turns "
+                            "exhaustion raised at the transport boundary "
+                            f"({type(exc).__name__}: {exc}; "
+                            f"max_turns={max(2, max_iterations)})"
+                        ) from exc
                     # The transport boundary failed: an absent/expired subscription
                     # login OR a genuine transport fault — we cannot disambiguate
                     # at the boundary. Map to the typed auth error and emit the

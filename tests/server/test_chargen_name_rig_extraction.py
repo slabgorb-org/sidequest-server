@@ -39,6 +39,9 @@ _REPRO_SENTENCE = (
     "running right, everything looks easy."
 )
 _REPRO_FOLLOWUP = "Road name: Zeppo. Rig name: Duck Soup."
+# 153-16: a name-less first answer — the genuine miss that still opens the
+# hook_prompt re-prompt (the parseable _REPRO_SENTENCE now advances directly).
+_UNPARSEABLE_NAME = "the road took everything from us and gave back only dust"
 
 
 @pytest.fixture
@@ -179,8 +182,15 @@ class TestNameRigExtractionWiring:
         self, handler: WebSocketSessionHandler, otel_capture: InMemorySpanExporter
     ) -> None:
         """The playtest report's OTEL gap: 'no extraction/rename span fired on
-        either submit'. The extraction and the vessel rename must each emit a
-        span event so the GM panel can see the decisions."""
+        either submit'. The extraction, the re-prompt DECISION (153-16), the
+        followup correction, and the vessel rename must each emit a span event
+        so the GM panel can see the decisions.
+
+        Driven through the genuine re-prompt path: the first answer carries no
+        recognizable name, so the hook_prompt followup opens (153-16) and the
+        correction supplies the name/rig. The parseable-prose ACCEPT path (no
+        followup, name lands directly) is covered by
+        test_extracted_name_and_renamed_rig_land_on_snapshot."""
 
         async def body() -> None:
             # The builder emits events on the CURRENT span (production wraps
@@ -193,7 +203,7 @@ class TestNameRigExtractionWiring:
                 await _connect(handler, genre="road_warrior", world="the_circuit")
                 await _walk_to_confirmation_with_followup(
                     handler,
-                    name_scene_text=_REPRO_SENTENCE,
+                    name_scene_text=_UNPARSEABLE_NAME,
                     followup_text=_REPRO_FOLLOWUP,
                 )
                 out = await _send_chargen(handler, CharacterCreationPayload(phase="confirmation"))
@@ -204,6 +214,10 @@ class TestNameRigExtractionWiring:
             ]
             assert "chargen.names_extracted" in event_names, (
                 "freeform name extraction must emit chargen.names_extracted "
+                f"(got events: {sorted(set(event_names))})"
+            )
+            assert "chargen.name_reprompt_decision" in event_names, (
+                "the name-scene re-prompt decision (153-16) must be observable "
                 f"(got events: {sorted(set(event_names))})"
             )
             assert "chargen.name_followup_correction" in event_names, (

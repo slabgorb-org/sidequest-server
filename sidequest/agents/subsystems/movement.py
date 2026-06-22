@@ -655,7 +655,13 @@ async def run_movement_dispatch(
         e for e in proj.exits if (not e.hidden) or (e.to_region_id in discovered_routes)
     ]
 
-    available_ids = [e.to_region_id for e in candidates]
+    # Order-preserving dedupe of the surfaced neighbor ids. 153-22 collapses
+    # parallel exits in project_region, so ``candidates`` is normally dup-free;
+    # this is belt-and-suspenders at the loud-failure projection boundary — where
+    # the 2026-06-21 playtest saw exp001.r1 listed twice — so an
+    # ambiguous_descriptor failure can never resurface a duplicate id regardless
+    # of upstream timing.
+    available_ids = list(dict.fromkeys(e.to_region_id for e in candidates))
 
     if not candidates:
         return _unresolved(
@@ -976,7 +982,13 @@ def _resolve_cartography_lateral(
     region = getattr(cart, "regions", {}).get(from_region)
     if region is None:
         return None, "region_lateral", False, [], ""
-    candidate_ids = sorted(n for n in (getattr(region, "adjacent", ()) or []))
+    # Dedupe parallel adjacency before sorting: a materializer loop / dup can
+    # list the same neighbor twice on a region's ``adjacent`` set (ADR-106 loop
+    # geometry or a materializer duplicate). 153-22 collapses parallel exits in
+    # project_region for the §Q1 procedural path; this is its lateral-cartography
+    # twin, so an ``ambiguous_region_exit`` failure never surfaces the same node
+    # id twice (sq-playtest 2026-06-21 saw exp001.r1 listed twice).
+    candidate_ids = sorted({n for n in (getattr(region, "adjacent", ()) or [])})
     if not candidate_ids:
         return None, "region_lateral", False, [], ""
 

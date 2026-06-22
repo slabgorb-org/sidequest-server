@@ -312,3 +312,41 @@ def test_lateral_resolver_ignores_leading_article():
         "after applying local stopword filter to both sides"
     )
     assert not ambiguous
+
+
+def test_lateral_candidate_ids_dedupe_parallel_adjacency():
+    """sq-playtest 2026-06-21: a region's runtime ``adjacent`` set can list the
+    same neighbor twice (ADR-106 materializer loop geometry or a materializer
+    duplicate). The surfaced candidate list must collapse the parallel edge so an
+    ``ambiguous_region_exit`` failure never shows the same node id twice — the bug
+    where ``available=['exp001.r0', 'exp001.r1', 'exp001.r1', 'exp001.r2']``
+    surfaced exp001.r1 twice. (The §Q1 procedural twin is covered by 153-22's
+    project_region dedup; this is its lateral-cartography sibling.)
+
+    SimpleNamespace stands in for the runtime region objects so the duplicate is
+    guaranteed to reach the resolver — the point under test is the resolver's own
+    dedupe at the ``adjacent`` read, independent of any upstream model validation.
+    Pre-fix ``sorted(...)`` preserved the dup; post-fix ``sorted({...})`` collapses it.
+    """
+    cart = types.SimpleNamespace(
+        regions={
+            "entrance": types.SimpleNamespace(
+                name="The Entrance",
+                adjacent=["exp001.r0", "exp001.r1", "exp001.r1", "exp001.r2"],
+            ),
+            "exp001.r0": types.SimpleNamespace(name="Chamber Zero", adjacent=[]),
+            "exp001.r1": types.SimpleNamespace(name="Chamber One", adjacent=[]),
+            "exp001.r2": types.SimpleNamespace(name="Chamber Two", adjacent=[]),
+        }
+    )
+    # "back" with no descriptor and no discovered history returns candidate_ids
+    # directly (line 990) — the simplest path that surfaces the list.
+    _target, _via, _ambiguous, candidate_ids, _surface = _resolve_cartography_lateral(
+        cart=cart,
+        from_region="entrance",
+        exit_descriptor="",
+        direction="back",
+        discovered_regions=[],
+    )
+    assert candidate_ids == ["exp001.r0", "exp001.r1", "exp001.r2"]
+    assert len(candidate_ids) == len(set(candidate_ids)), "no duplicate neighbor ids"

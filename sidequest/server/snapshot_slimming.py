@@ -170,7 +170,29 @@ def _apply_phase_c_projections(
         # legitimate off-scene drops — the GM panel had no way to see
         # data-shape drift. Now reported separately.
         "npcs_unresolvable_name_dropped": 0,
+        # Story 153-19 §oddity-4 — literal ``None`` rows in the npcs payload
+        # (phantom MM-patch slots dumped to null). Counted separately and
+        # filtered UNCONDITIONALLY below, so a serialization regression is
+        # GM-panel-visible and never masquerades as a legitimate off-scene drop.
+        "npcs_none_dropped": 0,
     }
+
+    # ---------------------------------------------------------------
+    # npcs — literal ``None`` filter. Runs REGARDLESS of current_room_id:
+    # region-mode worlds with no current_room hit the §D4 skip path below,
+    # which passes the raw payload through — so without this, phantom
+    # ``None`` rows (Story 153-19 oddity 4) reach the narrator's
+    # state_summary unfiltered. It also pre-empts the in-scene loop's
+    # ``entry.get("core")`` from dereferencing a literal ``None``. Real NPC
+    # dicts (including legitimately off-scene ones the §D4 doctrine
+    # preserves) are untouched — only ``None`` is removed.
+    # ---------------------------------------------------------------
+    _npcs_payload = payload.get("npcs")
+    if isinstance(_npcs_payload, list):
+        _before_none = len(_npcs_payload)
+        _filtered = [entry for entry in _npcs_payload if entry is not None]
+        counts["npcs_none_dropped"] = _before_none - len(_filtered)
+        payload["npcs"] = _filtered
 
     # ---------------------------------------------------------------
     # room_states + npcs — both depend on actor location. When the

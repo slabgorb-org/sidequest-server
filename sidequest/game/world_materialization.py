@@ -796,6 +796,31 @@ def materialize_from_genre_pack(
 # ---------------------------------------------------------------------------
 
 
+def prune_orphan_character_locations(snapshot: Any) -> int:
+    """Drop ``character_locations`` keys with no matching current character.
+
+    Story 153-19 (oddity 2): at chargen finalization the materialized
+    ``"Adventurer"`` placeholder Character is discarded (``chargen_mixin``:
+    ``materialized.characters = [character]``) but the ``character_locations``
+    dict keeps the placeholder's key alongside the real PC's — a stale projection
+    artifact (playtest: barsoom carried both ``Adventurer`` and ``Kantos``). Prune
+    every key that does not match a current character's ``core.name``. Mutates in
+    place; returns the count pruned.
+
+    Always emits ``character_locations.orphan_pruned`` (even on a 0-prune) so the
+    cleanup is GM-panel-visible and never a silent skip (CLAUDE.md "No Silent
+    Fallbacks" + OTEL Observability Principle).
+    """
+    from sidequest.telemetry.spans import character_locations_pruned_span
+
+    valid = {ch.core.name for ch in snapshot.characters}
+    orphans = [name for name in snapshot.character_locations if name not in valid]
+    for name in orphans:
+        del snapshot.character_locations[name]
+    character_locations_pruned_span(pruned_count=len(orphans), pruned_keys=orphans)
+    return len(orphans)
+
+
 def preload_authored_npcs(
     state: Any,
     authored: list[AuthoredNpc],

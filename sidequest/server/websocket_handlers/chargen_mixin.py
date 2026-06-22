@@ -61,6 +61,7 @@ from sidequest.game.world_materialization import (
     materialize_from_genre_pack,
     parse_history_chapters,
     preload_authored_npcs,
+    prune_orphan_character_locations,
 )
 from sidequest.genre.archetype.shim import resolve_archetype
 from sidequest.genre.error import GenreValidationError
@@ -1523,6 +1524,12 @@ class CharGenMixin:
                 if ch.location:
                     materialized.character_locations[character.core.name] = ch.location
                     break
+            # Story 153-19 (oddity 2): the discarded "Adventurer" placeholder may
+            # have seeded a character_locations key during materialize; prune any
+            # key that no longer matches a current character so the snapshot never
+            # carries a stale placeholder alongside the real PC. Always emits
+            # character_locations.orphan_pruned (GM-panel-visible, never silent).
+            prune_orphan_character_locations(materialized)
             # Mutate the canonical room snapshot in place rather than
             # reassigning ``sd.snapshot``. Reassignment orphans the
             # ``room._snapshot`` reference: ``room.save()`` then

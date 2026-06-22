@@ -13,6 +13,7 @@ decision 2). Deterministic (ties broken by theme id) — No Silent Fallbacks.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from sidequest.dungeon.materializer import MaterializationRequest
@@ -23,6 +24,7 @@ __all__ = [
     "ENTRANCE_ID",
     "build_entrance_seed_graph",
     "build_expansion_one_request",
+    "is_procedural_region_id",
     "select_entrance_theme_id",
 ]
 
@@ -32,6 +34,28 @@ ENTRANCE_ID = "entrance"
 
 # The surface entrance sits at depth 0.0 (frozen root, spec §7).
 _ENTRANCE_DEPTH = 0.0
+
+# Procedural region-id recognizer (story 153-27). The runtime megadungeon
+# (ADR-106) mints exactly two region-id shapes: the ``entrance`` anchor above and
+# expansion rooms ``f"exp{expansion_id:03d}.r{i}"`` — region_graph/generator.py is
+# the format's source of truth. ``:03d`` is a MINIMUM width, so the expansion id is
+# 3+ digits; the room index ``i`` (``range(n)``) is any non-negative int. Anchored
+# + lowercase: an authored cartography id, the ``deep_descent`` seam sentinel, and
+# malformed/short ids all fall through to False.
+_EXPANSION_REGION_RE = re.compile(r"^exp\d{3,}\.r\d+$")
+
+
+def is_procedural_region_id(region_id: str) -> bool:
+    """True iff ``region_id`` is a runtime-generated dungeon region id.
+
+    Recognizes the ``entrance`` anchor and the ``expNNN.rN`` expansion-room shape.
+    The cast-staging seam uses this to tell a legitimate procedural region (no
+    authored cartography cast, by design) from a misspelled / narrator-authored
+    cartography id (a real misconfiguration). Pure and total — robust on adversarial
+    input (empty / whitespace-only / junk → ``False``)."""
+    if not region_id:
+        return False
+    return region_id == ENTRANCE_ID or _EXPANSION_REGION_RE.match(region_id) is not None
 
 
 def select_entrance_theme_id(palette: Any) -> str:

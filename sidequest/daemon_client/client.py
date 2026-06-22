@@ -232,8 +232,16 @@ class DaemonClient:
 
         mirror = get_mirror()
 
+        # Story 153-8 (ADR-131): track whether the daemon has been unavailable
+        # since the last successful connection so a genuine unavailable->available
+        # edge can be surfaced loudly. Starts True: a server that boots while the
+        # daemon is down must announce the daemon's *first* arrival, not just
+        # silently begin embedding/rendering once the socket appears.
+        seen_unavailable = True
+
         while True:
             if not self.is_available():
+                seen_unavailable = True
                 await asyncio.sleep(poll_interval_seconds)
                 continue
             try:
@@ -242,8 +250,37 @@ class DaemonClient:
                     timeout=poll_interval_seconds,
                 )
             except (FileNotFoundError, ConnectionRefusedError, OSError, TimeoutError):
+                # Socket file present but the daemon isn't accepting yet — still
+                # unavailable from the dispatch path's point of view.
+                seen_unavailable = True
                 await asyncio.sleep(poll_interval_seconds)
                 continue
+
+            # Story 153-8 (ADR-131): the socket just became reachable after a
+            # stretch of unavailability. Surface the recovery so the GM panel and
+            # the server log confirm the daemon client reconnected — the
+            # embed/render dispatch resumes on the next turn. Per CLAUDE.md "No
+            # Silent Fallbacks" the unavailable->available flip must never be a
+            # silent recovery.
+            if seen_unavailable:
+                seen_unavailable = False
+                logger.info(
+                    "daemon.reconnected socket=%s — embed/render dispatch resumes",
+                    self._socket_path,
+                )
+                from sidequest.telemetry.watcher_hub import (
+                    publish_event as _watcher_publish,
+                )
+
+                _watcher_publish(
+                    "state_transition",
+                    {
+                        "field": "daemon",
+                        "op": "reconnected",
+                        "socket": str(self._socket_path),
+                    },
+                    component="daemon",
+                )
 
             # Send a `status` request to keep the connection active past
             # the daemon's read loop. The accept-time heartbeat fires

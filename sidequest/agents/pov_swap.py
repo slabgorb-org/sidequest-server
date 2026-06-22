@@ -229,10 +229,19 @@ def _is_skippable_adverb(word: str) -> bool:
     return lower == "then" or (lower.endswith("ly") and len(lower) > 2)
 
 
-def _is_proper_noun_fragment(text: str, name_start: int, name_end: int) -> bool:
+def _is_proper_noun_fragment(
+    text: str, name_start: int, name_end: int, *, is_first_clause: bool = True
+) -> bool:
     """Whether the PC-name token spanning ``[name_start, name_end)`` is part
     of a longer multi-word proper noun (an NPC's full name) rather than a
     standalone reference to the PC.
+
+    ``text`` is a single ``;``-delimited clause (Story 153-29); ``is_first_clause``
+    is threaded into the preceding-word sentence-start check so a capitalized
+    preceding token at the start of a NON-first clause ("…; Vah Kantos bows")
+    reads as a name fragment, not a sentence opener — otherwise the clause
+    boundary masquerades as a sentence start and the 153-14 guard leaks
+    ("…; Vah you bow", review round-trip 1).
 
     The ``\\b...\\b`` boundaries on the name passes are necessary but not
     sufficient: a multi-word NPC name like "Kantos Vah" carries an *internal*
@@ -261,7 +270,11 @@ def _is_proper_noun_fragment(text: str, name_start: int, name_end: int) -> bool:
         return True
     before = re.search(r"(\w+)\s+$", text[:name_start])
     return bool(
-        before and before.group(1)[0].isupper() and not _is_sentence_start_in(text, before.start(1))
+        before
+        and before.group(1)[0].isupper()
+        and not _is_sentence_start_in(
+            text, before.start(1), clause_is_sentence_start=is_first_clause
+        )
     )
 
 
@@ -409,7 +422,9 @@ def _rewrite_clause(
         nonlocal pass2_found_adjacent_verb, name_swap_occurred
         # The PC name as a fragment of a longer NPC proper noun ("Kantos Vah")
         # must not swap — leave the full NPC name intact (Story 153-14).
-        if _is_proper_noun_fragment(text, m.start(), m.start() + len(target_name)):
+        if _is_proper_noun_fragment(
+            text, m.start(), m.start() + len(target_name), is_first_clause=is_first_clause
+        ):
             return m.group(0)
         had_subject_swap = True
         name_swap_occurred = True
@@ -443,7 +458,7 @@ def _rewrite_clause(
         nonlocal count, subj_swapped_at_start, name_swap_occurred
         # Same fragment guard as Pass 2: a bare PC-name token inside a longer
         # NPC proper noun ("Kantos Vah") must not swap to "you" (Story 153-14).
-        if _is_proper_noun_fragment(text, m.start(), m.end()):
+        if _is_proper_noun_fragment(text, m.start(), m.end(), is_first_clause=is_first_clause):
             return m.group(0)
         count += 1
         name_swap_occurred = True
@@ -818,7 +833,15 @@ def _is_sentence_start_in(text: str, idx: int, *, clause_is_sentence_start: bool
     while j >= 0 and text[j].isspace():
         j -= 1
     if j < 0:
-        return True
+        # Walked back over leading whitespace to the start of this clause. After
+        # the Story 153-29 `;`-split each clause carries a leading space (the
+        # space that followed the `;`), so a clause-initial token sits at idx 1+
+        # and reaches HERE, not the idx==0 branch. A clause start is only a
+        # sentence start for the FIRST clause — otherwise "…; Carl steps" would
+        # capitalize mid-sentence ("…; You step") and the 153-14 fragment guard
+        # would misread a post-`;` name fragment as a sentence opener (review
+        # round-trip 1). Honor the caller's clause context.
+        return clause_is_sentence_start
     return text[j] in ".!?…"
 
 

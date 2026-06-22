@@ -36,6 +36,7 @@ from sidequest.game.seams import (
     SeamCrossingError,
     get_seam_resolver,
     seam_route_for,
+    seam_route_via_adjacency,
     surface_owner_for_entrance,
 )
 from sidequest.game.seams.deep_descent import resolve_deep_descent
@@ -298,6 +299,53 @@ async def run_movement_dispatch(
                     "resolved_via": "surface_descent",
                 }
             )
+
+        # --- sq-playtest 2026-06-21: descend from one step off the seam. ---
+        # The PC's region owns no seam, but sits directly adjacent to the
+        # region that does (beneath_sünden: 'ropefoot', the waiting-camp, is
+        # adjacent to 'the_dropmouth', which owns the deep_descent seam). The
+        # rope and winch are at the camp's lip, not a separate journey — a
+        # player who says "down the rope" at the camp means to descend, not to
+        # first walk to the shaft mouth and descend on a SECOND turn. Cross
+        # the adjacent owner's seam in one deliberate action.
+        #
+        # Gated on direction == "deeper" (the descent signal the router emits
+        # once the seam is surfaced at this region — see intent_router_pass
+        # _build_state_summary), NOT the broad ``!= "back"`` used for the
+        # owned-seam case: a surface camp has lateral intra-region movement
+        # ("walk to the board") that must NOT teleport the party into the deep.
+        # The router only assigns "deeper" to an actual descent.
+        if seam_route is None and direction == "deeper":
+            adjacent_seam = seam_route_via_adjacency(cart, from_region)
+            if adjacent_seam is not None:
+                try:
+                    crossing = get_seam_resolver(str(adjacent_seam.to_id))(
+                        snapshot=snapshot,
+                        player_name=player_name,
+                        route=adjacent_seam,
+                        resolved_via="surface_descent_adjacent",
+                        dungeon_store=dungeon_store,
+                        direction=direction,
+                        exit_descriptor=exit_descriptor,
+                    )
+                except SeamCrossingError as err:
+                    return _unresolved(
+                        snapshot=snapshot,
+                        player_name=player_name,
+                        reason=err.reason,
+                        from_region=from_region,
+                        direction=direction,
+                        exit_descriptor=exit_descriptor,
+                        available=[],
+                        surface=err.surface,
+                    )
+                return SubsystemOutput(
+                    data={
+                        "to_region": crossing.to_region,
+                        "from_region": from_region,
+                        "resolved_via": "surface_descent_adjacent",
+                    }
+                )
 
         # --- Story 105-3: the reverse seam — leaving the Deep. ---
         # A PC standing on the dungeon entrance node is at the static→procedural
@@ -576,6 +624,23 @@ async def run_movement_dispatch(
     # --- §Q2: advance THIS PC via the Phase-1 per-PC patch path. ---
     snapshot.apply_world_patch(WorldStatePatch(pc_region={player_name: target_id}))
 
+    # --- Affordance race fix (2026-06-22). ---
+    # The patch above fires the §Q3 next-ring look-ahead as a BACKGROUND
+    # create_task (lookahead_worker). Without draining it HERE, the destination's
+    # onward exits commit 2ms–7s AFTER the narrator's prompt is built, so the
+    # narrator describes a room whose forward exits do not exist yet and the
+    # player is shown a dead-end with no way on (live trace: exp002.r2, turn 2 —
+    # narrated as pure atmosphere because its prompt held only 2 exits while the
+    # forward exits were still materializing). Movement runs in the ADR-113
+    # engine-first pass, AHEAD of the narrator, so draining here guarantees the
+    # onward ring is COMMITTED before narration — generation-before-narrate. The
+    # narrator then describes the real exits (as it already does when they exist,
+    # e.g. turn 1). drain() is a no-op when nothing is in flight.
+    onward_ring_drained = False
+    if lookahead_handle is not None:
+        await lookahead_handle.drain()
+        onward_ring_drained = True
+
     party_split_after = snapshot.region_for() is None
 
     with movement_resolved_span(
@@ -591,8 +656,12 @@ async def run_movement_dispatch(
         span.set_attribute("target_pre_materialized", target_pre_materialized)
         # A move always enqueues next-ring look-ahead around the new region
         # (the §Q3 move-then-materialize ring); the sync-materialize for an
-        # uncommitted target is a SEPARATE prior step.
+        # uncommitted target is a SEPARATE prior step. ``onward_ring_drained``
+        # proves the affordance fix engaged — the look-ahead was awaited to
+        # completion before this turn proceeds to narration (lie-detector for
+        # generation-before-narrate).
         span.set_attribute("materialize_triggered", True)
+        span.set_attribute("onward_ring_drained", onward_ring_drained)
         span.set_attribute("party_split_after", party_split_after)
 
     logger.debug(

@@ -171,6 +171,32 @@ async def apply_world_patch(args: ApplyWorldPatchArgs, ctx: ToolContext) -> Tool
     ctx.otel_span.set_attribute("tool.world_patch.path_kind", path_kind)
     ctx.otel_span.set_attribute("tool.world_patch.supported", field_name is not None)
 
+    # Bug A (2026-06-22 findings): in a region-mode/seam world the ENGINE owns
+    # current_region (the movement subsystem crosses the static→procedural seam
+    # engine-first, ADR-113). The narrator writing /current_region here is a live
+    # race that historically split the party (session 14812). The title-scrape
+    # path is already fenced (region.entry_rejected: sub_location_in_region_mode_world);
+    # this closes the matching hole in the escape-hatch TOOL. Scoped to
+    # /current_region — /location, /time_of_day, /atmosphere stay open. Recoverable:
+    # the narrator re-plans, it does not abort the turn.
+    if args.path == "/current_region":
+        from sidequest.genre.models.world import NavigationMode
+
+        world_obj = ctx.genre_pack.worlds.get(ctx.world_id) if ctx.genre_pack is not None else None
+        cart = getattr(world_obj, "cartography", None) if world_obj is not None else None
+        is_region_mode = (
+            cart is not None and getattr(cart, "navigation_mode", None) == NavigationMode.region
+        )
+        if is_region_mode:
+            ctx.otel_span.set_attribute("tool.world_patch.region_write_denied", True)
+            return ToolResult.error(
+                "path '/current_region' is engine-owned in a region-mode world; "
+                "the movement subsystem crosses the seam engine-first (ADR-113). "
+                "The narrator must not set the region here — narrate the descent "
+                "in prose instead.",
+                recoverable=True,
+            )
+
     if field_name is None:
         return ToolResult.error(
             f"path {args.path!r} not supported by v1 apply_world_patch escape hatch; "

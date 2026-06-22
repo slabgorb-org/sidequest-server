@@ -46,6 +46,38 @@ def seam_route_for(cartography: CartographyConfig | None, region_id: str) -> Rou
     return None
 
 
+def seam_route_via_adjacency(cartography: CartographyConfig | None, region_id: str) -> Route | None:
+    """The seam route owned by a region ADJACENT to ``region_id``, or None.
+
+    The companion to :func:`seam_route_for` for the one-step-from-the-seam
+    surface case. A PC on a surface region that does not itself own a seam, but
+    sits directly adjacent to the region that does, can descend in a single
+    deliberate action — the rope and winch are at the camp's lip, not a separate
+    journey (beneath_sünden: ``ropefoot`` is adjacent to ``the_dropmouth``, which
+    owns the ``deep_descent`` seam; the player who says "down the rope" at the
+    camp expects to descend, not to first walk to the shaft mouth).
+
+    Returns the UNIQUE adjacent owner's route, or ``None`` when no adjacent
+    region owns a seam OR more than one does. The ambiguous case returns ``None``
+    so the caller does NOT guess which descent was meant (No Silent Fallbacks);
+    a multi-seam surface ring is a documented follow-up, mirroring the ambiguity
+    rule in :func:`surface_owner_for_entrance`.
+    """
+    if cartography is None:
+        return None
+    region = getattr(cartography, "regions", {}).get(region_id)
+    if region is None:
+        return None
+    found: list[Route] = []
+    for adj_id in getattr(region, "adjacent", ()) or ():
+        route = seam_route_for(cartography, adj_id)
+        if route is not None:
+            found.append(route)
+    if len(found) != 1:
+        return None
+    return found[0]
+
+
 def surface_owner_for_entrance(cartography: CartographyConfig | None) -> Route | None:
     """The seam route a PC at the dungeon entrance ascends back along (Story 105-3).
 

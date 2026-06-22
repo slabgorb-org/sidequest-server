@@ -191,6 +191,22 @@ def test_adjacent_regions_listed(hybrid_world_kit_at_ropefoot):
     assert ("The Dropmouth", "adjacent") in kinds  # cart region's display name
 
 
+def test_surface_camp_projects_seam_via_adjacency(hybrid_world_kit_at_ropefoot):
+    """sq-playtest 2026-06-21: ropefoot owns no seam, but it is one step from
+    the_dropmouth, which does. Surfacing that seam at the camp is what lets the
+    router's nudge classify "down the rope" as a descent (direction "deeper")
+    instead of a vague adjacency step — without it the descent never crossed and
+    the party was stranded at ropefoot through three explicit descents."""
+    kit = hybrid_world_kit_at_ropefoot
+    summary = _build_state_summary(kit.snapshot, pack=kit.pack, acting_player="Groucho")
+    kinds = {(e["name"], e["kind"]) for e in summary["current_region_exits"]}
+    assert ("Down the Rope", "seam") in kinds, (
+        f"ropefoot must expose the adjacent descent seam, got: {kinds}"
+    )
+    # ...and still lists the plain adjacency so "go to the shaft mouth" works too.
+    assert ("The Dropmouth", "adjacent") in kinds
+
+
 def test_no_cartography_no_projection(plain_snapshot_and_pack):
     snapshot, pack = plain_snapshot_and_pack
     summary = _build_state_summary(snapshot, pack=pack)

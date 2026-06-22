@@ -23,6 +23,8 @@ from typing import Any
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
+from sidequest.telemetry.watcher_hub import publish_event
+
 from ._core import SPAN_ROUTES, SpanRoute
 from .span import Span
 
@@ -142,6 +144,32 @@ SPAN_ROUTES[SPAN_ROOM_DISCOVERED] = SpanRoute(
 )
 
 # ---------------------------------------------------------------------------
+# DB-sink mirror helper
+# ---------------------------------------------------------------------------
+
+
+def _mirror_movement_span_to_sink(span_name: str, span: trace.Span) -> None:
+    """Mirror a finished movement span into the turn_telemetry DB sink.
+
+    Movement spans reach Jaeger via Span.open but never the turn_telemetry
+    Postgres sink — a firing engine reads as DEAD in saves (the 2026-06-22 root
+    cause behind 8 failed crossing attempts). EVERY movement emit site flows
+    through the three context managers below — the subsystem navigator, the
+    region-mode defer, the unresolved path, narration_apply's movement, AND both
+    seam resolvers (deep_descent = the real ropefoot->entrance crossing,
+    surface_ascent = the reverse) — so mirroring HERE covers all of them with no
+    per-site edits and no field drift: we reuse the SAME SPAN_ROUTES extract the
+    GM-panel dashboard uses. tx defaults to None -> the out-of-frame sink (NULL
+    event_seq); movement fires in the ADR-113 engine-first pass, before the turn
+    event frame, so there is no SaveTransaction to ride.
+    """
+    route = SPAN_ROUTES.get(span_name)
+    if route is None:
+        return
+    publish_event(route.event_type, route.extract(span), component=route.component)
+
+
+# ---------------------------------------------------------------------------
 # Context-manager helpers
 # ---------------------------------------------------------------------------
 
@@ -171,6 +199,7 @@ def movement_resolved_span(
         tracer_override=_tracer,
     ) as span:
         yield span
+    _mirror_movement_span_to_sink(SPAN_MOVEMENT_RESOLVED, span)
 
 
 @contextmanager
@@ -198,6 +227,7 @@ def movement_unresolved_span(
     ) as span:
         span.set_status(Status(StatusCode.ERROR, reason))
         yield span
+    _mirror_movement_span_to_sink(SPAN_MOVEMENT_UNRESOLVED, span)
 
 
 @contextmanager
@@ -226,6 +256,7 @@ def movement_region_mode_span(
         tracer_override=_tracer,
     ) as span:
         yield span
+    _mirror_movement_span_to_sink(SPAN_MOVEMENT_REGION_MODE, span)
 
 
 @contextmanager

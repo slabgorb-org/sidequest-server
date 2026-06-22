@@ -1025,3 +1025,104 @@ def test_localized_combat_sentence_has_no_residual_third_person_pronoun():
 def _re_word(word: str, text: str) -> bool:
     """True iff ``word`` appears as a standalone token in ``text``."""
     return re.search(rf"\b{re.escape(word)}\b", text) is not None
+
+
+# ===========================================================================
+# Story 153-29 — REVIEW REWORK (round-trip 1): post-semicolon clause-boundary
+# regressions introduced by the `;`-clause split.
+#
+# The 153-29 implementation made the pronoun gate clause-local by splitting each
+# engine-"sentence" on `;` and processing each clause through `_rewrite_clause`.
+# That split silently changed what the position-context helpers see: a clause is
+# NOT a sentence, but `_is_sentence_start_in` and `_is_proper_noun_fragment` were
+# written for whole-sentence input and now treat a CLAUSE start as a SENTENCE
+# start. Two behaviors that were CORRECT before the branch regressed (Reviewer,
+# round-trip 1):
+#
+#   1. CAPITALIZATION — a PC name/possessive swapped at the start of a NON-first
+#      `;`-clause must stay lowercase ("…; you step", "…; your grip"), because a
+#      semicolon does not open a new sentence. The split puts a leading space on
+#      the clause, so the name sits at idx 1; the new `clause_is_sentence_start`
+#      param only gates the idx==0 branch, while the real path is the whitespace
+#      walk-back `if j < 0: return True` — which ignores the flag. Currently the
+#      swap capitalizes ("…; You step"), which is wrong mid-sentence.
+#
+#   2. 153-14 NPC-NAME-FRAGMENT GUARD — a multi-word NPC name whose suffix token
+#      equals the PC name ("Vah Kantos", PC "Kantos") must stay intact after a
+#      `;`. Pre-split this was protected anywhere in the sentence; post-split the
+#      preceding-word check in `_is_proper_noun_fragment` calls
+#      `_is_sentence_start_in` without threading `is_first_clause`, so "Vah" at
+#      the clause start reads as a sentence opener (not a fragment) and "Kantos"
+#      wrongly swaps to "you" ("…; Vah you bow"). Re-opens a shipped fix
+#      (sq-playtest 2026-06-20/21).
+#
+# These tests are RED until Dev makes the clause-boundary explicit: thread
+# `is_first_clause` into `_is_proper_noun_fragment`, and make
+# `_is_sentence_start_in`'s `j < 0` walk-back return `clause_is_sentence_start`.
+# The first-clause sanity guards below must STAY green — the fix must not
+# over-correct and lowercase a genuine sentence-initial swap.
+# ===========================================================================
+
+
+def test_subject_swap_at_start_of_post_semicolon_clause_stays_lowercase():
+    """A PC subject+verb swap at the start of a non-first `;`-clause is
+    mid-sentence (a semicolon does not open a sentence), so it must render
+    lowercase 'you', not 'You'. Pre-split this was correct; the `;`-split
+    regressed it to capital 'You'."""
+    text = "The torch gutters; Carl steadies it."
+    out, _ = swap_to_second_person(text, target_name="Carl", pronouns="he/him")
+    assert out == "The torch gutters; you steady it.", repr(out)
+    assert "; You steady" not in out, repr(out)
+
+
+def test_subject_and_possessive_swap_after_semicolon_stays_lowercase():
+    """Both the subject name swap AND the follow-on possessive pronoun in a
+    post-`;` armed clause must be lowercase: 'you raise your guard'. (The
+    possessive 'his'->'your' agreement is correct from the green run; only the
+    capitalization of the clause-initial 'you' regressed.)"""
+    text = "The shield drops; Carl raises his guard."
+    out, _ = swap_to_second_person(text, target_name="Carl", pronouns="he/him")
+    assert out == "The shield drops; you raise your guard.", repr(out)
+    assert "; You raise" not in out, repr(out)
+
+
+def test_possessive_name_swap_at_start_of_post_semicolon_clause_stays_lowercase():
+    """The Pass-1 possessive-name path has the same clause-boundary bug: a
+    sentence-initial-looking 'Carl's' at the start of a non-first `;`-clause
+    must become lowercase 'your', not 'Your'."""
+    text = "The torch gutters; Carl's grip tightens."
+    out, _ = swap_to_second_person(text, target_name="Carl", pronouns="he/him")
+    assert out == "The torch gutters; your grip tightens.", repr(out)
+    assert "; Your grip" not in out, repr(out)
+
+
+def test_first_clause_subject_swap_stays_capitalized_after_semicolon_fix():
+    """Sanity guard — the lowercase fix must NOT over-correct: a genuine
+    sentence-initial swap (first clause / whole sentence) must STAY capital
+    'You'. This pins that the fix targets only non-first `;`-clauses."""
+    text = "Carl steadies the torch; the flame holds."
+    out, _ = swap_to_second_person(text, target_name="Carl", pronouns="he/him")
+    assert out.startswith("You steady the torch"), repr(out)
+
+
+def test_suffix_npc_name_after_semicolon_left_intact_153_14_regression():
+    """153-14 regression surfaced by the `;`-split: 'Vah Kantos' is a multi-word
+    NPC name whose suffix token equals the PC name 'Kantos'. After a `;` it must
+    stay fully intact — never 'Vah you bow'. The single-clause baseline
+    (test_pc_name_suffix_of_npc_name_left_intact_mid_sentence) still passes, so
+    the `;`-split is the regression."""
+    text = "The door opens; Vah Kantos bows to the council."
+    out, count = swap_to_second_person(text, target_name="Kantos", pronouns="he/him")
+    assert out == text, repr(out)
+    assert count == 0
+
+
+def test_prefix_npc_name_after_semicolon_left_intact_green_guard():
+    """Companion green guard: the PREFIX collision ('Kantos Vah', PC 'Kantos')
+    after a `;` is already protected (the following-capitalized-word check fires
+    on 'Vah'). This must stay green through the fix — pins that the boundary fix
+    does not regress the prefix case."""
+    text = "The door opens; Kantos Vah studies the console."
+    out, count = swap_to_second_person(text, target_name="Kantos", pronouns="he/him")
+    assert out == text, repr(out)
+    assert count == 0

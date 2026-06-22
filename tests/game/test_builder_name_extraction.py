@@ -103,6 +103,16 @@ _REPRO_LABELED = "Road name: Zeppo. Rig name: Duck Soup."
 _REPRO_TERSE = "Zeppo. The rig: Duck Soup."
 _REPRO_COMMA = "Zeppo, Duck Soup"
 
+# 153-16 (CHARGEN-NAME-PROSE-REJECT) — the exact playtest repro: a full prose
+# answer carrying BOTH halves that the old code re-prompted ("…Both matter.")
+# even though the parser understood it.
+_FINDING_PROSE = (
+    "They call me Riggs. The rig's name is The Anvil — a black, armored wall on wheels."
+)
+# Prose with no recognizable name pattern — the genuine miss that SHOULD still
+# trigger the re-prompt.
+_UNPARSEABLE = "the road took everything from us and gave back only dust"
+
 
 # ===========================================================================
 # extract_freeform_names — pure parsing
@@ -191,11 +201,15 @@ class TestCharacterNameExtraction:
 
 
 class TestNameSceneFollowupCorrection:
+    # 153-16: the name-scene re-prompt now fires ONLY when the first answer did
+    # not parse into a name (see TestNameRepromptGate). These correction-path
+    # tests therefore seed an UNPARSEABLE (or name-less) first answer so the
+    # hook_prompt followup genuinely opens — the path the correction exercises.
     def test_followup_correction_replaces_name_parse(self) -> None:
         """The dead-input bug: the re-prompt answer must be re-parsed and
         REPLACE the prior parse, not be dropped (or buried as a hook)."""
         b = name_scene_builder(hook_prompt="Give your rider a road name and your rig a name.")
-        b.apply_freeform(_REPRO_SENTENCE)
+        b.apply_freeform(_UNPARSEABLE)  # no name parsed → re-prompt opens
         assert b.is_awaiting_followup()
         b.answer_followup("Road name: Ghost. Rig name: Pale Horse.")
         assert b.is_confirmation()
@@ -203,9 +217,11 @@ class TestNameSceneFollowupCorrection:
         assert b.vessel_name() == "Pale Horse"
 
     def test_followup_correction_merges_per_field(self) -> None:
-        """A name-only correction keeps the rig name from the first answer."""
+        """A vessel-only first answer re-prompts for the missing name; the
+        name-only correction supplies the name and keeps the first rig."""
         b = name_scene_builder(hook_prompt="Names?")
-        b.apply_freeform(_REPRO_SENTENCE)  # Zeppo + Duck Soup
+        b.apply_freeform("The rig is Duck Soup")  # vessel only, no name → re-prompt
+        assert b.is_awaiting_followup()
         b.answer_followup("They call me Ghost.")  # name only
         assert b.character_name() == "Ghost"
         assert b.vessel_name() == "Duck Soup"
@@ -213,7 +229,8 @@ class TestNameSceneFollowupCorrection:
     def test_name_scene_followup_does_not_insert_wound_hook(self) -> None:
         """'Zeppo, Duck Soup' is a name correction, not a trauma hook."""
         b = name_scene_builder(hook_prompt="Names?")
-        b.apply_freeform(_REPRO_SENTENCE)
+        b.apply_freeform(_UNPARSEABLE)  # no name parsed → re-prompt opens
+        assert b.is_awaiting_followup()
         b.answer_followup(_REPRO_COMMA)
         results = b.scene_results()
         wound_texts = [
@@ -240,6 +257,60 @@ class TestNameSceneFollowupCorrection:
         results = b.scene_results()
         assert results[0].hooks_added[0].hook_type == HookType.WOUND
         assert results[0].hooks_added[0].text == "A thin white line across her palm."
+
+
+# ===========================================================================
+# 153-16 [CHARGEN-NAME-PROSE-REJECT] — the name-scene re-prompt is GATED on a
+# failed parse. A name-entry scene's hook_prompt is a name-CORRECTION re-prompt,
+# not the WOUND/elaboration hook of a normal scene. Firing it after the parser
+# already understood the answer read as a silent rejection of a good answer:
+# the playtest typed a full prose answer (both halves) and got re-prompted
+# "…Both matter." with no explanation. The gate: re-prompt only when no name
+# could be extracted; otherwise accept the answer and advance.
+# ===========================================================================
+
+
+class TestNameRepromptGate:
+    def test_parseable_prose_advances_without_reprompt(self) -> None:
+        """The exact playtest repro: a full prose answer carrying both halves is
+        accepted (advances straight to confirmation), not re-prompted."""
+        b = name_scene_builder(
+            hook_prompt="Give your rider a road name and your rig a name. Both matter."
+        )
+        b.apply_freeform(_FINDING_PROSE)
+        assert not b.is_awaiting_followup(), (
+            "a fully-parsed prose name answer was re-prompted — silent rejection"
+        )
+        assert b.is_confirmation()
+        assert b.character_name() == "Riggs"
+        assert b.vessel_name() == "The Anvil"
+
+    def test_name_only_answer_advances_without_reprompt(self) -> None:
+        """A name with no rig still parses a name, so it is accepted (the rig
+        half is optional) rather than nagged."""
+        b = name_scene_builder(hook_prompt="Both matter.")
+        b.apply_freeform("Riggs")
+        assert not b.is_awaiting_followup()
+        assert b.is_confirmation()
+        assert b.character_name() == "Riggs"
+        assert b.vessel_name() is None
+
+    def test_unparseable_answer_triggers_reprompt(self) -> None:
+        """The re-prompt is preserved for a genuine miss: prose with no
+        recognizable name still opens the hook_prompt followup."""
+        b = name_scene_builder(hook_prompt="Give your rider a road name.")
+        b.apply_freeform(_UNPARSEABLE)
+        assert b.is_awaiting_followup(), (
+            "an unparseable name answer must still re-prompt (the actionable miss)"
+        )
+
+    def test_name_scene_without_hook_prompt_advances(self) -> None:
+        """The gate only governs scenes that define a re-prompt — a name scene
+        with no hook_prompt always advances regardless of parse outcome."""
+        b = name_scene_builder()  # hook_prompt defaults to None
+        b.apply_freeform(_UNPARSEABLE)
+        assert not b.is_awaiting_followup()
+        assert b.is_confirmation()
 
 
 # ===========================================================================

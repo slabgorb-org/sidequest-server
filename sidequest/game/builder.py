@@ -2388,6 +2388,17 @@ class CharacterBuilder:
         # Emit the extraction decision so the GM panel can see what the
         # parser did with the player's words (the reported OTEL gap: "no
         # extraction span fired on either submit").
+        #
+        # A hook_prompt on a freeform scene normally opens a followup: on a
+        # NON-name scene that's the WOUND/elaboration hook, which always fires.
+        # On the NAME scene the hook_prompt is a name-correction RE-PROMPT, and
+        # firing it after the parser already understood the answer reads as a
+        # silent rejection of a perfectly good answer (153-16
+        # CHARGEN-NAME-PROSE-REJECT: "They call me Riggs. The rig's name is The
+        # Anvil — …" parsed to both halves yet was re-prompted "…Both matter.").
+        # followup_prompt is the hook to open after this answer (None → advance).
+        # The name-scene gate below clears it when the answer already parsed.
+        followup_prompt: str | None = scene.hook_prompt
         if self._is_name_scene(scene_index):
             extracted_name, extracted_vessel = extract_freeform_names(text)
             trace.get_current_span().add_event(
@@ -2402,11 +2413,31 @@ class CharacterBuilder:
                     "severity": "info" if extracted_name else "warn",
                 },
             )
+            # 153-16: re-prompt only when the parser could NOT pull a name from
+            # the answer (the verbatim-dump fallback case). A parsed name means
+            # the player gave a usable answer — accept it and advance instead of
+            # re-asking. The pack hook_prompt stays the actionable guidance shown
+            # on a genuine miss. (The vessel half stays optional, per the
+            # existing vessel_name()-is-None-when-absent contract.)
+            if followup_prompt is not None:
+                accepted = extracted_name is not None
+                if accepted:
+                    followup_prompt = None
+                trace.get_current_span().add_event(
+                    "chargen.name_reprompt_decision",
+                    {
+                        "action": "name_reprompt_decision",
+                        "scene_id": scene.id,
+                        "reprompt": not accepted,
+                        "reason": "name_accepted" if accepted else "name_unparsed",
+                        "severity": "info" if accepted else "warn",
+                    },
+                )
 
-        if scene.hook_prompt is not None:
+        if followup_prompt is not None:
             self._phase = AwaitingFollowup(
                 scene_index=scene_index,
-                hook_prompt=scene.hook_prompt,
+                hook_prompt=followup_prompt,
             )
         else:
             self._advance_scene(scene_index)

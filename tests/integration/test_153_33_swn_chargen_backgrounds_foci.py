@@ -184,10 +184,16 @@ def test_real_swn_chargen_grants_background_skills(
         f"{dict(bg_span.attributes)}"
     )
 
+    # Max-of merge semantics (builder.py): a background grants its skills at a
+    # FLOOR level (§1.3 → level 0); a focus or scene grant for the SAME skill can
+    # raise it (never lower it). So assert the background skill landed at AT LEAST
+    # its granted level, not exactly — mirroring the foci test below. (Concrete
+    # case: a perseus_cloud "Regency-raised" + Officer build grants Lead from both
+    # the background (0) and the chain-of-command focus (1) → sheet shows Lead 1.)
     for skill, level in granted.items():
-        assert char.skills.get(skill) == level, (
-            f"[{world_slug}] background skill {skill!r}={level} did not land on the "
-            f"character sheet; char.skills={char.skills}"
+        assert char.skills.get(skill, -1) >= level, (
+            f"[{world_slug}] background skill {skill!r} (granted at level {level}) did not "
+            f"land on the character sheet; char.skills={char.skills}"
         )
 
 
@@ -198,9 +204,7 @@ def test_real_swn_chargen_grants_background_skills(
 
 @pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
 @pytest.mark.parametrize("world_slug", SPACE_OPERA_WORLDS)
-def test_real_swn_chargen_grants_foci(
-    span_exporter: InMemorySpanExporter, world_slug: str
-) -> None:
+def test_real_swn_chargen_grants_foci(span_exporter: InMemorySpanExporter, world_slug: str) -> None:
     """A real space_opera character picks up at least one focus (WWN SRD §1.5):
     the focus id lands on ``Character.foci``, the focus's level-1 skills land on
     ``Character.skills``, and the ``swn.chargen.foci_applied`` span carries the
@@ -260,9 +264,7 @@ def test_real_swn_focus_grants_signature_ability(span_exporter: InMemorySpanExpo
     pack = _load_space_opera()
     char = _build_first_choice_character(pack, "aureate_span", "Kael Voss")
 
-    assert char.foci, (
-        f"no foci applied, so no focus ability can exist; char.foci={char.foci}"
-    )
+    assert char.foci, f"no foci applied, so no focus ability can exist; char.foci={char.foci}"
 
     class_def = next((c for c in pack.classes if c.display_name == char.char_class), None)
     assert class_def is not None, f"built class {char.char_class!r} not in pack roster"

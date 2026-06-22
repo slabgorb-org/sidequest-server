@@ -528,13 +528,57 @@ async def run_movement_dispatch(
             }
         )
 
-    proj = project_region(graph, from_region, palette)
-
-    # --- §Q1 step 3: filter hidden exits unless the edge is discovered. ---
+    # --- §Q1 step 3-4: project, filter hidden exits, resolve the intent. ---
+    # Bundled so Bug B can re-run the whole pass after a one-shot ring
+    # expansion: a depth-delta jump (entrance → exp002.r2, skipping exp001) can
+    # outrun the look-ahead, leaving the current node's onward ring
+    # unmaterialized. That surfaces as EITHER an empty projection (no_candidate
+    # edges, guard A) OR — when the only materialized neighbor is the node the
+    # PC jumped IN from (a backward edge) — a non-empty projection whose
+    # ``deeper`` resolution finds no forward edge (resolved is None, guard B).
+    # Both must trigger the ring expansion; ``ambiguous`` (a genuine "which
+    # way?" with several real forward ways) must NOT.
     discovered_routes = set(snapshot.discovered_routes or [])
-    candidates: list[RegionExit] = [
-        e for e in proj.exits if (not e.hidden) or (e.to_region_id in discovered_routes)
-    ]
+    discovered_regions = list(snapshot.discovered_regions or [])
+
+    def _project_and_resolve() -> tuple[list[RegionExit], RegionExit | None, str, bool]:
+        proj = project_region(graph, from_region, palette)
+        cands = [e for e in proj.exits if (not e.hidden) or (e.to_region_id in discovered_routes)]
+        if not cands:
+            return cands, None, "depth_delta", False
+        res, via, amb = _resolve(
+            candidates=cands,
+            graph=graph,
+            from_region=from_region,
+            from_depth=proj.depth_score,
+            direction=direction,
+            exit_descriptor=exit_descriptor,
+            discovered_regions=discovered_regions,
+        )
+        return cands, res, via, amb
+
+    candidates, resolved, resolved_via, ambiguous = _project_and_resolve()
+
+    # --- Bug B: dry "deeper"/"back"/"toward_exit" → expand the rooted ring. ---
+    # The narrator is describing real exits from a node whose ring the descent
+    # outran. Expand EVERY frontier edge rooted here ONCE, reload the graph, and
+    # re-resolve. No Silent Fallbacks: if the ring grows nothing, fall through to
+    # the original loud no_candidate_edges below (an honest dead end). A descriptor
+    # ambiguity is a fair "which way?" — never an unexpanded ring — so it is excluded.
+    if (
+        not ambiguous
+        and (not candidates or resolved is None)
+        and direction in ("deeper", "back", "toward_exit")
+    ):
+        grew = await _sync_expand_ring(
+            lookahead_handle=lookahead_handle,
+            dungeon_store=dungeon_store,
+            from_region=from_region,
+            snapshot=snapshot,
+        )
+        if grew:
+            graph = dungeon_store.load_map(entrance_id=_ENTRANCE_ID)
+            candidates, resolved, resolved_via, ambiguous = _project_and_resolve()
 
     available_ids = [e.to_region_id for e in candidates]
 
@@ -549,17 +593,6 @@ async def run_movement_dispatch(
             available=available_ids,
             surface=f"{player_name} finds no such way from here.",
         )
-
-    # --- §Q1 step 4: resolve the coarse intent against the candidates. ---
-    resolved, resolved_via, ambiguous = _resolve(
-        candidates=candidates,
-        graph=graph,
-        from_region=from_region,
-        from_depth=proj.depth_score,
-        direction=direction,
-        exit_descriptor=exit_descriptor,
-        discovered_regions=list(snapshot.discovered_regions or []),
-    )
 
     if ambiguous:
         ways = ", ".join(_way_phrase(e) for e in sorted(candidates, key=_exit_sort_key))
@@ -847,6 +880,57 @@ async def _sync_materialize(
         return False
     fresh = dungeon_store.load_map(entrance_id=_ENTRANCE_ID)
     return target_id in fresh.nodes
+
+
+async def _sync_expand_ring(
+    *,
+    lookahead_handle: LookaheadWorkerHandle | None,
+    dungeon_store: DungeonStore,
+    from_region: str,
+    snapshot: GameSnapshot,
+) -> bool:
+    """Materialize EVERY frontier edge rooted at ``from_region`` so the current
+    node's outgoing ring exists BEFORE we resolve a move from it.
+
+    Bug B (2026-06-22): a depth-delta jump (entrance → exp002.r2, skipping
+    exp001) can land the PC on a node whose onward ring was never materialized —
+    the look-ahead fell behind the descent. The only materialized neighbor is
+    then the node the PC jumped IN from (a backward edge), so the projection is
+    non-empty but a ``deeper`` intent resolves to nothing and the engine reports
+    ``no_candidate_edges`` while the narrator describes real exits. Rather than
+    fail loud on a node the narrator is actively describing exits from, expand
+    the ring here and let the caller re-project + re-resolve ONCE.
+
+    Materializes ALL rooted frontier edges (the full ring, not just the closest
+    — ``_sync_materialize`` does the single closest edge for a known target;
+    here we don't yet know which way the player goes, so we open the whole ring)
+    via the worker's own ``_materialize_edge`` path — same keyword contract as
+    ``_sync_materialize`` (``edge``/``to_region``/``snapshot``, ``to_region`` set
+    to ``from_region`` per the worker's ring-rooted convention). Returns True iff
+    the materialized map grew. NOT a silent fallback: if expansion adds nothing
+    the caller STILL fails loud — this only recovers a genuinely-unexpanded ring.
+    """
+    if lookahead_handle is None:
+        return False
+    before = len(dungeon_store.load_map(entrance_id=_ENTRANCE_ID).nodes)
+    rooted = [fe for fe in dungeon_store.load_frontier() if fe.from_region_id == from_region]
+    if not rooted:
+        return False
+    rooted.sort(key=lambda fe: (fe.spawn_depth_score, fe.frontier_edge_id))
+    for fe in rooted:
+        try:
+            await lookahead_handle._materialize_edge(  # noqa: SLF001 — reuse the one worker path
+                edge=fe, to_region=from_region, snapshot=snapshot
+            )
+        except Exception as exc:  # noqa: BLE001 — one bad edge must not abort the whole ring
+            logger.warning(
+                "movement.ring_expand_edge_failed from=%s edge=%s exc=%s",
+                from_region,
+                fe.frontier_edge_id,
+                exc,
+            )
+    after = len(dungeon_store.load_map(entrance_id=_ENTRANCE_ID).nodes)
+    return after > before
 
 
 def _defer_region_mode(

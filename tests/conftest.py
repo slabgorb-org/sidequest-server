@@ -258,7 +258,19 @@ _CAVERNS_SUNDEN_DEPRECATED_TESTS = frozenset(
         "server/test_magic_init_mp_second_commit.py",
         "server/test_magic_init.py",
         "server/test_merged_mp_emitter_projection.py",
-        "server/test_narration_pov_emission.py",
+        # 153-29: test_narration_pov_emission.py was RE-INCLUDED (removed from
+        # this skip set). It is the per-recipient POV-swap WIRING coverage for
+        # swap_to_second_person / emitters._apply_pov_swap — the same live
+        # subsystem whose unit suite (agents/test_pov_swap.py) was already
+        # un-skipped above for being world-agnostic. This file likewise builds
+        # its GameSnapshot + characters IN-MEMORY (no on-disk caverns_sunden
+        # world load); its only deprecated tie is the world_slug STRING, which
+        # its un-skipped sibling test_narration_pov_regression.py already uses
+        # without issue. pov_swap is live in the beneath_sunden playtest, and
+        # Story 153-29's AC-8 requires a RUNNING wiring test through the real
+        # emit path — a skipped wiring test proves nothing (CLAUDE.md: no
+        # skipping tests for live subsystems; no half-wired features). Removed
+        # deliberately and visibly per this block's reversible-with-reason contract.
         "server/test_opening_turn_bootstrap.py",
         "server/test_persistence_otel_wiring.py",
         "server/test_region_init.py",

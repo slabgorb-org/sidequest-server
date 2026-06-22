@@ -41,6 +41,8 @@ These tests RED until the helper module exists. They prove:
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 # RED until sidequest.agents.pov_swap is created. The import must be at
@@ -339,31 +341,42 @@ def test_npc_them_with_they_them_pc_not_rewritten():
     assert count == 0
 
 
-def test_pronoun_in_predicate_after_name_swap_stays_third_person():
-    """If the narrator slips and mixes the PC's name with pronouns inside one
-    sentence (legacy 49-8 narrator style), the name swaps but the pronouns
-    survive — the renderer no longer guesses which pronouns refer to the PC
-    vs. another character. The prompt-side discipline (pov_rules.md) is what
-    keeps this from happening in well-formed prose."""
+def test_subject_pronoun_after_name_swap_in_same_clause_becomes_you():
+    """UPDATED by Story 153-29 (was test_pronoun_in_predicate_after_name_swap_
+    stays_third_person under the retired-pass 49-8 contract).
+
+    A subject pronoun that co-refers with the just-swapped PC in the SAME
+    clause now agrees, and its verb conjugates: 'and he hauls' → 'and you
+    haul'. This is the canonical AC-2 case from the finding — person-
+    disagreement inside the localized player's own tab is the bug. The
+    antecedent gate (the sentence already had a name-driven swap of the
+    target PC) is what makes this safe; a same-pronoun NPC sentence with no
+    PC name is still left untouched (see the NPC-bleed guards above)."""
     text = "Carl plants a boot and he hauls the polearm out wet."
     out, _ = swap_to_second_person(text, target_name="Carl", pronouns="he/him")
-    # Name → "You", verb conjugated by Pass 2. The bare "he hauls" survives
-    # untouched — antecedent-blind pronoun-pass would have wrongly converted
-    # it; the new contract does not.
-    assert out == "You plant a boot and he hauls the polearm out wet.", out
+    assert out == "You plant a boot and you haul the polearm out wet.", repr(out)
+    assert "he hauls" not in out
 
 
 def test_object_pronoun_him_for_npc_stays_third_person():
-    """Object 'him' referring to an NPC in the same sentence as the PC is a
-    direct antecedent collision. The retire keeps the NPC pronoun intact."""
+    """CLAUSE-LOCAL GATE (Story 153-29): the object pronoun 'him' sits in a
+    DIFFERENT clause (after the ';', subject 'the moth') than the name swap
+    ('Carl' in the first clause). 153-29 re-introduces object-pronoun
+    agreement, but gated per-clause so it does NOT cross the ';' into a clause
+    about another actor — 'him' refers to the moth (or is ambiguous) and must
+    stay third-person. Crossing the boundary would re-open the 2026-05-23
+    NPC-bleed bug inside one engine 'sentence' (split only on .!?). The same-
+    clause cases (e.g. 'Carl charges in and the blast hurls him back') DO
+    convert — see the AC-3 tests below."""
     text = "Carl plants a boot; the moth shudders against him."
     out, _ = swap_to_second_person(text, target_name="Carl", pronouns="he/him")
-    # 'him' refers to the moth (or to Carl — ambiguous), and the engine no
-    # longer guesses. 'Carl' → 'You' fires; the object pronoun stays.
     assert out == "You plant a boot; the moth shudders against him.", out
 
 
 def test_object_pronoun_her_for_npc_stays_third_person():
+    """She/her parity for the clause-local gate: 'her' is in a separate
+    semicolon clause ('the cold seeps') and stays third-person — the gate does
+    not cross the ';'."""
     text = "Katia eases the knife; the cold seeps into her."
     out, _ = swap_to_second_person(text, target_name="Katia", pronouns="she/her")
     assert out == "You ease the knife; the cold seeps into her.", out
@@ -807,3 +820,195 @@ def test_pc_name_suffix_of_npc_name_left_intact_mid_sentence():
     out, count = swap_to_second_person(text, target_name="Kantos", pronouns="he/him")
     assert out == text, repr(out)
     assert count == 0
+
+
+# ===========================================================================
+# Story 153-29: antecedent-gated pronoun agreement
+# (MP-PRONOUN-LOCALIZATION-INCOMPLETE, sq-playtest 2026-06-20/21).
+#
+# The name + adjacent-verb swap (Passes 1-4) leaves possessive / subject /
+# object pronouns for the SAME just-swapped PC in third person, producing
+# person-disagreement inside the localized player's own tab:
+#   "Vesna presses her palm"  ->  "You press her palm"   (should be "your palm")
+# and, worse, a single combat sentence mixing 2nd + 3rd person for one
+# character ("the weight lands on your back and something rakes across his
+# shoulders").
+#
+# Passes 5/6/7 (subject / possessive / object pronoun) were RETIRED 2026-05-23
+# because they were antecedent-blind (rewrote NPC pronouns too). Story 153-29
+# re-introduces them ANTECEDENT-GATED: a pronoun is rewritten only inside the
+# clause that already had a name-driven swap of the target PC. A same-pronoun
+# NPC in a sentence/clause that never named the PC is left fully third-person
+# (preserves the 2026-05-23 fix — AC 4).
+#
+# These tests are RED until the gated pronoun passes are re-introduced.
+# ===========================================================================
+
+# Any third-person pronoun (subject/object/possessive) across the three
+# supported pronoun sets. AC 5 asserts NONE of these survive in a fully
+# localized sentence whose pronouns all co-refer with the swapped "You".
+_THIRD_PERSON_PRONOUN_RE = re.compile(
+    r"\b(?:he|she|they|him|her|them|his|their|hers|theirs)\b", re.IGNORECASE
+)
+
+
+# --- AC 1: possessive pronoun agreement (her / his / their -> your) ---------
+
+
+def test_possessive_pronoun_her_after_name_swap_becomes_your():
+    """Verbatim finding: 'Vesna presses her palm flat to the gouged wall.' on
+    Vesna's own tab must read 'You press your palm…', not 'You press her
+    palm…'. The possessive 'her' co-refers with the swapped 'You'."""
+    text = "Vesna presses her palm flat to the gouged wall."
+    out, _ = swap_to_second_person(text, target_name="Vesna", pronouns="she/her")
+    assert out == "You press your palm flat to the gouged wall.", repr(out)
+    assert "her palm" not in out
+
+
+def test_possessive_pronoun_his_after_name_swap_becomes_your():
+    text = "Carl raises his shield against the blow."
+    out, _ = swap_to_second_person(text, target_name="Carl", pronouns="he/him")
+    assert out == "You raise your shield against the blow.", repr(out)
+    assert "his shield" not in out
+
+
+def test_possessive_pronoun_their_after_name_swap_becomes_your():
+    text = "Sam grips their blade and holds the line."
+    out, _ = swap_to_second_person(text, target_name="Sam", pronouns="they/them")
+    assert out == "You grip your blade and hold the line.", repr(out)
+    assert "their blade" not in out
+
+
+def test_possessive_name_swap_arms_the_pronoun_gate():
+    """AC 4: a name-driven POSSESSIVE swap (Pass 1) — not only a subject swap
+    — must arm the pronoun gate. 'Vesna's grip tightens on her blade.' has no
+    bare subject name, only the possessive 'Vesna's'; the follow-on possessive
+    pronoun 'her blade' must still agree. ('grip' is the subject of 'tightens',
+    not the PC, so 'tightens' stays third-person — only the two possessives
+    change.)"""
+    text = "Vesna's grip tightens on her blade."
+    out, _ = swap_to_second_person(text, target_name="Vesna", pronouns="she/her")
+    assert out == "Your grip tightens on your blade.", repr(out)
+    assert "her blade" not in out
+
+
+# --- AC 2: follow-on subject pronoun agreement (he / she / they -> you) -----
+
+
+def test_subject_pronoun_he_after_name_swap_becomes_you():
+    """Finding (combat): '…before he can raise the blade' on the PC's own tab
+    must read '…before you can raise the blade.' The subject pronoun 'he'
+    co-refers with the swapped 'You' (same clause, no intervening NPC). 'can
+    raise' is a modal phrase — no -s to drop, only the pronoun changes."""
+    text = "Carl lunges before he can raise the blade."
+    out, _ = swap_to_second_person(text, target_name="Carl", pronouns="he/him")
+    assert out == "You lunge before you can raise the blade.", repr(out)
+    assert _re_word("he", out) is False
+
+
+def test_subject_pronoun_she_after_name_swap_conjugates_verb():
+    """She/her parity + verb agreement: 'and she strikes' -> 'and you strike'
+    (the follow-on subject pronoun drops the 3rd-person -s like Pass 2)."""
+    text = "Vesna steps in and she strikes."
+    out, _ = swap_to_second_person(text, target_name="Vesna", pronouns="she/her")
+    assert out == "You step in and you strike.", repr(out)
+    assert "she strikes" not in out
+
+
+def test_subject_pronoun_they_after_name_swap_becomes_you():
+    """Singular-they subject pronoun -> 'you'. The 'you' verb form equals the
+    they form, so 'they swing' -> 'you swing' (no -s change), but the pronoun
+    must still convert."""
+    text = "Sam advances and they swing the hammer wide."
+    out, _ = swap_to_second_person(text, target_name="Sam", pronouns="they/them")
+    assert out == "You advance and you swing the hammer wide.", repr(out)
+    assert "they swing" not in out
+
+
+# --- AC 3: object pronoun agreement (him / her / them -> you) ---------------
+
+
+def test_object_pronoun_him_referring_to_pc_becomes_you():
+    """An object pronoun that co-refers with the swapped PC in the same clause
+    agrees: 'Carl charges in and the blast hurls him back.' -> '…hurls you
+    back.' ('the blast' is the subject of 'hurls', so 'hurls' stays; only the
+    object 'him' converts.)"""
+    text = "Carl charges in and the blast hurls him back."
+    out, _ = swap_to_second_person(text, target_name="Carl", pronouns="he/him")
+    assert out == "You charge in and the blast hurls you back.", repr(out)
+    assert "hurls him" not in out
+
+
+def test_object_pronoun_her_referring_to_pc_becomes_you():
+    """She/her object: 'the cold bites her' (her + terminal punctuation ==
+    object form by lookahead) -> 'the cold bites you'."""
+    text = "Vesna holds the line and the cold bites her."
+    out, _ = swap_to_second_person(text, target_name="Vesna", pronouns="she/her")
+    assert out == "You hold the line and the cold bites you.", repr(out)
+    assert "bites her" not in out
+
+
+def test_object_pronoun_them_referring_to_pc_becomes_you():
+    text = "Sam stands firm and the blow staggers them."
+    out, _ = swap_to_second_person(text, target_name="Sam", pronouns="they/them")
+    assert out == "You stand firm and the blow staggers you.", repr(out)
+    assert "staggers them" not in out
+
+
+# --- AC 4: antecedent gate / no NPC bleed ----------------------------------
+
+
+def test_pronoun_in_separate_sentence_without_pc_name_survives():
+    """The gate is per-sentence: a name swap in sentence 1 must NOT license
+    pronoun rewrites in a LATER sentence that never names the PC. The verbatim
+    annees_folles NPC shape, prefixed with a PC-action opener — sentence 1
+    swaps, sentences 2-3 (the man / He) are untouched."""
+    text = "Carl plants a boot. The man folds his paper. He doesn't hurry."
+    out, _ = swap_to_second_person(text, target_name="Carl", pronouns="he/him")
+    assert out == "You plant a boot. The man folds his paper. He doesn't hurry.", repr(out)
+
+
+def test_pronoun_converts_in_name_clause_but_not_across_semicolon_to_npc():
+    """The antecedent gate is CLAUSE-local, not whole-sentence-coarse. In one
+    engine 'sentence' (split only on .!?), the possessive that co-refers with
+    the named PC in the FIRST clause agrees ('his shield' -> 'your shield'),
+    but an object pronoun in a later ';'-delimited clause about a DIFFERENT
+    subject (the troll) must stay third-person ('swings at him'). Crossing the
+    clause boundary would re-open the 2026-05-23 NPC-bleed bug.
+
+    NOTE (TEA, 153-29): the story context's gate wording is "same sentence";
+    TEA pins the stricter CLAUSE-local reading to honor AC 4's stated 'no NPC
+    bleed' intent. See the Design Deviation + Delivery Finding in the session
+    file. If the Architect prefers the coarse same-sentence gate, this test
+    (and the two ';' NPC guards above) is where that decision lands."""
+    text = "Carl raises his shield; the troll swings at him."
+    out, _ = swap_to_second_person(text, target_name="Carl", pronouns="he/him")
+    assert out == "You raise your shield; the troll swings at him.", repr(out)
+    assert "your shield" in out
+    assert "swings at him" in out
+
+
+# --- AC 5: full person agreement on a localized multi-pronoun sentence ------
+
+
+def test_localized_combat_sentence_has_no_residual_third_person_pronoun():
+    """AC 5 (required): feed a localized multi-pronoun sentence whose pronouns
+    all co-refer with the anchor PC (same clause, comma-chained absolutes) and
+    assert FULL person agreement — no residual third-person pronoun survives.
+    This is the assertion the finding demands: a single localized sentence
+    must never mix 2nd + 3rd person for the same character."""
+    text = "Vesna grits her teeth, pain flooding her arm, the world tilting under her."
+    out, _ = swap_to_second_person(text, target_name="Vesna", pronouns="she/her")
+    assert out == (
+        "You grit your teeth, pain flooding your arm, the world tilting under you."
+    ), repr(out)
+    residual = _THIRD_PERSON_PRONOUN_RE.search(out)
+    assert residual is None, (
+        f"localized sentence must contain NO residual 3rd-person pronoun for the "
+        f"anchor PC; found {residual.group(0)!r} in {out!r}"
+    )
+
+
+def _re_word(word: str, text: str) -> bool:
+    """True iff ``word`` appears as a standalone token in ``text``."""
+    return re.search(rf"\b{re.escape(word)}\b", text) is not None

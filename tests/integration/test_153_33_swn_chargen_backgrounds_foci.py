@@ -11,13 +11,15 @@ references) so ``contribute_background_skills()`` and ``contribute_foci()`` —
 both live and proven against synthetic fixtures in
 ``tests/game/test_chargen_seam_wiring.py`` — finally run with REAL inputs.
 
-THE FINDING (epic-153 playtest sweep): space_opera ships no backgrounds/foci/
-skills catalogs, so every SWN chargen resolves an EMPTY background catalog and
-NO focus ids. ``contribute_background_skills`` fires with
-``reason=no_matching_background_def`` and empty skills; ``contribute_foci``
-fires with an empty focus list. A built character carries zero
-background/focus-granted skills and an empty ``foci`` list. The narrator can
-*describe* a Void-born pilot's training, but nothing mechanical backs it.
+THE FINDING (epic-153 playtest sweep) — the pre-153-33 state these tests guard
+against: space_opera shipped no backgrounds/foci/skills catalogs, so every SWN
+chargen resolved an EMPTY background catalog and NO focus ids.
+``contribute_background_skills`` fired with ``reason=no_matching_background_def``
+and empty skills; ``contribute_foci`` fired with an empty focus list. A built
+character carried zero background/focus-granted skills and an empty ``foci``
+list — the narrator could *describe* a Void-born pilot's training, but nothing
+mechanical backed it. 153-33 authored the content; this suite is now the
+regression guard that keeps it wired.
 
 These tests drive the REAL production wiring — they mirror ``connect.py``'s
 ``resolve_backgrounds`` / ``resolve_foci`` / ``with_chargen_defs`` seam (the
@@ -26,8 +28,8 @@ exercised this path). Parametrized across all three LIVE space_opera worlds
 (aureate_span, coyote_star, perseus_cloud) so the fix cannot be a half-wire that
 covers one world and leaves the others mechanically mute.
 
-RED until the Dev authors the content. Skips cleanly when sidequest-content is
-not present on disk.
+GREEN since 153-33 authored the space_opera catalogs + ``focus_id`` wiring.
+Skips cleanly when sidequest-content is not present on disk.
 
 OTEL assertions use the monkeypatched-tracer pattern from
 ``tests/game/test_chargen_seam_wiring.py``; the span names are
@@ -88,7 +90,7 @@ def span_exporter(monkeypatch: pytest.MonkeyPatch) -> InMemorySpanExporter:
     return exporter
 
 
-def _build_first_choice_character(pack, world_slug: str, name: str):
+def _build_first_choice_character(pack, world_slug: str, name: str, *, crucible_choice: int = 0):
     """Walk the real char_creation scenes picking choice 0, build, return char.
 
     Mirrors the PRODUCTION connect.py chargen seam: resolves scenes, classes,
@@ -96,6 +98,10 @@ def _build_first_choice_character(pack, world_slug: str, name: str):
     via ``with_chargen_defs`` — the step the 153-4 spread test omits. Choice-0 /
     auto-advance / followup reaches confirmation for every space_opera world
     (no LLM-blocking scene), exactly like test_153_4_swn_chargen_spread_wiring.
+
+    ``crucible_choice`` selects which vocation (and therefore which focus) is
+    taken at the ``crucible`` scene; every other choice-bearing scene still takes
+    choice 0. Default 0 = the first vocation (Officer → chain-of-command focus).
     """
     from sidequest.game.builder import CharacterBuilder
     from sidequest.server.dispatch.char_creation_resolve import resolve_char_creation_scenes
@@ -134,12 +140,18 @@ def _build_first_choice_character(pack, world_slug: str, name: str):
             continue
         scene = builder.current_scene()
         if not scene.choices:
-            try:
-                builder.apply_auto_advance()
-            except Exception:
+            # A no-choice scene is either display-only (auto-advance) or wants a
+            # freeform answer. Dispatch on the scene's own ``allows_freeform`` flag
+            # rather than catching exceptions — apply_auto_advance() raises
+            # InvalidChoiceError precisely when ``scene.allows_freeform`` is set, so
+            # a bare ``except Exception`` here would also swallow a real WrongPhaseError
+            # (an FSM bug this wiring test exists to surface). Let it propagate.
+            if scene.allows_freeform:
                 builder.apply_freeform(name)
+            else:
+                builder.apply_auto_advance()
             continue
-        builder.apply_choice(0)
+        builder.apply_choice(crucible_choice if scene.id == "crucible" else 0)
 
     return builder.build(name)
 
@@ -167,9 +179,10 @@ def test_real_swn_chargen_grants_background_skills(
     quick_skills (WWN SRD §1.3), and the ``swn.chargen.background_skills`` span
     carries a NON-EMPTY skill grant that matches what landed on the character.
 
-    RED today: space_opera ships no backgrounds catalog, so the background tag
-    (e.g. 'Core-educated') resolves to no def — the span fires with empty skills
-    and ``reason=no_matching_background_def`` and nothing reaches the sheet.
+    Regression guard: before 153-33, space_opera shipped no backgrounds catalog,
+    so the background tag (e.g. 'Core-educated') resolved to no def — the span
+    fired with empty skills and ``reason=no_matching_background_def`` and nothing
+    reached the sheet. This now asserts the grant lands.
     """
     pack = _load_space_opera()
     assert pack.rules.ruleset == "swn", f"space_opera must bind swn; got {pack.rules.ruleset!r}"
@@ -210,10 +223,10 @@ def test_real_swn_chargen_grants_foci(span_exporter: InMemorySpanExporter, world
     ``Character.skills``, and the ``swn.chargen.foci_applied`` span carries the
     non-empty focus list.
 
-    RED today: no space_opera char_creation scene sets ``focus_id``, so no foci
-    accumulate — the span fires with an empty focus list and the character's
-    ``foci`` is empty. The Dev must author foci.yaml AND wire ``focus_id`` into
-    the scene choices for every world.
+    Regression guard: before 153-33, no space_opera char_creation scene set
+    ``focus_id``, so no foci accumulated — the span fired with an empty focus list
+    and the character's ``foci`` was empty. 153-33 wired ``focus_id`` into every
+    world's crucible choices; this now asserts the focus lands.
     """
     pack = _load_space_opera()
 
@@ -249,36 +262,63 @@ def test_real_swn_chargen_grants_foci(span_exporter: InMemorySpanExporter, world
 # ---------------------------------------------------------------------------
 
 
+# (crucible choice index, expected focus id, expected signature-ability name).
+# The crucible scene is identical across all three worlds (genre-tier foci), so
+# each vocation choice grants exactly one focus + its level-1 signature ability.
+# Walking all five choices proves EVERY focus's ability reaches the sheet — not
+# just choice-0's (chain-of-command), which is all a single-walk test would cover.
+_FOCI_BY_CRUCIBLE = [
+    (0, "chain-of-command", "Pull Rank"),
+    (1, "jury-rigger", "Make It Hold"),
+    (2, "dead-reckoning", "Know the Lanes"),
+    (3, "black-market-contacts", "Know a Guy"),
+    (4, "cultural-fluency", "Read the Room"),
+]
+
+
 @pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
-def test_real_swn_focus_grants_signature_ability(span_exporter: InMemorySpanExporter) -> None:
-    """At least one chargen focus contributes a signature ability to the sheet
-    (WWN SRD §1.5; ADR-095 — focus abilities are distinct from class abilities).
+@pytest.mark.parametrize("crucible_idx,focus_id,ability_name", _FOCI_BY_CRUCIBLE)
+def test_real_swn_focus_grants_signature_ability(
+    span_exporter: InMemorySpanExporter, crucible_idx: int, focus_id: str, ability_name: str
+) -> None:
+    """Each chargen focus contributes its signature ability to the sheet
+    (WWN SRD §1.5; ADR-097 — focus abilities are distinct from class abilities).
 
     Foci abilities are stamped ``AbilitySource.Class`` by the builder (there is
     no AbilitySource.Focus). The character must therefore carry MORE abilities
     than its class alone grants — proof a focus ability was applied, not just a
-    focus skill. RED today: no foci are applied at all.
+    focus skill. Parametrized over all five crucible vocations so a focus authored
+    skill-only (no ability) cannot slip through (``FocusLevel.abilities`` defaults
+    to ``[]`` and the validator does not require an ability).
     """
     from sidequest.game.ability import AbilitySource
 
     pack = _load_space_opera()
-    char = _build_first_choice_character(pack, "aureate_span", "Kael Voss")
+    char = _build_first_choice_character(
+        pack, "aureate_span", "Kael Voss", crucible_choice=crucible_idx
+    )
 
-    assert char.foci, f"no foci applied, so no focus ability can exist; char.foci={char.foci}"
+    assert focus_id in char.foci, (
+        f"crucible choice {crucible_idx} should grant focus {focus_id!r}; char.foci={char.foci}"
+    )
 
     class_def = next((c for c in pack.classes if c.display_name == char.char_class), None)
     assert class_def is not None, f"built class {char.char_class!r} not in pack roster"
     class_ability_names = {a.name for a in (class_def.abilities or [])}
 
-    focus_abilities = [
-        a
-        for a in char.abilities
-        if a.source == AbilitySource.Class and a.name not in class_ability_names
-    ]
-    assert focus_abilities, (
-        f"expected at least one focus-contributed ability beyond the class's own "
-        f"({sorted(class_ability_names)}); character abilities="
-        f"{[a.name for a in char.abilities]}"
+    # The focus's named signature ability is on the sheet, stamped Class-source,
+    # and is NOT one of the class's own abilities (ADR-097 distinctness).
+    assert ability_name not in class_ability_names, (
+        f"focus ability {ability_name!r} collides with a class ability name "
+        f"({sorted(class_ability_names)}) — ADR-097 requires them distinct"
+    )
+    match = next((a for a in char.abilities if a.name == ability_name), None)
+    assert match is not None, (
+        f"focus {focus_id!r} signature ability {ability_name!r} did not reach the sheet; "
+        f"character abilities={[a.name for a in char.abilities]}"
+    )
+    assert match.source == AbilitySource.Class, (
+        f"focus ability {ability_name!r} should be stamped AbilitySource.Class; got {match.source!r}"
     )
 
 

@@ -9,8 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import dataclass, field
 from typing import Any, cast
 from unittest.mock import MagicMock
+
+import pytest
 
 from sidequest.agents.narrator_perception_filter import NarratorPerceptionFilter
 from sidequest.agents.tool_registry import (
@@ -423,3 +426,137 @@ async def test_dispatch_path_returns_json_payload() -> None:
     assert payload["path"] == "/current_region"
     assert payload["value"] == "Iron Ward"
     assert payload["applied_field"] == "current_region"
+
+
+# ---------------------------------------------------------------------------
+# Bug A — region-mode /current_region guard (2026-06-22 findings)
+# ---------------------------------------------------------------------------
+# The narrator's escape-hatch tool must NOT write /current_region in a
+# region-mode/seam world — the engine owns the region there (movement
+# subsystem crosses the static→procedural seam engine-first, ADR-113).
+# The title-scrape path was already fenced; this closes the matching hole
+# in the TOOL. Scoped to /current_region; recoverable (narrator re-plans).
+#
+# Fixture helpers: minimal duck-typed CartographyConfig + World + GenrePack
+# stand-ins so we don't need a real loader, following the pattern in
+# test_tick_tropes.py (_FakePack) and test_stabilize_dying_window_clock.py.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _FakeCartography:
+    navigation_mode: Any = None
+
+
+@dataclass
+class _FakeWorld:
+    cartography: _FakeCartography = field(default_factory=_FakeCartography)
+
+
+@dataclass
+class _FakePack:
+    worlds: dict[str, _FakeWorld] = field(default_factory=dict)
+
+
+def _make_region_mode_ctx(store, *, session_id: str = "s-region") -> ToolContext:
+    """ToolContext whose world has cartography.navigation_mode == NavigationMode.region."""
+    from sidequest.genre.models.world import NavigationMode
+
+    cart = _FakeCartography(navigation_mode=NavigationMode.region)
+    world = _FakeWorld(cartography=cart)
+    pack = _FakePack(worlds={"testworld": world})
+    return ToolContext(
+        world_id="testworld",
+        session_id=session_id,
+        perspective_pc="Alice",
+        turn_number=3,
+        repository=store,
+        otel_span=MagicMock(),
+        perception_filter=NarratorPerceptionFilter(),
+        genre_pack=pack,
+    )
+
+
+def _make_plain_ctx(store, *, session_id: str = "s-plain") -> ToolContext:
+    """ToolContext whose world has cartography.navigation_mode == NavigationMode.room_graph
+    (non-region-mode — /current_region escape hatch stays open)."""
+    from sidequest.genre.models.world import NavigationMode
+
+    cart = _FakeCartography(navigation_mode=NavigationMode.room_graph)
+    world = _FakeWorld(cartography=cart)
+    pack = _FakePack(worlds={"testworld": world})
+    return ToolContext(
+        world_id="testworld",
+        session_id=session_id,
+        perspective_pc="Alice",
+        turn_number=3,
+        repository=store,
+        otel_span=MagicMock(),
+        perception_filter=NarratorPerceptionFilter(),
+        genre_pack=pack,
+    )
+
+
+@pytest.mark.asyncio
+async def test_current_region_denied_in_region_mode_world() -> None:
+    """Bug A: the narrator's escape hatch must not write /current_region in a
+    region-mode/seam world — the engine owns the region there. Recoverable
+    rejection (the narrator re-plans), NOT a fatal abort."""
+    snap = _build_snapshot()
+    store = _store_with(snap)
+    ctx = _make_region_mode_ctx(store)
+
+    r = await _call(
+        {
+            "path": "/current_region",
+            "value": "exp001.r0",
+            "reason": "narrator tries to set region",
+        },
+        ctx,
+    )
+    assert r.status is ToolResultStatus.ERROR_RECOVERABLE
+    assert r.message is not None
+    assert "region-mode" in r.message or "engine" in r.message
+    # The snapshot's current_region must NOT have been written.
+    reloaded = store.load()
+    assert reloaded is not None
+    assert reloaded.snapshot.current_region != "exp001.r0"
+
+
+@pytest.mark.asyncio
+async def test_current_region_allowed_in_non_region_world() -> None:
+    """Non-region-mode worlds keep the existing /current_region escape hatch."""
+    snap = _build_snapshot()
+    store = _store_with(snap)
+    ctx = _make_plain_ctx(store)
+
+    r = await _call(
+        {
+            "path": "/current_region",
+            "value": "the_market",
+            "reason": "ordinary region set",
+        },
+        ctx,
+    )
+    assert r.status is ToolResultStatus.OK
+
+
+@pytest.mark.asyncio
+async def test_location_still_allowed_in_region_mode_world() -> None:
+    """The denial is scoped to /current_region — /location (scene heading) is
+    still a legitimate narrator write in a region-mode world."""
+    snap = _build_snapshot()
+    snap.player_seats = {"p1": "Alice"}
+    snap.character_locations["Alice"] = "old place"
+    store = _store_with(snap)
+    ctx = _make_region_mode_ctx(store, session_id="s-region-loc")
+
+    r = await _call(
+        {
+            "path": "/location",
+            "value": "The Dropmouth — First Chamber",
+            "reason": "scene heading",
+        },
+        ctx,
+    )
+    assert r.status is ToolResultStatus.OK

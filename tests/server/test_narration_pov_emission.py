@@ -514,3 +514,119 @@ def test_narration_segment_firewalled_and_pov_swapped_end_to_end(
     )
     delivered = queues["p_carl"].get_nowait()
     assert "you" in delivered.payload["text"].lower()
+
+
+# ---------------------------------------------------------------------------
+# 6. Story 153-29 — pronoun agreement through the REAL per-recipient emit path
+#    (emitters._apply_pov_swap -> swap_to_second_person), plus the canonical
+#    EventLog (replay) invariant. This is the AC-8 wiring proof and the AC-6
+#    replay proof — driven end-to-end, never by grepping pov_swap source.
+# ---------------------------------------------------------------------------
+
+
+def test_anchor_recipient_sees_full_pronoun_agreement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC 8 (wiring) + AC 5 (agreement): drive the production per-recipient
+    emit path with a pc-anchored frame whose canonical prose carries a
+    possessive pronoun for the anchor. Katia's (anchor, she/her) delivered
+    frame must show FULL pronoun agreement — 'You press your palm…' with no
+    residual 'her' — proving the re-introduced pronoun passes are reached
+    through emitters._apply_pov_swap, not just unit-tested in isolation. A
+    non-anchor recipient (Donut) must still see the canonical third-person."""
+    handler = _make_handler_three_pcs(tmp_path)
+    queues = _attach_queues(handler._room)
+
+    from sidequest.server import session_handler as handler_module
+    from sidequest.server import views as views_module
+
+    class _FakeMsg:
+        def __init__(self, payload):
+            self.payload = payload
+
+    monkeypatch.setitem(handler_module._KIND_TO_MESSAGE_CLS, "NARRATION", _FakeMsg)
+    monkeypatch.setattr(views_module, "status_effects_by_player", lambda _h: {})
+
+    payload = {
+        "text": "Katia presses her palm flat to the gouged wall.",
+        "footnotes": [],
+        "_visibility": {
+            "visible_to": "all",
+            "fidelity": {},
+            "anchor_pc": "Katia",
+            "pov_strategy": "pc_anchored",
+        },
+    }
+    handler._emit_event("NARRATION", payload)
+
+    # Katia (anchor, she/her) — possessive agreement on her own tab.
+    assert queues["p_katia"].qsize() == 1, "Katia must receive her own card"
+    katia_text = queues["p_katia"].get_nowait().payload["text"]
+    assert "You press your palm" in katia_text, (
+        f"anchor must see full pronoun agreement through the emit path; "
+        f"got: {katia_text!r}"
+    )
+    assert "her palm" not in katia_text, (
+        f"possessive pronoun must agree (her->your) on the anchor's tab; "
+        f"got: {katia_text!r}"
+    )
+    assert "Katia" not in katia_text
+
+    # Donut (non-anchor) — canonical third-person, untouched.
+    assert queues["p_donut"].qsize() == 1
+    donut_text = queues["p_donut"].get_nowait().payload["text"]
+    assert donut_text == "Katia presses her palm flat to the gouged wall.", (
+        f"non-anchor recipient must see canonical 3rd-person; got: {donut_text!r}"
+    )
+
+
+def test_canonical_eventlog_text_stays_third_person_after_localized_emit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC 6 (replay/canonical invariant): the stored EventLog prose remains
+    canonical third-person — pronouns intact — because the 2nd-person pronoun
+    agreement is applied solely at the per-recipient emit step, AFTER the
+    canonical payload is appended to the log. Reconnect/replay re-reads this
+    canonical text (which is exactly why the finding noted replay shows clean
+    3rd-person)."""
+    handler = _make_handler_three_pcs(tmp_path)
+    _attach_queues(handler._room)
+
+    from sidequest.server import session_handler as handler_module
+    from sidequest.server import views as views_module
+
+    class _FakeMsg:
+        def __init__(self, payload):
+            self.payload = payload
+
+    monkeypatch.setitem(handler_module._KIND_TO_MESSAGE_CLS, "NARRATION", _FakeMsg)
+    monkeypatch.setattr(views_module, "status_effects_by_player", lambda _h: {})
+
+    canonical = "Katia presses her palm flat to the gouged wall."
+    payload = {
+        "text": canonical,
+        "footnotes": [],
+        "_visibility": {
+            "visible_to": "all",
+            "fidelity": {},
+            "anchor_pc": "Katia",
+            "pov_strategy": "pc_anchored",
+        },
+    }
+    handler._emit_event("NARRATION", payload)
+
+    import json
+
+    assert handler._event_log is not None
+    rows = handler._event_log.read_since(since_seq=0)
+    narration_rows = [r for r in rows if r.kind == "NARRATION"]
+    assert narration_rows, "emit must persist a NARRATION event to the log"
+    stored = json.loads(narration_rows[-1].payload_json)
+    assert stored["text"] == canonical, (
+        f"stored/replay prose must stay canonical 3rd-person (un-localized); "
+        f"got: {stored['text']!r}"
+    )
+    # Belt-and-suspenders: the canonical text keeps the 3rd-person pronoun and
+    # carries no 2nd-person leakage from the per-recipient swap.
+    assert "her palm" in stored["text"]
+    assert "You press" not in stored["text"]

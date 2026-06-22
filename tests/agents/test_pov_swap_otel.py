@@ -179,3 +179,36 @@ def test_swap_with_no_matches_still_emits_span_with_zero_count(otel_capture):
     attrs = dict(spans[0].attributes)
     assert attrs.get("swap_count") == 0
     assert attrs.get("swap_target_name") == "Carl"
+
+
+# ---------------------------------------------------------------------------
+# Story 153-29: swap_count must include the new pronoun substitutions
+# ---------------------------------------------------------------------------
+
+
+def test_swap_count_includes_pronoun_substitutions(otel_capture):
+    """AC 7: the narration.second_person_swap span's swap_count must grow to
+    include the new possessive / subject / object pronoun edits — not just the
+    name + adjacent verb. The GM panel reads swap_count to confirm pronoun
+    agreement actually fired (the lie-detector), so re-introducing the gated
+    pronoun passes without counting them would leave the panel blind.
+
+    'Carl plants a boot and he hauls his polearm.' ->
+    'You plant a boot and you haul your polearm.'
+      name(Carl->You)=1, verb(plants->plant)=1, subj-pron(he->you)=1,
+      verb(hauls->haul)=1, poss-pron(his->your)=1  => 5 edits.
+    Under the retired-pass contract only the name + first verb count (=2),
+    so this asserts the count climbs to include the pronoun work."""
+    swap_to_second_person(
+        "Carl plants a boot and he hauls his polearm.",
+        target_name="Carl",
+        pronouns="he/him",
+    )
+    spans = _spans_named(otel_capture, "narration.second_person_swap")
+    assert len(spans) == 1
+    swap_count = dict(spans[0].attributes).get("swap_count")
+    assert isinstance(swap_count, int) and swap_count >= 5, (
+        f"swap_count must include the pronoun substitutions (expected >= 5: "
+        f"name + verb + subject-pronoun + its verb + possessive-pronoun); "
+        f"got {swap_count!r}"
+    )

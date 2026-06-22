@@ -124,9 +124,71 @@ _BEARING_LR_RANK: dict[str, int] = {
 }
 
 
+# Common English function words stripped ONLY in ``_resolve_cartography_lateral``
+# when matching a player's exit descriptor against region DISPLAY NAMES (e.g.
+# "head to the Emerald City" should not score a hit on "the" in "The Meadow").
+# Scoped to the lateral resolver — NOT used in the shared ``_tokens`` helper —
+# so ``_resolve`` (room-graph) and ``_resolve_ordinal`` are unaffected.
+#
+# Directional words (up, down, out, around, over, under, back) are deliberately
+# EXCLUDED: even in lateral display-name matching, a directional word could be
+# the only discriminating token in a region's name ("The Down Below", "The
+# Overpass"), and silently dropping it would violate No-Silent-Fallbacks.
+_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "of",
+        "in",
+        "on",
+        "at",
+        "to",
+        "for",
+        "and",
+        "or",
+        "but",
+        "by",
+        "from",
+        "with",
+        "into",
+        "onto",
+        "upon",
+        "i",
+        "me",
+        "my",
+        "you",
+        "your",
+        "we",
+        "our",
+        "it",
+        "its",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "do",
+        "does",
+        "did",
+        "have",
+        "has",
+        "had",
+        "this",
+        "that",
+        "these",
+        "those",
+        "there",
+        "here",
+    }
+)
+
+
 def _tokens(text: str) -> set[str]:
     """Lowercased alpha tokens for descriptor token-overlap scoring."""
-    return {t for t in re.findall(r"[a-z]+", (text or "").lower())}
+    return set(re.findall(r"[a-z]+", (text or "").lower()))
 
 
 def _exit_sort_key(e: RegionExit) -> tuple[str, str]:
@@ -414,6 +476,63 @@ async def run_movement_dispatch(
             and from_region in dungeon_store.load_map(entrance_id=_ENTRANCE_ID).nodes
         )
         if not _in_dungeon:
+            # --- Engine-authoritative lateral cartography travel (Plan 1). ---
+            # A region-mode PC on a surface cartography region moving to an
+            # ADJACENT region (oz: munchkin_country -> the_emerald_city). The
+            # ONLY mover for this historically was the narration title-scrape
+            # (narration_apply.location_update) — the fragile path that let the
+            # narrator move the party. Resolve it engine-side against the
+            # cartography adjacency graph and cross via the per-PC chokepoint,
+            # exactly like the §Q1 dungeon navigator. ADDITIVE: an unmatched
+            # intent still defers (the scrape remains the backstop until Plan 2
+            # severs it); an AMBIGUOUS intent fails loud (No Silent Fallbacks).
+            target_id, via, ambiguous, candidate_ids, surface = _resolve_cartography_lateral(
+                cart=cart,
+                from_region=from_region,
+                exit_descriptor=exit_descriptor,
+                direction=direction,
+                discovered_regions=list(snapshot.discovered_regions or []),
+            )
+            if target_id is not None:
+                snapshot.apply_world_patch(WorldStatePatch(pc_region={player_name: target_id}))
+                with movement_resolved_span(
+                    pc_name=player_name,
+                    from_region=from_region,
+                    to_region=target_id,
+                ) as span:
+                    span.set_attribute("intent.direction", direction)
+                    span.set_attribute("intent.exit_descriptor", exit_descriptor)
+                    span.set_attribute("resolved_via", via)
+                    span.set_attribute("candidate_exits", candidate_ids)
+                    span.set_attribute("edge_kind", "cartography_adjacent")
+                    span.set_attribute("party_split_after", snapshot.region_for() is None)
+                logger.debug(
+                    "movement.resolved pc=%s from=%s to=%s via=%s kind=cartography_adjacent",
+                    player_name,
+                    from_region,
+                    target_id,
+                    via,
+                )
+                return SubsystemOutput(
+                    data={
+                        "to_region": target_id,
+                        "from_region": from_region,
+                        "resolved_via": via,
+                    }
+                )
+            if ambiguous:
+                return _unresolved(
+                    snapshot=snapshot,
+                    player_name=player_name,
+                    reason="ambiguous_region_exit",
+                    from_region=from_region,
+                    direction=direction,
+                    exit_descriptor=exit_descriptor,
+                    available=candidate_ids,
+                    surface=surface,
+                )
+            # No lateral match (non-travel intent / flavor descriptor): defer to
+            # the existing region-mode path (additive — Plan 1 removes nothing).
             return _defer_region_mode(
                 snapshot=snapshot,
                 player_name=player_name,
@@ -829,6 +948,81 @@ def _resolve(
 
     # Unknown direction with no descriptor → no resolution.
     return None, "depth_delta", False
+
+
+def _resolve_cartography_lateral(
+    *,
+    cart,
+    from_region: str,
+    exit_descriptor: str,
+    direction: str,
+    discovered_regions: list[str],
+) -> tuple[str | None, str, bool, list[str], str]:
+    """Resolve a LATERAL region-mode move against the current region's
+    cartography neighbors. Returns (target_id, resolved_via, ambiguous,
+    candidate_ids, surface).
+
+    The cartography-graph twin of ``_resolve`` (which resolves the procedural
+    room graph). The router emits only coarse directions
+    (deeper/back/toward_exit) plus the player's verbatim ``exit_descriptor``;
+    a lateral move carries its target in the descriptor (oz: "head to the
+    Emerald City"). Match the descriptor's tokens against each adjacent
+    region's id + display name; a unique top score wins, a top-2 tie is
+    ambiguous (fail loud), no overlap is a no-match (caller defers — this is
+    additive, Plan 1). ``back`` with no descriptor resolves to the
+    most-recently-prior discovered neighbor. NEVER guesses (No Silent
+    Fallbacks).
+    """
+    region = getattr(cart, "regions", {}).get(from_region)
+    if region is None:
+        return None, "region_lateral", False, [], ""
+    candidate_ids = sorted(n for n in (getattr(region, "adjacent", ()) or []))
+    if not candidate_ids:
+        return None, "region_lateral", False, [], ""
+
+    # "back" with no descriptor → most-recently-prior discovered neighbor.
+    if direction == "back" and not exit_descriptor.strip():
+        recency = {rid: i for i, rid in enumerate(discovered_regions)}
+        prior = [c for c in candidate_ids if c in recency]
+        if prior:
+            prior.sort(key=lambda c: -recency[c])
+            return prior[0], "region_back", False, candidate_ids, ""
+        return None, "region_lateral", False, candidate_ids, ""
+
+    if not exit_descriptor.strip():
+        return None, "region_lateral", False, candidate_ids, ""
+
+    want = _tokens(exit_descriptor) - _STOPWORDS
+    scored: list[tuple[int, str]] = []
+    regions_map = getattr(cart, "regions", {})
+    for cid in candidate_ids:
+        neighbor = regions_map.get(cid)
+        surface_tokens = _tokens(cid) - _STOPWORDS
+        if neighbor is not None:
+            surface_tokens = surface_tokens | (
+                _tokens(str(getattr(neighbor, "name", "") or "")) - _STOPWORDS
+            )
+        score = len(want & surface_tokens)
+        if score > 0:
+            scored.append((score, cid))
+    if not scored:
+        return None, "region_lateral", False, candidate_ids, ""
+    scored.sort(key=lambda s: (-s[0], s[1]))
+    if len(scored) >= 2 and scored[0][0] == scored[1][0]:
+        ways = ", ".join(
+            str(getattr(regions_map.get(cid), "name", cid) or cid) for _, cid in scored
+        )
+        from_region_display = str(
+            getattr(regions_map.get(from_region), "name", from_region) or from_region
+        )
+        return (
+            None,
+            "region_lateral",
+            True,
+            candidate_ids,
+            f"{from_region_display} could go more than one way: {ways}. Which way?",
+        )
+    return scored[0][1], "region_lateral", False, candidate_ids, ""
 
 
 async def _sync_materialize(

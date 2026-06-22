@@ -295,6 +295,23 @@ For each player action:
          the engine resolves it against the world's bodies and refuses an unknown
          body LOUDLY. A clear declaration of travel to a named body scores HIGH; a
          vague "let's get moving" with no named destination scores LOW.
+       - dogfight: SHIP-vs-SHIP / fighter combat — the player's ship or fighter
+         engages a hostile contact, vessel, or enemy pilot (paint/lock a contact
+         with targeting radar, bring the ship to combat attitude with weapons hot,
+         intercept/pursue/engage another vessel, open fire on a ship). params={
+           "opponent": {"name": "<the hostile ship/pilot/contact>",
+                        "description": "<one clause>"}
+         }.
+         Emit dogfight (NOT confrontation) for VEHICLE/ship combat in space — the
+         ADR-077 sealed-letter dogfight engine seats the duel. Use confrontation
+         for PERSONAL combat (a corridor shoot-out, a brawl). A dogfight REQUIRES
+         an Other (ADR-116): ALWAYS name the hostile vessel/pilot in
+         params["opponent"] — the contact painted, the ship pursued — even when it
+         was only just named in the fiction; the engine materializes it as the
+         opponent. Omitting it collapses a real ship fight into prose (the engine
+         never starts, no dice). An unambiguous ship-combat action ("full lock,
+         weapons hot, engage the contact") scores HIGH; a vague "keep an eye on
+         that contact" with no engagement scores LOW.
      Every dispatch carries a per-dispatch confidence (0.0-1.0): how certain you
      are that THIS specific mechanical engagement is what the player intended.
      Score the confidence for each dispatch honestly — a high score fires the

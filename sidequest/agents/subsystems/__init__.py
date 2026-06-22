@@ -33,10 +33,14 @@ Registered handlers (post-Story 59-6):
   - ``fate_action`` → ``run_fate_action_dispatch`` — engages one classified
     Fate action (overcome/create_advantage/attack/concede) via
     ``dispatch_fate_action`` on a ``ruleset: fate`` pack (ADR-144 F2a).
+  - ``dogfight`` → ``run_dogfight_dispatch`` — seats the ADR-077 sealed-letter
+    ship-combat dogfight from a natural-language ship-combat intent, reusing
+    the shared ``instantiate_encounter_from_trigger`` primitive (story 153-6).
 
-All eight subsystems are live on the turn path. The Intent Router's
-system prompt names them as valid dispatch types and the dispatch
-engagement watcher (story 59-3) has engagement witnesses for each.
+All registered subsystems are live on the turn path (see ``_register_defaults``
+for the authoritative list). The Intent Router's system prompt names them as
+valid dispatch types and the dispatch engagement watcher (story 59-3) has
+engagement witnesses for the snapshot-observable ones.
 """
 
 from __future__ import annotations
@@ -180,6 +184,7 @@ def _register_defaults() -> None:
     from sidequest.agents.subsystems.confrontation import run_confrontation_dispatch
     from sidequest.agents.subsystems.course import run_course_dispatch
     from sidequest.agents.subsystems.distinctive_detail import run_distinctive_detail
+    from sidequest.agents.subsystems.dogfight import run_dogfight_dispatch
     from sidequest.agents.subsystems.environment_clock import run_environment_clock_dispatch
     from sidequest.agents.subsystems.equip import run_equip_dispatch
     from sidequest.agents.subsystems.fate_action import run_fate_action_dispatch
@@ -206,6 +211,7 @@ def _register_defaults() -> None:
         ("fate_action", run_fate_action_dispatch),
         ("quest_offer", run_quest_offer_dispatch),
         ("course", run_course_dispatch),
+        ("dogfight", run_dogfight_dispatch),
     ):
         _REGISTRY.pop(name, None)
         _REGISTRY[name] = fn

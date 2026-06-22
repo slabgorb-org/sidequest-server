@@ -1,11 +1,13 @@
-"""Dogfight sealed-letter resolution spans.
+"""Dogfight sealed-letter resolution + dispatch spans.
 
-ADR-077 (per the dogfight × SWN resolution work). Five spans live below:
-confrontation_started, maneuver_committed, cell_resolved, plus shot_attempted
-(hit resolution) and shot_damage (damage ablation). Four remain deferred —
-gun_solution_fired, energy_depleted, skill_tier_resolved, ace_instinct_used —
-because they need subsystems that don't exist yet. The two SWN shot spans are
-additions to the live set; the deferred list is unchanged.
+ADR-077 (per the dogfight × SWN resolution work). Eight spans live below:
+the engine spans confrontation_started, maneuver_committed, cell_resolved,
+shot_attempted (hit resolution), shot_damage (damage ablation), and
+weapon_resolved (ship-weapon provenance, story 114-15); plus the dispatch-level
+pair dispatch and dispatch.rejected (the IntentRouter dogfight handler,
+story 153-6). Four remain deferred — gun_solution_fired, energy_depleted,
+skill_tier_resolved, ace_instinct_used — because they need subsystems that
+don't exist yet.
 """
 
 from __future__ import annotations
@@ -254,6 +256,82 @@ def dogfight_shot_damage_span(
             "target_hp_after": target_hp_after,
             **attrs,
         },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+# ---------------------------------------------------------------------------
+# Dispatch-level spans (Story 153-6 — [SWN-DOGFIGHT-UNREACHABLE]).
+#
+# The spans above fire from inside the dogfight ENGINE (seating + sealed-letter
+# resolution). These two fire from the IntentRouter dispatch HANDLER
+# (``agents/subsystems/dogfight.py``) — the GM-panel lie-detector confirming
+# that a ship-combat intent ENGAGED the dogfight engine (``dogfight.dispatch``)
+# rather than the narrator improvising it, and that an un-seatable dogfight
+# failed LOUD (``dogfight.dispatch.rejected``) instead of silently handing back
+# to the narrator (No Silent Fallbacks; AC-5). Mirrors the 153-5 ``course.plot``
+# / ``course.plot.rejected`` handler-level pair.
+# ---------------------------------------------------------------------------
+
+SPAN_DOGFIGHT_DISPATCH = "dogfight.dispatch"
+SPAN_ROUTES[SPAN_DOGFIGHT_DISPATCH] = SpanRoute(
+    event_type="state_transition",
+    component="dogfight",
+    extract=lambda span: {
+        "field": "dogfight",
+        "op": "dispatch",
+        "encounter_type": (span.attributes or {}).get("encounter_type", ""),
+        "opponent": (span.attributes or {}).get("opponent", ""),
+    },
+)
+SPAN_DOGFIGHT_DISPATCH_REJECTED = "dogfight.dispatch.rejected"
+SPAN_ROUTES[SPAN_DOGFIGHT_DISPATCH_REJECTED] = SpanRoute(
+    event_type="state_transition",
+    component="dogfight",
+    extract=lambda span: {
+        "field": "dogfight",
+        "op": "dispatch_rejected",
+        "reason": (span.attributes or {}).get("reason", ""),
+        "opponent": (span.attributes or {}).get("opponent", ""),
+    },
+)
+
+
+@contextmanager
+def dogfight_dispatch_span(
+    *,
+    encounter_type: str,
+    opponent: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """A ship-combat intent dispatched to the dogfight subsystem and SEATED a
+    dogfight encounter (Story 153-6, AC-2). The GM-panel proof that the engine
+    engaged, not that the narrator improvised ship combat."""
+    with Span.open(
+        SPAN_DOGFIGHT_DISPATCH,
+        {"encounter_type": encounter_type, "opponent": opponent, **attrs},
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def dogfight_dispatch_rejected_span(
+    *,
+    reason: str,
+    opponent: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """A dogfight dispatch could NOT seat the engine (no Other to seat, no
+    dogfight ConfrontationDef, instantiation refused) — a LOUD failure with a
+    reason the GM panel can read (Story 153-6, AC-5; No Silent Fallbacks). Never
+    a silent hand-back to the narrator."""
+    with Span.open(
+        SPAN_DOGFIGHT_DISPATCH_REJECTED,
+        {"reason": reason, "opponent": opponent, **attrs},
         tracer_override=_tracer,
     ) as span:
         yield span

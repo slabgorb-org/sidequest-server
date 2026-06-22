@@ -405,6 +405,35 @@ def _check_course_engaged(
     )
 
 
+def _check_dogfight_engaged(
+    dispatch: SubsystemDispatch, snapshot: GameSnapshot, player_id: str | None
+) -> str | None:
+    """dogfight witness — "a live dogfight encounter seated" (Story 153-6).
+
+    Router-claimed-but-engine-idle for ADR-077 ship combat: when the router
+    dispatched ``dogfight`` but no live dogfight encounter landed on the post-turn
+    snapshot, the dogfight engine never engaged — a real mismatch (the narrator
+    improvised the ship combat / let the contact break off, the
+    [SWN-DOGFIGHT-UNREACHABLE] repro). A seated, unresolved encounter whose type
+    matches the dispatched type (when the router named one) is honest engagement.
+
+    Unlike ``confrontation`` the dispatched ``type`` is OPTIONAL (the dogfight
+    subsystem resolves the sealed-letter type itself), so a dogfight dispatch with
+    no ``type`` is engaged by ANY live encounter; when a type IS named it must
+    match.
+    """
+    encounter = snapshot.encounter
+    if encounter is None:
+        return "router dispatched dogfight but snapshot.encounter is None (engine idle)"
+    dispatched_type = _required_str_param(dispatch, "type")
+    if dispatched_type is not None and encounter.encounter_type != dispatched_type:
+        return (
+            f"snapshot.encounter.encounter_type={encounter.encounter_type!r} "
+            f"!= dispatched dogfight type={dispatched_type!r}"
+        )
+    return None
+
+
 _DISPATCHED_TYPE_KEY: dict[str, str] = {
     "confrontation": "type",
     "magic_working": "actor",
@@ -416,6 +445,7 @@ _DISPATCHED_TYPE_KEY: dict[str, str] = {
     "movement": "direction",
     "quest_offer": "quest_id",
     "course": "destination",
+    "dogfight": "type",
 }
 
 
@@ -430,6 +460,7 @@ _WITNESSES = {
     "movement": _check_movement_engaged,
     "quest_offer": _check_quest_offer_engaged,
     "course": _check_course_engaged,
+    "dogfight": _check_dogfight_engaged,
 }
 
 
@@ -476,15 +507,17 @@ def detect_dispatch_engagement_mismatch(
     (``package=None`` or empty package) return ``[]``.
 
     Subsystems whose names are not in :data:`_WITNESSES` are *ignored* —
-    not every router subsystem is the watcher's concern. As of story 153-5,
-    ten live-path subsystems have witnesses: ``confrontation``,
+    not every router subsystem is the watcher's concern. As of story 153-6,
+    eleven live-path subsystems have witnesses: ``confrontation``,
     ``magic_working``, ``scenario_clue``, ``npc_agency``,
     ``distinctive_detail_hint``, ``reflect_absence``, ``witnessed_act``
     (turn-scoped political-ledger read), ``movement`` (per-PC
     relocation-occurred read), ``quest_offer`` (accept-minted-a-quest read,
     ADR-146 §4 — the structurally-sound replacement for the keyword
-    unminted-objective detector), and ``course`` (course-plotted-or-arrived
-    read, ADR-130/153-5 — the orbital course/clock engine engaged).
+    unminted-objective detector), ``course`` (course-plotted-or-arrived
+    read, ADR-130/153-5 — the orbital course/clock engine engaged), and
+    ``dogfight`` (dogfight-encounter-seated read, ADR-077/153-6 — the
+    ship-combat dogfight engine engaged).
     """
     if package is None:
         return []

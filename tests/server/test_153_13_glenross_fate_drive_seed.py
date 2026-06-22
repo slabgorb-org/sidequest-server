@@ -76,20 +76,22 @@ def _load_pack():
         pytest.skip("sidequest-content not on disk in this checkout")
 
 
-def _build_glenross_pc(name: str = "Eleanor Vance"):
-    """Walk the REAL glenross chargen through the production ``CharacterBuilder``,
-    picking the ``Episcopal Rector`` vocation, and return the built Character.
+def _build_pc(world: str, name: str = "Eleanor Vance", prefer_vocation: str | None = None):
+    """Walk the REAL chargen for ``world`` through the production ``CharacterBuilder``
+    and return the built Character. When ``prefer_vocation`` matches a vocation
+    choice label, pick it (so ``calling_label`` is deterministic); otherwise take the
+    first choice in each scene.
 
     Mirrors the annees_folles narrative-walk harness
     (``tests/integration/test_126_24_annees_folles_chargen_seed.py``): accept the
-    seeded Fate steps, author HC/Trouble, otherwise take the named vocation.
+    seeded Fate steps, author HC/Trouble, otherwise take the offered choice.
     """
     from sidequest.game.builder import CharacterBuilder
     from sidequest.server.dispatch.char_creation_resolve import resolve_char_creation_scenes
 
     pack = _load_pack()
-    scenes = resolve_char_creation_scenes(pack, world_slug=WORLD_SLUG)
-    assert scenes, f"no char_creation scenes resolved for world {WORLD_SLUG!r}"
+    scenes = resolve_char_creation_scenes(pack, world_slug=world)
+    assert scenes, f"no char_creation scenes resolved for world {world!r}"
     builder = CharacterBuilder(
         scenes=scenes, rules=pack.rules, backstory_tables=pack.backstory_tables
     ).with_lobby_name(name)
@@ -135,44 +137,55 @@ def _build_glenross_pc(name: str = "Eleanor Vance"):
             except Exception:
                 builder.apply_freeform(name)
             continue
-        # Prefer the named vowel-vocation (so calling_label is deterministic);
-        # else take the first choice.
-        idx = next(
-            (i for i, c in enumerate(scene.choices) if c.label == VOWEL_VOCATION),
-            None,
-        )
+        # Prefer the named vocation (so calling_label is deterministic when a world
+        # is asked for one); else take the first choice.
+        idx = None
+        if prefer_vocation is not None:
+            idx = next(
+                (i for i, c in enumerate(scene.choices) if c.label == prefer_vocation),
+                None,
+            )
         builder.apply_choice(idx if idx is not None else 0)
 
     return builder.build(name)
 
 
-class TestGlenrossDriveBuilderSeam:
-    def test_chargen_assigns_real_drive_not_vocation_label(self) -> None:
-        """AC-1: after Fate chargen on glenross, ``character.drive`` is a genuine
-        aspiration — not the vocation/calling label, and not empty (an empty drive
-        is what makes the downstream seed silently fall back to the calling)."""
-        pc = _build_glenross_pc()
+class TestDriveBuilderSeam:
+    # glenross is the story's named world (deterministic "Episcopal Rector" vocation);
+    # blackthorn_moor is the sibling tea_and_murder world with the IDENTICAL missing-
+    # drive gap, fixed in the same change (the "no half-wired features" principle).
+    @pytest.mark.parametrize(
+        "world,prefer_vocation,expected_calling",
+        [
+            ("glenross", VOWEL_VOCATION, VOWEL_VOCATION),
+            ("blackthorn_moor", None, None),
+        ],
+    )
+    def test_chargen_assigns_real_drive_not_vocation_label(
+        self, world: str, prefer_vocation: str | None, expected_calling: str | None
+    ) -> None:
+        """AC-1: after Fate chargen, ``character.drive`` is a genuine aspiration — not
+        the vocation/calling label, and not empty (an empty drive is what makes the
+        downstream seed silently fall back to the calling)."""
+        pc = _build_pc(world, prefer_vocation=prefer_vocation)
 
-        # Sanity: we actually picked the named vocation, so the calling label is
-        # deterministic for the comparison below.
-        assert pc.calling_label == VOWEL_VOCATION, (
-            f"test harness expected to pick {VOWEL_VOCATION!r}; got "
-            f"calling_label={pc.calling_label!r}"
-        )
+        calling = (pc.calling_label or "").strip()
+        assert calling, f"{world}: harness picked no vocation/calling"
+        if expected_calling is not None:
+            assert pc.calling_label == expected_calling, (
+                f"{world}: harness expected to pick {expected_calling!r}; got "
+                f"calling_label={pc.calling_label!r}"
+            )
 
         drive = (pc.drive or "").strip()
         assert drive, (
-            "glenross Fate chargen left character.drive EMPTY — glenross authors no "
-            "drive scene, so the seeded quest spine silently falls back to the "
-            "calling label. Add a real drive surface (drive scene / per-calling "
-            "drives list)."
+            f"{world} Fate chargen left character.drive EMPTY — the world authors no "
+            "drive scene, so the seeded quest spine silently falls back to the calling "
+            "label. Add a real drive surface (drive scene / per-calling drives list)."
         )
         assert drive != pc.calling_label, (
-            f"character.drive echoes the vocation/calling label {pc.calling_label!r} "
-            "instead of a real aspiration"
-        )
-        assert drive.casefold() != VOWEL_VOCATION.casefold(), (
-            f"character.drive is the vocation {VOWEL_VOCATION!r}, not a drive"
+            f"{world}: character.drive echoes the vocation/calling label "
+            f"{pc.calling_label!r} instead of a real aspiration"
         )
 
 

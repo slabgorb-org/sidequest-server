@@ -46,6 +46,7 @@ from sidequest.game.encounter import (
     EncounterMetric,
     StructuredEncounter,
 )
+from sidequest.game.ruleset.registry import get_ruleset_module
 from sidequest.game.session import GameSnapshot, Npc
 from sidequest.game.turn import TurnManager
 from sidequest.genre.loader import load_genre_pack
@@ -363,6 +364,7 @@ def test_statted_bound_creature_keeps_own_hp_not_cdef_default():
         turn=5,
         source="test",
         acting_character_name="Kirk",
+        ruleset=get_ruleset_module("wwn"),
     )
 
     assert creature.core.hp.max == 24, "statted creature HP clobbered to cdef default"
@@ -395,6 +397,7 @@ def test_non_statted_existing_npc_still_seeded_from_cdef():
         turn=5,
         source="test",
         acting_character_name="Kirk",
+        ruleset=get_ruleset_module("wwn"),
     )
 
     assert plain.core.hp.max == 10, "non-statted NPC should seed from cdef opponent_hp"
@@ -422,6 +425,7 @@ def test_minted_stub_marked_ephemeral_and_spanned(otel_capture):
         turn=5,
         source="test",
         acting_character_name="Kirk",
+        ruleset=get_ruleset_module("wwn"),
     )
 
     stub = next(n for n in snap.npcs if n.core.name == "Arena Opponent")

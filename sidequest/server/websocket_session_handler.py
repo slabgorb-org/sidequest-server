@@ -850,9 +850,11 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     # spawn-anchor ``current_region`` (No Silent Fallbacks).
                     # ``region_for()`` returns None on a split/unseeded party, which
                     # ``inject`` treats exactly as the legacy ``room_id=None`` path
-                    # (the binding branch is strictly additive and gated on a
-                    # resolved room id) — so a party with no consensus region places
-                    # no binding and the handler never fabricates a room id.
+                    # (the binding branch is strictly additive and gated on BOTH a
+                    # resolved room id AND ``combat_encounters=True`` — a non-combat
+                    # pack skips the binding even with a resolved room) — so a party
+                    # with no consensus region places no binding and the handler
+                    # never fabricates a room id.
                     mm_room_id = snapshot.region_for()
                     mm_injected = monster_manual_inject.inject(
                         sd,

@@ -17,8 +17,9 @@ The per-room placement infrastructure already ships (Story 107-2 / ADR-059):
 
 The break is purely a **wiring gap**: the sole production caller —
 ``websocket_session_handler._execute_narration_turn`` (the ``inject(...)`` call
-at ~line 843) — never passes ``room_id``. It defaults to ``None``, the binding
-branch is skipped, and the authored Gnaw-Swarm is dead code in production. The
+at ~line 843) — never passed ``room_id`` (this diff is the fix that threads it).
+It defaulted to ``None``, the binding branch was skipped, and the authored
+Gnaw-Swarm was dead code in production. The
 107-2 tests all drove ``inject`` with an EXPLICIT ``room_id`` and left the
 handler→inject ``region_for()`` plumbing as a documented, blocking delivery
 finding — *this story is that finding.*
@@ -59,7 +60,6 @@ import pytest
 import yaml
 
 from sidequest.game.monster_manual import MonsterManual
-from sidequest.server.dispatch import monster_manual_inject
 from sidequest.telemetry.spans.monster_manual import SPAN_MONSTER_MANUAL_ROOM_BOUND
 from tests._helpers.genre_paths import GENRE_PACKS_DIR, PackNotFound, find_pack_path
 
@@ -294,7 +294,9 @@ async def test_placed_room_creature_is_a_combat_ready_other(session_fixture, ote
     await _drive_turn(sd, handler)
 
     gnaw = _placed(sd, _GNAW_SWARM_AUTHORED_NAME)
-    assert gnaw is not None, "no Other placed — the room binding did not fire (room_id not threaded)"
+    assert gnaw is not None, (
+        "no Other placed — the room binding did not fire (room_id not threaded)"
+    )
     assert int(gnaw.disposition) < 0, (
         f"a placed dungeon opponent must be hostile (disposition<0) to be a real "
         f"combat Other; got disposition={int(gnaw.disposition)}"
@@ -352,7 +354,9 @@ async def test_room_id_resolves_from_pc_regions_not_scene_string(
         "room id at all (develop) or keyed off the scene string/current_region "
         "instead of region_for()/pc_regions"
     )
-    assert _room_bound_spans(otel_capture), "monster_manual.room_bound did not fire for the pc_regions room"
+    assert _room_bound_spans(otel_capture), (
+        "monster_manual.room_bound did not fire for the pc_regions room"
+    )
 
 
 # ---------------------------------------------------------------------------

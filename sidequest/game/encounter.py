@@ -533,3 +533,32 @@ class StructuredEncounter(BaseModel):
         if all_withdrawn or disposition_yield:
             return "opponent_yielded"
         return None
+
+
+def is_live_wn_combat(encounter: StructuredEncounter | None, bound_ruleset: str | None) -> bool:
+    """True iff a Without-Number-bound ``hp_depletion`` combat is live.
+
+    The single predicate for the sq-playtest 2026-06-22 WWN-combat fix. Under a
+    WN binding the ruleset OWNS the round (ADR-143): combat resolves on the
+    player's DICE_THROW via ``run_wn_round`` (epic 108), and the narrator must
+    NARRATE the seated/resolved beat — it must not be handed the combat-
+    resolution toolset or told to drive beats (the max-turns starve). This
+    predicate gates (1) the narrator tool filter, (2) the de-nativized narrator
+    prompt branch, and (3) the narration-apply stray-beat drop, so all three
+    agree on exactly when WN combat is live.
+
+    Gated on the WN family (``swn``/``wwn``/``cwn``/``awn``) — NOT win_condition
+    alone — so a native ``dial`` pack's ``hp_depletion`` combat keeps the legacy
+    beat-driven path (the ADR-143 "don't balance the native engine" guard cuts
+    both ways: leave native packs alone). Resolved encounters return False.
+    """
+    if encounter is None or encounter.resolved:
+        return False
+    if bound_ruleset is None:
+        return False
+    # Local import avoids any chance of an import-order cycle at module load.
+    from sidequest.genre.ruleset_reference import WN_FAMILY
+
+    if bound_ruleset not in WN_FAMILY:
+        return False
+    return encounter.win_condition == "hp_depletion"

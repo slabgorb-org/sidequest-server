@@ -63,6 +63,9 @@ class ApplyDamageArgs(BaseModel):
         "description."
     ),
     category=ToolCategory.WRITE,
+    # WN combat resolution belongs to run_wn_round (ADR-143); withheld from the
+    # narrator on a live WN combat. sq-playtest 2026-06-22.
+    combat_resolution=True,
 )
 async def apply_damage(args: ApplyDamageArgs, ctx: ToolContext) -> ToolResult:
     session = ctx.repository.load()

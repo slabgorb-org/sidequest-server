@@ -81,6 +81,9 @@ class AdvanceEncounterBeatArgs(BaseModel):
         "encounter is active."
     ),
     category=ToolCategory.WRITE,
+    # WN combat resolution belongs to run_wn_round (ADR-143); withheld from the
+    # narrator on a live WN combat. sq-playtest 2026-06-22.
+    combat_resolution=True,
 )
 async def advance_encounter_beat(args: AdvanceEncounterBeatArgs, ctx: ToolContext) -> ToolResult:
     session = ctx.repository.load()

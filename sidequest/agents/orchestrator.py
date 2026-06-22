@@ -2186,6 +2186,18 @@ class Orchestrator:
             or context.in_encounter
             or context.pending_resolution_signal is not None
         ):
+            # sq-playtest 2026-06-22: on a live WN hp_depletion combat, suppress
+            # the native beat menu in the prompt (the prompt half of the gate;
+            # the tool half is the exclude_combat_resolution filter at the
+            # tool-assembly site). is_live_wn_combat is the shared predicate so
+            # both halves agree on exactly when WN combat is live.
+            _enc_bound_ruleset = (
+                context.pack.rules.ruleset
+                if context.pack is not None and getattr(context.pack, "rules", None) is not None
+                else None
+            )
+            from sidequest.game.encounter import is_live_wn_combat
+
             self._narrator.build_encounter_context(
                 registry,
                 encounter=context.encounter,
@@ -2194,6 +2206,7 @@ class Orchestrator:
                 statuses_by_actor=context.statuses_by_actor,
                 resolution_signal=context.pending_resolution_signal,
                 pc_classes_by_name=context.pc_classes_by_name or None,
+                suppress_native_combat=is_live_wn_combat(context.encounter, _enc_bound_ruleset),
             )
             if context.pending_resolution_signal is not None:
                 from sidequest.telemetry.spans import (
@@ -4174,7 +4187,19 @@ class Orchestrator:
             bound_ruleset: str | None = None
             if _pack is not None and getattr(_pack, "rules", None) is not None:
                 bound_ruleset = _pack.rules.ruleset
-            advertised_tool_defs = default_registry.tool_definitions(bound_ruleset)
+            # sq-playtest 2026-06-22 (WWN combat de-nativization): on a live WN
+            # hp_depletion combat the ruleset OWNS the round (ADR-143) — combat
+            # resolves on the player's DICE_THROW via run_wn_round, so withhold
+            # the combat-RESOLUTION tools from the narrator. Without this the
+            # narrator grinds roll/apply/advance in its own tool loop past
+            # max_turns (the seated-but-never-resolves crash). Gated on the WN
+            # family + a live combat so native-dial packs keep the full toolset.
+            from sidequest.game.encounter import is_live_wn_combat
+
+            _wn_combat_live = is_live_wn_combat(context.encounter, bound_ruleset)
+            advertised_tool_defs = default_registry.tool_definitions(
+                bound_ruleset, exclude_combat_resolution=_wn_combat_live
+            )
             _total_tool_count = len(default_registry.list_names())
             _advertised_tool_count = len(advertised_tool_defs)
             # GM-panel lie detector (CLAUDE.md OTEL Observability Principle):
@@ -4188,6 +4213,8 @@ class Orchestrator:
                     "tools.bound_ruleset": bound_ruleset or "none",
                     "tools.advertised_count": _advertised_tool_count,
                     "tools.excluded_count": _total_tool_count - _advertised_tool_count,
+                    "tools.combat_resolution_withheld": _wn_combat_live,
+                    "encounter.live_wn_combat": _wn_combat_live,
                 },
             ):
                 pass

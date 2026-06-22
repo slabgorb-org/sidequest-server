@@ -143,6 +143,9 @@ def _find_active_cdef(genre_pack: Any, encounter_type: str) -> Any:
         "fatally if no encounter is active."
     ),
     category=ToolCategory.WRITE,
+    # WN combat resolution belongs to run_wn_round (ADR-143); withheld from the
+    # narrator on a live WN combat. sq-playtest 2026-06-22.
+    combat_resolution=True,
 )
 async def advance_confrontation(args: AdvanceConfrontationArgs, ctx: ToolContext) -> ToolResult:
     # Story 73-3: mutate the CANONICAL in-turn snapshot the narration pipeline

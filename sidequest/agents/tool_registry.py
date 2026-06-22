@@ -175,6 +175,16 @@ class _RegisteredTool:
     # advertised to every member, hidden from non-members. The single-slug str
     # form (73-15) is the one-member special case.
     ruleset: str | tuple[str, ...] | None = None
+    # sq-playtest 2026-06-22 (WWN combat de-nativization): a combat-RESOLUTION
+    # tool — it rolls dice, applies damage/status, or advances beats/
+    # confrontations. Under a Without-Number binding the ruleset OWNS the round
+    # (ADR-143): resolution happens on the player's DICE_THROW via run_wn_round,
+    # and the narrator must NARRATE an already-resolved beat, not drive
+    # resolution inside its own tool loop (the cause of the max-turns starve).
+    # ``tool_definitions(..., exclude_combat_resolution=True)`` withholds these
+    # from the narrator on a live WN combat. Default False leaves every existing
+    # tool — and every native-dial pack — unchanged.
+    combat_resolution: bool = False
 
 
 def _ruleset_advertises(declared: str | tuple[str, ...] | None, bound_slug: str) -> bool:
@@ -207,6 +217,7 @@ class Registry:
         args_model: type[BaseModel],
         handler: Callable[..., Awaitable[ToolResult]],
         ruleset: str | tuple[str, ...] | None = None,
+        combat_resolution: bool = False,
     ) -> None:
         if name in self._tools:
             raise ValueError(f"Tool {name!r} already registered")
@@ -217,12 +228,15 @@ class Registry:
             args_model=args_model,
             handler=handler,
             ruleset=ruleset,
+            combat_resolution=combat_resolution,
         )
 
     def list_names(self) -> list[str]:
         return sorted(self._tools)
 
-    def tool_definitions(self, ruleset: str | None = None) -> list[ToolDefinition]:
+    def tool_definitions(
+        self, ruleset: str | None = None, *, exclude_combat_resolution: bool = False
+    ) -> list[ToolDefinition]:
         """Tool definitions, optionally filtered to a bound ruleset.
 
         Story 73-15 (ADR-117 tightening): when ``ruleset`` is a slug (e.g.
@@ -237,6 +251,13 @@ class Registry:
         Story 102-5: a tool may declare a FAMILY (a tuple of slugs) — advertised
         to every member and hidden from non-members. The single-slug str form is
         the one-member case.
+
+        sq-playtest 2026-06-22: ``exclude_combat_resolution=True`` additionally
+        withholds combat-RESOLUTION tools (``combat_resolution=True``) — the
+        narrator must not drive WN combat resolution in its own tool loop; under
+        a WN binding the player throws and ``run_wn_round`` resolves. The caller
+        gates this on a live WN ``hp_depletion`` encounter; default False is
+        unchanged behavior.
         """
         return [
             ToolDefinition(
@@ -245,7 +266,8 @@ class Registry:
                 input_schema=t.args_model.model_json_schema(),
             )
             for t in self._tools.values()
-            if ruleset is None or _ruleset_advertises(t.ruleset, ruleset)
+            if (ruleset is None or _ruleset_advertises(t.ruleset, ruleset))
+            and not (exclude_combat_resolution and t.combat_resolution)
         ]
 
     async def dispatch(
@@ -351,6 +373,7 @@ def tool(
     category: ToolCategory,
     registry: Registry | None = None,
     ruleset: str | tuple[str, ...] | None = None,
+    combat_resolution: bool = False,
 ) -> Callable[[Callable[..., Awaitable[ToolResult]]], Callable[..., Awaitable[ToolResult]]]:
     """Decorator: register an async handler with a Pydantic-args model.
 
@@ -391,6 +414,7 @@ def tool(
             args_model=args_annotation,
             handler=fn,
             ruleset=ruleset,
+            combat_resolution=combat_resolution,
         )
         return fn
 

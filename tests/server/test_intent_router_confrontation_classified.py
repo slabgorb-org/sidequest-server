@@ -6,10 +6,10 @@ brace matching the standoff def's own intent_verbs yielded
 indistinguishable from "feature doesn't exist". The pass now emits
 ``intent_router.confrontation_classified`` whenever the action lexically
 matches an authored intent_verb OR a confrontation dispatch was emitted;
-``emitted=0`` with non-empty ``verb_hits`` is the unrouted shape (plus a
-DEBUG log — Story 126-6 downgraded it from WARNING; a correct suppression
-is not a warning, and the span already carries the GM-panel signal). Quiet
-turns (no hit, no dispatch) stay span-free.
+``emitted=0`` with non-empty ``verb_hits`` is the unrouted shape (plus an
+INFO log when no confrontation is active — Story 126-6 downgraded it to DEBUG,
+then Story 158-2 re-raised it to INFO so a missed literary attack is observable
+in the GM panel). Quiet turns (no hit, no dispatch) stay span-free.
 
 Twin of ``test_intent_router_witnessed_act_classified.py`` — same harness.
 """
@@ -147,11 +147,16 @@ async def test_span_fires_with_emitted_type_when_router_dispatches(otel_capture)
 
 
 @pytest.mark.asyncio
-async def test_verb_hit_with_no_dispatch_logs_at_debug_not_warning(otel_capture, caplog):
+async def test_verb_hit_with_no_dispatch_logs_at_info(otel_capture, caplog):
     """The turn-5 decline: action matches authored verbs, router emits no
     confrontation dispatch → span fires with emitted=0 + verb_hits, and the
-    unrouted-verb log names the verbs at DEBUG (Story 126-6: a correct
-    suppression is not a WARNING — the span carries the GM-panel signal)."""
+    unrouted-verb log names the verbs at INFO or higher.
+
+    Story 126-6 originally downgraded this to DEBUG ("a correct suppression is
+    not a WARNING"). Story 158-2 SUPERSEDES that: a verb-seen-but-not-routed is
+    indistinguishable at the lexical layer from a MISSED literary attack (the
+    beneath_sunden turn-5 hole), so the miss must be observable in the GM panel
+    per the OTEL lie-detector principle. The signal is re-raised to INFO."""
     router = _StubRouter(_empty_package())
     with caplog.at_level(logging.DEBUG):
         await execute_intent_router_pre_narrator_pass(
@@ -168,8 +173,9 @@ async def test_verb_hit_with_no_dispatch_logs_at_debug_not_warning(otel_capture,
     assert "standoff:intimidate" in attrs["verb_hits"]
     unrouted = [r for r in caplog.records if "confrontation_verb_unrouted" in r.getMessage()]
     assert unrouted, "the decline must still log, naming the unrouted verbs"
-    assert all(r.levelno == logging.DEBUG for r in unrouted), (
-        "a correct suppression must log at DEBUG, not WARNING (Story 126-6)"
+    assert all(r.levelno >= logging.INFO for r in unrouted), (
+        "the unrouted-combat-verb signal must be observable (>= INFO), not "
+        "buried at DEBUG — Story 158-2 supersedes the Story 126-6 downgrade"
     )
 
 

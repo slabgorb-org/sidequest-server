@@ -38,6 +38,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from sidequest.orbital.loader import OrbitalContent
 
+from sidequest.agents.confrontation_intent_validator import tokenize
 from sidequest.agents.dispatch_precondition_gate import (
     run_dispatch_precondition_gate,
     run_unregistered_subsystem_gate,
@@ -185,12 +186,21 @@ def _confrontation_types_emitted(package: DispatchPackage) -> list[str]:
 def _confrontation_verb_hits(action: str, pack: GenrePack | None) -> list[str]:
     """Lexical ``type:verb`` matches between the action and authored intent_verbs.
 
-    Word-boundary, case-insensitive — the deterministic half of the
-    standoff-seam decline detector (sq-playtest 2026-06-07). A hit here with
-    zero confrontation dispatches emitted is the loud unrouted shape; the
-    Haiku-judgment half (paraphrased intent, no literal verb) is steered by
-    the pre-combat paragraph in ``CONFRONTATION_TRIGGER_CORE`` and cannot be
-    lexically detected, by construction.
+    Token-level, suffix-stripped, case-insensitive — the deterministic half of
+    the standoff-seam decline detector (sq-playtest 2026-06-07). Story 158-2:
+    matching runs on the SHARED ``tokenize`` (the same suffix-stripper the pack
+    loader and ``confrontation_intent_validator`` use to derive
+    ``intent_verb_set``), so an attack verb buried in described prose in an
+    INFLECTED form ("hacks", "striking", "stabbed") is no longer invisible —
+    the beneath_sunden turn-5 zero-telemetry hole, where a literary attack
+    produced neither a span nor a log. Matching stays word-level, not
+    substring: "withdraw" still does not hit authored "draw". A multi-word
+    intent_verb hits only when ALL of its tokens are present.
+
+    A hit here with zero confrontation dispatches emitted is the loud unrouted
+    shape. The route/no-route DECISION itself is upstream — the Haiku
+    ``IntentRouter.decompose`` pass steered by ``CONFRONTATION_TRIGGER_CORE``;
+    this detector only makes the miss observable to the GM panel.
     """
     # getattr walk — duck-typed test packs (bare objects, fakes without
     # ``rules``) pass through, same access style as the witnessed_acts gate.
@@ -198,11 +208,14 @@ def _confrontation_verb_hits(action: str, pack: GenrePack | None) -> list[str]:
     confrontations = getattr(rules, "confrontations", None) if rules else None
     if not confrontations:
         return []
-    folded = action.casefold()
+    action_tokens = tokenize(action)
+    if not action_tokens:
+        return []
     hits: list[str] = []
     for cdef in confrontations:
         for verb in getattr(cdef, "intent_verbs", None) or []:
-            if re.search(rf"\b{re.escape(verb.casefold())}\b", folded):
+            verb_tokens = tokenize(verb)
+            if verb_tokens and verb_tokens <= action_tokens:
                 hits.append(f"{cdef.confrontation_type}:{verb}")
     return hits
 
@@ -874,15 +887,17 @@ async def execute_intent_router_pre_narrator_pass(
             ):
                 pass
             if verb_hits and not conf_types:
-                # Story 126-6: a verb-hit-without-dispatch is a CORRECT
-                # suppression — the router lexically matched an authored
-                # intent_verb and deliberately declined to seat a
-                # confrontation (expected behavior, not an error). The
-                # ``intent_router.confrontation_classified`` span above already
-                # records this decline (emitted=0 + verb_hits) for the GM
-                # panel, so this log line is redundant signal; emit it at DEBUG
-                # so it stops diluting genuine WARNINGs in the server log.
-                logger.debug(
+                # Story 158-2 (SUPERSEDES the Story 126-6 DEBUG downgrade): a
+                # verb-hit-without-dispatch is NOT reliably a correct
+                # suppression. At the lexical layer it is indistinguishable
+                # from a MISSED literary attack — the beneath_sunden turn-5
+                # hole, where "drives the point at the crouched thing" was a
+                # real strike the router declined. The miss must be observable
+                # in the GM panel per the OTEL lie-detector principle, so the
+                # signal is emitted at INFO (the ``confrontation_classified``
+                # span above carries the structured form for the panel; this
+                # log gives the same signal at a level humans tail).
+                logger.info(
                     "intent_router.confrontation_verb_unrouted verb_hits=%s "
                     "action_preview=%r — the action lexically matched authored "
                     "intent_verbs but the router emitted no confrontation dispatch",

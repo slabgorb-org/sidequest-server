@@ -180,3 +180,54 @@ def seed_expansion_quest(
             )
         )
     return thread_id
+
+
+# ---------------------------------------------------------------------------
+# Projection: reconcile open expansion-quest threads into snapshot.quest_log
+# ---------------------------------------------------------------------------
+
+from sidequest.game.session import GameSnapshot, QuestEntry  # noqa: E402
+
+_DUNGEON_QUEST_PREFIX = "dungeon:exp"
+
+
+def reconcile_dungeon_quests_into_log(
+    *,
+    snapshot: GameSnapshot,
+    store: DungeonStore,
+    reached_expansion_ids: set[int],
+) -> int:
+    """Write/update namespaced QuestEntry rows (id ``dungeon:expN``) into
+    ``snapshot.quest_log`` for every open expansion-quest thread whose
+    expansion_id is in ``reached_expansion_ids``.
+
+    - NEVER touches non-``dungeon:`` quest_log entries.
+    - Idempotent: already-active entries are not duplicated; already-resolved
+      entries are not reopened.
+    - Returns the count of entries newly projected (0 on a no-op re-run).
+    """
+    projected = 0
+    for thread in store.open_threads():
+        if thread.kind != "quest" or thread.payload.get("scope") != "expansion":
+            continue
+        exp_id = thread.payload.get("expansion_id")
+        if exp_id not in reached_expansion_ids:
+            continue
+        qid = f"{_DUNGEON_QUEST_PREFIX}{exp_id}"
+        existing = snapshot.quest_log.get(qid)
+        title = thread.payload.get("title", "")
+        objective = thread.payload.get("objective", "")
+        anchor = thread.payload.get("anchor_region")
+        if existing is None:
+            snapshot.quest_log[qid] = QuestEntry(
+                title=title,
+                objective=objective,
+                status="active",
+                anchor_id=anchor,
+            )
+            if anchor and anchor not in snapshot.quest_anchors:
+                snapshot.quest_anchors.append(anchor)
+            projected += 1
+        elif existing.status not in ("active",):
+            continue  # already resolved/closed — don't reopen
+    return projected

@@ -477,3 +477,80 @@ def test_party_advance_wired_through_dispatch_bank(capture_spans):
         "the bank must thread additional_player_names into movement so the "
         f"co-located peer advances; Harpo at {snap.pc_regions.get('Harpo')!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Telemetry-mirror robustness (158-7 tail): a non-recording span must not
+# crash the movement dispatch it wraps. This is the root cause behind the
+# pre-existing flaky failures in the seam/movement suite — a telemetry
+# side-channel reading span.attributes on a NonRecordingSpan, raising
+# AttributeError OUT of run_movement_dispatch and failing the whole turn
+# whenever no recording TracerProvider was installed (test-order dependent).
+# ---------------------------------------------------------------------------
+
+
+def test_movement_span_mirror_skips_nonrecording_span(monkeypatch):
+    """``_mirror_movement_span_to_sink`` must SKIP (never raise, never publish)
+    when handed a non-recording span: that span carries no attributes to
+    mirror, and the mirror is wrapped around the live movement dispatch — an
+    exception here fails the player's turn. Before the fix this raised
+    ``AttributeError('NonRecordingSpan' object has no attribute 'attributes')``.
+    """
+    from opentelemetry.trace import INVALID_SPAN  # a ready-made NonRecordingSpan
+
+    import sidequest.telemetry.spans.movement as movement_spans
+
+    published: list[tuple] = []
+    monkeypatch.setattr(
+        movement_spans,
+        "publish_event",
+        lambda event_type, fields, **kw: published.append((event_type, fields, kw)),
+    )
+
+    # Must not raise.
+    movement_spans._mirror_movement_span_to_sink(
+        movement_spans.SPAN_MOVEMENT_RESOLVED, INVALID_SPAN
+    )
+
+    assert published == [], (
+        "a non-recording span has no attributes to mirror; the sink must not be "
+        f"published to. got: {published}"
+    )
+
+
+def test_seam_crossing_completes_without_a_recording_tracer(monkeypatch):
+    """End-to-end guard: a real seam descent through ``run_movement_dispatch``
+    must complete and advance the PC even when NO recording TracerProvider is
+    installed (the span is non-recording). This is the exact shape of the
+    pre-existing flaky seam/movement failures — the crossing erroring out
+    inside the dispatch because the movement→sink mirror raised."""
+    from opentelemetry.trace import NoOpTracer
+
+    import sidequest.telemetry.spans as spans_module
+
+    # Force the non-recording path regardless of global provider state.
+    monkeypatch.setattr(spans_module, "tracer", lambda: NoOpTracer())
+
+    snap = _party_snapshot(
+        {"Groucho": "ropefoot", "Harpo": "ropefoot"},
+        {"p1": "Groucho", "p2": "Harpo"},
+    )
+    pack = _pack_with_cartography("beneath_sunden", _hybrid_cartography())
+
+    out = _run(
+        run_movement_dispatch(
+            _movement("deeper", "down the rope"),
+            snapshot=snap,
+            player_name="Groucho",
+            additional_player_names=["Harpo"],
+            dungeon_store=_StoreWithEntrance(),
+            palette=_FakePalette(),
+            pack=pack,
+        )
+    )
+
+    assert out.data.get("error") is None, f"crossing must not error on a no-op tracer: {out.data}"
+    assert snap.pc_regions["Groucho"] == ENTRANCE_ID
+    assert snap.pc_regions["Harpo"] == ENTRANCE_ID, (
+        "co-located peer must still advance with no recording tracer installed"
+    )

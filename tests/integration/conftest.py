@@ -46,6 +46,7 @@ from tests.server.conftest import (  # noqa: F401
     _no_real_anthropic_sdk,
     _stub_intent_router_factory,
     _stub_unseeded_objective_classifier,
+    _watcher_hub_event_store_isolation,
     encounter_dispatch_helper,
     otel_capture,
     session_fixture,

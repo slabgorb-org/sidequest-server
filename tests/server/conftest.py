@@ -246,26 +246,35 @@ _install_genre_loader_cache_patch()
 
 @pytest.fixture(autouse=True)
 def _watcher_hub_event_store_isolation():
-    """Autouse guard: clear the watcher_hub ``_telemetry_sink`` binding
-    between tests (ADR-115 D5 renamed ``_event_store`` → ``_telemetry_sink``).
+    """Autouse guard: clear the watcher_hub ``_telemetry_sink`` AND
+    ``_process_session_slug`` process-global bindings between tests (ADR-115 D5
+    renamed ``_event_store`` → ``_telemetry_sink``; ADR-132 added the
+    session-slug partition key).
 
     Several tests reach the slug-connect handler path, which calls
-    ``bind_event_store(sink)`` on a TelemetrySink that lives only for the
-    duration of that test. Without this fixture, the binding survives —
-    the sink's pool gets closed by session teardown (or by the test going
-    out of scope), but the global pointer in
-    ``sidequest.telemetry.watcher_hub`` still references the dead handle.
-    The next test that publishes a persistable event would then hit a
-    closed-pool error (full-suite flake — passes in isolation).
+    ``bind_event_store(sink)`` + ``bind_session_slug(slug)``. Both set a
+    process-global fallback (``_telemetry_sink`` / ``_process_session_slug``)
+    in addition to the per-task ContextVar. The ContextVar resets when the
+    test's asyncio task ends, but the process-global SURVIVES — so the next
+    test that publishes inherits a dead sink handle (closed-pool error) or a
+    stale ``session_slug`` stamped onto its events (e.g.
+    ``test_publish_event_shape`` asserting ``session_slug is None`` saw a
+    leaked ``resume-light-current-preserved`` from an earlier integration
+    test). Both are full-suite flakes that pass in isolation.
 
     This fixture restores the pre-test binding state on teardown so each
-    test starts with whatever binding it sets up itself (typically None).
+    test starts with whatever binding it sets up itself (typically None). It
+    is re-exported into ``tests/integration/conftest.py`` so the integration
+    tree — a sibling that does not inherit this conftest — is guarded too,
+    fixing the leak at its source.
     """
     from sidequest.telemetry import watcher_hub
 
-    prior = watcher_hub._telemetry_sink
+    prior_sink = watcher_hub._telemetry_sink
+    prior_slug = watcher_hub._process_session_slug
     yield
-    watcher_hub._telemetry_sink = prior
+    watcher_hub._telemetry_sink = prior_sink
+    watcher_hub._process_session_slug = prior_slug
 
 
 @pytest.fixture(autouse=True)

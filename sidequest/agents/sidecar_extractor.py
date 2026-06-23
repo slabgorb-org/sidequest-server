@@ -382,6 +382,15 @@ def detect_sidecar_extraction_mismatch(
     known = _known_npc_names(snapshot)
     mismatches: list[SidecarMismatch] = []
     for mention in extraction.npcs_present:
+        # Story 158-4: a mention the extractor flagged as a PLACE is correctly
+        # declined from the roster by the _apply_npc_mentions place-guard
+        # (npc.place_skipped). A place is never in the seated cast, so without this
+        # skip the witness would false-positive on the place feature's own correct
+        # behavior — polluting the lie-detector channel the GM panel (and the AC4
+        # re-verify) reads. An is_place entry is not a phantom NPC; skip it here
+        # exactly as the reconcile does.
+        if isinstance(mention, dict) and mention.get("is_place"):
+            continue
         name = (mention.get("name", "") if isinstance(mention, dict) else "") or ""
         if name and name not in known:
             mismatches.append(

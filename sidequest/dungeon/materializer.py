@@ -495,6 +495,18 @@ class CuratedCreature:
     threat_level: int
 
 
+def _curated_to_payload(c: CuratedCreature) -> dict:
+    """JSON-safe payload for the per-region ``region_population`` mutation
+    (Task 3). HpPool is a pydantic model → ``model_dump`` is JSON-safe."""
+    return {
+        "name": c.name,
+        "creature_type": c.creature_type,
+        "telegraph": c.telegraph,
+        "hp": c.hp.model_dump(),
+        "threat_level": c.threat_level,
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class RegionCuration:
     """In-memory curated content for one expansion (Plan 7 Task 4).
@@ -2048,6 +2060,27 @@ def _stage_commit(
             )
             rolled_persisted += 1
 
+        # Story 153-x: freeze each generated region's curated population on the
+        # SAME txn (save-is-truth). Reuses the Plan-5 append-only primitive — no
+        # new table. The entrance (Expansion 0) is authored content, not in
+        # ``expansion.new_nodes``, so it is never given a procedural roster.
+        pop_persisted = 0
+        for node in expansion.new_nodes:
+            roster = curation.region_creatures.get(node.id, [])
+            big_bad = curation.region_big_bad.get(node.id)
+            if not roster and big_bad is None:
+                continue
+            tx.record_mutation(
+                node.id,
+                "region_population",
+                {
+                    "region_id": node.id,
+                    "creatures": [_curated_to_payload(c) for c in roster],
+                    "big_bad": _curated_to_payload(big_bad) if big_bad is not None else None,
+                },
+            )
+            pop_persisted += 1
+
         for fe in new_frontier:
             tx.put_frontier(fe)
         # The coordinator's ``with dungeon_repository.transaction()`` commits on
@@ -2065,6 +2098,7 @@ def _stage_commit(
     span.set_attribute("regions_committed", len(expansion.new_nodes))
     span.set_attribute("edges_committed", len(expansion.new_edges))
     span.set_attribute("rolled_persisted", rolled_persisted)
+    span.set_attribute("region_populations_committed", pop_persisted)
     span.set_attribute("frontier_edges_added", len(new_frontier))
     span.set_attribute("generator_version", generator_version)
 

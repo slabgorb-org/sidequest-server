@@ -54,3 +54,99 @@ def test_curated_creature_has_threat_level_field():
         threat_level=2,
     )
     assert c.threat_level == 2
+
+
+# ---------------------------------------------------------------------------
+# Task 3: freeze curated region population to the dungeon store at commit.
+# ---------------------------------------------------------------------------
+
+
+def test_curated_to_payload_round_trips_shape():
+    from sidequest.dungeon.materializer import _curated_to_payload
+    from sidequest.game.creature_core import hp_pool_from_hp
+
+    c = CuratedCreature(
+        name="Gnaw-Swarm",
+        creature_type="swarm",
+        telegraph="chittering",
+        hp=hp_pool_from_hp(6),
+        threat_level=1,
+    )
+    p = _curated_to_payload(c)
+    assert p == {
+        "name": "Gnaw-Swarm",
+        "creature_type": "swarm",
+        "telegraph": "chittering",
+        "hp": c.hp.model_dump(),
+        "threat_level": 1,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Task 3 wiring test: region_population rows persisted by materialize()
+# ---------------------------------------------------------------------------
+
+
+async def test_region_population_rows_land_in_dungeon_store(
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: str,
+) -> None:
+    """Drive the real materialize() coordinator and assert that
+    ``region_population`` mutation rows were committed to the dungeon store,
+    each with a ``creatures`` list whose entries carry ``threat_level``.
+
+    Non-circular: the test never calls ``_curated_to_payload`` or
+    ``_stage_commit`` directly — it calls ``materialize()`` and inspects
+    ``repo.load_mutations()``.  If ``_stage_commit`` does not write
+    ``region_population`` rows the assertion fails."""
+    import sidequest.telemetry.spans as _spans_module
+    from sidequest.dungeon.materializer import materialize
+    from tests.dungeon.conftest import build_pg_dungeon_repo
+    from tests.dungeon.test_materializer import (
+        _attach_pack,
+        _commit_palette,
+        _fresh_snapshot,
+        _make_request_task3,
+        _otel_in_memory,
+        _real_cookbook_bundle,
+        _reflecting_sdk_client,
+        _seed_graph_themed,
+    )
+
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+
+    bundle = _real_cookbook_bundle()
+    theme_id = "pop_wiring_crypt"
+    palette = _commit_palette(theme_id)
+    graph = _seed_graph_themed(theme_id)
+
+    _exporter, _provider, real_tracer = _otel_in_memory()
+    original_tracer_fn = _spans_module.tracer
+    _spans_module.tracer = lambda: real_tracer  # type: ignore[method-assign]
+    try:
+        req = _make_request_task3()
+        await materialize(
+            req,
+            graph=graph,
+            bundle=bundle,
+            palette=palette,
+            dungeon_repository=repo,
+            snapshot=_fresh_snapshot(),
+            pack_tropes=_attach_pack("cave_in"),
+            claude_client=_reflecting_sdk_client(),
+        )
+    finally:
+        _spans_module.tracer = original_tracer_fn  # type: ignore[method-assign]
+
+    pops = [m for m in repo.load_mutations() if m.kind == "region_population"]
+    assert pops, (
+        "no region_population rows were persisted — "
+        "_stage_commit is not writing the curated roster (Task 3 wiring broken)"
+    )
+    sample = pops[0].payload
+    assert "creatures" in sample and isinstance(sample["creatures"], list), (
+        f"region_population payload missing 'creatures' list: {sample!r}"
+    )
+    assert all("threat_level" in c for c in sample["creatures"]), (
+        f"some creature entries missing 'threat_level': {sample['creatures']!r}"
+    )

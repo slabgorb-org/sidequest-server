@@ -36,17 +36,31 @@ def test_quest_resolved_span_emits():
                              resolving_event="hp_depletion", _tracer=tracer):
         pass
     spans = exporter.get_finished_spans()
+    assert len(spans) == 1
     assert spans[0].name == SPAN_QUEST_RESOLVED
     assert spans[0].attributes["resolving_event"] == "hp_depletion"
 
 
 def test_quest_bound_span_in_span_routes():
-    """Wiring test — both quest spans are registered in SPAN_ROUTES."""
-    from sidequest.telemetry.spans import SPAN_ROUTES  # noqa: PLC0415
+    """Wiring test — both quest spans are accessible on the spans PACKAGE (star-import).
 
-    assert SPAN_QUEST_BOUND in SPAN_ROUTES, (
+    Importing SPAN_ROUTES from the package (not the module) proves that
+    __init__.py's ``from .dungeon_quest import *`` line is present.  A direct
+    module import would populate the dict regardless of __init__.py wiring.
+    """
+    import sidequest.telemetry.spans as spans_pkg
+
+    assert hasattr(spans_pkg, "SPAN_QUEST_BOUND"), (
+        "SPAN_QUEST_BOUND not on sidequest.telemetry.spans package — "
+        "add 'from .dungeon_quest import *' to spans/__init__.py"
+    )
+    assert hasattr(spans_pkg, "SPAN_QUEST_RESOLVED"), (
+        "SPAN_QUEST_RESOLVED not on sidequest.telemetry.spans package — "
+        "add 'from .dungeon_quest import *' to spans/__init__.py"
+    )
+    assert SPAN_QUEST_BOUND in spans_pkg.SPAN_ROUTES, (
         f"{SPAN_QUEST_BOUND!r} not in SPAN_ROUTES — GM panel cannot see quest binds"
     )
-    assert SPAN_QUEST_RESOLVED in SPAN_ROUTES, (
+    assert SPAN_QUEST_RESOLVED in spans_pkg.SPAN_ROUTES, (
         f"{SPAN_QUEST_RESOLVED!r} not in SPAN_ROUTES — GM panel cannot see quest resolutions"
     )

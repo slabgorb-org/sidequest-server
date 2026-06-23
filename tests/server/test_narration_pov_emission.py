@@ -628,3 +628,224 @@ def test_canonical_eventlog_text_stays_third_person_after_localized_emit(
     # carries no 2nd-person leakage from the per-recipient swap.
     assert "her palm" in stored["text"]
     assert "You press" not in stored["text"]
+
+
+# ---------------------------------------------------------------------------
+# 7. Story 158-8 — PER-RECIPIENT RE-ANCHOR (Facet 2).
+#
+#    Playtest finding (2026-06-22, caverns_and_claudes/beneath_sunden): when a
+#    NARRATION card names more than one PC, the localizer anchors a single
+#    "you" to the card's PRIMARY actor (anchor_pc) and only swaps for the
+#    recipient whose PC == anchor_pc. A *non-anchor* recipient reads about
+#    THEIR OWN PC in third person on their own screen — "Harpo moves to the
+#    winch..." instead of "you move to the winch...".
+#
+#    The fix re-anchors 2nd person PER RECIPIENT: on each recipient's frame,
+#    THAT recipient's own PC name is swapped to "you" (with full gendered-
+#    pronoun agreement, reusing the 153-29 machinery), while the other PCs
+#    stay as names.
+#
+#    RED until emitters._apply_pov_swap targets the RECIPIENT's own PC rather
+#    than gating on recipient_pc_name == anchor_pc.
+#
+#    NOTE — the localizer (swap_to_second_person) already handles a non-subject
+#    target with agreement; these tests prove the *emit wiring* re-anchors per
+#    recipient. They must NOT regress test #2 above (a card that names only the
+#    anchor leaves non-anchor recipients fully unchanged, because their own PC
+#    is absent from the prose → the swap is a no-op for them).
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def otel_capture():
+    """Drain OTEL spans into an in-memory exporter (mirrors
+    tests/agents/test_pov_swap_otel.py) so the AC-4 per-recipient swap span
+    can be read at the wire."""
+    from opentelemetry import trace as otel_trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    from sidequest.telemetry.setup import init_tracer
+
+    init_tracer()
+    provider = otel_trace.get_tracer_provider()
+    assert isinstance(provider, TracerProvider)
+    exporter = InMemorySpanExporter()
+    processor = SimpleSpanProcessor(exporter)
+    provider.add_span_processor(processor)
+    try:
+        yield exporter
+    finally:
+        processor.shutdown()
+
+
+# A two-actor card: Carl (anchor + emitter, he/him) AND Katia (non-anchor
+# peer recipient, she/her) both named. This is the shape the single-anchor
+# localizer gets wrong for Katia.
+_TWO_ACTOR_TEXT = "Carl hauls the rope while Katia steadies the winch."
+_TWO_ACTOR_VIZ = {
+    "visible_to": "all",
+    "fidelity": {},
+    "anchor_pc": "Carl",
+    "pov_strategy": "pc_anchored",
+}
+
+
+def _narration_msg_patch(monkeypatch) -> None:
+    from sidequest.server import session_handler as handler_module
+    from sidequest.server import views as views_module
+
+    class _FakeMsg:
+        def __init__(self, payload):
+            self.payload = payload
+
+    monkeypatch.setitem(handler_module._KIND_TO_MESSAGE_CLS, "NARRATION", _FakeMsg)
+    monkeypatch.setattr(views_module, "status_effects_by_player", lambda _h: {})
+
+
+def test_158_8_non_anchor_recipient_own_pc_reanchored_to_you(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RED (Facet 2): Katia is a non-anchor peer recipient whose own PC is
+    named in the card. Her delivered frame must re-anchor Katia -> 'you'
+    ('...while you steady the winch'), while the OTHER PC (Carl) stays a
+    name. Today _apply_pov_swap returns the canonical prose unchanged for
+    Katia because Katia != anchor_pc, so she reads about herself in 3rd
+    person — the exact playtest defect."""
+    handler = _make_handler_three_pcs(tmp_path)
+    queues = _attach_queues(handler._room)
+    _narration_msg_patch(monkeypatch)
+
+    payload = {"text": _TWO_ACTOR_TEXT, "footnotes": [], "_visibility": dict(_TWO_ACTOR_VIZ)}
+    handler._emit_event("NARRATION", payload)
+
+    assert queues["p_katia"].qsize() == 1, "Katia must receive the card"
+    katia_text = queues["p_katia"].get_nowait().payload["text"]
+    assert "you steady the winch" in katia_text, (
+        "non-anchor recipient Katia must read her OWN action in 2nd person "
+        f"(re-anchored per recipient); got: {katia_text!r}"
+    )
+    assert "Katia steadies" not in katia_text, (
+        f"Katia must NOT read her own name in 3rd person on her own screen; got: {katia_text!r}"
+    )
+    # The OTHER PC (the card's primary actor) must remain a name for Katia.
+    assert "Carl hauls the rope" in katia_text, (
+        f"the other PC (Carl) must stay a 3rd-person name on Katia's screen; got: {katia_text!r}"
+    )
+
+
+def test_158_8_reanchor_carries_gendered_pronoun_agreement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RED (Facet 2 + Facet 1 agreement): the per-recipient re-anchor must
+    carry the recipient's gendered pronouns too (153-29 machinery), so Katia
+    (she/her) sees 'you brace yourself ... past you', never a 'you ... her'
+    person-disagreement and never her own name in 3rd person."""
+    handler = _make_handler_three_pcs(tmp_path)
+    queues = _attach_queues(handler._room)
+    _narration_msg_patch(monkeypatch)
+
+    text = "Carl steadies the rope while Katia braces herself against the draft pushing past her."
+    payload = {
+        "text": text,
+        "footnotes": [],
+        "_visibility": {
+            "visible_to": "all",
+            "fidelity": {},
+            "anchor_pc": "Carl",
+            "pov_strategy": "pc_anchored",
+        },
+    }
+    handler._emit_event("NARRATION", payload)
+
+    assert queues["p_katia"].qsize() == 1
+    katia_text = queues["p_katia"].get_nowait().payload["text"]
+    assert "you brace yourself" in katia_text, (
+        f"re-anchor must carry the reflexive (herself->yourself); got: {katia_text!r}"
+    )
+    assert "pushing past you" in katia_text, (
+        f"re-anchor must carry the object pronoun (her->you); got: {katia_text!r}"
+    )
+    assert "herself" not in katia_text and "Katia braces" not in katia_text, (
+        f"no residual 3rd-person reference to Katia on her own screen; got: {katia_text!r}"
+    )
+
+
+def test_158_8_anchor_frame_unaffected_other_pc_stays_a_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression pin (must stay GREEN): the anchor/emitter (Carl) keeps
+    seeing himself as 'you' and the OTHER PC (Katia) as a name. The Facet 2
+    fix must not collapse both PCs to 'you' on a single screen."""
+    handler = _make_handler_three_pcs(tmp_path)
+    _attach_queues(handler._room)
+    _narration_msg_patch(monkeypatch)
+
+    payload = {"text": _TWO_ACTOR_TEXT, "footnotes": [], "_visibility": dict(_TWO_ACTOR_VIZ)}
+    out_to_self = handler._emit_event("NARRATION", payload)
+
+    assert out_to_self is not None
+    carl_text = out_to_self.payload["text"]
+    assert "You haul the rope" in carl_text, (
+        f"emitter+anchor Carl must still see himself in 2nd person; got: {carl_text!r}"
+    )
+    assert "Katia steadies the winch" in carl_text, (
+        f"the OTHER PC (Katia) must stay a 3rd-person name on Carl's screen; got: {carl_text!r}"
+    )
+    assert "you steady" not in carl_text, (
+        f"only ONE PC re-anchors per screen — Katia must not become 'you' on Carl's; got: {carl_text!r}"
+    )
+
+
+def test_158_8_recipient_not_named_in_card_is_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Guard (must stay GREEN before AND after the fix): Donut is named
+    nowhere in the card, so his frame stays fully canonical — the
+    re-anchor must be a no-op when the recipient's own PC is absent. This
+    is what keeps test #2 above (anchor-only card) green."""
+    handler = _make_handler_three_pcs(tmp_path)
+    queues = _attach_queues(handler._room)
+    _narration_msg_patch(monkeypatch)
+
+    payload = {"text": _TWO_ACTOR_TEXT, "footnotes": [], "_visibility": dict(_TWO_ACTOR_VIZ)}
+    handler._emit_event("NARRATION", payload)
+
+    assert queues["p_donut"].qsize() == 1
+    donut_text = queues["p_donut"].get_nowait().payload["text"]
+    assert donut_text == _TWO_ACTOR_TEXT, (
+        f"a recipient named nowhere in the card must see canonical prose untouched; got: {donut_text!r}"
+    )
+
+
+def test_158_8_per_recipient_swap_emits_otel_span_for_own_pc(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, otel_capture
+) -> None:
+    """RED (AC-4, OTEL lie-detector): when Katia's frame is re-anchored, a
+    narration.second_person_swap span must fire for HER own PC
+    (swap_target_name='Katia', swap_count>=1). Today no swap span fires for
+    Katia at all — the GM panel cannot tell a non-anchor recipient was even
+    considered, let alone re-anchored."""
+    handler = _make_handler_three_pcs(tmp_path)
+    _attach_queues(handler._room)
+    _narration_msg_patch(monkeypatch)
+
+    payload = {"text": _TWO_ACTOR_TEXT, "footnotes": [], "_visibility": dict(_TWO_ACTOR_VIZ)}
+    handler._emit_event("NARRATION", payload)
+
+    swap_spans = [
+        s for s in otel_capture.get_finished_spans() if s.name == "narration.second_person_swap"
+    ]
+    katia_spans = [
+        s for s in swap_spans if dict(s.attributes).get("swap_target_name") == "Katia"
+    ]
+    assert katia_spans, (
+        "a per-recipient narration.second_person_swap span must fire for Katia's own PC; "
+        f"got swap_target_names: {[dict(s.attributes).get('swap_target_name') for s in swap_spans]}"
+    )
+    assert int(dict(katia_spans[0].attributes).get("swap_count", 0)) >= 1, (
+        "Katia's re-anchor swap must record a positive swap_count (the lie-detector signal)"
+    )

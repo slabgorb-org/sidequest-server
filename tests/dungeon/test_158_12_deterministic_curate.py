@@ -718,3 +718,59 @@ async def test_malformed_authored_room_yaml_stays_loud_but_graceful(
     assert [nid for nid in repo.load_map(entrance_id="entrance").nodes if nid != "entrance"], (
         "materialize must still commit generated regions (no crashed connect)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Reviewer 158-12 MEDIUM — the curate span's lie-detector must never go dark:
+#   an UNEXPECTED exception (outside ValueError/CurationError) must still tag
+#   the curate span curated=false before it propagates and aborts the txn.
+# ---------------------------------------------------------------------------
+
+
+async def test_unexpected_exception_tags_curate_span_before_propagating(
+    monkeypatch: pytest.MonkeyPatch, migrated_db: str
+) -> None:
+    """An unexpected exception from the per-region curate body (e.g. a malformed
+    homebrew pack object) must STILL stamp the `dungeon.materialize.curate` span
+    `curated=false` before propagating — consistent with the ValueError /
+    CurationError handlers (OTEL lie-detector / No Silent Fallbacks). The
+    exception must still propagate loud (the transaction aborts; nothing is
+    silently swallowed).
+    """
+    from tests.dungeon.conftest import build_pg_dungeon_repo
+
+    # An unexpected (non-ValueError/non-CurationError) failure in the per-region
+    # body — the kind the typed handlers do NOT catch.
+    def _boom(*_a: Any, **_k: Any) -> Any:
+        raise RuntimeError("malformed homebrew pack")
+
+    monkeypatch.setattr(_mat, "_append_authored_creatures", _boom)
+
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    theme_id = "boom_crypt_158_12"
+    palette = _commit_palette(theme_id)
+    graph = _seed_graph_themed(theme_id)
+    request = _make_request_task3(campaign_seed=99, expansion_id=1)
+
+    exporter, restore = _install_in_memory_tracer()
+    try:
+        with pytest.raises(RuntimeError, match="malformed homebrew pack"):
+            await _run_materialize(
+                request,
+                graph=graph,
+                bundle=_real_cookbook_bundle(),
+                palette=palette,
+                dungeon_repository=repo,
+                snapshot=_fresh_snapshot(),
+                pack_tropes=_attach_pack("cave_in"),
+            )
+    finally:
+        restore()
+
+    curate_spans = _spans_named(exporter, "dungeon.materialize.curate")
+    assert curate_spans, "the curate span must have opened/closed even on the error path"
+    assert any(dict(s.attributes or {}).get("curated") is False for s in curate_spans), (
+        "the curate span must be tagged curated=false before the unexpected "
+        "exception propagated — the GM-panel lie-detector must not go dark on an "
+        f"error path. Spans: {[dict(s.attributes or {}) for s in curate_spans]}"
+    )

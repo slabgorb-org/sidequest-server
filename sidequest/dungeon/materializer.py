@@ -898,23 +898,23 @@ def _resolve_look_for_theme(bundle: CookbookBundle, theme: Any, *, region_id: st
 def _creatures_from_manifest(
     manifest: RegionContentManifest, bundle: CookbookBundle
 ) -> tuple[list[CuratedCreature], CuratedCreature | None]:
-    """ADR-106 Amendment A Layer-2 degrade content: CR→Edge translate the
-    deterministic pre-curation ``assemble_region`` manifest itself (clause
-    9 — valid, complete, seed-reproducible). Same CR→Edge seam the curated
-    path uses; sourced from the manifest, not a (failed) verdict.
+    """ADR-106 Amendment C — the deterministic curate MAIN path: CR→Edge
+    translate the seeded ``assemble_region`` manifest itself (clause 9 — valid,
+    complete, seed-reproducible). Sourced from the manifest (no LLM verdict). The
+    same payload Amendment A used only on its Layer-2 degrade is now the ONLY
+    curate path.
 
     A manifest row/big_bad that cannot CR→Edge translate is the RETAINED
-    ``CurationError`` carve-out (i): the assembled input is itself
-    structurally invalid — a real upstream bug; never degrade a corrupt
-    input into shipped content.
+    ``CurationError`` carve-out (i): the assembled input is itself structurally
+    invalid — a real upstream content bug; fail loud, never ship a corrupt input.
     """
     creatures: list[CuratedCreature] = []
     for row in manifest.wandering_table:
         if "cr" not in row:
             raise CurationError(
                 f"assembled manifest wandering row {row!r} has no 'cr' — "
-                f"the pre-curation manifest is itself invalid (Amendment A "
-                f"carve-out i); cannot degrade a corrupt input"
+                f"the assembled manifest is itself invalid (carve-out i); "
+                f"fail loud, never ship a corrupt input"
             )
         creatures.append(
             CuratedCreature(
@@ -939,8 +939,7 @@ def _creatures_from_manifest(
                 raise CurationError(
                     f"assembled manifest big_bad has no cr and cr_band "
                     f"{manifest.cr_band!r} is not in affinities.cr_bands — "
-                    f"the pre-curation manifest is itself invalid "
-                    f"(Amendment A carve-out i)"
+                    f"the assembled manifest is itself invalid (carve-out i)"
                 )
             bb_cr = band.cr_max
         bb_src = manifest.big_bad if isinstance(manifest.big_bad, dict) else {}
@@ -961,30 +960,29 @@ def _append_authored_creatures(
     pack: Any,
     world_slug: str,
 ) -> list[CuratedCreature]:
-    """Story 153-26: even when a region Layer-2-degrades, surface its AUTHORED
-    ``rooms/<id>.yaml`` ``encounter_creatures`` binding.
+    """Surface a region's AUTHORED ``rooms/<id>.yaml`` ``encounter_creatures``
+    binding (Story 153-26; ADR-106 Amendment C: this runs on the deterministic
+    curate MAIN path, for every region — not a degrade fallback).
 
     ``_creatures_from_manifest`` translates only the PROCEDURAL
-    ``assemble_region`` manifest, so a degrade silently drops authored
-    encounters (``entrance`` → ``gnaw_swarm``). ``resolve_room_creatures`` is the
-    LLM-free authored-binding read shared with the runtime Monster Manual seam
-    (it emits ``monster_manual.room_bound``); consulting it here makes authored
-    content survive the degrade rather than vanish into the deterministic coal.
+    ``assemble_region`` manifest, so without this step authored encounters
+    (``entrance`` → ``gnaw_swarm``) would never surface. ``resolve_room_creatures``
+    is the LLM-free authored-binding read shared with the runtime Monster Manual
+    seam (it emits ``monster_manual.room_bound``); consulting it here makes
+    authored content join the deterministic procedural roster.
 
     A region with no authored binding (the common procedural case) is returned
     unchanged. ``pack=None`` / blank ``world_slug`` (test/bootstrap inputs with no
-    world context) is a no-op, preserving the prior packless degrade shape — NOT
-    a silent fallback, just an absent binding.
+    world context) is a no-op — NOT a silent fallback, just an absent binding.
 
     A binding referencing an unknown bestiary id (or a world with no bestiary at
     all) is an AUTHORING error: ``resolve_room_creatures`` raises
     ``RoomCreatureBindingError``. On THIS path that error must stay LOUD-but-
-    GRACEFUL (ADR-106 Amendment A degrade contract: "LOUD degrade, the turn
-    proceeds, no table freeze") — it is caught, logged at ERROR, and surfaced on
-    the ``dungeon.curate.authored_bind_failed`` span, then the degrade PROCEEDS
-    with the procedural coal. Letting it propagate would crash the player-facing
-    bootstrap ``await materialize()`` at connect for a single content typo
-    (Reviewer 153-26 HIGH).
+    GRACEFUL: it is caught, logged at ERROR, and surfaced on the
+    ``dungeon.curate.authored_bind_failed`` span, then curate PROCEEDS with the
+    procedural roster (the turn proceeds, no table freeze). Letting it propagate
+    would crash the player-facing bootstrap ``await materialize()`` at connect for
+    a single content typo (Reviewer 153-26 HIGH).
     """
     if pack is None or not world_slug:
         return creatures
@@ -998,14 +996,15 @@ def _append_authored_creatures(
     try:
         bound_ids = resolve_room_creatures(pack, world_slug, region_id)
     except RoomCreatureBindingError as exc:
-        # Loud-but-graceful: the degrade is already shipping coal — a broken
-        # authored binding must NOT additionally crash the connect. Surface it
-        # (ERROR log + GM-panel span) and proceed with the procedural creatures.
+        # Loud-but-graceful: curate is already shipping the procedural roster —
+        # a broken authored binding must NOT additionally crash the connect.
+        # Surface it (ERROR log + GM-panel span) and proceed with the procedural
+        # creatures.
         logger.error(
-            "dungeon curate degrade: authored room binding for region=%s "
-            "world=%s could not be resolved (%s); shipping procedural coal only "
-            "— authored encounter dropped (ADR-106 Amendment A: loud, but the "
-            "turn proceeds, no table freeze)",
+            "dungeon curate: authored room binding for region=%s "
+            "world=%s could not be resolved (%s); shipping the procedural roster "
+            "only — authored encounter dropped (ADR-106 Amendment C: loud-but-"
+            "graceful on the main path, the turn proceeds, no table freeze)",
             region_id,
             world_slug,
             exc,
@@ -1029,7 +1028,7 @@ def _append_authored_creatures(
             # reads diverged (effective_bestiary is pure — should be impossible).
             # Log LOUD for observability rather than dropping it silently.
             logger.error(
-                "dungeon curate degrade: authored binding id=%s for region=%s "
+                "dungeon curate: authored binding id=%s for region=%s "
                 "resolved by resolve_room_creatures but is absent from the "
                 "effective bestiary — dropping (divergent bestiary read?)",
                 cid,
@@ -1188,8 +1187,12 @@ def _stage_curate(
             region_creatures[node.id] = creatures
             region_big_bad[node.id] = big_bad
     except ValueError as exc:
+        # ValueError covers all three region-build sources: a theme absent from
+        # the palette, an unresolved/multi-bound look (_resolve_look_for_theme),
+        # and assemble_region itself — so the prefix is "region-build", not the
+        # narrower "assemble" (Reviewer 158-12 LOW: GM-panel legibility).
         span.set_attribute("curated", False)
-        span.set_attribute("reason", f"assemble: {exc}")
+        span.set_attribute("reason", f"region-build: {exc}")
         raise
     except CurationError as exc:
         # Carve-out (i): a structurally-invalid *assembled* manifest is a
@@ -1198,6 +1201,17 @@ def _stage_curate(
         # lie-detector marker before the raise propagates and aborts the txn.
         span.set_attribute("curated", False)
         span.set_attribute("reason", f"invalid manifest: {exc}")
+        raise
+    except Exception as exc:
+        # Any OTHER unexpected failure (e.g. a malformed homebrew pack object
+        # whose effective_bestiary misbehaves) must STILL tag the curate span
+        # before it propagates and aborts the txn — the GM-panel lie-detector
+        # must never go dark on an error path (OTEL principle / No Silent
+        # Fallbacks; consistent with the typed handlers above). Reviewer 158-12
+        # MEDIUM: the typed handlers tag-before-raise; an unexpected exception
+        # left the span untagged.
+        span.set_attribute("curated", False)
+        span.set_attribute("reason", f"unexpected: {exc}")
         raise
 
     # ADR-106 Amendment C: lie-detector summary on the curate STAGE span.

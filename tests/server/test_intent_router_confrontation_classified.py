@@ -6,10 +6,10 @@ brace matching the standoff def's own intent_verbs yielded
 indistinguishable from "feature doesn't exist". The pass now emits
 ``intent_router.confrontation_classified`` whenever the action lexically
 matches an authored intent_verb OR a confrontation dispatch was emitted;
-``emitted=0`` with non-empty ``verb_hits`` is the unrouted shape (plus a
-DEBUG log — Story 126-6 downgraded it from WARNING; a correct suppression
-is not a warning, and the span already carries the GM-panel signal). Quiet
-turns (no hit, no dispatch) stay span-free.
+``emitted=0`` with non-empty ``verb_hits`` is the unrouted shape (plus an
+INFO log when no confrontation is active — Story 126-6 downgraded it to DEBUG,
+then Story 158-2 re-raised it to INFO so a missed literary attack is observable
+in the GM panel). Quiet turns (no hit, no dispatch) stay span-free.
 
 Twin of ``test_intent_router_witnessed_act_classified.py`` — same harness.
 """

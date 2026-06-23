@@ -275,3 +275,67 @@ async def test_widening_does_not_match_stemmed_near_miss(otel_capture):
         player_name="Groucho",
     )
     assert _classified_spans(otel_capture) == []
+
+
+# ---------------------------------------------------------------------------
+# Review rework (158-2 round-trip 1): the unrouted-verb INFO signal is a
+# NO-ENCOUNTER miss detector. During active combat a described attack ("I
+# strike again") correctly routes to a beat, so verb_hits-without-dispatch is
+# expected and must NOT be logged loudly (it would drown the real miss).
+# And the log must never carry raw player text (CWE-532 / no PII in logs).
+# ---------------------------------------------------------------------------
+
+
+class _ActiveEncounter:
+    resolved = False
+
+
+def _snapshot_in_combat() -> GameSnapshot:
+    snap = _snapshot()
+    snap.encounter = _ActiveEncounter()
+    return snap
+
+
+@pytest.mark.asyncio
+async def test_active_encounter_suppresses_unrouted_log(otel_capture, caplog):
+    """During active combat the player keeps describing attacks; the router uses
+    beat_selections (no new confrontation), so verb_hits-without-conf_types is
+    EXPECTED. The unrouted-verb INFO log must stay silent so it does not dilute
+    the genuine no-encounter miss signal."""
+    router = _StubRouter(_empty_package())
+    with caplog.at_level(logging.DEBUG):
+        await execute_intent_router_pre_narrator_pass(
+            intent_router=router,
+            snapshot=_snapshot_in_combat(),
+            pack=_combat_pack(),
+            action="I strike the pale thing again with my short sword.",
+            player_name="Groucho",
+        )
+    assert _unrouted_log_records(caplog) == [], (
+        "an unrouted combat verb during ACTIVE combat is expected suppression, "
+        "not a miss — it must not be logged"
+    )
+
+
+@pytest.mark.asyncio
+async def test_unrouted_log_omits_raw_action_text(otel_capture, caplog):
+    """The unrouted-verb log must not echo raw player input (CWE-532 / no PII).
+    The distinctive non-verb words from the action must never appear in the log
+    message; only verb_hits and action_len are permitted."""
+    router = _StubRouter(_empty_package())
+    secret = "4111111111111111 hunter2 ssn-078051120"
+    with caplog.at_level(logging.DEBUG):
+        await execute_intent_router_pre_narrator_pass(
+            intent_router=router,
+            snapshot=_snapshot(),
+            pack=_combat_pack(),
+            action=f"I attack the thing, {secret}",
+            player_name="Groucho",
+        )
+    unrouted = _unrouted_log_records(caplog)
+    assert unrouted, "a no-encounter combat verb must still log the miss"
+    for record in unrouted:
+        msg = record.getMessage()
+        assert "4111111111111111" not in msg
+        assert "hunter2" not in msg
+        assert "ssn-078051120" not in msg

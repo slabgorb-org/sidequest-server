@@ -886,23 +886,32 @@ async def execute_intent_router_pre_narrator_pass(
                 genre_slug=snapshot.genre_slug or "",
             ):
                 pass
-            if verb_hits and not conf_types:
+            # Only a verb-hit-with-no-dispatch AND no active confrontation is a
+            # genuine miss. Once a confrontation is seated, a described attack
+            # ("I strike again") correctly routes to a beat (no NEW confrontation
+            # dispatch), so verb_hits-without-conf_types is EXPECTED every combat
+            # turn — logging it loudly there would drown the real no-encounter
+            # miss (the beneath_sunden turn-5 case) the signal exists to surface.
+            _enc = snapshot.encounter
+            _encounter_active = _enc is not None and not getattr(_enc, "resolved", False)
+            if verb_hits and not conf_types and not _encounter_active:
                 # Story 158-2 (SUPERSEDES the Story 126-6 DEBUG downgrade): a
-                # verb-hit-without-dispatch is NOT reliably a correct
-                # suppression. At the lexical layer it is indistinguishable
-                # from a MISSED literary attack — the beneath_sunden turn-5
-                # hole, where "drives the point at the crouched thing" was a
-                # real strike the router declined. The miss must be observable
-                # in the GM panel per the OTEL lie-detector principle, so the
-                # signal is emitted at INFO (the ``confrontation_classified``
-                # span above carries the structured form for the panel; this
-                # log gives the same signal at a level humans tail).
+                # verb-hit-without-dispatch with NO encounter is indistinguishable
+                # at the lexical layer from a MISSED literary attack — the
+                # beneath_sunden turn-5 hole, where "drives the point at the
+                # crouched thing" was a real strike the router declined. The miss
+                # must be observable in the GM panel per the OTEL lie-detector
+                # principle, so the signal is emitted at INFO (the
+                # ``confrontation_classified`` span above carries the structured
+                # form for the panel; this log gives the same signal at a level
+                # humans tail). Logs ``action_len`` only — never raw player text
+                # (CWE-532 / no-PII-in-logs; matches the codebase convention).
                 logger.info(
                     "intent_router.confrontation_verb_unrouted verb_hits=%s "
-                    "action_preview=%r — the action lexically matched authored "
+                    "action_len=%d — the action lexically matched authored "
                     "intent_verbs but the router emitted no confrontation dispatch",
                     ",".join(verb_hits),
-                    action[:120],
+                    len(action),
                 )
 
         # Ability-invocation decline evidence (sq-playtest 2026-06-07 Reroute

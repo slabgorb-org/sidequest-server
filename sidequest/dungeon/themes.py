@@ -20,6 +20,7 @@ registry (not yet present at this commit — authored in Task 7).
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -202,6 +203,30 @@ class LootEntry(BaseModel):
         return v
 
 
+class ExpansionQuestTemplate(BaseModel):
+    """Per-expansion quest template (ADR-137 × ADR-106). Deterministic slot
+    fill at attach; narrator flavors the prose at surface (Amendment C).
+
+    ``signature`` declares what beat completes the quest:
+      - big_bad   : the deepest region's big_bad NPC (hp_depletion resolves)
+      - set_piece : the set-piece named by ``set_piece_id`` (trope handshake resolves)
+      - reach_deep: the deepest region (frontier transition into it resolves)
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    signature: Literal["big_bad", "set_piece", "reach_deep"]
+    title: str
+    objective: str
+    set_piece_id: str | None = None  # required iff signature == "set_piece"
+
+    @model_validator(mode="after")
+    def _v_set_piece_id(self) -> "ExpansionQuestTemplate":
+        if self.signature == "set_piece" and not (self.set_piece_id or "").strip():
+            raise ValueError("signature 'set_piece' requires a non-blank set_piece_id")
+        return self
+
+
 class DungeonTheme(BaseModel):
     """One curated themed zone definition (spec §6)."""
 
@@ -217,6 +242,7 @@ class DungeonTheme(BaseModel):
     creature_table: list[CreatureEntry] = Field(default_factory=list)
     loot_table: list[LootEntry] = Field(default_factory=list)
     set_pieces: list[SetPiece] = Field(default_factory=list)
+    quest_template: ExpansionQuestTemplate | None = None
 
     @field_validator("id", "display_name")
     @classmethod

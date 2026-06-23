@@ -15,8 +15,9 @@ from dataclasses import dataclass, field
 FLOOR = 0
 WALL = 1
 
-# Themes whose register floods low floor (drowned/sunken families). Display-only.
-WATER_THEMES: frozenset[str] = frozenset({"drowned_cavern", "sunken_temple", "sunless_temple"})
+# drowned_cavern is the only beneath_sunden theme with flood/drowning motifs — the
+# sole water theme as of this audit. Add new water themes here as content grows.
+WATER_THEMES: frozenset[str] = frozenset({"drowned_cavern"})
 
 # Fraction of non-choke floor cells the water theme floods; distributed by seeded rotation.
 _WATER_FRACTION = 0.18

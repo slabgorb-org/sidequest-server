@@ -57,7 +57,7 @@ class RegionTactical:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "RegionTactical":
+    def from_dict(cls, d: dict) -> RegionTactical:
         return cls(
             region_id=d["region_id"],
             features=[
@@ -156,7 +156,7 @@ def derive_region_tactical(
     # 3. Hazard set-pieces -> one hazard marker each, on distinct floor cells.
     if hazard_setpieces:
         spots = _deterministic_sample(floor, len(hazard_setpieces), seed ^ 0x9E3779B9)
-        for piece, c in zip(hazard_setpieces, spots):
+        for piece, c in zip(hazard_setpieces, spots, strict=False):
             features.append(TacticalFeatureCell("hazard", c, f"{piece.replace('_', ' ')} — unstable"))
 
     # 4. Token anchors: entrance anchor first floor cell; creatures spread after.
@@ -175,7 +175,7 @@ def derive_region_tactical(
     exit_thresholds: dict[str, tuple[int, int]] = {}
     if floor and neighbor_ids:
         picks = _deterministic_sample(floor, len(neighbor_ids), seed ^ 0xC2B2AE35)
-        for nid, c in zip(neighbor_ids, picks):
+        for nid, c in zip(neighbor_ids, picks, strict=False):
             exit_thresholds[nid] = c
 
     return RegionTactical(

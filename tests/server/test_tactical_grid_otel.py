@@ -11,7 +11,6 @@ Capture pattern mirrors tests/integration/test_tactical_grid_runtime_wiring.py.
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 import pytest

@@ -1865,11 +1865,11 @@ def _new_frontier_edges(
 
 def _stage_tactical(
     *,
-    expansion: "Expansion",
-    graph: "RegionGraph",
-    fill_result: "Mapping[str, RegionFill]",
-    curation: "RegionCuration",
-    attach_result: "AttachResult",
+    expansion: Expansion,
+    graph: RegionGraph,
+    fill_result: Mapping[str, RegionFill],
+    curation: RegionCuration,
+    attach_result: AttachResult,
 ) -> dict[str, RegionTactical]:
     """Derive deterministic tactical data per filled region (ADR-096 token+feature).
 

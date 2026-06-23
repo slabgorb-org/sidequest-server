@@ -12,7 +12,7 @@ from sidequest.dungeon.region_graph.model import Expansion, RegionNode
 from sidequest.dungeon.themes import ExpansionQuestTemplate
 from sidequest.game.cookbook.models import RegionContentManifest
 from sidequest.game.session import GameSnapshot, QuestEntry
-from sidequest.telemetry.spans.dungeon_quest import quest_bound_span
+from sidequest.telemetry.spans.dungeon_quest import quest_bound_span, quest_resolved_span
 
 
 @dataclass(frozen=True)
@@ -231,3 +231,65 @@ def reconcile_dungeon_quests_into_log(
             # Entry was externally resolved (e.g. "completed", "failed") — preserve it.
             continue
     return projected
+
+
+# ---------------------------------------------------------------------------
+# Resolution: check each open expansion-quest thread against fired beats
+# ---------------------------------------------------------------------------
+
+
+def _beat_fired(
+    payload: dict,
+    *,
+    reached_region_ids: set[str],
+    resolved_trope_ids: list[str],
+    defeated_npc_names: set[str],
+) -> str | None:
+    """Return the resolving_event name if the thread's signature beat fired, else None."""
+    kind = payload.get("signature_kind")
+    ref = payload.get("ref_id", "")
+    if kind == "reach_deep" and payload.get("anchor_region") in reached_region_ids:
+        return "reach_deep"
+    if kind == "set_piece" and ref in resolved_trope_ids:
+        return "set_piece"
+    if kind == "big_bad" and ref in defeated_npc_names:
+        return "hp_depletion"
+    return None
+
+
+def resolve_expansion_quests(
+    *,
+    snapshot: GameSnapshot,
+    store: DungeonStore,
+    reached_region_ids: set[str],
+    resolved_trope_ids: list[str],
+    defeated_npc_names: set[str],
+) -> int:
+    """For each open expansion-quest thread whose signature beat has fired,
+    resolve the ledger thread, flip the projected QuestEntry to "completed",
+    and emit a quest_resolved_span.  Returns the count of quests resolved.
+    """
+    resolved = 0
+    for thread in store.open_threads():
+        if thread.kind != "quest" or thread.payload.get("scope") != "expansion":
+            continue
+        event = _beat_fired(
+            thread.payload,
+            reached_region_ids=reached_region_ids,
+            resolved_trope_ids=resolved_trope_ids,
+            defeated_npc_names=defeated_npc_names,
+        )
+        if event is None:
+            continue
+        exp_id = thread.payload.get("expansion_id")
+        with quest_resolved_span(
+            expansion_id=exp_id,
+            signature_kind=thread.payload.get("signature_kind", ""),
+            resolving_event=event,
+        ):
+            store.resolve_thread(thread.thread_id)
+            entry = snapshot.quest_log.get(f"dungeon:exp{exp_id}")
+            if entry is not None:
+                entry.status = "completed"
+        resolved += 1
+    return resolved

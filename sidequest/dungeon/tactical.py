@@ -43,6 +43,31 @@ class RegionTactical:
     pois: list[tuple[int, int]] = field(default_factory=list)
     exit_thresholds: dict[str, tuple[int, int]] = field(default_factory=dict)
 
+    def to_dict(self) -> dict:
+        return {
+            "region_id": self.region_id,
+            "features": [
+                {"feature_type": f.feature_type, "cell": list(f.cell), "label": f.label}
+                for f in self.features
+            ],
+            "anchors": [{"cell": list(a.cell), "role": a.role} for a in self.anchors],
+            "pois": [list(p) for p in self.pois],
+            "exit_thresholds": {k: list(v) for k, v in self.exit_thresholds.items()},
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "RegionTactical":
+        return cls(
+            region_id=d["region_id"],
+            features=[
+                TacticalFeatureCell(f["feature_type"], (f["cell"][0], f["cell"][1]), f["label"])
+                for f in d.get("features", [])
+            ],
+            anchors=[TokenAnchor((a["cell"][0], a["cell"][1]), a["role"]) for a in d.get("anchors", [])],
+            pois=[(p[0], p[1]) for p in d.get("pois", [])],
+            exit_thresholds={k: (v[0], v[1]) for k, v in d.get("exit_thresholds", {}).items()},
+        )
+
 
 def _seed(region_id: str) -> int:
     """Stable integer seed from the region id (resume-safe; no clock/random)."""

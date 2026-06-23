@@ -4,6 +4,8 @@ Deterministic — no LLM (Amendment C)."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import hashlib
 from dataclasses import dataclass
 
@@ -297,3 +299,66 @@ def resolve_expansion_quests(
                 entry.status = "completed"
         resolved += 1
     return resolved
+
+
+# ---------------------------------------------------------------------------
+# Frontier observer factory — Task 8 wiring seam
+# ---------------------------------------------------------------------------
+
+# Type alias matching FrontierObserver (collections.abc.Callable[..., None]).
+_FrontierObserver = Callable[..., None]
+
+
+def _expansion_id_of(region_id: str) -> int | None:
+    """Parse the expansion id from a region id (e.g. 'exp001.r3' → 1).
+
+    Non-``exp`` ids (e.g. 'entrance') return ``None`` — they carry no
+    expansion association and must not trigger quest projection.
+    """
+    if not region_id.startswith("exp"):
+        return None
+    try:
+        return int(region_id.split(".", 1)[0][3:])
+    except ValueError:
+        return None
+
+
+def make_expansion_quest_observer(store: DungeonStore) -> _FrontierObserver:
+    """Return a frontier observer that, on each region transition:
+
+    1. Computes the expansion id from ``to_region`` (None for non-exp regions).
+    2. Calls ``reconcile_dungeon_quests_into_log`` to project open expansion-quest
+       threads for the reached expansion into ``snapshot.quest_log``.
+    3. Calls ``resolve_expansion_quests`` to resolve any whose ``reach_deep``
+       beat fired this transition.
+
+    ``resolved_trope_ids`` and ``defeated_npc_names`` are deferred to later
+    tasks (set_piece / big_bad resolution) and passed as empty here.
+
+    The returned callable matches the ``FrontierObserver`` signature:
+    ``observer(*, snapshot, pc_name, from_region, to_region) -> None``.
+    """
+
+    def _observer(
+        *,
+        snapshot: GameSnapshot,
+        pc_name: str,
+        from_region: str | None,
+        to_region: str,
+    ) -> None:
+        exp_id = _expansion_id_of(to_region)
+        reached_exps: set[int] = {exp_id} if exp_id is not None else set()
+        reconcile_dungeon_quests_into_log(
+            snapshot=snapshot,
+            store=store,
+            reached_expansion_ids=reached_exps,
+        )
+        resolve_expansion_quests(
+            snapshot=snapshot,
+            store=store,
+            reached_region_ids={to_region},
+            resolved_trope_ids=[],
+            defeated_npc_names=set(),
+        )
+
+    return _observer

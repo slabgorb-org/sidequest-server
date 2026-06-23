@@ -124,6 +124,25 @@ def build_sd_with_tactical_region(
     snap.character_locations["Rux"] = region_id
     snap.discovered_rooms = [region_id]
 
+    # Real Character with a live HpPool and armor_class so find_creature_core resolves hp/ac.
+    from sidequest.game.character import Character
+    from sidequest.game.creature_core import CreatureCore, HpPool
+
+    rux_core = CreatureCore(
+        name="Rux",
+        description="A stalwart explorer.",
+        personality="Curious and cautious.",
+        hp=HpPool(current=18, max=22, base_max=22),
+        armor_class=14,
+    )
+    rux_char = Character(
+        core=rux_core,
+        backstory="Descended from the rock-wardens of old Sünden.",
+        char_class="Fighter",
+        race="Human",
+    )
+    snap.characters.append(rux_char)
+
     if creature_revealed:
         # One opponent actor — concealment gate lets live actors through, suppresses withdrawn.
         from sidequest.game.encounter import EncounterMetric
@@ -140,6 +159,18 @@ def build_sd_with_tactical_region(
             opponent_metric=EncounterMetric(name="fear", threshold=10),
             actors=[actor],
         )
+
+        # Matching Npc in snapshot.npcs so the creature token gets hp/ac.
+        from sidequest.game.session import Npc
+
+        spider_core = CreatureCore(
+            name="rope-spider",
+            description="A large spider that hunts with silk ropes.",
+            personality="Predatory and patient.",
+            hp=HpPool(current=8, max=12, base_max=12),
+            armor_class=13,
+        )
+        snap.npcs.append(Npc(core=spider_core))
     else:
         # No encounter (pre-ambush) — concealment gate produces no creature tokens.
         snap.encounter = None

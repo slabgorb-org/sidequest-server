@@ -1272,12 +1272,27 @@ class LocationEntityResolution(BaseModel):
     from_promotion: bool = False
 
 
+class HpPayload(ProtocolBase):
+    """Current/max HP for a tactical-map token (ADR-096 token+feature phase)."""
+
+    current: int
+    max: int
+
+
 class TokenPayload(ProtocolBase):
-    """A token placed on the tactical grid (placeholder — populated at dispatch)."""
+    """A token placed on the tactical grid — populated from live game state (158-18)."""
 
     token_id: str
     label: str
     position: tuple[int, int]
+    faction: str = "neutral"
+    """player|ally|neutral|hostile — UI token color."""
+    hp: HpPayload | None = None
+    ac: int | None = None
+
+    @field_serializer("position")
+    def _ser_position(self, value: tuple[int, int]) -> list[int]:
+        return list(value)
 
 
 class InitiativeEntry(ProtocolBase):

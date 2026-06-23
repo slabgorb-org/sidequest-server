@@ -34,13 +34,20 @@ logger = logging.getLogger(__name__)
 
 
 def _place_tokens_on_anchors(*, snapshot, room_id: str, anchors) -> list:
-    """Place revealed live tokens onto anchors.
+    """Place revealed live tokens onto anchors, enriched with faction/hp/ac.
 
     Concealment gate (spec §4.3): party PCs located in this room + opponent
     actors in the LIVE encounter. Pre-ambush creatures are not yet encounter
     actors, so gating on the actor roster never leaks them onto the map.
+
+    Enrichment (158-18): each token carries faction, hp (HpPayload), and ac
+    drawn from the live game state via snapshot.find_creature_core (PCs) and
+    snapshot.npcs match (creatures). If a core cannot be resolved, hp/ac are
+    left as None — the token is still placed positionally.
     """
-    from sidequest.protocol.models import TokenPayload
+    from sidequest.protocol.models import HpPayload, TokenPayload
+
+    _SIDE_TO_FACTION = {"player": "ally", "opponent": "hostile", "neutral": "neutral"}
 
     tokens: list[TokenPayload] = []
     entrance = [a for a in anchors if a.role == "entrance"]
@@ -57,7 +64,19 @@ def _place_tokens_on_anchors(*, snapshot, room_id: str, anchors) -> list:
         if i < len(pc_cells):
             # v1: excess PCs beyond available anchor slots are intentionally dropped;
             # finer overflow placement (e.g. nearest floor cell) is a follow-up.
-            tokens.append(TokenPayload(token_id=f"pc:{name}", label=name, position=pc_cells[i]))
+            core = snapshot.find_creature_core(name)
+            hp = HpPayload(current=core.hp.current, max=core.hp.max) if core is not None else None
+            ac = core.armor_class if core is not None else None
+            tokens.append(
+                TokenPayload(
+                    token_id=f"pc:{name}",
+                    label=name,
+                    position=pc_cells[i],
+                    faction="player",
+                    hp=hp,
+                    ac=ac,
+                )
+            )
 
     # REVEALED creatures only = live opponent actors (not withdrawn).
     enc = getattr(snapshot, "encounter", None)
@@ -67,13 +86,25 @@ def _place_tokens_on_anchors(*, snapshot, room_id: str, anchors) -> list:
         for a in actors
         if getattr(a, "side", None) == "opponent" and not getattr(a, "withdrawn", False)
     ]
+    npcs = getattr(snapshot, "npcs", []) or []
     for i, actor in enumerate(revealed):
         if i < len(creature_anchors):
+            faction = _SIDE_TO_FACTION.get(getattr(actor, "side", "neutral"), "neutral")
+            npc = next((n for n in npcs if n.core.name == actor.name), None)
+            hp = (
+                HpPayload(current=npc.core.hp.current, max=npc.core.hp.max)
+                if npc is not None
+                else None
+            )
+            ac = npc.core.armor_class if npc is not None else None
             tokens.append(
                 TokenPayload(
                     token_id=f"creature:{actor.name}",
                     label=actor.name,
                     position=creature_anchors[i].cell,
+                    faction=faction,
+                    hp=hp,
+                    ac=ac,
                 )
             )
     return tokens

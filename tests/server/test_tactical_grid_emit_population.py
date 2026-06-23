@@ -41,6 +41,27 @@ def test_runtime_payload_has_tokens_and_features(tmp_path: Path, monkeypatch) ->
     assert payload.derived is not None, "derived must be set"
     assert payload.derived.pois is not None, "derived.pois must be set (may be empty list)"
 
+    # 158-18 token-contract assertions: faction/hp/ac enrichment from live game state.
+    pc_tok = pc_tokens[0]
+    assert pc_tok.faction == "player", f"PC token faction must be 'player', got {pc_tok.faction!r}"
+    assert pc_tok.hp is not None, "PC token hp must be populated from snapshot character"
+    assert pc_tok.hp.current == 18 and pc_tok.hp.max == 22, (
+        f"PC token hp must match fixture values (18/22), got {pc_tok.hp}"
+    )
+    assert pc_tok.ac == 14, f"PC token ac must match fixture armor_class=14, got {pc_tok.ac}"
+
+    creature_tok = creature_tokens[0]
+    assert creature_tok.faction == "hostile", (
+        f"opponent creature token faction must be 'hostile', got {creature_tok.faction!r}"
+    )
+    assert creature_tok.hp is not None, "creature token hp must be populated from snapshot NPC"
+    assert creature_tok.hp.current == 8 and creature_tok.hp.max == 12, (
+        f"creature token hp must match fixture values (8/12), got {creature_tok.hp}"
+    )
+    assert creature_tok.ac == 13, (
+        f"creature token ac must match fixture armor_class=13, got {creature_tok.ac}"
+    )
+
 
 def test_unrevealed_creature_not_placed(tmp_path: Path, monkeypatch) -> None:
     """Pre-ambush creatures (not yet encounter actors) must not leak onto the map.

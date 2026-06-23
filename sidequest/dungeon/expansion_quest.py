@@ -4,11 +4,14 @@ Deterministic — no LLM (Amendment C)."""
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 
+from sidequest.dungeon.persistence import ComplicationThread, DungeonStore
 from sidequest.dungeon.region_graph.model import Expansion, RegionNode
 from sidequest.dungeon.themes import ExpansionQuestTemplate
 from sidequest.game.cookbook.models import RegionContentManifest
+from sidequest.telemetry.spans.dungeon_quest import quest_bound_span
 
 
 @dataclass(frozen=True)
@@ -119,12 +122,6 @@ def _empty_manifest() -> RegionContentManifest:
     )
 
 
-import hashlib  # noqa: E402
-
-from sidequest.dungeon.persistence import ComplicationThread
-from sidequest.telemetry.spans.dungeon_quest import quest_bound_span
-
-
 def _expansion_quest_thread_id(campaign_seed: int, expansion_id: int) -> str:
     h = hashlib.blake2b(
         f"{campaign_seed}:{expansion_id}:expansion_quest".encode(), digest_size=8
@@ -138,7 +135,7 @@ def seed_expansion_quest(
     expansion: Expansion,
     manifests_by_region: dict[str, RegionContentManifest],
     template: ExpansionQuestTemplate,
-    store,
+    store: DungeonStore,
     started_at_depth_score: float,
 ) -> str:
     """Open one expansion-scoped ComplicationThread in the ledger.

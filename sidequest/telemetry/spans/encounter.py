@@ -378,6 +378,33 @@ SPAN_ROUTES[SPAN_ENCOUNTER_ROSTER_RESOLUTION_SKIPPED] = SpanRoute(
     },
 )
 
+# 158-1 (WWN-COMBAT-NEVER-SEATS): the seater found NO co-located adversary for a
+# combat target, but a manual_origin bestiary adversary the narrator surfaced
+# on-stage this turn (or last) was sitting at a STALE zone (its authored room,
+# not the PC's current scene — e.g. the entrance Gnaw-Swarm the party moved
+# past, dragged forward in prose). Per ADR-116 the projection had no co-located
+# Other, so the router never seated and the narrator free-narrated the fight.
+# The engine reconciles the surfaced creature's zone to the PC's scene so the
+# bound creature reaches the fight; this span is the GM-panel lie-detector that
+# the zone fix happened (CLAUDE.md OTEL Observability / SOUL "Yes, And"), naming
+# the creature and the from→to zones. Turn-scoped (``last_seen_turn`` recent) so
+# it never region-wide-conscripts an off-stage creature (the over-reach ADR-116
+# guards against).
+SPAN_ENCOUNTER_CREATURE_ZONE_RECONCILED = "encounter.creature_zone_reconciled"
+SPAN_ROUTES[SPAN_ENCOUNTER_CREATURE_ZONE_RECONCILED] = SpanRoute(
+    event_type="state_transition",
+    component="encounter",
+    extract=lambda span: {
+        "field": "encounter.creature_zone_reconciled",
+        "creature_name": (span.attributes or {}).get("creature_name", ""),
+        "creature_id": (span.attributes or {}).get("creature_id", ""),
+        "from_location": (span.attributes or {}).get("from_location", ""),
+        "to_location": (span.attributes or {}).get("to_location", ""),
+        "last_seen_turn": (span.attributes or {}).get("last_seen_turn", 0),
+        "current_turn": (span.attributes or {}).get("current_turn", 0),
+    },
+)
+
 # Story 45-3: Mid-turn momentum broadcast lie-detector. Fires whenever the
 # server emits a CONFRONTATION frame carrying post-mutation momentum, so
 # the GM panel can audit "the dial moved on screen because the engine
@@ -1129,6 +1156,41 @@ def encounter_roster_resolution_skipped_span(
             "router_name": router_name,
             "declined_name": declined_name,
             "confrontation_category": confrontation_category,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def encounter_creature_zone_reconciled_span(
+    *,
+    creature_name: str,
+    creature_id: str,
+    from_location: str,
+    to_location: str,
+    last_seen_turn: int,
+    current_turn: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """158-1: a combat target had no co-located adversary, but a manual_origin
+    bestiary adversary the narrator surfaced this turn (or last) was stranded at a
+    stale zone. Its zone is reconciled to the PC's current scene so the bound
+    creature reaches the fight instead of a fabricated stub (ADR-116 / ADR-059;
+    SOUL "Yes, And"). ``from_location`` is the stale stored zone, ``to_location``
+    the PC's scene; the GM panel reads this to confirm the engine MADE the Other
+    present rather than the narrator improvising (No Silent Fallbacks)."""
+    with Span.open(
+        SPAN_ENCOUNTER_CREATURE_ZONE_RECONCILED,
+        {
+            "creature_name": creature_name,
+            "creature_id": creature_id,
+            "from_location": from_location,
+            "to_location": to_location,
+            "last_seen_turn": last_seen_turn,
+            "current_turn": current_turn,
             **attrs,
         },
         tracer_override=_tracer,

@@ -121,6 +121,20 @@ CONFRONTATION_TRIGGER_CORE: str = (
     "striking a PRESENT target. An anticipated or "
     "hypothetical attack is not an Other; readying for it "
     "is prose, not a confrontation.\n"
+    "A DESCRIBED or literary attack counts as striking a "
+    "PRESENT target even when the attack verb is buried in "
+    'prose and the literal word "attack" never appears: '
+    '"drives the point at the crouched thing", "brings the '
+    'blade down on the sentry", "lunges at the beast", '
+    '"looses an arrow at the rider" are all hostile commits '
+    "against a present, named Other — fire the combat type. "
+    "A LEADING preparation clause does not downgrade them: an "
+    "action that OPENS with drawing or stepping but ENDS in a "
+    'strike on a present target ("draws his sword, crosses '
+    'the room, and runs it through the guard") is a strike, '
+    "not mere readying. Preparation is prose ONLY when it "
+    "stands alone with no follow-through against anyone "
+    "present.\n"
     "Pre-combat / face-off triggers (``standoff`` and any "
     "other type whose category is ``pre_combat``): the "
     "THREAT of violence is the trigger, not violence "

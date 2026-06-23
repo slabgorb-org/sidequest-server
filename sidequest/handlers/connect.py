@@ -1416,6 +1416,33 @@ class ConnectHandler:
                     ),
                     player_id=player_id,
                 )
+            # Story 158-9 — server-side loud guard for the No-Silent-Fallbacks
+            # gap behind the 2026-06-21 beneath_sunden playtest finding ("genre
+            # theme CSS never arrives on connect"). The emit above is
+            # unconditional, but when neither a world- nor genre-level
+            # client_theme.css resolves, ``theme_msg`` stays None and the UI
+            # silently collapses ``--accent`` to a near-invisible oklch(0.269)
+            # (caught only by useGenreTheme's 8s loud-fail banner). Every live
+            # genre pack ships a genre-level client_theme.css, so a "none"
+            # source on connect is a real misconfig (pack missing its theme, or
+            # genre_pack failed to load) — not the tolerated theme-less default.
+            # Fail loudly here so a future regression surfaces server-side
+            # immediately: a WARNING log line + a warning-severity watcher event
+            # the GM panel flags, instead of a silent info-level "absent".
+            theme_absent = theme_msg is None
+            if theme_absent:
+                logger.warning(
+                    "session.theme_css_absent genre=%s world=%s slug=%s player_id=%s "
+                    "genre_pack=%s — no client_theme.css resolved; the UI will fall "
+                    "back to the near-invisible dark default. Every live pack ships a "
+                    "genre-level client_theme.css, so this is a real misconfig, not "
+                    "the tolerated theme-less path.",
+                    row.genre_slug,
+                    row.world_slug,
+                    slug,
+                    player_id,
+                    "missing" if genre_pack is None else "loaded",
+                )
             _watcher_publish(
                 "state_transition",
                 {
@@ -1429,6 +1456,7 @@ class ConnectHandler:
                     "slug": slug,
                 },
                 component="genre",
+                severity="warning" if theme_absent else "info",
             )
 
             # Task 19: lazy-fill projection_cache for this player if they're

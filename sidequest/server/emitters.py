@@ -15,8 +15,10 @@ import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from opentelemetry import trace
+
 from sidequest.agents.perception_rewriter import rewrite_for_recipient
-from sidequest.agents.pov_swap import swap_to_second_person
+from sidequest.agents.pov_swap import _PRONOUN_FORMS, swap_to_second_person
 
 if TYPE_CHECKING:
     from sidequest.game.projection.view import SessionGameStateView
@@ -26,6 +28,7 @@ if TYPE_CHECKING:
     from sidequest.server.session_handler import WebSocketSessionHandler, _SessionData
 
 logger = logging.getLogger(__name__)
+_tracer = trace.get_tracer("sidequest.server.emitters")
 
 
 def _emit_recipient_dropped(kind: str, player_id: str, reason: str) -> None:
@@ -290,6 +293,23 @@ def _apply_pov_swap(
         # Cannot safely swap without pronouns — return canonical prose.
         # Genre-side chargen should always populate pronouns; this is a
         # defensive guard against a malformed save.
+        return payload_dict
+    if pronouns not in _PRONOUN_FORMS:
+        # Story 158-8 (rework): chargen permits freeform pronouns
+        # (builder.py pronouns_allow_freeform), but the localizer only swaps
+        # the three canonical sets. Handing a non-canonical value to
+        # swap_to_second_person raises ValueError, and because this call sits
+        # inside emit_event's repo.transaction() that ValueError would roll
+        # back the NARRATION turn for the WHOLE table. Fail open to canonical
+        # 3rd-person prose — same shape as the empty-pronoun guard above — and
+        # emit a skip span so the GM panel sees the fail-open decision instead
+        # of a silent return (OTEL Observability Principle / No Silent
+        # Fallbacks). This is the in-function guard; the root-cause fix is a
+        # constrained Character.pronouns type (see Delivery Findings).
+        with _tracer.start_as_current_span("narration.pov_swap_skipped") as span:
+            span.set_attribute("recipient_pc", recipient_pc_name)
+            span.set_attribute("reason", "unsupported_pronouns")
+            span.set_attribute("pronouns", pronouns)
         return payload_dict
     text = payload_dict.get("text", "")
     if not isinstance(text, str) or not text:
@@ -595,10 +615,14 @@ def emit_event(
                             viewer_player_id=other_pid,
                             status_effects=status_effects,
                         )
-                        # Story 49-8: 2nd-person POV swap. Fires only
-                        # when the recipient's PC matches the sidecar's
-                        # anchor_pc and pov_strategy=="pc_anchored".
-                        # No-op for atmospheric / non-anchor recipients.
+                        # Story 49-8 / 158-8: 2nd-person POV swap, re-anchored
+                        # PER RECIPIENT. On each recipient's frame their OWN PC
+                        # becomes "you" (with gendered-pronoun agreement) when
+                        # pov_strategy=="pc_anchored"; every other PC stays a
+                        # name. No-op for atmospheric narration, for a recipient
+                        # whose PC is absent from the prose, and (158-8 rework)
+                        # for a recipient with non-canonical/freeform pronouns
+                        # (fails open to canonical prose + a skip span).
                         if _snapshot_for_swap is not None:
                             filtered_data = _apply_pov_swap(
                                 filtered_data,

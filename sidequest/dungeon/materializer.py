@@ -292,6 +292,20 @@ def _hp_from_cr(cr: float) -> HpPool:
     return hp_pool_from_hp(hp)
 
 
+def _threat_from_band(bundle: CookbookBundle, cr_band: str) -> int:
+    """Derive the 1-4 B/X threat tier from a region's CR band (Keith ruling
+    2026-06-22). ``band_order`` is the shallow<mid<deep ordinal; tier is the
+    1-based ordinal clamped to [1, 4]. An unknown band is a loud bug, not a
+    silent default (No Silent Fallbacks)."""
+    order = bundle.affinities.band_order()
+    if cr_band not in order:
+        raise CurationError(
+            f"cr_band {cr_band!r} is not in affinities.cr_bands {sorted(order)} "
+            f"— cannot derive a threat tier"
+        )
+    return min(4, max(1, order[cr_band] + 1))
+
+
 def _region_interior_seed(campaign_seed: int, expansion_id: int, region_id: str) -> int:
     """Deterministic per-region interior seed.
 
@@ -474,6 +488,11 @@ class CuratedCreature:
     creature_type: str
     telegraph: str
     hp: HpPool
+    # ADR-114 discipline: NO raw cr. ``threat_level`` is the DERIVED B/X tier
+    # (1-4) from the region's CR band — the legible difficulty signal the
+    # inject stamps onto the runtime Npc (Keith ruling 2026-06-22: derive from
+    # CR band). Big-bad gets the region tier +1 (capped at 4).
+    threat_level: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -989,6 +1008,7 @@ def _creatures_from_manifest(
                 creature_type=str(row.get("type", "")),
                 telegraph=str(row.get("telegraph", "")),
                 hp=_hp_from_cr(float(row["cr"])),
+                threat_level=_threat_from_band(bundle, manifest.cr_band),
             )
         )
     big_bad: CuratedCreature | None = None
@@ -1015,6 +1035,7 @@ def _creatures_from_manifest(
             creature_type="big_bad",
             telegraph=str(bb_src.get("min_band", "")),
             hp=_hp_from_cr(float(bb_cr)),
+            threat_level=min(4, _threat_from_band(bundle, manifest.cr_band) + 1),
         )
     return creatures, big_bad
 
@@ -1110,6 +1131,7 @@ def _append_authored_creatures(
                 creature_type=str(getattr(entry, "role", "") or "authored"),
                 telegraph=str(getattr(entry, "description", "") or ""),
                 hp=hp_pool_from_hp(int(entry.hp)),
+                threat_level=int(getattr(entry, "level", 1) or 1),
             )
         )
         existing_names.add(entry.name)
@@ -1470,6 +1492,7 @@ async def _stage_curate(
                         creature_type=str(row.get("type", "")),
                         telegraph=str(row.get("telegraph", "")),
                         hp=_hp_from_cr(float(row["cr"])),
+                        threat_level=_threat_from_band(bundle, manifest.cr_band),
                     )
                 )
             region_creatures[region_id] = creatures
@@ -1503,6 +1526,7 @@ async def _stage_curate(
                     creature_type="big_bad",
                     telegraph=str(bb_v.get("min_band", "")),
                     hp=_hp_from_cr(float(bb_cr)),
+                    threat_level=min(4, _threat_from_band(bundle, manifest.cr_band) + 1),
                 )
 
     # Lie-detector summary on the curate STAGE span. `curated` is the

@@ -592,6 +592,12 @@ def test_witnesses_count_is_eleven_and_docstring_not_stale() -> None:
         f"expected 11 registered witnesses (6 original + witnessed_act + movement "
         f"+ quest_offer + course + dogfight); got {len(_WITNESSES)}: {sorted(_WITNESSES)}"
     )
+    # Pin the NEW key, not just the count: a different 11th registration (a
+    # rename, a dropped+re-added witness) would otherwise pass the count check
+    # silently. Mirrors the explicit movement/course key checks elsewhere.
+    assert "dogfight" in _WITNESSES, (
+        f"the 11th witness must be dogfight (153-6, ADR-077); got {sorted(_WITNESSES)}"
+    )
     doc = (detect_dispatch_engagement_mismatch.__doc__ or "").lower()
     assert "six" not in doc, "stale 'all six live-path subsystems' docstring not corrected"
     assert "witnessed_act" in doc and "movement" in doc, (

@@ -41,6 +41,7 @@ from sidequest.server.dispatch.confrontation import find_confrontation_def
 from sidequest.server.dispatch.sealed_letter import ROLE_BLUE, ROLE_RED
 from sidequest.telemetry.spans import (
     encounter_confrontation_initiated_span,
+    encounter_creature_zone_reconciled_span,
     encounter_no_opponent_available_span,
     encounter_opponent_minted_stub_span,
     encounter_opponent_resolved_from_roster_span,
@@ -473,7 +474,9 @@ def _seed_combat_hp_depletion_to_npcs(
         if not _has_authored_reprisal_source(cdef, opponent_core):
             resolvable = _opponent_reprisal_damage_resolvable(cdef, opponent_core, ruleset)
             unarmed_floor = (
-                ruleset.SRD_UNARMED_DICE if isinstance(ruleset, WithoutNumberRulesetModule) else None
+                ruleset.SRD_UNARMED_DICE
+                if isinstance(ruleset, WithoutNumberRulesetModule)
+                else None
             )
             # ``ruleset`` (always) + WN-only ``unarmed_floor`` discriminate
             # "floor resolved" from a genuine toothless flag; ``reprisal_resolvable``
@@ -973,6 +976,92 @@ def _npc_fallback_at_location(
     return fallback, True
 
 
+def _reconcile_surfaced_adversary(
+    snapshot: GameSnapshot,
+    *,
+    location: str,
+    turn: int,
+) -> Npc | None:
+    """158-1 ([WWN-COMBAT-NEVER-SEATS]): when a combat target has NO co-located
+    adversary, recover a bound Monster-Manual adversary the narrator surfaced
+    on-stage whose stored zone drifted from the PC's current scene.
+
+    The forensic shape (beneath_sunden ``8b54610d``): the authored entrance
+    Gnaw-Swarm sits in ``snapshot.npcs`` at its authored room ("Under the Rope")
+    while the PC descended to a procedural region; the narrator dragged it forward
+    in prose ("pooling at your feet") but the engine kept it at the entrance. The
+    co-location projection (``_resolve_opponent_from_roster`` /
+    ``_npc_fallback_at_location``, ADR-116) finds no Other → the router never seats
+    → the narrator free-narrates the fight and fabricates player HP.
+
+    Recovery is deliberately NARROW — the same over-reach guard
+    ``_resolve_opponent_from_roster`` documents (region-wide sourcing is forbidden;
+    ADR-116). A candidate must be:
+
+      * ``creature_id``-statted AND ``manual_origin`` — a bound bestiary adversary
+        (ADR-059), never a narrator-invented person;
+      * adversarial and not ``Attitude.FRIENDLY``;
+      * carrying a REAL stored zone (at least one of ``location`` /
+        ``last_seen_location`` non-None) that is stale relative to the PC's scene —
+        a creature with NO location is unplaced, not zone-drifted;
+      * surfaced THIS turn or the immediately-preceding one — ``last_seen_turn > 0``
+        (the model's ``0`` means "never mentioned this session" — a never-surfaced
+        creature is not "engaged this turn") AND ``0 <= turn - last_seen_turn <= 1``.
+        Narration stamps ``last_seen_turn`` AFTER the seater runs, so a creature the
+        narrator put on-stage last turn carries ``turn - 1`` at this turn's seat
+        time; a creature last seen earlier (or never) is genuinely off-stage and is
+        left untouched (the 158-1 no-over-reach AC);
+      * NOT already co-located (else the normal candidate scan already had it).
+
+    The most-recently-surfaced match has its ``last_seen_location`` and
+    ``location`` reconciled to the PC's scene (SOUL "Yes, And" — trust the
+    narrator's on-stage placement), emitting ``encounter.creature_zone_reconciled``
+    for the GM panel. Returns the reconciled, now-co-located ``Npc`` or ``None``.
+    """
+    candidates = [
+        n
+        for n in snapshot.npcs
+        if n.creature_id is not None
+        and n.manual_origin
+        and _npc_is_adversary(n)
+        and n.disposition.attitude() != Attitude.FRIENDLY
+        # Must carry a REAL stored zone to have drifted FROM — a creature with no
+        # location at all (both fields None) is unplaced, not zone-drifted, and
+        # would emit a phantom from_location="" span (review finding).
+        and (n.last_seen_location is not None or n.location is not None)
+        and n.last_seen_location != location
+        and n.location != location
+        # Surfaced THIS turn or the immediately-preceding one. ``last_seen_turn > 0``
+        # excludes the model's "never mentioned in this session" default (0) — a
+        # never-surfaced creature is NOT "engaged this turn" and reconciling it is
+        # the region-wide over-reach ADR-116 forbids (review finding: the window
+        # ``0 <= 1 - 0 <= 1`` would otherwise admit it at interaction==1).
+        and n.last_seen_turn > 0
+        and 0 <= turn - n.last_seen_turn <= 1
+    ]
+    if not candidates:
+        return None
+    # Most recently surfaced, then highest threat, then name (deterministic).
+    candidates.sort(
+        key=lambda n: (n.last_seen_turn, n.threat_level or 0, n.core.name),
+        reverse=True,
+    )
+    chosen = candidates[0]
+    from_location = chosen.last_seen_location or chosen.location or ""
+    with encounter_creature_zone_reconciled_span(
+        creature_name=chosen.core.name,
+        creature_id=chosen.creature_id or "",
+        from_location=from_location,
+        to_location=location,
+        last_seen_turn=chosen.last_seen_turn,
+        current_turn=turn,
+    ):
+        pass
+    chosen.last_seen_location = location
+    chosen.location = location
+    return chosen
+
+
 def _resolve_opponent_from_roster(
     snapshot: GameSnapshot,
     *,
@@ -1025,7 +1114,24 @@ def _resolve_opponent_from_roster(
         and n.disposition.attitude() != Attitude.FRIENDLY
     ]
     if not candidates:
-        return None
+        # 158-1: no co-located adversary — but the player may be attacking a bound
+        # bestiary creature the narrator surfaced on-stage whose stored zone
+        # drifted from the PC's scene (the entrance Gnaw-Swarm the party moved
+        # past). Reconcile its zone so the bound creature reaches the fight instead
+        # of a fabricated stub. Native COMBAT only: a Fate conflict resolves on
+        # FateSheet stress and a non-combat standoff never conscripts a bestiary
+        # mob (the same 150-2 / 153-9 declines enforced below) — so there is
+        # nothing to recover for those paths.
+        if confrontation_category == "combat" and not is_fate:
+            reconciled = _reconcile_surfaced_adversary(
+                snapshot,
+                location=location,
+                turn=snapshot.turn_manager.interaction,
+            )
+            if reconciled is not None:
+                candidates = [reconciled]
+        if not candidates:
+            return None
     # Deterministic pick: most recently in scene, then highest threat, then name.
     candidates.sort(
         key=lambda n: (n.last_seen_turn, n.threat_level or 0, n.core.name),
@@ -2005,7 +2111,9 @@ def instantiate_encounter_from_trigger(
                 # 'dial' default) so the seater can consult the WN SRD unarmed
                 # floor at seat time and stamp the discriminating span fields.
                 ruleset_slug = (
-                    pack.rules.ruleset if pack and pack.rules else _raise_missing_ruleset("hp_depletion_seating")
+                    pack.rules.ruleset
+                    if pack and pack.rules
+                    else _raise_missing_ruleset("hp_depletion_seating")
                 )
                 _seed_combat_hp_depletion_to_npcs(
                     snapshot=snapshot,

@@ -26,6 +26,11 @@ from sidequest.game.creature_core import (
     HpPool,
     Inventory,
 )
+from sidequest.game.encounter import (
+    EncounterActor,
+    EncounterMetric,
+    StructuredEncounter,
+)
 from sidequest.game.session import GameSnapshot, Npc
 from sidequest.game.turn import TurnManager
 
@@ -144,9 +149,24 @@ async def test_damage_zero_is_noop_but_returns_ok() -> None:
 
 
 async def test_damage_targets_npc() -> None:
+    # Story 158-3: damaging an NPC opponent requires a seated confrontation —
+    # opponent HP is undefined outside one (ADR-116). Seat a combat encounter
+    # so this stays a valid "NPC damage during combat" case. The no-encounter
+    # rejection path is covered by test_apply_damage_confrontation_guard.py.
     snap = _build_snapshot(
         characters=[_character("Alice")],
         npcs=[_npc("Goblin", edge_current=8)],
+    )
+    snap.encounter = StructuredEncounter(
+        encounter_type="combat",
+        win_condition="hp_depletion",
+        category="combat",
+        player_metric=EncounterMetric(name="hp", current=0, starting=0, threshold=0),
+        opponent_metric=EncounterMetric(name="hp", current=0, starting=0, threshold=0),
+        actors=[
+            EncounterActor(name="Alice", role="combatant", side="player"),
+            EncounterActor(name="Goblin", role="combatant", side="opponent"),
+        ],
     )
     store = _store_with(snap)
     ctx = _make_ctx(store)

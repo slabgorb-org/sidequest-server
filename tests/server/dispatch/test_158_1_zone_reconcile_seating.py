@@ -193,11 +193,13 @@ def _player_chico(name: str = "Chico") -> Character:
     )
 
 
-def _snapshot_with(*, npcs: list[Npc], player: str = "Chico") -> GameSnapshot:
+def _snapshot_with(
+    *, npcs: list[Npc], player: str = "Chico", interaction: int = _TURN
+) -> GameSnapshot:
     snap = GameSnapshot(
         genre_slug=_WWN_PACK,
         world_slug=_WORLD,
-        turn_manager=TurnManager(interaction=_TURN),
+        turn_manager=TurnManager(interaction=interaction),
     )
     snap.characters.append(_player_chico(player))
     snap.character_locations[player] = _PC_SCENE
@@ -425,6 +427,82 @@ def test_offstage_stale_swarm_is_not_reconciled(otel_capture):
     assert _SWARM_NAME not in _opponents_or_empty(snap), (
         "an off-stage creature must not be conscripted as the Other on a vague "
         "target"
+    )
+
+
+# ---------------------------------------------------------------------------
+# AC-4 (boundary guards added in rework — Reviewer flagged two over-reach holes
+# the gap-4 guard above missed). ADR-116 no-region-wide-sourcing, sharpened.
+# ---------------------------------------------------------------------------
+
+
+def test_never_surfaced_creature_not_reconciled_on_turn_one(otel_capture):
+    """A manual_origin adversary with ``last_seen_turn == 0`` was NEVER surfaced:
+    0 is the ``Npc`` model's documented "never mentioned in this session" default
+    (the turn counter starts at 1). At ``interaction == 1`` the recency window
+    ``0 <= 1 - 0 <= 1`` is True, so a naive filter reconciles+seats a creature the
+    narrator never put on-stage — the exact region-wide over-reach ADR-116 and AC-4
+    forbid, and a direct contradiction of the helper's own docstring ("surfaced
+    THIS turn or the immediately-preceding one"; ``last_seen_turn == 0`` is
+    neither). It must NOT be reconciled.
+
+    RED before the rework fix (``n.last_seen_turn > 0`` guard): the never-seen
+    creature passes the window at turn 1, is reconciled, and is seated as the
+    Other."""
+    pack = _load_wwn_pack()
+    never_seen = _swarm(last_seen_location=_STALE_ZONE, last_seen_turn=0)
+    snap = _snapshot_with(npcs=[never_seen], interaction=1)
+
+    _seat_swarm_attack(pack, snap)
+
+    untouched = next(n for n in snap.npcs if n.core.name == _SWARM_NAME)
+    assert untouched.last_seen_location == _STALE_ZONE, (
+        "a never-surfaced creature (last_seen_turn==0, the model's 'never mentioned' "
+        "default) must NOT be reconciled to the PC's scene at turn 1; its location "
+        f"moved to {untouched.last_seen_location!r} — the recency window admitted a "
+        "creature the narrator never put on-stage (ADR-116 over-reach / AC-4)"
+    )
+    spans = {s.name for s in otel_capture.get_finished_spans()}
+    assert "encounter.creature_zone_reconciled" not in spans, (
+        "a zone-reconcile span fired for a never-surfaced creature (last_seen_turn==0)"
+    )
+    assert _SWARM_NAME not in _opponents_or_empty(snap), (
+        "a never-surfaced creature must not be conscripted as the Other"
+    )
+
+
+def test_unlocated_creature_not_reconciled(otel_capture):
+    """A manual_origin adversary with NO location at all — both ``last_seen_location``
+    and ``location`` are None — is not a zone-DRIFT case: there is no stale zone to
+    reconcile away from, only absence. The candidate filter checks only
+    ``!= location``, so two None fields both pass (``None != "<scene>"``), and the
+    reconcile span would fire with ``from_location == ""`` — a phantom "drift" on
+    the GM-panel lie-detector (the very telemetry the project trusts to catch
+    improvisation). An unlocated creature must NOT be reconciled.
+
+    RED before the rework fix (require a non-None location field): the None-located
+    creature passes the filter, is reconciled, and the span fires with an empty
+    from_location."""
+    pack = _load_wwn_pack()
+    # last_seen_location=None → _swarm leaves location None too → both fields absent,
+    # surfaced this turn (last_seen_turn == interaction) so only the missing-location
+    # guard — not the recency window — can exclude it.
+    unlocated = _swarm(last_seen_location=None, last_seen_turn=_TURN)
+    snap = _snapshot_with(npcs=[unlocated])
+    assert unlocated.location is None and unlocated.last_seen_location is None, (
+        "fixture precondition: the unlocated creature carries no location at all"
+    )
+
+    _seat_swarm_attack(pack, snap)
+
+    spans = {s.name for s in otel_capture.get_finished_spans()}
+    assert "encounter.creature_zone_reconciled" not in spans, (
+        "a zone-reconcile span fired for a creature with no location (both fields "
+        "None) — it has no stale zone to drift from; a from_location='' span is a "
+        "phantom drift on the GM panel"
+    )
+    assert _SWARM_NAME not in _opponents_or_empty(snap), (
+        "an unlocated creature must not be conscripted as the Other"
     )
 
 

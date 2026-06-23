@@ -81,7 +81,9 @@ def test_158_8_facet1_solo_mid_sentence_conversion_after_npc_clause() -> None:
 def test_158_8_facet1_female_pc_agreement() -> None:
     """she/her variant (the non-anchor recipient in the Facet 2 tests is
     she/her): 'Harpo ... her hands ... as she leans' -> full 2nd-person."""
-    text = "Harpo moves to the winch without a word, her hands finding the crank as she leans into it."
+    text = (
+        "Harpo moves to the winch without a word, her hands finding the crank as she leans into it."
+    )
     out, _ = swap_to_second_person(text, target_name="Harpo", pronouns="she/her")
     assert "your hands" in out, f"possessive her->your must carry; got: {out!r}"
     assert "as you lean" in out, f"subject she->you (+verb) must carry; got: {out!r}"

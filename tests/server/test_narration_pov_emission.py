@@ -839,9 +839,7 @@ def test_158_8_per_recipient_swap_emits_otel_span_for_own_pc(
     swap_spans = [
         s for s in otel_capture.get_finished_spans() if s.name == "narration.second_person_swap"
     ]
-    katia_spans = [
-        s for s in swap_spans if dict(s.attributes).get("swap_target_name") == "Katia"
-    ]
+    katia_spans = [s for s in swap_spans if dict(s.attributes).get("swap_target_name") == "Katia"]
     assert katia_spans, (
         "a per-recipient narration.second_person_swap span must fire for Katia's own PC; "
         f"got swap_target_names: {[dict(s.attributes).get('swap_target_name') for s in swap_spans]}"

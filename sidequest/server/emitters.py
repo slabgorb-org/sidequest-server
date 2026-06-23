@@ -262,13 +262,20 @@ def _apply_pov_swap(
     view: SessionGameStateView,
     snapshot: GameSnapshot,
 ) -> dict:
-    """If ``recipient_player_id`` corresponds to the POV anchor in the
-    payload's ``_visibility`` sidecar, return a copy of the payload with
-    the ``text`` field rewritten in 2nd-person. Otherwise return the
-    payload unchanged.
+    """Rewrite the ``text`` field so the RECIPIENT reads their OWN PC in
+    2nd-person ("you"), re-anchored per recipient — not per card.
 
-    Story 49-8 — applies only to payloads carrying a pc-anchored
-    visibility sidecar. NPCs and atmospheric narration leave prose alone.
+    Story 49-8 stamped a single ``anchor_pc`` (the card's primary actor) and
+    swapped only for the recipient whose PC == anchor_pc, so a non-anchor
+    recipient read their own PC in 3rd person on their own screen (the 158-8
+    playtest defect). The swap target is now the recipient's own PC: on each
+    recipient's frame their name becomes "you" (carrying gendered-pronoun
+    agreement, the 153-29 machinery), while every other PC stays a 3rd-person
+    name. The swap is a no-op when the recipient's PC is absent from the prose,
+    so an anchor-only card still reaches a not-mentioned recipient unchanged.
+
+    Applies only to payloads carrying a pc-anchored visibility sidecar;
+    atmospheric narration (no anchor) leaves prose alone.
     """
     viz = payload_dict.get("_visibility") or {}
     anchor_pc = viz.get("anchor_pc")
@@ -276,7 +283,7 @@ def _apply_pov_swap(
     if not anchor_pc or pov_strategy != "pc_anchored":
         return payload_dict
     recipient_pc_name = view.character_of(recipient_player_id)
-    if recipient_pc_name is None or recipient_pc_name != anchor_pc:
+    if recipient_pc_name is None:
         return payload_dict
     pronouns = _pronouns_for_pc(snapshot, recipient_pc_name)
     if not pronouns:
@@ -289,7 +296,7 @@ def _apply_pov_swap(
         return payload_dict
     swapped, _ = swap_to_second_person(
         text,
-        target_name=anchor_pc,
+        target_name=recipient_pc_name,
         pronouns=pronouns,
     )
     return {**payload_dict, "text": swapped}

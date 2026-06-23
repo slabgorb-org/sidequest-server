@@ -87,6 +87,9 @@ _TOOL_DESCRIPTION = (
     "story-important, or character-defining), set that item's optional "
     "grants_aspect to a short invokable aspect phrase capturing why it matters; "
     "leave it unset for ordinary items (a hat is a hat). "
+    "For NPCs present, list only PEOPLE and CREATURES — if a proper noun names a "
+    "PLACE or location (a hold, cavern, town, region), set that entry's is_place "
+    "to true so it is not mistaken for a person. "
     "Report only what the prose states; never invent. An empty field is correct "
     "when the prose says nothing about it."
 )
@@ -114,6 +117,37 @@ _ITEMS_GAINED_ITEM_SCHEMA: dict[str, Any] = {
                 "value is a short invokable Fate aspect phrase naming why it matters "
                 "(e.g. 'Knows the Hidden Trails'). Leave UNSET for ordinary items — "
                 "do NOT mark every item; most gear is pure flavor."
+            ),
+        },
+    },
+    "additionalProperties": True,
+}
+
+# Story 158-4: the JSON schema the extractor LLM sees for ONE npcs_present entry.
+# Surfaced via WithJsonSchema so the reader is TOLD to flag a proper noun that
+# names a PLACE/LOCATION (a hold, cavern, town, region) with is_place=true rather
+# than listing it as a person — closing the beneath_sunden place-name leak where
+# narrator-invented "Torchdeep"/"Torchhold" registered as phantom NPCs (disp=0,
+# creature_id=None). ``additionalProperties`` stays OPEN: ``NpcMention.from_value``
+# still reads name/pronouns/role/appearance/is_new/is_creature free-form, so this
+# only ADDS the place discriminator; it does not constrain the existing fields.
+# ``side`` is deliberately undocumented — it is ENGINE-owned
+# (merge_sidecar_extraction_npcs_present), not a thing the reader should claim.
+_NPCS_PRESENT_ITEM_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "name": {
+            "type": "string",
+            "description": "The NPC's name, as the prose states it.",
+        },
+        "is_place": {
+            "type": "boolean",
+            "description": (
+                "Set TRUE when this proper noun names a PLACE or LOCATION (a hold, "
+                "cavern, town, region — e.g. 'Torchdeep', 'Torchhold') rather than a "
+                "person or creature. A place is NOT an NPC: flag it so the engine "
+                "keeps it out of the roster. Leave UNSET/false for any person or "
+                "creature — most named entities are people, so do NOT over-flag."
             ),
         },
     },
@@ -148,7 +182,12 @@ class SidecarExtraction(BaseModel):
     gold_change: int | None = None
     companions_added: list[dict[str, Any]] = Field(default_factory=list)
     companions_dismissed: list[str] = Field(default_factory=list)
-    npcs_present: list[dict[str, Any]] = Field(default_factory=list)
+    # npcs_present entries stay runtime dicts (from_value reads .get(...)), but the
+    # EMITTED tool-schema documents the optional is_place discriminator so the reader
+    # is told to flag a LOCATION proper-noun out of the roster (story 158-4).
+    npcs_present: list[Annotated[dict[str, Any], WithJsonSchema(_NPCS_PRESENT_ITEM_SCHEMA)]] = (
+        Field(default_factory=list)
+    )
     scene_mood: str | None = None
     # visual_scene + footnotes deliberately absent — generative/authorial fields the
     # narrator owns (ADR-150 amendment 2026-06-20, RENDER-NO-SUBJECT). The forced
@@ -343,6 +382,15 @@ def detect_sidecar_extraction_mismatch(
     known = _known_npc_names(snapshot)
     mismatches: list[SidecarMismatch] = []
     for mention in extraction.npcs_present:
+        # Story 158-4: a mention the extractor flagged as a PLACE is correctly
+        # declined from the roster by the _apply_npc_mentions place-guard
+        # (npc.place_skipped). A place is never in the seated cast, so without this
+        # skip the witness would false-positive on the place feature's own correct
+        # behavior — polluting the lie-detector channel the GM panel (and the AC4
+        # re-verify) reads. An is_place entry is not a phantom NPC; skip it here
+        # exactly as the reconcile does.
+        if isinstance(mention, dict) and mention.get("is_place"):
+            continue
         name = (mention.get("name", "") if isinstance(mention, dict) else "") or ""
         if name and name not in known:
             mismatches.append(

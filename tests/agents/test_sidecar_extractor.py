@@ -395,6 +395,73 @@ async def test_no_mismatch_span_when_extraction_agrees_with_state(otel_capture) 
     assert mismatches == [], "a consistent extraction must not emit a mismatch span"
 
 
+async def test_no_mismatch_span_for_a_flagged_place(otel_capture) -> None:
+    """Story 158-4 rework (Reviewer RT1): a correctly-flagged PLACE must not
+    register as an ``npcs_present`` mismatch.
+
+    A place name ("Torchdeep") is never in the seated cast — but it is NOT a
+    phantom NPC the extractor invented; it is a location the place-guard
+    correctly DECLINES (``npc.place_skipped``). The mismatch lie-detector must be
+    ``is_place``-aware, or it false-positives on the place feature's own correct
+    behavior — polluting the exact GM-panel channel AC4's DRIVER re-verify reads
+    (a DRIVER would see "extractor reported 'Torchdeep' not seated" and misread
+    the fixed leak as still open). Fails today: ``detect_sidecar_extraction_mismatch``
+    is ``is_place``-blind.
+    """
+    from sidequest.agents.sidecar_extractor import run_sidecar_extraction_watcher
+
+    emit = _empty_emit()
+    emit["npcs_present"] = [{"name": "Torchdeep", "is_place": True}]
+
+    await run_sidecar_extraction_watcher(
+        narration="Far below, the gates of Torchdeep glitter in the black water.",
+        snapshot=_snapshot(npc_pool=[_known_npc("Brecca Half-Hand")]),  # no Torchdeep
+        llm=_make_mock_llm(emit),
+    )
+
+    mismatches = [
+        s for s in otel_capture.get_finished_spans() if s.name == "sidecar_extraction.mismatch"
+    ]
+    assert mismatches == [], (
+        "a correctly-flagged place (is_place=True) must NOT raise a "
+        "sidecar_extraction.mismatch span — the detector must skip is_place "
+        "entries or it false-positives on the place-guard's own correct behavior; "
+        f"got {[str(dict(m.attributes or {})) for m in mismatches]!r}"
+    )
+
+
+async def test_mismatch_skip_is_surgical_place_skipped_person_still_flagged(otel_capture) -> None:
+    """The ``is_place`` skip must be SURGICAL: a turn mentioning BOTH a flagged
+    place and a genuinely-unseated person must raise exactly ONE mismatch (the
+    person) — not zero (over-suppression would blind the lie-detector to real
+    invented NPCs) and not two (the place false-positive)."""
+    from sidequest.agents.sidecar_extractor import run_sidecar_extraction_watcher
+
+    emit = _empty_emit()
+    emit["npcs_present"] = [
+        {"name": "Torchdeep", "is_place": True},
+        {"name": "Mordecai the Unseated"},
+    ]
+
+    await run_sidecar_extraction_watcher(
+        narration="Mordecai steps out as the gates of Torchdeep loom behind him.",
+        snapshot=_snapshot(npc_pool=[_known_npc("Brecca Half-Hand")]),  # neither seated
+        llm=_make_mock_llm(emit),
+    )
+
+    mismatches = [
+        s for s in otel_capture.get_finished_spans() if s.name == "sidecar_extraction.mismatch"
+    ]
+    assert len(mismatches) == 1, (
+        "exactly one mismatch (the unseated person Mordecai) — the place is "
+        "skipped, the person is still flagged; got "
+        f"{[str(dict(m.attributes or {})) for m in mismatches]!r}"
+    )
+    assert "Mordecai" in str(dict(mismatches[0].attributes or {})), (
+        "the surviving mismatch must be the unseated person, not the skipped place"
+    )
+
+
 # ===========================================================================
 # AC5 — No silent fallback: ERROR span + one bounded retry + explicit error
 # ===========================================================================

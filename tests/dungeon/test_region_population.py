@@ -7,7 +7,9 @@ CuratedCreature.
 """
 from pathlib import Path
 
-from sidequest.dungeon.materializer import CuratedCreature, _threat_from_band
+import pytest
+
+from sidequest.dungeon.materializer import CuratedCreature, CurationError, _threat_from_band
 from sidequest.game.cookbook.loader import load_cookbook
 
 # Discovery mirrors test_materializer.py: parents[3] is the orchestrator root.
@@ -32,14 +34,12 @@ def test_threat_from_band_shallow_is_tier_one():
 def test_threat_from_band_clamps_to_four():
     bundle = _bundle()
     deepest = bundle.affinities.cr_bands[-1].id
-    assert 1 <= _threat_from_band(bundle, deepest) <= 4
+    assert _threat_from_band(bundle, deepest) == min(4, len(bundle.affinities.cr_bands))
 
 
 def test_threat_from_band_unknown_raises():
     bundle = _bundle()
-    import pytest
-
-    with pytest.raises(Exception, match="cr_band"):
+    with pytest.raises(CurationError, match="cr_band"):
         _threat_from_band(bundle, "nonexistent_band_xyz")
 
 

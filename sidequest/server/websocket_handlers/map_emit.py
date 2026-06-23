@@ -420,6 +420,10 @@ def _maybe_emit_tactical_grid(
             "room_type": payload.room_type,
             "room_name": payload.room_name,
             "source": source,
+            "token_count": len(payload.tokens),
+            "feature_count": len(payload.features),
+            "exit_count": len(payload.derived.exits) if payload.derived else 0,
+            "poi_count": len(payload.derived.pois) if payload.derived else 0,
         },
         component="cavern_renderer",
     )

@@ -847,3 +847,207 @@ def test_158_8_per_recipient_swap_emits_otel_span_for_own_pc(
     assert int(dict(katia_spans[0].attributes).get("swap_count", 0)) >= 1, (
         "Katia's re-anchor swap must record a positive swap_count (the lie-detector signal)"
     )
+
+
+# ---------------------------------------------------------------------------
+# 8. Story 158-8 REWORK (Reviewer REJECT, 2026-06-23) — non-canonical
+#    (freeform) pronouns must FAIL OPEN, never crash the whole table.
+#
+#    The Facet-2 re-anchor (section 7) widened a latent crash. The localizer
+#    `swap_to_second_person` raises ValueError for any pronouns outside the
+#    canonical set {he/him, she/her, they/them} (pov_swap.py:877), and that
+#    validation fires BEFORE any name matching. `_apply_pov_swap` now calls it
+#    for EVERY pc_anchored recipient (re-anchored per recipient, not per card),
+#    and the call sits inside emit_event's `repo.transaction()`
+#    (emitters.py:518). So a single recipient whose chargen pronouns are
+#    freeform — "she/they", "any", "xe/xem", "it/its", "ze/zir", all invited by
+#    builder.py `pronouns_allow_freeform=True` — raises mid-fan-out, the turn's
+#    NARRATION event ROLLS BACK, and NO player at the table gets narration.
+#    One honest chargen choice bricks the session for everyone.
+#
+#    Required behavior (Reviewer): guard before swapping — if the recipient's
+#    pronouns are not a canonical form, return the payload unchanged (fail-open
+#    to canonical 3rd-person prose, exactly like the existing empty-pronoun
+#    guard at emitters.py:289) AND emit an OTEL skip span so the GM panel sees
+#    the fail-open decision (OTEL Observability Principle + No-Silent-Fallbacks).
+#    No bare try/except that hides it.
+#
+#    OTEL contract (TEA-defined; Dev implements to match): the skip path emits a
+#    span named `narration.pov_swap_skipped` carrying `recipient_pc` (which
+#    screen), `reason="unsupported_pronouns"` (why), and `pronouns` (the
+#    offending chargen value).
+#
+#    RED until `_apply_pov_swap` guards `pronouns in _PRONOUN_FORMS`. These
+#    currently fail by ValueError escaping the emit path — the documented
+#    table-wide-rollback defect, not a flaky error.
+# ---------------------------------------------------------------------------
+
+# Freeform pronoun strings chargen invites (builder.py pronouns_allow_freeform)
+# that are NOT in the localizer's canonical set — every one raises today.
+_FREEFORM_PRONOUNS = ["she/they", "any", "xe/xem", "it/its", "ze/zir"]
+
+# A card anchored on Carl that does NOT name Katia at all. The crash fires even
+# here, because pronoun validation precedes name matching — proving the blast
+# radius is "every pc_anchored card", not just cards that mention the
+# freeform-pronoun player.
+_CARL_ONLY_TEXT = "Carl hauls the rope, boots scraping the wet stone."
+
+
+def _set_pc_pronouns(handler: WebSocketSessionHandler, pc_name: str, pronouns: str) -> None:
+    """Override one seated PC's pronouns to a freeform/non-canonical value
+    (the chargen choice builder.py invites via pronouns_allow_freeform)."""
+    assert handler._session_data is not None
+    for c in handler._session_data.snapshot.characters:
+        if c.core.name == pc_name:
+            c.pronouns = pronouns
+            return
+    raise AssertionError(f"PC {pc_name!r} not in fixture snapshot")
+
+
+def test_158_8_freeform_test_pronouns_are_genuinely_noncanonical() -> None:
+    """Guard against a vacuous suite (must stay GREEN): every pronoun this
+    section exercises must actually be OUTSIDE the canonical set, or the
+    'fail-open' tests below would pass for the wrong reason (a normal swap that
+    never hits the guard). If someone widens _PRONOUN_FORMS, this fails loudly
+    so the section's premise is re-examined."""
+    from sidequest.agents.pov_swap import _PRONOUN_FORMS
+
+    for p in _FREEFORM_PRONOUNS:
+        assert p not in _PRONOUN_FORMS, (
+            f"{p!r} is canonical — this section's premise (it raises) is void; "
+            f"canonical set is {sorted(_PRONOUN_FORMS)}"
+        )
+
+
+@pytest.mark.parametrize("pronouns", _FREEFORM_PRONOUNS)
+def test_158_8_noncanonical_pronoun_recipient_falls_open_to_canonical(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pronouns: str
+) -> None:
+    """RED (blocking [SEC] fix): Katia chose freeform pronouns at chargen. A
+    pc_anchored card delivered to her must NOT raise and must fall open to
+    canonical 3rd-person prose on her tab — her own name stays a name, no
+    crash. Today _apply_pov_swap hands her unsupported pronouns to
+    swap_to_second_person and the ValueError aborts the whole emit."""
+    handler = _make_handler_three_pcs(tmp_path)
+    _set_pc_pronouns(handler, "Katia", pronouns)
+    queues = _attach_queues(handler._room)
+    _narration_msg_patch(monkeypatch)
+
+    payload = {"text": _TWO_ACTOR_TEXT, "footnotes": [], "_visibility": dict(_TWO_ACTOR_VIZ)}
+    # Must NOT raise — today swap_to_second_person raises ValueError for
+    # non-canonical pronouns and it propagates out of emit_event.
+    handler._emit_event("NARRATION", payload)
+
+    assert queues["p_katia"].qsize() == 1, (
+        "Katia must still receive the card (fail-open), not a rolled-back/empty turn"
+    )
+    katia_text = queues["p_katia"].get_nowait().payload["text"]
+    assert katia_text == _TWO_ACTOR_TEXT, (
+        "a recipient with non-canonical pronouns must fall open to canonical "
+        f"3rd-person prose (no swap, no crash); got: {katia_text!r}"
+    )
+
+
+@pytest.mark.parametrize("pronouns", _FREEFORM_PRONOUNS)
+def test_158_8_noncanonical_pronoun_does_not_brick_the_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pronouns: str
+) -> None:
+    """RED (table-wide blast radius): the crash fires for EVERY pc_anchored
+    card — even one that never names the freeform-pronoun player — because
+    pronoun validation precedes name matching. One recipient's chargen choice
+    must not roll back the whole table's narration. After the guard: Carl
+    (emitter) still gets his 2nd-person frame, Donut + Katia get canonical
+    prose, and the NARRATION event is PERSISTED (not rolled back)."""
+    handler = _make_handler_three_pcs(tmp_path)
+    _set_pc_pronouns(handler, "Katia", pronouns)
+    queues = _attach_queues(handler._room)
+    _narration_msg_patch(monkeypatch)
+
+    payload = {"text": _CARL_ONLY_TEXT, "footnotes": [], "_visibility": dict(_TWO_ACTOR_VIZ)}
+    out_to_self = handler._emit_event("NARRATION", payload)
+
+    # Emitter (Carl, he/him) — his own action still re-anchors to 2nd person.
+    assert out_to_self is not None
+    assert "You haul the rope" in out_to_self.payload["text"], (
+        f"emitter Carl must still get his narration; got: {out_to_self.payload['text']!r}"
+    )
+    # Both peers received a frame — the table is not bricked by Katia's choice.
+    assert queues["p_donut"].qsize() == 1, "Donut must still receive narration"
+    assert queues["p_katia"].qsize() == 1, "Katia must still receive narration"
+    assert queues["p_donut"].get_nowait().payload["text"] == _CARL_ONLY_TEXT, (
+        "Donut (canonical pronouns, not named in card) must see canonical prose"
+    )
+    assert queues["p_katia"].get_nowait().payload["text"] == _CARL_ONLY_TEXT, (
+        "Katia (freeform pronouns) must fall open to canonical prose, not crash"
+    )
+
+    # The canonical NARRATION event must be PERSISTED — proof the freeform-
+    # pronoun ValueError did not roll back emit_event's repo.transaction().
+    assert handler._event_log is not None
+    rows = handler._event_log.read_since(since_seq=0)
+    assert any(r.kind == "NARRATION" for r in rows), (
+        "the NARRATION event must persist — a freeform-pronoun recipient must "
+        "not roll back the turn for the whole table"
+    )
+
+
+@pytest.mark.parametrize("pronouns", ["she/they", "xe/xem"])
+def test_158_8_noncanonical_pronoun_emitter_does_not_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pronouns: str
+) -> None:
+    """RED (distinct call site): the freeform-pronoun crash also reaches the
+    EMITTER's own swap path (_apply_pov_swap at emitters.py:~689/707), not just
+    the peer fan-out. If Carl — the emitter and anchor — chose freeform
+    pronouns, his own frame must fail open to canonical prose, not raise."""
+    handler = _make_handler_three_pcs(tmp_path)
+    _set_pc_pronouns(handler, "Carl", pronouns)
+    _attach_queues(handler._room)
+    _narration_msg_patch(monkeypatch)
+
+    payload = {"text": _TWO_ACTOR_TEXT, "footnotes": [], "_visibility": dict(_TWO_ACTOR_VIZ)}
+    out_to_self = handler._emit_event("NARRATION", payload)
+
+    assert out_to_self is not None
+    carl_text = out_to_self.payload["text"]
+    assert carl_text == _TWO_ACTOR_TEXT, (
+        "the emitter's own freeform pronouns must fail open to canonical prose "
+        f"(no crash, no swap); got: {carl_text!r}"
+    )
+
+
+@pytest.mark.parametrize("pronouns", _FREEFORM_PRONOUNS)
+def test_158_8_noncanonical_pronoun_emits_skip_span(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, otel_capture, pronouns: str
+) -> None:
+    """RED (AC-4 / OTEL Observability Principle / No-Silent-Fallbacks): when
+    _apply_pov_swap declines to swap because the recipient's pronouns are not a
+    canonical form, it must emit a `narration.pov_swap_skipped` span naming the
+    recipient PC, the reason, and the offending pronoun value — so the GM panel
+    sees the fail-open decision instead of bare canonical prose. Today no span
+    fires (the emit crashes), so the GM panel cannot tell the swap was skipped
+    vs. the narrator simply never anchoring."""
+    handler = _make_handler_three_pcs(tmp_path)
+    _set_pc_pronouns(handler, "Katia", pronouns)
+    _attach_queues(handler._room)
+    _narration_msg_patch(monkeypatch)
+
+    payload = {"text": _TWO_ACTOR_TEXT, "footnotes": [], "_visibility": dict(_TWO_ACTOR_VIZ)}
+    handler._emit_event("NARRATION", payload)
+
+    skip_spans = [
+        s for s in otel_capture.get_finished_spans() if s.name == "narration.pov_swap_skipped"
+    ]
+    katia_skips = [s for s in skip_spans if dict(s.attributes).get("recipient_pc") == "Katia"]
+    assert katia_skips, (
+        "a narration.pov_swap_skipped span must fire for Katia's freeform "
+        f"pronouns ({pronouns!r}); got skip spans for recipients: "
+        f"{[dict(s.attributes).get('recipient_pc') for s in skip_spans]}"
+    )
+    attrs = dict(katia_skips[0].attributes)
+    assert attrs.get("reason") == "unsupported_pronouns", (
+        f"skip span must record WHY it fell open; got reason={attrs.get('reason')!r}"
+    )
+    assert attrs.get("pronouns") == pronouns, (
+        "skip span must record the offending pronoun value so the GM panel can "
+        f"see which chargen choice fell open; got pronouns={attrs.get('pronouns')!r}"
+    )

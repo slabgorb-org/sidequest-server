@@ -28,6 +28,17 @@ def test_reach_deep_resolves_on_arrival():
     assert store.open_threads() == []   # ledger thread resolved
 
 
+def test_resolves_thread_even_when_quest_log_entry_absent():
+    conn, store = _store(); _seed_thread(store, 1, "reach_deep", "exp001.r3", "exp001.r3"); conn.commit()
+    snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug="beneath_sunden")
+    # quest_log deliberately NOT pre-populated
+    n = resolve_expansion_quests(snapshot=snap, store=store, reached_region_ids={"exp001.r3"},
+                                 resolved_trope_ids=[], defeated_npc_names=set())
+    conn.commit()
+    assert n == 1
+    assert store.open_threads() == []
+
+
 def test_unfired_beat_does_not_resolve():
     conn, store = _store(); _seed_thread(store, 1, "reach_deep", "exp001.r3", "exp001.r3"); conn.commit()
     snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug="beneath_sunden")

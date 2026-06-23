@@ -282,6 +282,10 @@ def resolve_expansion_quests(
         if event is None:
             continue
         exp_id = thread.payload.get("expansion_id")
+        if exp_id is None:
+            raise ValueError(
+                f"expansion-quest thread {thread.thread_id!r} missing expansion_id in payload"
+            )
         with quest_resolved_span(
             expansion_id=exp_id,
             signature_kind=thread.payload.get("signature_kind", ""),

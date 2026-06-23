@@ -148,6 +148,11 @@ class Npc(BaseModel):
     # fixtures and world-materialization callers.
     disposition: Disposition = Field(default_factory=Disposition)
     location: str | None = None
+    # Engine-owned region id (ADR-106 procedural dungeon / region-mode worlds).
+    # Set ONLY by the region-population inject (Task 5); narrator-declared NPCs
+    # and non-region worlds leave it None. Co-location seating prefers this over
+    # the free-text scene when present (ADR-116, region-keyed seating).
+    region: str | None = None
     # Position on a chassis interior (narrator-tracked, optional).
     # Orthogonal to ``location`` (which is general-world); ``current_room``
     # is meaningful only when the NPC is aboard a chassis.
@@ -396,6 +401,9 @@ class NpcPatch(BaseModel):
     height: str | None = None
     distinguishing_features: list[str] | None = None
     location: str | None = None
+    region: str | None = None
+    """Engine-owned region id (ADR-106). Set by the region-population inject;
+    narrator/encountergen patches leave it None."""
 
     # Creature-shape fields (ADR-059 Monster Manual port). All optional;
     # narrator-emitted patches leave them None and inherit human-NPC defaults.
@@ -1848,6 +1856,8 @@ class GameSnapshot(BaseModel):
             npc.distinguishing_features = patch.distinguishing_features
         if patch.location is not None:
             npc.location = patch.location
+        if patch.region is not None:
+            npc.region = patch.region
 
         # Creature-shape fields (ADR-059): patches re-emitted on
         # re-encounter (e.g. Monster Manual seed during a save+load
@@ -1933,6 +1943,7 @@ class GameSnapshot(BaseModel):
             height=patch.height,
             distinguishing_features=patch.distinguishing_features or [],
             location=patch.location,
+            region=patch.region,
             # Creatures default to hostile (-20), matching encountergen output.
             disposition=-20 if is_creature else 0,
             creature_id=patch.creature_id,

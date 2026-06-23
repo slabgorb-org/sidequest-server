@@ -1001,11 +1001,16 @@ def _reconcile_surfaced_adversary(
       * ``creature_id``-statted AND ``manual_origin`` — a bound bestiary adversary
         (ADR-059), never a narrator-invented person;
       * adversarial and not ``Attitude.FRIENDLY``;
-      * surfaced THIS turn or the immediately-preceding one
-        (``0 <= turn - last_seen_turn <= 1``). Narration stamps ``last_seen_turn``
-        AFTER the seater runs, so a creature the narrator put on-stage last turn
-        carries ``turn - 1`` at this turn's seat time; a creature last seen earlier
-        is genuinely off-stage and is left untouched (the 158-1 no-over-reach AC);
+      * carrying a REAL stored zone (at least one of ``location`` /
+        ``last_seen_location`` non-None) that is stale relative to the PC's scene —
+        a creature with NO location is unplaced, not zone-drifted;
+      * surfaced THIS turn or the immediately-preceding one — ``last_seen_turn > 0``
+        (the model's ``0`` means "never mentioned this session" — a never-surfaced
+        creature is not "engaged this turn") AND ``0 <= turn - last_seen_turn <= 1``.
+        Narration stamps ``last_seen_turn`` AFTER the seater runs, so a creature the
+        narrator put on-stage last turn carries ``turn - 1`` at this turn's seat
+        time; a creature last seen earlier (or never) is genuinely off-stage and is
+        left untouched (the 158-1 no-over-reach AC);
       * NOT already co-located (else the normal candidate scan already had it).
 
     The most-recently-surfaced match has its ``last_seen_location`` and
@@ -1020,8 +1025,18 @@ def _reconcile_surfaced_adversary(
         and n.manual_origin
         and _npc_is_adversary(n)
         and n.disposition.attitude() != Attitude.FRIENDLY
+        # Must carry a REAL stored zone to have drifted FROM — a creature with no
+        # location at all (both fields None) is unplaced, not zone-drifted, and
+        # would emit a phantom from_location="" span (review finding).
+        and (n.last_seen_location is not None or n.location is not None)
         and n.last_seen_location != location
         and n.location != location
+        # Surfaced THIS turn or the immediately-preceding one. ``last_seen_turn > 0``
+        # excludes the model's "never mentioned in this session" default (0) — a
+        # never-surfaced creature is NOT "engaged this turn" and reconciling it is
+        # the region-wide over-reach ADR-116 forbids (review finding: the window
+        # ``0 <= 1 - 0 <= 1`` would otherwise admit it at interaction==1).
+        and n.last_seen_turn > 0
         and 0 <= turn - n.last_seen_turn <= 1
     ]
     if not candidates:

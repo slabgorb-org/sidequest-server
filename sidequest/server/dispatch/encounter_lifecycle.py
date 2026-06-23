@@ -40,6 +40,8 @@ from sidequest.protocol.models import AffinityTierUp
 from sidequest.server.dispatch.confrontation import find_confrontation_def
 from sidequest.server.dispatch.sealed_letter import ROLE_BLUE, ROLE_RED
 from sidequest.telemetry.spans import (
+    SPAN_CONFRONTATION_COLOCATION,
+    Span,
     encounter_confrontation_initiated_span,
     encounter_creature_zone_reconciled_span,
     encounter_no_opponent_available_span,
@@ -883,6 +885,18 @@ def _npc_is_adversary(npc: Npc) -> bool:
     return role in _ADVERSARIAL_ROLE_IDS
 
 
+def _co_located(npc: Npc, *, pc_region: str | None, scene_match: bool) -> bool:
+    """ADR-116 co-location for seating. Prefer the engine-owned region id when
+    the candidate carries a region stamp (procedural-dungeon creatures, Task 1);
+    otherwise fall back to the caller's free-text scene match — narrator NPCs and
+    all non-procedural worlds carry no ``region``, so their behavior is unchanged.
+    This is the fix for region-keyed seating: co-location no longer depends on
+    the narrator-owned scene string that drifts across seams/turns (Gap B)."""
+    if npc.region and pc_region:
+        return npc.region == pc_region
+    return scene_match
+
+
 def _npc_fallback_at_location(
     snapshot: GameSnapshot,
     *,
@@ -945,10 +959,13 @@ def _npc_fallback_at_location(
     location = snapshot.party_location(perspective=acting_character_name)
     if not location:
         return [], False
+    pc_region = snapshot.region_for(perspective=acting_character_name)
     default_side = "opponent" if adversarial else "neutral"
     fallback: list = []
     for npc in snapshot.npcs:
-        if npc.last_seen_location != location:
+        if not _co_located(
+            npc, pc_region=pc_region, scene_match=(npc.last_seen_location == location)
+        ):
             continue
         # Story 59-17: sealed-letter sourcing seats only genuine adversaries —
         # a neutral-disposition bystander sharing the room is not the Other.
@@ -1094,9 +1111,10 @@ def _resolve_opponent_from_roster(
     A candidate is a ``creature_id``-statted, adversarial (``_npc_is_adversary``),
     non-friendly NPC at the acting PC's resolved location — the same room signal
     (``last_seen_location`` / ``location``) ``_npc_fallback_at_location`` and the
-    Monster-Manual injector use. Region-wide sourcing is deliberately NOT done:
-    NPCs carry no region key, so a broader scan could conscript a creature from
-    an unrelated room — the exact over-reach ADR-116 guards against.
+    Monster-Manual injector use. Region-wide sourcing (``_co_located``) is now safe
+    when the NPC carries a ``region`` stamp (Task 1 procedural creatures); the
+    ``_co_located`` helper gates region-matching on that stamp so narrator NPCs and
+    non-procedural worlds keep the exact free-text behaviour.
     """
     # An exact roster match means the router named a real NPC — seat it directly
     # (the seater's dedup reuses it). Resolution is only for unbacked inventions.
@@ -1105,11 +1123,16 @@ def _resolve_opponent_from_roster(
     location = snapshot.party_location(perspective=acting_character_name)
     if not location:
         return None
+    pc_region = snapshot.region_for(perspective=acting_character_name)
     candidates = [
         n
         for n in snapshot.npcs
         if n.creature_id is not None
-        and (n.last_seen_location == location or n.location == location)
+        and _co_located(
+            n,
+            pc_region=pc_region,
+            scene_match=(n.last_seen_location == location or n.location == location),
+        )
         and _npc_is_adversary(n)
         and n.disposition.attitude() != Attitude.FRIENDLY
     ]
@@ -1228,9 +1251,12 @@ def _friendly_fallback_at_location(
     location = snapshot.party_location(perspective=acting_character_name)
     if not location:
         return []
+    pc_region = snapshot.region_for(perspective=acting_character_name)
     allies: list[NpcMention] = []
     for npc in snapshot.npcs:
-        if npc.last_seen_location != location:
+        if not _co_located(
+            npc, pc_region=pc_region, scene_match=(npc.last_seen_location == location)
+        ):
             continue
         if npc.disposition.attitude() != Attitude.FRIENDLY:
             continue
@@ -1700,6 +1726,17 @@ def instantiate_encounter_from_trigger(
     # confrontation of ANY category needs an Other to roll against — a duel of
     # wits with nobody on the other side cannot resolve — so _requires_opponent
     # folds opposed_check in here too (playtest 59-8).
+    _pc_region = snapshot.region_for(perspective=player_name)
+    with Span.open(
+        SPAN_CONFRONTATION_COLOCATION,
+        {
+            "encounter_type": encounter_type,
+            "pc_region": _pc_region or "",
+            "match_mode": "region" if _pc_region else "scene",
+            "opponent_count": len(npcs_present),
+        },
+    ):
+        pass
     if (
         _requires_opponent(cdef)
         and cdef.resolution_mode != ResolutionMode.sealed_letter_lookup

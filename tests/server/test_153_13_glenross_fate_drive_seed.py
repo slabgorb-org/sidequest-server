@@ -250,9 +250,7 @@ def handler(tmp_path: Path) -> WebSocketSessionHandler:
     )
 
 
-async def _walk_handler_to_confirmation(
-    handler: WebSocketSessionHandler, name: str
-) -> None:
+async def _walk_handler_to_confirmation(handler: WebSocketSessionHandler, name: str) -> None:
     """Fate-aware walk of the websocket chargen handler to Confirmation: choice
     scenes take the first choice, the three Fate steps submit their seeded
     defaults, display-only scenes ``continue``."""
@@ -300,9 +298,7 @@ async def _walk_handler_to_confirmation(
         elif scene.choices:
             out = await _send_chargen(handler, CharacterCreationPayload(phase="scene", choice="1"))
         elif scene.allows_freeform:
-            out = await _send_chargen(
-                handler, CharacterCreationPayload(phase="scene", choice=name)
-            )
+            out = await _send_chargen(handler, CharacterCreationPayload(phase="scene", choice=name))
         else:
             out = await _send_chargen(handler, CharacterCreationPayload(phase="continue"))
         assert out and not isinstance(out[0], ErrorMessage), (

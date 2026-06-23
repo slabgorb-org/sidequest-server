@@ -107,8 +107,7 @@ def test_apply_beat_suppressed_for_fate_conflict() -> None:
         f"got skipped_reason={result.skipped_reason!r}"
     )
     assert result.deltas is None, (
-        "a suppressed Fate-conflict beat applies no deltas; "
-        f"got deltas={result.deltas!r}"
+        f"a suppressed Fate-conflict beat applies no deltas; got deltas={result.deltas!r}"
     )
     # No native tag was created either — removal is total, not dial-only.
     assert enc.tags == [], (
@@ -175,6 +174,6 @@ def test_dial_threshold_emits_metric_advance_not_suppression(
     assert [e for e in events if e["fields"].get("op") == "metric_advance"], (
         "a native dial pack must emit metric_advance for an applied beat"
     )
-    assert not [
-        e for e in events if e["fields"].get("op") == "beat_suppressed_fate_conflict"
-    ], "beat_suppressed_fate_conflict must be Fate-only — it must never fire for a native pack"
+    assert not [e for e in events if e["fields"].get("op") == "beat_suppressed_fate_conflict"], (
+        "beat_suppressed_fate_conflict must be Fate-only — it must never fire for a native pack"
+    )

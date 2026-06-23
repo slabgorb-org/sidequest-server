@@ -225,9 +225,7 @@ async def test_chargen_confirm_fires_armor_derivation_through_real_wire(otel_cap
         # the span's reported item_id actually landed equipped in inventory —
         # end-to-end, not a hardcoded assumption about which piece rolled.
         armor_item_id = attrs.get("item_id")
-        armor = next(
-            i for i in character.core.inventory.items if i.get("id") == armor_item_id
-        )
+        armor = next(i for i in character.core.inventory.items if i.get("id") == armor_item_id)
         assert armor["equipped"] is True, "the rolled armor must be equipped"
     else:
         # shield_wood / helmet_iron — no catalog armor_class today: loud fail,

@@ -512,7 +512,9 @@ def test_opening_resolution_seam_persists_props_on_chassis_anchor() -> None:
             interior_room=interior_room,
             present_props=[ENVELOPE, PERNOD, ASHTRAY],
         ),
-        establishing_narration=("The envelope waits in the booth, between the glass and the ashtray."),
+        establishing_narration=(
+            "The envelope waits in the booth, between the glass and the ashtray."
+        ),
         first_turn_invitation="The zinc bar hums under the lamps.",
     )
 
@@ -525,7 +527,9 @@ def test_opening_resolution_seam_persists_props_on_chassis_anchor() -> None:
     )
 
     with (
-        patch.object(opening_helpers, "_resolve_opening_post_chargen", return_value=chassis_opening),
+        patch.object(
+            opening_helpers, "_resolve_opening_post_chargen", return_value=chassis_opening
+        ),
         patch.object(Span, "open", wraps=Span.open) as span_open,
     ):
         opening_helpers._populate_opening_directive_on_chargen_complete(

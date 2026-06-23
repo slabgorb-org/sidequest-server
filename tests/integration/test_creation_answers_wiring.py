@@ -84,12 +84,8 @@ def _walk_chargen(pack, *, target_class: str = "Warrior", rng_seed: int = 42):
     # Scene 1: the_trade — WWN background pick (added in the chargen
     # reconciliation). Choose the first option.
     trade_scene = builder.current_scene()
-    assert trade_scene.id == "the_trade", (
-        f"expected the_trade second, got {trade_scene.id!r}"
-    )
-    walk_log.append(
-        (trade_scene.id, trade_scene.title, "choice", trade_scene.choices[0].label)
-    )
+    assert trade_scene.id == "the_trade", f"expected the_trade second, got {trade_scene.id!r}"
+    walk_log.append((trade_scene.id, trade_scene.title, "choice", trade_scene.choices[0].label))
     builder.apply_choice(0)
     # Scene 2: the_story — pronouns + freeform background/description.
     story_scene = builder.current_scene()

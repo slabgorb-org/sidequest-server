@@ -104,9 +104,7 @@ def _snapshot(pc_regions: dict[str, str]) -> GameSnapshot:
 
 
 def _draw_once(snap: GameSnapshot, pack: Any) -> None:
-    draw_engaged_seed(
-        snap, pack, session_id=SESSION, engagement_signal="mechanical", now_turn=5
-    )
+    draw_engaged_seed(snap, pack, session_id=SESSION, engagement_signal="mechanical", now_turn=5)
 
 
 def _drain(snap: GameSnapshot, pack: Any) -> list[str]:

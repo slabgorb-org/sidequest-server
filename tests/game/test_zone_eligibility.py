@@ -285,9 +285,7 @@ def test_manual_npc_factions_defaults_empty_and_round_trips() -> None:
     157-3); the field must exist and default empty now."""
     npc = ManualNpc(data={"name": "n"}, name="n", role="r", culture="c")
     assert npc.factions == []
-    tagged = ManualNpc(
-        data={"name": "n"}, name="n", role="r", culture="c", factions=[LILLIPUT]
-    )
+    tagged = ManualNpc(data={"name": "n"}, name="n", role="r", culture="c", factions=[LILLIPUT])
     assert tagged.factions == [LILLIPUT]
 
 

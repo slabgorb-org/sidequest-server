@@ -163,9 +163,7 @@ def test_dungeon_emit_stands_down_on_surface(
 # --------------------------------------------------------------------------
 # dungeon emit: DEEP phase still ships the DUNGEON_MAP (guard against over-suppression)
 # --------------------------------------------------------------------------
-def test_dungeon_emit_ships_in_deep(
-    _stub_deep_ctx: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_dungeon_emit_ships_in_deep(_stub_deep_ctx: None, monkeypatch: pytest.MonkeyPatch) -> None:
     events = _capture_events(monkeypatch)
     emitted: list[Any] = []
     snap = _snapshot(pc_region="exp001.r2", discovered=("entrance", "exp001.r2"))

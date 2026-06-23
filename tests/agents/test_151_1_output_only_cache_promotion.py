@@ -181,9 +181,7 @@ async def test_output_contract_rides_cached_system_prefix(simple_turn_context) -
     cached = request.system_blocks[0].text
     volatile = "\n".join(b.text for b in request.system_blocks[1:])
     user_msg = "\n".join(
-        m.content
-        for m in request.messages
-        if m.role == "user" and isinstance(m.content, str)
+        m.content for m in request.messages if m.role == "user" and isinstance(m.content, str)
     )
 
     assert OUTPUT_ONLY_MARKER in cached, (
@@ -214,9 +212,7 @@ async def test_output_contract_absent_from_per_turn_user_message(
 
     request = fake.recorded_requests[0]
     user_msg = "\n".join(
-        m.content
-        for m in request.messages
-        if m.role == "user" and isinstance(m.content, str)
+        m.content for m in request.messages if m.role == "user" and isinstance(m.content, str)
     )
     assert OUTPUT_ONLY_MARKER not in user_msg, (
         "The narrator output contract is still on the per-turn user message "

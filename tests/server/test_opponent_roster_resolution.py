@@ -240,9 +240,7 @@ def test_non_combat_confrontation_does_not_conscript_colocated_bestiary_creature
     "Western Diamondback" must NOT be seated against a router-named human
     threat; the router name is seated instead.
     """
-    snake = _statted_creature(
-        "Western Diamondback", creature_id="diamondback_rattler", hp=2
-    )
+    snake = _statted_creature("Western Diamondback", creature_id="diamondback_rattler", hp=2)
     snap = _snapshot_with(snake)
     pack = _load_pack()
 
@@ -256,9 +254,7 @@ def test_non_combat_confrontation_does_not_conscript_colocated_bestiary_creature
         player_name="Kirk",
         npcs_present=[],
         genre_slug=snap.genre_slug,
-        materialized_threat=NpcMention(
-            name="the drifter", role="hostile", side="opponent"
-        ),
+        materialized_threat=NpcMention(name="the drifter", role="hostile", side="opponent"),
     )
 
     opponents = [a.name for a in enc.actors if a.side == "opponent"]
@@ -275,9 +271,7 @@ def test_combat_confrontation_still_reconciles_same_bestiary_creature():
     statted HP matters (ADR-059). Proves the 150-2 gate keys on the confrontation
     CATEGORY, not the creature.
     """
-    snake = _statted_creature(
-        "Western Diamondback", creature_id="diamondback_rattler", hp=2
-    )
+    snake = _statted_creature("Western Diamondback", creature_id="diamondback_rattler", hp=2)
     snap = _snapshot_with(snake)
     pack = _load_pack()
 
@@ -288,9 +282,7 @@ def test_combat_confrontation_still_reconciles_same_bestiary_creature():
         player_name="Kirk",
         npcs_present=[],
         genre_slug=snap.genre_slug,
-        materialized_threat=NpcMention(
-            name="Hold-Dead", role="hostile", side="opponent"
-        ),
+        materialized_threat=NpcMention(name="Hold-Dead", role="hostile", side="opponent"),
     )
 
     opponents = [a.name for a in enc.actors if a.side == "opponent"]
@@ -303,9 +295,7 @@ def test_non_combat_skip_emits_decision_span(otel_capture):
     """OTEL principle / CLAUDE.md lie-detector: declining to conscript an ambient
     bestiary hazard into a non-combat confrontation is a subsystem decision and
     MUST be observable on the GM panel."""
-    snake = _statted_creature(
-        "Western Diamondback", creature_id="diamondback_rattler", hp=2
-    )
+    snake = _statted_creature("Western Diamondback", creature_id="diamondback_rattler", hp=2)
     snap = _snapshot_with(snake)
     pack = _load_pack()
 
@@ -316,9 +306,7 @@ def test_non_combat_skip_emits_decision_span(otel_capture):
         player_name="Kirk",
         npcs_present=[],
         genre_slug=snap.genre_slug,
-        materialized_threat=NpcMention(
-            name="the drifter", role="hostile", side="opponent"
-        ),
+        materialized_threat=NpcMention(name="the drifter", role="hostile", side="opponent"),
     )
 
     spans = {s.name: s for s in otel_capture.get_finished_spans()}

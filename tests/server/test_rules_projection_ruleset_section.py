@@ -31,6 +31,7 @@ from sidequest.server.reference_routes import create_reference_router
 # Shared SRD content seeder
 # ---------------------------------------------------------------------------
 
+
 def _seed_fate_content(content_root: Path) -> None:
     """Write a minimal fate SRD chapter under content_root/rulesets/fate/srd/."""
     srd = content_root / "rulesets" / "fate" / "srd"

@@ -97,9 +97,7 @@ def _names(snap: GameSnapshot) -> list[str]:
 
 def _filtered_spans(otel_capture: InMemorySpanExporter) -> list[Any]:
     return [
-        s
-        for s in otel_capture.get_finished_spans()
-        if s.name == SPAN_ZONE_ELIGIBILITY_FILTERED
+        s for s in otel_capture.get_finished_spans() if s.name == SPAN_ZONE_ELIGIBILITY_FILTERED
     ]
 
 
@@ -264,7 +262,8 @@ def test_inject_out_of_combat_limit_applied_after_filter() -> None:
     from sidequest.server.dispatch.monster_manual_inject import _OUT_OF_COMBAT_ENCOUNTER_LIMIT
 
     wrong = [
-        _encounter(f"Wrong{i}", factions=[HOUYHNHNM]) for i in range(_OUT_OF_COMBAT_ENCOUNTER_LIMIT + 1)
+        _encounter(f"Wrong{i}", factions=[HOUYHNHNM])
+        for i in range(_OUT_OF_COMBAT_ENCOUNTER_LIMIT + 1)
     ]
     right = _encounter("Lilliput Guard", factions=[LILLIPUT])
     sd = _FakeSessionData(_zoned_pack({"lilliput_shore": LILLIPUT, "houyhnhnm_land": HOUYHNHNM}))

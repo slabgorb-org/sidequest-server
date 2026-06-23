@@ -125,9 +125,7 @@ def test_narration_apply_drops_native_beats_for_fate_conflict(
         "no beat_applied may fire for a Fate conflict — the native beat was dropped, not "
         "applied to the dial"
     )
-    dropped = [
-        e for e in events if e["fields"].get("op") == "conflict_beat_dropped_dial_blocked"
-    ]
+    dropped = [e for e in events if e["fields"].get("op") == "conflict_beat_dropped_dial_blocked"]
     assert len(dropped) == 1, (
         "the narration pipeline must DROP the native beat selection for a Fate conflict and "
         "surface it on the GM panel (sibling of contest_beat_dropped_dial_blocked); got "

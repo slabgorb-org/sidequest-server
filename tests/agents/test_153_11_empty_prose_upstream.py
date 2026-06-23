@@ -357,7 +357,9 @@ async def test_healthy_sdk_turn_emits_no_upstream_signal(
     await bound_hub.subscribe(sock)  # type: ignore[arg-type]
 
     client = FakeAnthropicSdkClient(
-        responses=[_response(text="The lamp sputters and the wick catches.", stop_reason="end_turn")]
+        responses=[
+            _response(text="The lamp sputters and the wick catches.", stop_reason="end_turn")
+        ]
     )
     result = await _drive_sdk_turn(monkeypatch, client)
     await asyncio.sleep(0.05)

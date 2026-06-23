@@ -74,7 +74,9 @@ def _walk_capturing_seed(builder):
             payload = builder.to_scene_message("p1").payload
             slots = payload.fate_aspect_slots or []
             seeded_free_aspects = [
-                s.value for s in slots if s.kind not in ("high_concept", "trouble") and (s.value or "").strip()
+                s.value
+                for s in slots
+                if s.kind not in ("high_concept", "trouble") and (s.value or "").strip()
             ]
             # Author HC/Trouble (no-silent-default) and ACCEPT the seeded free aspects.
             builder.apply_fate_aspects(
@@ -107,8 +109,11 @@ def _walk_capturing_seed(builder):
         )
         if idx is None:
             idx = next(
-                (i for i, c in enumerate(scene.choices)
-                 if c.mechanical_effects and c.mechanical_effects.class_hint),
+                (
+                    i
+                    for i, c in enumerate(scene.choices)
+                    if c.mechanical_effects and c.mechanical_effects.class_hint
+                ),
                 None,
             )
         builder.apply_choice(idx if idx is not None else 0)
@@ -151,4 +156,6 @@ class TestAnneesFollesNarrativeChargenSeed:
         sheet = character.core.fate_sheet
         assert sheet is not None
         gear_aspects = [a for a in sheet.aspects if a.source_gear]
-        assert gear_aspects, "no gear-derived aspects on the sheet — the narrative-wizard path bypassed compile_gear_onto_sheet"
+        assert gear_aspects, (
+            "no gear-derived aspects on the sheet — the narrative-wizard path bypassed compile_gear_onto_sheet"
+        )

@@ -553,7 +553,9 @@ def test_add_encounter_threads_factions_onto_manual_encounter() -> None:
     """The seed path passes the union through ``add_encounter(factions=...)`` →
     it must land on ``ManualEncounter.factions`` (the value Seam 1 reads)."""
     manual = MonsterManual(genre="wry_whimsy", world="gulliver")
-    manual.add_encounter(_enc_data("Yahoo Brute"), tier=2, terrain_tags=[], factions=["the_houyhnhnm_assembly"])
+    manual.add_encounter(
+        _enc_data("Yahoo Brute"), tier=2, terrain_tags=[], factions=["the_houyhnhnm_assembly"]
+    )
     assert manual.encounters[0].factions == ["the_houyhnhnm_assembly"]
 
 

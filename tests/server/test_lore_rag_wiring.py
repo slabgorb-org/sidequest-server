@@ -117,7 +117,9 @@ async def _connect_and_confirm(handler: WebSocketSessionHandler) -> None:
     """Walk the shortest chargen path to Playing state."""
     from tests.server.conftest import attach_default_room_context, seed_slug_for_test
 
-    slug = seed_slug_for_test(handler._save_dir, genre="caverns_and_claudes", world="beneath_sunden")
+    slug = seed_slug_for_test(
+        handler._save_dir, genre="caverns_and_claudes", world="beneath_sunden"
+    )
     attach_default_room_context(handler)
     await handler.handle_message(
         SessionEventMessage(

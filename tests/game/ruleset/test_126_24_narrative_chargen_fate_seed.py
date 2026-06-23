@@ -181,7 +181,9 @@ def captured(monkeypatch):
     return exporter
 
 
-def builder_with_hint(*, class_hint: str = DETECTIVE_HINT, with_seed_table: bool = True) -> CharacterBuilder:
+def builder_with_hint(
+    *, class_hint: str = DETECTIVE_HINT, with_seed_table: bool = True
+) -> CharacterBuilder:
     """A builder parked at the fate_aspects step with ``class_hint`` accumulated:
     [crucible(class_hint) -> aspects -> pyramid -> stunts]; the crucible choice is
     applied so ``accumulated().class_hint`` is set before the fate steps present."""
@@ -389,7 +391,9 @@ class TestAC2WorldOverride:
         world_pyramid = dict(DETECTIVE_PYRAMID)
         world_pyramid["Notice"], world_pyramid["Contacts"] = 3, 3  # same shape, world flavor
         world_seed = _seed(world_pyramid, ["A Name in the Annees Folles"])
-        pack = _FakePack(genre=genre, worlds={"annees_folles": _FakeWorld({DETECTIVE_HINT: world_seed})})
+        pack = _FakePack(
+            genre=genre, worlds={"annees_folles": _FakeWorld({DETECTIVE_HINT: world_seed})}
+        )
 
         resolved = resolve_fate_chargen_seed_table(pack, "annees_folles")
 
@@ -403,7 +407,9 @@ class TestAC2WorldOverride:
         }
         pack = _FakePack(
             genre=genre,
-            worlds={"annees_folles": _FakeWorld({DETECTIVE_HINT: _seed(DETECTIVE_PYRAMID, ["world"])})},
+            worlds={
+                "annees_folles": _FakeWorld({DETECTIVE_HINT: _seed(DETECTIVE_PYRAMID, ["world"])})
+            },
         )
         resolved = resolve_fate_chargen_seed_table(pack, "annees_folles")
         assert resolved["Fixer"].aspects == ["I Know People"]  # untouched genre default
@@ -430,7 +436,9 @@ class TestAC8ConfirmationHighConcept:
         hc = "The Hard-Luck Investigator"
         builder = builder_with_hint()
         builder.apply_fate_aspects(high_concept=hc, trouble="A Loose Thread", free_aspects=[])
-        rendered = builder.interpolate_scene_narration("They step out, a {high_concept}, into the night.")
+        rendered = builder.interpolate_scene_narration(
+            "They step out, a {high_concept}, into the night."
+        )
         assert hc in rendered
         assert "{high_concept}" not in rendered
 
@@ -457,7 +465,9 @@ class TestAC9NarrativeWizardGear:
                 "grants_aspects": [{"text": "A Contact for Every Occasion", "kind": "character"}],
             },
         ]
-        rules = fate_rules(gear=["noir_pi_license", "noir_little_black_book"], gear_catalog=gear_catalog)
+        rules = fate_rules(
+            gear=["noir_pi_license", "noir_little_black_book"], gear_catalog=gear_catalog
+        )
         scenes = [
             narrative_scene(crucible_choice()),
             fate_step_scene("aspects"),

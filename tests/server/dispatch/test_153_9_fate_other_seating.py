@@ -75,9 +75,7 @@ def _has_fate_content() -> bool:
         return False
 
 
-pytestmark = pytest.mark.skipif(
-    not _has_fate_content(), reason=f"{_FATE_PACK} pack not on disk"
-)
+pytestmark = pytest.mark.skipif(not _has_fate_content(), reason=f"{_FATE_PACK} pack not on disk")
 
 
 def _load_fate_pack():
@@ -168,9 +166,7 @@ def test_fate_seats_named_antagonist_over_same_surname_roster_npc():
     Fate the named antagonist must be seated as the Other — Marguerite must NOT
     be conscripted in his place."""
     pack = _load_fate_pack()
-    snap = _snapshot_with(
-        _statted_adversary("Marguerite Vance"), genre_slug=_FATE_PACK
-    )
+    snap = _snapshot_with(_statted_adversary("Marguerite Vance"), genre_slug=_FATE_PACK)
 
     enc = instantiate_encounter_from_trigger(
         snapshot=snap,
@@ -179,9 +175,7 @@ def test_fate_seats_named_antagonist_over_same_surname_roster_npc():
         player_name="Sam",
         npcs_present=[],
         genre_slug=_FATE_PACK,
-        materialized_threat=NpcMention(
-            name="Silas Vance", role="hostile", side="opponent"
-        ),
+        materialized_threat=NpcMention(name="Silas Vance", role="hostile", side="opponent"),
     )
 
     assert enc is not None, "Fate combat confrontation failed to instantiate"
@@ -208,9 +202,7 @@ def test_fate_decline_to_conscript_emits_decision_span(otel_capture):
     fire. Without the span the GM can't tell the seater engaged from the
     narrator improvising (No Silent Fallbacks)."""
     pack = _load_fate_pack()
-    snap = _snapshot_with(
-        _statted_adversary("Marguerite Vance"), genre_slug=_FATE_PACK
-    )
+    snap = _snapshot_with(_statted_adversary("Marguerite Vance"), genre_slug=_FATE_PACK)
 
     instantiate_encounter_from_trigger(
         snapshot=snap,
@@ -219,9 +211,7 @@ def test_fate_decline_to_conscript_emits_decision_span(otel_capture):
         player_name="Sam",
         npcs_present=[],
         genre_slug=_FATE_PACK,
-        materialized_threat=NpcMention(
-            name="Silas Vance", role="hostile", side="opponent"
-        ),
+        materialized_threat=NpcMention(name="Silas Vance", role="hostile", side="opponent"),
     )
 
     spans = {s.name: s for s in otel_capture.get_finished_spans()}
@@ -253,9 +243,7 @@ def test_fate_exact_roster_target_is_still_seated():
     decline only suppresses conscripting a DIFFERENT adversary; it must never
     drop an exactly-named roster Other."""
     pack = _load_fate_pack()
-    snap = _snapshot_with(
-        _statted_adversary("Marguerite Vance"), genre_slug=_FATE_PACK
-    )
+    snap = _snapshot_with(_statted_adversary("Marguerite Vance"), genre_slug=_FATE_PACK)
 
     enc = instantiate_encounter_from_trigger(
         snapshot=snap,
@@ -264,9 +252,7 @@ def test_fate_exact_roster_target_is_still_seated():
         player_name="Sam",
         npcs_present=[],
         genre_slug=_FATE_PACK,
-        materialized_threat=NpcMention(
-            name="Marguerite Vance", role="hostile", side="opponent"
-        ),
+        materialized_threat=NpcMention(name="Marguerite Vance", role="hostile", side="opponent"),
     )
 
     assert enc is not None
@@ -292,9 +278,7 @@ def test_non_fate_combat_still_conscripts_colocated_adversary():
     assert pack.rules.ruleset != "fate", (
         "this guard requires a NON-Fate fixture to prove the fix is Fate-scoped"
     )
-    snap = _snapshot_with(
-        _statted_adversary("Marguerite Vance"), genre_slug="caverns_and_claudes"
-    )
+    snap = _snapshot_with(_statted_adversary("Marguerite Vance"), genre_slug="caverns_and_claudes")
 
     enc = instantiate_encounter_from_trigger(
         snapshot=snap,

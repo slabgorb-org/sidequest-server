@@ -42,6 +42,7 @@ from sidequest.telemetry.spans import Span
 from sidequest.telemetry.spans.monster_manual import (
     SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL,
     SPAN_MONSTER_MANUAL_INJECTED,
+    SPAN_MONSTER_MANUAL_REGION_POPULATION,
     SPAN_MONSTER_MANUAL_STALE_PURGED,
 )
 from sidequest.telemetry.spans.zone_eligibility import SPAN_ZONE_ELIGIBILITY_FILTERED
@@ -508,6 +509,64 @@ def _creature_patch_from_bestiary_entry(entry: Any, *, location: str | None) -> 
     )
 
 
+def _creature_patch_from_region_creature(rc: Any, *, location: str | None, region: str) -> NpcPatch:
+    """Translate one frozen ``RegionCreature`` (Task 4) into a region-stamped
+    creature patch. ``region`` is the engine-owned key co-location seats on
+    (ADR-116); ``location`` is the free-text scene for narrator/UI display."""
+    return NpcPatch(
+        name=rc.name,
+        description=rc.telegraph or None,
+        role=rc.creature_type or None,
+        creature_id=rc.creature_type or None,
+        threat_level=rc.threat_level,
+        hp=rc.hp,
+        location=location,
+        region=region,
+        manual_origin=True,
+    )
+
+
+def _npc_patches_for_region_population(
+    sd: Any, region_id: str, *, current_location: str, in_combat: bool
+) -> list[NpcPatch]:
+    """Build region-stamped creature patches from the region's frozen procedural
+    roster (Task 3/4). Out of combat the roster is capped at
+    ``_OUT_OF_COMBAT_ENCOUNTER_LIMIT`` (Keith ruling 2026-06-22); the big-bad is
+    always present (it only SEATS when the player engages).
+    Emits ``monster_manual.region_population``. Returns ``[]`` for a region with
+    no frozen population (absent binding, not a fallback)."""
+    repo = getattr(sd, "dungeon_repository", None)
+    if repo is None:
+        return []
+    from sidequest.server.dispatch.region_population import load_region_population
+
+    roster, big_bad = load_region_population(repo, region_id)
+    if not roster and big_bad is None:
+        return []
+    creature_location = current_location or None
+    capped = roster if in_combat else roster[:_OUT_OF_COMBAT_ENCOUNTER_LIMIT]
+    patches = [
+        _creature_patch_from_region_creature(rc, location=creature_location, region=region_id)
+        for rc in capped
+    ]
+    if big_bad is not None:
+        patches.append(
+            _creature_patch_from_region_creature(
+                big_bad, location=creature_location, region=region_id
+            )
+        )
+    with Span.open(
+        SPAN_MONSTER_MANUAL_REGION_POPULATION,
+        {
+            "region_id": region_id,
+            "creature_count": len(capped),
+            "big_bad": big_bad is not None,
+        },
+    ):
+        pass
+    return patches
+
+
 def _npc_patches_for_room_binding(
     sd: _SessionData, room_id: str, current_location: str
 ) -> list[NpcPatch]:
@@ -681,7 +740,17 @@ def inject(
     # fails loud on a dangling ref). Strictly additive to the Manual pool above
     # and gated on combat — a non-combat pack never fields creatures.
     if room_id and combat_encounters:
-        all_patches = all_patches + _npc_patches_for_room_binding(sd, room_id, current_location)
+        authored = _npc_patches_for_room_binding(sd, room_id, current_location)
+        all_patches = all_patches + authored
+        # Story 153-x (ADR-106 region population): inject the region's frozen
+        # procedural roster, region-stamped so Task 6 can seat by region id.
+        # De-duped by name so an authored creature ALWAYS wins over its
+        # procedural counterpart (authored content dominates; No Silent Fallbacks).
+        authored_names = {p.name for p in authored}
+        region_pop = _npc_patches_for_region_population(
+            sd, room_id, current_location=current_location, in_combat=in_combat
+        )
+        all_patches = all_patches + [p for p in region_pop if p.name not in authored_names]
 
     if not all_patches:
         return 0

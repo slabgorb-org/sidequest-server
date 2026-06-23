@@ -979,9 +979,7 @@ def _maybe_emit_dungeon_map(
             },
             component="dungeon",
         )
-        logger.info(
-            "dungeon.map_skipped surface_phase pc=%s region=%s", pc_name, pc_region
-        )
+        logger.info("dungeon.map_skipped surface_phase pc=%s region=%s", pc_name, pc_region)
         return
 
     payload = _build_dungeon_map_payload(

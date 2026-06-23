@@ -82,9 +82,7 @@ def _walk_chargen_calling(pack, *, calling_idx: int, lobby: str, rng_seed: int =
     # Scene 1 the_trade — WWN background pick (added in the chargen
     # reconciliation). Choose the first option.
     trade_scene = builder.current_scene()
-    assert trade_scene.id == "the_trade", (
-        f"expected the_trade second, got {trade_scene.id!r}"
-    )
+    assert trade_scene.id == "the_trade", f"expected the_trade second, got {trade_scene.id!r}"
     builder.apply_choice(0)
     # Scene 2 the_story — freeform (not fragment-backed).
     builder.apply_response(

@@ -292,6 +292,20 @@ def _hp_from_cr(cr: float) -> HpPool:
     return hp_pool_from_hp(hp)
 
 
+def _threat_from_band(bundle: CookbookBundle, cr_band: str) -> int:
+    """Derive the 1-4 B/X threat tier from a region's CR band (Keith ruling
+    2026-06-22). ``band_order`` is the shallow<mid<deep ordinal; tier is the
+    1-based ordinal clamped to [1, 4]. An unknown band is a loud bug, not a
+    silent default (No Silent Fallbacks)."""
+    order = bundle.affinities.band_order()
+    if cr_band not in order:
+        raise CurationError(
+            f"cr_band {cr_band!r} is not in affinities.cr_bands {sorted(order)} "
+            f"— cannot derive a threat tier"
+        )
+    return min(4, max(1, order[cr_band] + 1))
+
+
 def _region_interior_seed(campaign_seed: int, expansion_id: int, region_id: str) -> int:
     """Deterministic per-region interior seed.
 
@@ -474,6 +488,23 @@ class CuratedCreature:
     creature_type: str
     telegraph: str
     hp: HpPool
+    # ADR-114 discipline: NO raw cr. ``threat_level`` is the DERIVED B/X tier
+    # (1-4) from the region's CR band — the legible difficulty signal the
+    # inject stamps onto the runtime Npc (Keith ruling 2026-06-22: derive from
+    # CR band). Big-bad gets the region tier +1 (capped at 4).
+    threat_level: int
+
+
+def _curated_to_payload(c: CuratedCreature) -> dict:
+    """JSON-safe payload for the per-region ``region_population`` mutation
+    (Task 3). HpPool is a pydantic model → ``model_dump`` is JSON-safe."""
+    return {
+        "name": c.name,
+        "creature_type": c.creature_type,
+        "telegraph": c.telegraph,
+        "hp": c.hp.model_dump(),
+        "threat_level": c.threat_level,
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -989,6 +1020,7 @@ def _creatures_from_manifest(
                 creature_type=str(row.get("type", "")),
                 telegraph=str(row.get("telegraph", "")),
                 hp=_hp_from_cr(float(row["cr"])),
+                threat_level=_threat_from_band(bundle, manifest.cr_band),
             )
         )
     big_bad: CuratedCreature | None = None
@@ -1015,6 +1047,7 @@ def _creatures_from_manifest(
             creature_type="big_bad",
             telegraph=str(bb_src.get("min_band", "")),
             hp=_hp_from_cr(float(bb_cr)),
+            threat_level=min(4, _threat_from_band(bundle, manifest.cr_band) + 1),
         )
     return creatures, big_bad
 
@@ -1110,6 +1143,7 @@ def _append_authored_creatures(
                 creature_type=str(getattr(entry, "role", "") or "authored"),
                 telegraph=str(getattr(entry, "description", "") or ""),
                 hp=hp_pool_from_hp(int(entry.hp)),
+                threat_level=int(getattr(entry, "level", 1) or 1),
             )
         )
         existing_names.add(entry.name)
@@ -1470,6 +1504,7 @@ async def _stage_curate(
                         creature_type=str(row.get("type", "")),
                         telegraph=str(row.get("telegraph", "")),
                         hp=_hp_from_cr(float(row["cr"])),
+                        threat_level=_threat_from_band(bundle, manifest.cr_band),
                     )
                 )
             region_creatures[region_id] = creatures
@@ -1503,6 +1538,7 @@ async def _stage_curate(
                     creature_type="big_bad",
                     telegraph=str(bb_v.get("min_band", "")),
                     hp=_hp_from_cr(float(bb_cr)),
+                    threat_level=min(4, _threat_from_band(bundle, manifest.cr_band) + 1),
                 )
 
     # Lie-detector summary on the curate STAGE span. `curated` is the
@@ -2024,6 +2060,27 @@ def _stage_commit(
             )
             rolled_persisted += 1
 
+        # Story 153-x: freeze each generated region's curated population on the
+        # SAME txn (save-is-truth). Reuses the Plan-5 append-only primitive — no
+        # new table. The entrance (Expansion 0) is authored content, not in
+        # ``expansion.new_nodes``, so it is never given a procedural roster.
+        pop_persisted = 0
+        for node in expansion.new_nodes:
+            roster = curation.region_creatures.get(node.id, [])
+            big_bad = curation.region_big_bad.get(node.id)
+            if not roster and big_bad is None:
+                continue
+            tx.record_mutation(
+                node.id,
+                "region_population",
+                {
+                    "region_id": node.id,
+                    "creatures": [_curated_to_payload(c) for c in roster],
+                    "big_bad": _curated_to_payload(big_bad) if big_bad is not None else None,
+                },
+            )
+            pop_persisted += 1
+
         for fe in new_frontier:
             tx.put_frontier(fe)
         # The coordinator's ``with dungeon_repository.transaction()`` commits on
@@ -2041,6 +2098,7 @@ def _stage_commit(
     span.set_attribute("regions_committed", len(expansion.new_nodes))
     span.set_attribute("edges_committed", len(expansion.new_edges))
     span.set_attribute("rolled_persisted", rolled_persisted)
+    span.set_attribute("region_populations_committed", pop_persisted)
     span.set_attribute("frontier_edges_added", len(new_frontier))
     span.set_attribute("generator_version", generator_version)
 

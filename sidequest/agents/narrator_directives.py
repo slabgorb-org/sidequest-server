@@ -71,9 +71,7 @@ def render_narrator_directives(directives: list[NarratorDirective]) -> str:
     """
     if not directives:
         return ""
-    lines = "\n".join(
-        f"- {_DIRECTIVE_IMPERATIVES[d.kind]}: {d.payload}" for d in directives
-    )
+    lines = "\n".join(f"- {_DIRECTIVE_IMPERATIVES[d.kind]}: {d.payload}" for d in directives)
     return f"{_FRAMING_OPEN}\n{lines}{_FRAMING_CLOSE}"
 
 

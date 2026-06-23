@@ -9,10 +9,12 @@ from sidequest.genre.ruleset_reference import (
 )
 
 
-def _write(p: Path, anchor: str, title: str, order: int, body: str, *, srd="fixture", lic="ccby") -> None:
+def _write(
+    p: Path, anchor: str, title: str, order: int, body: str, *, srd="fixture", lic="ccby"
+) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(
-        f"---\nsrd: {srd}\nsrd_ref: \"{title}\"\nlicense: {lic}\n"
+        f'---\nsrd: {srd}\nsrd_ref: "{title}"\nlicense: {lic}\n'
         f"anchor: {anchor}\ntitle: {title}\norder: {order}\n---\n{body}\n",
         encoding="utf-8",
     )
@@ -49,14 +51,32 @@ def test_missing_required_frontmatter_key_raises(tmp_path: Path):
 
 def test_wn_overlay_overrides_core_by_anchor(tmp_path: Path):
     root = tmp_path / "rulesets"
-    _write(root / "without_number" / "core" / "srd" / "combat.md", "combat", "Combat (core)", 1, "Core combat body")
-    _write(root / "without_number" / "core" / "srd" / "magic.md", "magic", "Magic", 2, "Core magic body")
-    _write(root / "without_number" / "wwn" / "srd" / "combat.md", "combat", "Combat (wwn)", 1, "WWN combat body")
+    _write(
+        root / "without_number" / "core" / "srd" / "combat.md",
+        "combat",
+        "Combat (core)",
+        1,
+        "Core combat body",
+    )
+    _write(
+        root / "without_number" / "core" / "srd" / "magic.md",
+        "magic",
+        "Magic",
+        2,
+        "Core magic body",
+    )
+    _write(
+        root / "without_number" / "wwn" / "srd" / "combat.md",
+        "combat",
+        "Combat (wwn)",
+        1,
+        "WWN combat body",
+    )
     chapters = load_ruleset_chapters("wwn", rulesets_root=root)
     by_anchor = {c["anchor"]: c for c in chapters}
-    assert by_anchor["combat"]["title"] == "Combat (wwn)"          # overlay won
+    assert by_anchor["combat"]["title"] == "Combat (wwn)"  # overlay won
     assert by_anchor["combat"]["body_markdown"].strip() == "WWN combat body"
-    assert by_anchor["magic"]["title"] == "Magic"                  # core-only chapter preserved
+    assert by_anchor["magic"]["title"] == "Magic"  # core-only chapter preserved
     assert [c["anchor"] for c in chapters] == ["combat", "magic"]  # ordered by `order`
 
 

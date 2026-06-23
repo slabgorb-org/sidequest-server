@@ -467,6 +467,12 @@ SPAN_ENCOUNTER_RESOLUTION_SIGNAL_CONSUMED = "encounter.resolution_signal_consume
 SPAN_ENCOUNTER_EDGE_DEBIT = "encounter.edge_debit"
 SPAN_ENCOUNTER_COMPOSURE_BREAK = "encounter.composure_break"
 
+# Story 153-23 (ADR-116 region-keyed seating): emitted once per seating attempt
+# in instantiate_encounter_from_trigger recording which co-location mode decided
+# whether an Other was found. ``match_mode=region`` means the engine-owned region
+# id seated (or declined) the opponent; ``scene`` means the legacy free-text path.
+SPAN_CONFRONTATION_COLOCATION = "confrontation.colocation"
+
 FLAT_ONLY_SPANS.update(
     {
         SPAN_ENCOUNTER_BEAT_SKIPPED,
@@ -481,6 +487,7 @@ FLAT_ONLY_SPANS.update(
         SPAN_ENCOUNTER_YIELD_RESOLVED,
         SPAN_ENCOUNTER_RESOLUTION_SIGNAL_EMITTED,
         SPAN_ENCOUNTER_RESOLUTION_SIGNAL_CONSUMED,
+        SPAN_CONFRONTATION_COLOCATION,
     }
 )
 # Promoted from flat-only — combat resolution lie-detector (sprint 3 cold-subsystem

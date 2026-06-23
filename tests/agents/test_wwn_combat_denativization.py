@@ -122,7 +122,9 @@ def test_predicate_false_when_resolved_absent_or_not_wn_or_not_hp() -> None:
 
 def test_exclude_combat_resolution_withholds_exactly_the_resolution_tools() -> None:
     full = {t.name for t in default_registry.tool_definitions("wwn")}
-    filtered = {t.name for t in default_registry.tool_definitions("wwn", exclude_combat_resolution=True)}
+    filtered = {
+        t.name for t in default_registry.tool_definitions("wwn", exclude_combat_resolution=True)
+    }
     assert full - filtered == set(_COMBAT_RESOLUTION_TOOLS), (
         "exactly the combat-resolution tools must be withheld on a live WN combat"
     )

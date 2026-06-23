@@ -95,9 +95,7 @@ class _ReconnectFakeDaemon:
         self._path = path
         self._server = await asyncio.start_unix_server(self._handle, path=str(path))
 
-    async def _handle(
-        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-    ) -> None:
+    async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         self.connection_count += 1
         self.first_connection.set()
         try:
@@ -275,7 +273,8 @@ async def test_retrieve_resumes_after_socket_returns(short_sock: Path) -> None:
 
     # Daemon absent again -> retrieval degrades to None (graceful, but degraded).
     absent = await retrieve_lore_context(
-        store, "tell me about the cathedral",
+        store,
+        "tell me about the cathedral",
         client=DaemonClient(socket_path=short_sock, timeout_seconds=2.0),
     )
     assert absent is None
@@ -285,7 +284,8 @@ async def test_retrieve_resumes_after_socket_returns(short_sock: Path) -> None:
     await daemon2.start(short_sock)
     try:
         recovered = await retrieve_lore_context(
-            store, "tell me about the cathedral",
+            store,
+            "tell me about the cathedral",
             client=DaemonClient(socket_path=short_sock, timeout_seconds=2.0),
         )
     finally:

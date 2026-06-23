@@ -45,9 +45,7 @@ def test_every_kind_maps_to_an_imperative() -> None:
 def test_no_machinery_token_leaks_for_any_kind() -> None:
     """The raw kind token must never appear; the payload always does."""
     for kind in get_args(NarratorDirectiveKind):
-        directive = NarratorDirective(
-            kind=kind, payload="PAYLOAD_SENTINEL", visibility=_viz()
-        )
+        directive = NarratorDirective(kind=kind, payload="PAYLOAD_SENTINEL", visibility=_viz())
         out = render_narrator_directives([directive])
         assert kind not in out, f"raw machinery token {kind!r} leaked into the prompt"
         assert "PAYLOAD_SENTINEL" in out

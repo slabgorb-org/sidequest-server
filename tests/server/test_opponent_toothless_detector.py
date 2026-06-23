@@ -257,7 +257,9 @@ def test_non_wn_weaponless_seat_span_is_toothless_without_floor(otel_capture):
     spans = [s for s in otel_capture.get_finished_spans() if s.name == SPAN_TOOTHLESS]
     assert spans, "a genuinely toothless (non-WN weaponless) opponent must still flag at seating"
     attrs = dict(spans[0].attributes)
-    assert attrs.get("ruleset") == "dial", "AC-3: the span carries the bound ruleset even when toothless"
+    assert attrs.get("ruleset") == "dial", (
+        "AC-3: the span carries the bound ruleset even when toothless"
+    )
     assert not attrs.get("unarmed_floor"), (
         "a non-WN toothless opponent has NO unarmed floor — the unarmed_floor field "
         "must be absent/empty so the GM panel reads it as a genuine toothless flag"

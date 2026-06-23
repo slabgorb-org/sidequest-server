@@ -83,21 +83,27 @@ class _FakeStore:
 
 
 class _FakeHandle:
-    """Fake LookaheadWorkerHandle exposing the one entry the handler calls
-    (``_materialize_edge``) + ``persistence``/``palette`` for context
-    derivation. ``materialize_effect`` is invoked to flip the store to a
-    map that contains the now-committed target node."""
+    """Fake LookaheadWorkerHandle exposing the entries the handler calls
+    (``_materialize_edge`` + ``drain``) + ``persistence``/``palette`` for
+    context derivation. ``materialize_effect`` is invoked to flip the store to
+    a map that contains the now-committed target node."""
 
     def __init__(self, store: _FakeStore, palette, materialize_effect=None):
         self.persistence = store
         self.palette = palette
         self._materialize_effect = materialize_effect
         self.materialize_calls: list[str] = []
+        self.drain_calls = 0
 
     async def _materialize_edge(self, *, edge, to_region: str, snapshot) -> None:
         self.materialize_calls.append(edge.frontier_edge_id)
         if self._materialize_effect is not None:
             self._materialize_effect()
+
+    async def drain(self) -> None:
+        """Match the real handle's onward-ring drain (movement.py affordance
+        race fix). A no-op here; counted so a test can assert it was awaited."""
+        self.drain_calls += 1
 
 
 def _snapshot(pc_regions: dict[str, str], seats: dict[str, str], **kw) -> GameSnapshot:

@@ -11,6 +11,7 @@ from sidequest.dungeon.persistence import ComplicationThread, DungeonStore
 from sidequest.dungeon.region_graph.model import Expansion, RegionNode
 from sidequest.dungeon.themes import ExpansionQuestTemplate
 from sidequest.game.cookbook.models import RegionContentManifest
+from sidequest.game.session import GameSnapshot, QuestEntry
 from sidequest.telemetry.spans.dungeon_quest import quest_bound_span
 
 
@@ -186,8 +187,6 @@ def seed_expansion_quest(
 # Projection: reconcile open expansion-quest threads into snapshot.quest_log
 # ---------------------------------------------------------------------------
 
-from sidequest.game.session import GameSnapshot, QuestEntry  # noqa: E402
-
 _DUNGEON_QUEST_PREFIX = "dungeon:exp"
 
 
@@ -228,6 +227,7 @@ def reconcile_dungeon_quests_into_log(
             if anchor and anchor not in snapshot.quest_anchors:
                 snapshot.quest_anchors.append(anchor)
             projected += 1
-        elif existing.status not in ("active",):
-            continue  # already resolved/closed — don't reopen
+        elif existing.status != "active":
+            # Entry was externally resolved (e.g. "completed", "failed") — preserve it.
+            continue
     return projected

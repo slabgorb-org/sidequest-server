@@ -68,3 +68,19 @@ def test_projection_never_touches_non_dungeon_entries():
     snap.quest_log["seed_drive"] = QuestEntry(title="My Drive", objective="x", status="active")
     reconcile_dungeon_quests_into_log(snapshot=snap, store=store, reached_expansion_ids={1})
     assert snap.quest_log["seed_drive"].title == "My Drive"  # untouched
+    assert "dungeon:exp1" in snap.quest_log  # dungeon entry was written
+
+
+def test_projection_does_not_reopen_resolved_entry():
+    conn, store = _store()
+    store.open_thread(_thread(1, "exp001.r0"))
+    conn.commit()
+    snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug="beneath_sunden")
+    snap.quest_log["dungeon:exp1"] = QuestEntry(
+        title="t", objective="o", status="completed", anchor_id="exp001.r0"
+    )
+    n = reconcile_dungeon_quests_into_log(
+        snapshot=snap, store=store, reached_expansion_ids={1}
+    )
+    assert n == 0
+    assert snap.quest_log["dungeon:exp1"].status == "completed"

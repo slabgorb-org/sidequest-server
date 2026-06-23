@@ -10,7 +10,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 from sidequest.protocol.base import ProtocolBase
 from sidequest.protocol.dice import ThrowParams
@@ -706,6 +706,25 @@ class DerivedRoomData(ProtocolBase):
     pois: list[tuple[int, int]]
 
 
+class TacticalFeature(ProtocolBase):
+    """A positioned tactical-map feature marker (ADR-096 token+feature phase).
+
+    v1 is pure visual/positional — ``feature_type`` + ``cell`` + ``label`` only.
+    A future ``mechanics`` field attaches WWN math without reshaping this.
+    """
+
+    feature_type: str
+    """One of the UI FeatureType vocabulary: cover|hazard|difficult_terrain|water|atmosphere|interactable."""
+    cell: tuple[int, int]
+    """(x, y) cell into the mask grid."""
+    label: str
+    """Player-facing one-liner shown on hover."""
+
+    @field_serializer("cell")
+    def _ser_cell(self, value: tuple[int, int]) -> list[int]:
+        return list(value)
+
+
 # ---------------------------------------------------------------------------
 # Location manifest (Story 54-2 / ADR-109)
 # ---------------------------------------------------------------------------
@@ -1304,6 +1323,9 @@ class TacticalGridPayload(ProtocolBase):
     """Typed location-entity manifest per ADR-109. Loaded from the room
     YAML's top-level ``entities`` block. Empty when the room has no
     manifest authored yet — graceful absence, not a lookup failure."""
+
+    features: list[TacticalFeature] = Field(default_factory=list)
+    """Positioned tactical feature markers (water/hazard/cover/...). ADR-096 token+feature phase."""
 
 
 # ---------------------------------------------------------------------------

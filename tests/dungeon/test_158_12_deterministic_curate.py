@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -390,9 +391,7 @@ async def test_authored_binding_survives_deterministic_materialize(
     # load_genre_pack tests. Redirect the emit to tmp; we assert on spans +
     # committed rosters, never the written YAMLs.
     emit_root = tmp_path / "emitted_world_dirs"
-    monkeypatch.setattr(
-        _mat, "_resolve_world_dir", lambda request: emit_root / request.world_slug
-    )
+    monkeypatch.setattr(_mat, "_resolve_world_dir", lambda request: emit_root / request.world_slug)
 
     _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
     theme_id = "authored_crypt_158_12"
@@ -409,8 +408,8 @@ async def test_authored_binding_survives_deterministic_materialize(
         creature_name="Gnaw Swarm",
     )
 
-    from sidequest.dungeon.persistence import FrontierEdge
     from sidequest.dungeon.materializer import MaterializationRequest
+    from sidequest.dungeon.persistence import FrontierEdge
 
     fe = FrontierEdge(
         frontier_edge_id="fe1",
@@ -514,3 +513,208 @@ def test_curation_error_carveout_i_retained() -> None:
     )
     with pytest.raises(CurationError):
         _mat._creatures_from_manifest(bad_band_manifest, bundle)
+
+
+# ---------------------------------------------------------------------------
+# AC4 (extension) — a BROKEN authored binding on the (now sole) deterministic
+#   main path is loud-but-GRACEFUL: it must NOT crash the player-facing connect.
+#   Ports the live Reviewer-153-26-HIGH invariant off the retired degrade path.
+# ---------------------------------------------------------------------------
+
+
+def _authored_pack_dangling(source_root: Path, *, world_slug: str, region_ids: list[str]) -> Any:
+    """A pack whose rooms bind an id ABSENT from the bestiary (a ``gnaw_swarm`` ->
+    ``gnaw_swrm`` typo). ``resolve_room_creatures`` raises ``RoomCreatureBindingError``."""
+    rooms_dir = source_root / "worlds" / world_slug / "rooms"
+    rooms_dir.mkdir(parents=True, exist_ok=True)
+    for rid in region_ids:
+        (rooms_dir / f"{rid}.yaml").write_text(
+            f"id: {rid}\nencounter_creatures:\n- gnaw_swrm\n",  # typo: not in bestiary
+            encoding="utf-8",
+        )
+    bestiary = Bestiary(
+        entries=[
+            BestiaryEntry(
+                id="gnaw_swarm", name="Gnaw Swarm", level=1, hp=8, armor_class=12, attack_bonus=1
+            )
+        ]
+    )
+
+    class _DanglingPack:
+        source_dir = source_root
+
+        def effective_bestiary(self, world: str | None) -> tuple[Bestiary, str]:
+            return bestiary, (world or "")
+
+    return _DanglingPack()
+
+
+async def test_broken_authored_binding_stays_loud_but_graceful(
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: str,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A region whose authored ``rooms/<id>.yaml`` binds a DANGLING bestiary id (a
+    homebrew typo) must stay loud-but-GRACEFUL on the deterministic main path: the
+    real ``materialize`` must NOT raise (no crashed connect), it must emit
+    ``dungeon.curate.authored_bind_failed`` (GM-panel lie-detector) + log ERROR,
+    and the region still ships its procedural creatures. Ports the live
+    Reviewer-153-26-HIGH invariant onto the post-Amendment-C main path.
+    """
+    from tests.dungeon.conftest import build_pg_dungeon_repo
+
+    emit_root = tmp_path / "emitted_world_dirs"
+    monkeypatch.setattr(_mat, "_resolve_world_dir", lambda request: emit_root / request.world_slug)
+
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    theme_id = "dangling_crypt_158_12"
+    palette = _commit_palette(theme_id)
+    graph = _seed_graph_themed(theme_id)
+    world = "test_world"
+    pack = _authored_pack_dangling(
+        tmp_path, world_slug=world, region_ids=[f"exp001.r{n}" for n in range(10)]
+    )
+
+    from sidequest.dungeon.materializer import MaterializationRequest
+    from sidequest.dungeon.persistence import FrontierEdge
+
+    fe = FrontierEdge(
+        frontier_edge_id="fe1", from_region_id="entrance", heading="north", spawn_depth_score=15.0
+    )
+    request = MaterializationRequest.build(
+        campaign_seed=7,
+        expansion_id=1,
+        frontier_edge=fe,
+        frontier=[fe],
+        attach_region_ids=["entrance"],
+        heading="north",
+        burst_magnitude=3,
+        lookahead_breadth=2,
+        genre_slug="caverns_and_claudes",
+        world_slug=world,
+    )
+
+    exporter, restore = _install_in_memory_tracer()
+    try:
+        with caplog.at_level(logging.ERROR):
+            # MUST NOT raise — the broken binding is caught and curate proceeds.
+            await _run_materialize(
+                request,
+                graph=graph,
+                bundle=_real_cookbook_bundle(),
+                palette=palette,
+                dungeon_repository=repo,
+                snapshot=_fresh_snapshot(),
+                pack_tropes=_attach_pack("cave_in"),
+                pack=pack,
+            )
+    finally:
+        restore()
+
+    assert _spans_named(exporter, "dungeon.curate.authored_bind_failed"), (
+        "a dangling authored binding caught on the main path must emit "
+        "dungeon.curate.authored_bind_failed so the GM panel SEES the dropped content"
+    )
+    assert any(r.levelno >= logging.ERROR for r in caplog.records), (
+        "the caught binding error must log LOUD at ERROR level"
+    )
+    # The region still ships procedural coal — graceful, not an empty crash.
+    dungeon_map = repo.load_map(entrance_id="entrance")
+    generated = [nid for nid in dungeon_map.nodes if nid != "entrance"]
+    assert generated, "materialize committed no generated regions (the connect crashed?)"
+    surfaced: set[str] = set()
+    for rid in generated:
+        roster, _bb = load_region_population(repo, rid)
+        surfaced.update(c.name for c in roster)
+    assert "Gnaw Swarm" not in surfaced, "the dangling-bound creature must not appear"
+    assert surfaced, "the region must still ship its procedural creatures despite the bad binding"
+
+
+async def test_malformed_authored_room_yaml_stays_loud_but_graceful(
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: str,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Sibling of the dangling-id case (Reviewer-153-26 round-2 HIGH), on the
+    deterministic main path: a MALFORMED ``rooms/<id>.yaml`` (a homebrew YAML typo)
+    must also stay loud-but-GRACEFUL — ``materialize`` must NOT crash, it emits
+    ``dungeon.curate.authored_bind_failed`` + logs ERROR, and ships procedural coal.
+    """
+    from tests.dungeon.conftest import build_pg_dungeon_repo
+
+    emit_root = tmp_path / "emitted_world_dirs"
+    monkeypatch.setattr(_mat, "_resolve_world_dir", lambda request: emit_root / request.world_slug)
+    world = "test_world"
+    rooms_dir = tmp_path / "worlds" / world / "rooms"
+    rooms_dir.mkdir(parents=True, exist_ok=True)
+    for n in range(10):
+        (rooms_dir / f"exp001.r{n}.yaml").write_text(
+            "encounter_creatures: [gnaw_swarm, broken\n",  # unterminated → YAMLError
+            encoding="utf-8",
+        )
+    bestiary = Bestiary(
+        entries=[
+            BestiaryEntry(
+                id="gnaw_swarm", name="Gnaw Swarm", level=1, hp=8, armor_class=12, attack_bonus=1
+            )
+        ]
+    )
+
+    class _MalformedPack:
+        source_dir = tmp_path
+
+        def effective_bestiary(self, w: str | None) -> tuple[Bestiary, str]:
+            return bestiary, (w or "")
+
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    theme_id = "malformed_crypt_158_12"
+    palette = _commit_palette(theme_id)
+    graph = _seed_graph_themed(theme_id)
+
+    from sidequest.dungeon.materializer import MaterializationRequest
+    from sidequest.dungeon.persistence import FrontierEdge
+
+    fe = FrontierEdge(
+        frontier_edge_id="fe1", from_region_id="entrance", heading="north", spawn_depth_score=15.0
+    )
+    request = MaterializationRequest.build(
+        campaign_seed=7,
+        expansion_id=1,
+        frontier_edge=fe,
+        frontier=[fe],
+        attach_region_ids=["entrance"],
+        heading="north",
+        burst_magnitude=3,
+        lookahead_breadth=2,
+        genre_slug="caverns_and_claudes",
+        world_slug=world,
+    )
+
+    exporter, restore = _install_in_memory_tracer()
+    try:
+        with caplog.at_level(logging.ERROR):
+            await _run_materialize(
+                request,
+                graph=graph,
+                bundle=_real_cookbook_bundle(),
+                palette=palette,
+                dungeon_repository=repo,
+                snapshot=_fresh_snapshot(),
+                pack_tropes=_attach_pack("cave_in"),
+                pack=_MalformedPack(),
+            )
+    finally:
+        restore()
+
+    assert _spans_named(exporter, "dungeon.curate.authored_bind_failed"), (
+        "a malformed room YAML caught on the main path must emit "
+        "dungeon.curate.authored_bind_failed (not crash the connect)"
+    )
+    assert any(r.levelno >= logging.ERROR for r in caplog.records), (
+        "the caught YAML error must log LOUD at ERROR level"
+    )
+    assert [nid for nid in repo.load_map(entrance_id="entrance").nodes if nid != "entrance"], (
+        "materialize must still commit generated regions (no crashed connect)"
+    )

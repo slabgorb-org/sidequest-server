@@ -135,7 +135,6 @@ async def test_emit_runs_after_a_clean_materialize_commit(
         _fresh_snapshot,
         _otel_in_memory,
         _real_cookbook_bundle,
-        _reflecting_sdk_client,
         _seed_graph_themed,
     )
 
@@ -162,7 +161,6 @@ async def test_emit_runs_after_a_clean_materialize_commit(
             dungeon_repository=repo,
             snapshot=_fresh_snapshot(),
             pack_tropes=_attach_pack("cave_in"),
-            claude_client=_reflecting_sdk_client(),
         )
     finally:
         _spans_module.tracer = original_tracer_fn  # type: ignore[method-assign]
@@ -195,7 +193,6 @@ async def test_emit_skipped_when_commit_rolls_back(
         _fresh_snapshot,
         _otel_in_memory,
         _real_cookbook_bundle,
-        _reflecting_sdk_client,
         _seed_graph_themed,
     )
 
@@ -228,7 +225,6 @@ async def test_emit_skipped_when_commit_rolls_back(
                 dungeon_repository=repo,
                 snapshot=_fresh_snapshot(),
                 pack_tropes=_attach_pack("cave_in"),
-                claude_client=_reflecting_sdk_client(),
             )
     finally:
         _spans_module.tracer = original_tracer_fn  # type: ignore[method-assign]

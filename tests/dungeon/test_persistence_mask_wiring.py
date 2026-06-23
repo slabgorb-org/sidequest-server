@@ -60,7 +60,6 @@ async def test_materialize_pipeline_writes_mask_blobs_for_generated_regions(
         _fresh_snapshot,
         _otel_in_memory,
         _real_cookbook_bundle,
-        _reflecting_sdk_client,
         _seed_graph_themed,
     )
 
@@ -85,7 +84,6 @@ async def test_materialize_pipeline_writes_mask_blobs_for_generated_regions(
             dungeon_repository=repo,
             snapshot=_fresh_snapshot(),
             pack_tropes=_attach_pack("cave_in"),
-            claude_client=_reflecting_sdk_client(),
         )
     finally:
         _spans_module.tracer = original_tracer_fn  # type: ignore[method-assign]
@@ -156,7 +154,6 @@ async def test_materialize_then_reload_returns_masks_for_generated_regions(
         _fresh_snapshot,
         _otel_in_memory,
         _real_cookbook_bundle,
-        _reflecting_sdk_client,
         _seed_graph_themed,
     )
 
@@ -179,7 +176,6 @@ async def test_materialize_then_reload_returns_masks_for_generated_regions(
             dungeon_repository=repo,
             snapshot=_fresh_snapshot(),
             pack_tropes=_attach_pack("cave_in"),
-            claude_client=_reflecting_sdk_client(),
         )
     finally:
         _spans_module.tracer = original_tracer_fn  # type: ignore[method-assign]

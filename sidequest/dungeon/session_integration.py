@@ -18,7 +18,6 @@ import secrets
 from pathlib import Path
 from typing import Any
 
-from sidequest.agents.llm_factory import build_llm_client
 from sidequest.dungeon.lookahead_worker import (
     LookaheadWorkerHandle,
     register_lookahead_worker,
@@ -150,7 +149,6 @@ async def attach_dungeon_to_session(
 
         bundle = load_cookbook(world_dir)
         palette = load_theme_palette(_theme_pack_root(world_dir))
-        claude_client = build_llm_client(purpose="tool")
 
         # Save-is-truth: reuse a frozen seed; only generate+persist on a
         # genuinely fresh save (a prior failed bootstrap left the seed but
@@ -187,9 +185,9 @@ async def attach_dungeon_to_session(
                 dungeon_repository=dungeon_repository,
                 snapshot=snapshot,
                 pack_tropes=genre_pack,
-                claude_client=claude_client,
-                # Story 153-26: thread the genre pack so a Layer-2 curate degrade
-                # still surfaces a room's authored encounter_creatures binding.
+                # Story 153-26 / ADR-106 Amendment C: thread the genre pack so the
+                # deterministic curate path surfaces a room's authored
+                # encounter_creatures binding (_append_authored_creatures).
                 pack=genre_pack,
             )
             _span.set_attribute("outcome", "bootstrapped")
@@ -225,7 +223,6 @@ async def attach_dungeon_to_session(
             bundle=bundle,
             palette=palette,
             pack_tropes=genre_pack,
-            claude_client=claude_client,
             campaign_seed=campaign_seed,
             # Story 55-1: thread the session slugs so the
             # materializer's post-commit YAML emit can resolve

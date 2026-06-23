@@ -38,8 +38,15 @@ SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL = "monster_manual.authored_backfill"
 # via the bestiary path.
 SPAN_MONSTER_MANUAL_STALE_PURGED = "monster_manual.stale_encounter_purged"
 
+# Story 153-x (ADR-106 region population): emitted when a generated region's
+# frozen procedural roster (Task 3) is injected into snapshot.npcs, region-
+# stamped for region-keyed seating. The GM-panel lie-detector that procedural
+# rooms field real, statted creatures instead of leaving the narrator to improvise.
+SPAN_MONSTER_MANUAL_REGION_POPULATION = "monster_manual.region_population"
+
 FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_INJECTED)
 FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_HP_PRESERVED)
 FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_ROOM_BOUND)
 FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL)
 FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_STALE_PURGED)
+FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_REGION_POPULATION)

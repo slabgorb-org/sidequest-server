@@ -110,9 +110,7 @@ async def _attach(
     monkeypatch: pytest.MonkeyPatch,
 ) -> Any:
     from sidequest.dungeon import session_integration
-    from tests.dungeon.test_materializer import _reflecting_sdk_client
 
-    monkeypatch.setattr(session_integration, "build_llm_client", _reflecting_sdk_client)
     return await session_integration.attach_dungeon_to_session(
         dungeon_repository=repo,
         game_slug=game_slug,

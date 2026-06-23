@@ -77,9 +77,6 @@ async def test_session_lifecycle_registers_worker_and_dungeon_grows(
         SPAN_FRONTIER_REGION_TRANSITION,
     )
     from tests.dungeon.conftest import build_pg_dungeon_repo
-    from tests.dungeon.test_materializer import _reflecting_sdk_client
-
-    monkeypatch.setattr(session_integration, "build_llm_client", _reflecting_sdk_client)
 
     _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
     game_slug = f"lifecycle_{uuid.uuid4().hex[:12]}"

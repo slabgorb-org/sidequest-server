@@ -283,11 +283,63 @@ def _is_region_mode(cart) -> bool:
     return getattr(cart, "navigation_mode", None) == NavigationMode.region
 
 
+def _advance_colocated_peers(
+    snapshot: GameSnapshot,
+    *,
+    acting_pc: str,
+    from_region: str,
+    to_region: str,
+    additional_player_names: list[str] | None,
+    resolved_via: str,
+) -> list[str]:
+    """Story 158-7: move the co-located party as a unit.
+
+    A region advance resolves for ONE acting PC (``§Q5 split-party``), but a
+    co-located party that moved together (a shared/anchored descent) must land
+    on the SAME node — else ``pc_regions`` desyncs across the hop and the split
+    direction is non-deterministic (sq-playtest 2026-06-21 MP repro,
+    ``2026-06-21-beneath_sunden-mp-6c89369d``). For each seated peer in
+    ``additional_player_names`` who was co-located with the acting PC at
+    ``from_region`` — and ONLY those: a genuinely split party stays split
+    (Agency) — advance them to ``to_region`` via the SAME per-PC patch path
+    (which fires ``notify_region_transition`` for the look-ahead worker) and
+    emit that peer's own ``movement.resolved`` span (the per-PC span doctrine:
+    the GM panel sees each PC's move independently). Returns the peers moved.
+    """
+    if not to_region:
+        return []
+    peers = [
+        name
+        for name in (additional_player_names or [])
+        if name != acting_pc and snapshot.pc_regions.get(name) == from_region
+    ]
+    for peer in peers:
+        snapshot.apply_world_patch(WorldStatePatch(pc_region={peer: to_region}))
+        with movement_resolved_span(
+            pc_name=peer,
+            from_region=from_region,
+            to_region=to_region,
+        ) as span:
+            span.set_attribute("resolved_via", resolved_via)
+            span.set_attribute("party_advance", True)
+            span.set_attribute("anchor_pc", acting_pc)
+        logger.debug(
+            "movement.party_advance peer=%s from=%s to=%s anchor=%s via=%s",
+            peer,
+            from_region,
+            to_region,
+            acting_pc,
+            resolved_via,
+        )
+    return peers
+
+
 async def run_movement_dispatch(
     dispatch: SubsystemDispatch,
     *,
     snapshot: GameSnapshot,
     player_name: str,
+    additional_player_names: list[str] | None = None,
     dungeon_store: DungeonStore | None = None,
     palette: ThemePalette | None = None,
     lookahead_handle: LookaheadWorkerHandle | None = None,
@@ -354,6 +406,14 @@ async def run_movement_dispatch(
                     available=[],
                     surface=err.surface,
                 )
+            _advance_colocated_peers(
+                snapshot,
+                acting_pc=player_name,
+                from_region=from_region,
+                to_region=crossing.to_region,
+                additional_player_names=additional_player_names,
+                resolved_via="surface_descent",
+            )
             return SubsystemOutput(
                 data={
                     "to_region": crossing.to_region,
@@ -401,6 +461,14 @@ async def run_movement_dispatch(
                         available=[],
                         surface=err.surface,
                     )
+                _advance_colocated_peers(
+                    snapshot,
+                    acting_pc=player_name,
+                    from_region=from_region,
+                    to_region=crossing.to_region,
+                    additional_player_names=additional_player_names,
+                    resolved_via="surface_descent_adjacent",
+                )
                 return SubsystemOutput(
                     data={
                         "to_region": crossing.to_region,
@@ -453,6 +521,14 @@ async def run_movement_dispatch(
                         available=[],
                         surface=err.surface,
                     )
+                _advance_colocated_peers(
+                    snapshot,
+                    acting_pc=player_name,
+                    from_region=from_region,
+                    to_region=crossing.to_region,
+                    additional_player_names=additional_player_names,
+                    resolved_via="surface_ascent",
+                )
                 return SubsystemOutput(
                     data={
                         "to_region": crossing.to_region,
@@ -512,6 +588,14 @@ async def run_movement_dispatch(
                     from_region,
                     target_id,
                     via,
+                )
+                _advance_colocated_peers(
+                    snapshot,
+                    acting_pc=player_name,
+                    from_region=from_region,
+                    to_region=target_id,
+                    additional_player_names=additional_player_names,
+                    resolved_via=via,
                 )
                 return SubsystemOutput(
                     data={
@@ -639,6 +723,14 @@ async def run_movement_dispatch(
                 available=[],
                 surface=err.surface,
             )
+        _advance_colocated_peers(
+            snapshot,
+            acting_pc=player_name,
+            from_region=from_region,
+            to_region=crossing.to_region,
+            additional_player_names=additional_player_names,
+            resolved_via="surface_descent",
+        )
         return SubsystemOutput(
             data={
                 "to_region": crossing.to_region,
@@ -797,6 +889,14 @@ async def run_movement_dispatch(
         resolved_via,
         chosen.kind,
         target_pre_materialized,
+    )
+    _advance_colocated_peers(
+        snapshot,
+        acting_pc=player_name,
+        from_region=from_region,
+        to_region=target_id,
+        additional_player_names=additional_player_names,
+        resolved_via=resolved_via,
     )
     return SubsystemOutput(
         data={

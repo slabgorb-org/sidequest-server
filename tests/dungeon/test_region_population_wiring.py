@@ -12,9 +12,9 @@ works in isolation; that is not enough. This file proves the FULL chain:
     → snap.npcs contains at least one Npc with .region == region_id
       and .threat_level is not None
 
-Non-circular: the test drives REAL materialize() + REAL inject(); the ONLY
-mocked seam is the claude -p curation subprocess (``_reflecting_sdk_client``),
-the established wiring-test rule for this materializer harness.  ``sd`` carries
+Non-circular: the test drives REAL materialize() + REAL inject() with NO
+mocked seam — ADR-106 Amendment C made curate deterministic (no LLM), so
+materialization runs end-to-end as pure seeded compute.  ``sd`` carries
 the same ``dungeon_repository`` that materialize() wrote to, so
 ``load_region_population`` reads the rows Task 3 actually committed.
 
@@ -61,7 +61,6 @@ async def test_region_population_end_to_end_inject(
         _make_request_task3,
         _otel_in_memory,
         _real_cookbook_bundle,
-        _reflecting_sdk_client,
         _seed_graph_themed,
     )
 
@@ -90,7 +89,6 @@ async def test_region_population_end_to_end_inject(
             dungeon_repository=repo,
             snapshot=GameSnapshot(genre_slug="caverns_and_claudes", world_slug="beneath_sunden"),
             pack_tropes=_attach_pack("cave_in"),
-            claude_client=_reflecting_sdk_client(),
         )
     finally:
         _spans_module.tracer = original_tracer_fn  # type: ignore[method-assign]

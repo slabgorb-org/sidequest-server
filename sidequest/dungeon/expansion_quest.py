@@ -117,3 +117,69 @@ def _empty_manifest() -> RegionContentManifest:
         special_rooms=[],
         big_bad=None,
     )
+
+
+import hashlib  # noqa: E402
+
+from sidequest.dungeon.persistence import ComplicationThread
+from sidequest.telemetry.spans.dungeon_quest import quest_bound_span
+
+
+def _expansion_quest_thread_id(campaign_seed: int, expansion_id: int) -> str:
+    h = hashlib.blake2b(
+        f"{campaign_seed}:{expansion_id}:expansion_quest".encode(), digest_size=8
+    )
+    return f"q.exp{expansion_id}.{h.hexdigest()}"
+
+
+def seed_expansion_quest(
+    *,
+    campaign_seed: int,
+    expansion: Expansion,
+    manifests_by_region: dict[str, RegionContentManifest],
+    template: ExpansionQuestTemplate,
+    store,
+    started_at_depth_score: float,
+) -> str:
+    """Open one expansion-scoped ComplicationThread in the ledger.
+
+    Calls ``select_signature`` to pick the quest's signature beat, then
+    writes a single ``ComplicationThread(kind="quest")`` to ``store`` via
+    ``DungeonStore.open_thread``.  Emits ``quest_bound_span`` so the GM
+    panel can verify the quest engine engaged rather than the narrator
+    improvising quest outcomes.
+
+    Returns the thread_id (deterministic: same campaign_seed + expansion_id
+    always yields the same id regardless of store state).
+    """
+    b = select_signature(
+        expansion=expansion,
+        manifests_by_region=manifests_by_region,
+        template=template,
+    )
+    thread_id = _expansion_quest_thread_id(campaign_seed, expansion.expansion_id)
+    with quest_bound_span(
+        expansion_id=expansion.expansion_id,
+        signature_kind=b.kind,
+        ref_id=b.ref_id,
+        degraded=b.degraded,
+    ):
+        store.open_thread(
+            ComplicationThread(
+                thread_id=thread_id,
+                origin_region_id=b.anchor_region,
+                kind="quest",
+                status="open",
+                started_at_depth_score=started_at_depth_score,
+                payload={
+                    "scope": "expansion",
+                    "expansion_id": expansion.expansion_id,
+                    "signature_kind": b.kind,
+                    "ref_id": b.ref_id,
+                    "anchor_region": b.anchor_region,
+                    "title": b.title,
+                    "objective": b.objective,
+                },
+            )
+        )
+    return thread_id

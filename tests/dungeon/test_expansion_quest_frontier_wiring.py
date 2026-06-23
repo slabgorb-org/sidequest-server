@@ -11,8 +11,6 @@ Imports are at the top; no mid-file noqa: E402.
 
 import sqlite3
 
-import pytest
-
 from sidequest.dungeon import frontier_hook
 from sidequest.dungeon.expansion_quest import make_expansion_quest_observer
 from sidequest.dungeon.frontier_hook import (
@@ -22,7 +20,6 @@ from sidequest.dungeon.frontier_hook import (
 )
 from sidequest.dungeon.persistence import ComplicationThread, DungeonStore
 from sidequest.game.session import GameSnapshot
-
 
 # ---------------------------------------------------------------------------
 # Helpers

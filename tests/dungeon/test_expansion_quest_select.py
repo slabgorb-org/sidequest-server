@@ -1,7 +1,7 @@
+from sidequest.dungeon.expansion_quest import select_signature
 from sidequest.dungeon.region_graph.model import Expansion, RegionNode
 from sidequest.dungeon.themes import ExpansionQuestTemplate
 from sidequest.game.cookbook.models import RegionContentManifest
-from sidequest.dungeon.expansion_quest import select_signature
 
 
 def _node(rid, depth, theme="bone_crypt"):

@@ -1,14 +1,18 @@
 """Task 4: seed_expansion_quest — opens an expansion-scoped ledger thread."""
 import sqlite3
+
+from sidequest.dungeon.expansion_quest import seed_expansion_quest
 from sidequest.dungeon.persistence import DungeonStore
 from sidequest.dungeon.region_graph.model import Expansion, RegionNode
 from sidequest.dungeon.themes import ExpansionQuestTemplate
-from sidequest.dungeon.expansion_quest import seed_expansion_quest
 
 
 def _store():
-    conn = sqlite3.connect(":memory:"); conn.row_factory = sqlite3.Row
-    s = DungeonStore(conn); s.ensure_schema(); return conn, s
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    s = DungeonStore(conn)
+    s.ensure_schema()
+    return conn, s
 
 
 def _exp():
@@ -35,7 +39,8 @@ def test_seed_opens_one_expansion_quest_thread():
 
 
 def test_seed_is_deterministic_thread_id():
-    conn1, s1 = _store(); conn2, s2 = _store()
+    conn1, s1 = _store()
+    conn2, s2 = _store()
     tpl = ExpansionQuestTemplate(signature="reach_deep", title="t", objective="o")
     a = seed_expansion_quest(campaign_seed=77, expansion=_exp(), manifests_by_region={}, template=tpl, store=s1, started_at_depth_score=40.0)
     b = seed_expansion_quest(campaign_seed=77, expansion=_exp(), manifests_by_region={}, template=tpl, store=s2, started_at_depth_score=40.0)

@@ -22,7 +22,6 @@ from typing import Any
 
 import sidequest.telemetry.spans as _spans_module
 
-
 # ---------------------------------------------------------------------------
 # Shared fixture helpers (inlined; CLAUDE.md: do not reach across test
 # modules into underscore-prefixed helpers)

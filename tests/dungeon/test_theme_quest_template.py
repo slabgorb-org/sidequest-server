@@ -1,6 +1,7 @@
 # tests/dungeon/test_theme_quest_template.py
 import pytest
 from pydantic import ValidationError
+
 from sidequest.dungeon.themes import DungeonTheme
 
 _BASE = {

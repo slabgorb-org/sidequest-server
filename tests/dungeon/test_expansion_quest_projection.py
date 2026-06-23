@@ -3,8 +3,8 @@ into snapshot.quest_log as namespaced QuestEntry rows (dungeon:expN)."""
 
 import sqlite3
 
-from sidequest.dungeon.persistence import ComplicationThread, DungeonStore
 from sidequest.dungeon.expansion_quest import reconcile_dungeon_quests_into_log
+from sidequest.dungeon.persistence import ComplicationThread, DungeonStore
 from sidequest.game.session import GameSnapshot, QuestEntry
 
 

@@ -6,8 +6,11 @@ from sidequest.game.session import GameSnapshot, QuestEntry
 
 
 def _store():
-    conn = sqlite3.connect(":memory:"); conn.row_factory = sqlite3.Row
-    s = DungeonStore(conn); s.ensure_schema(); return conn, s
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    s = DungeonStore(conn)
+    s.ensure_schema()
+    return conn, s
 
 
 def _seed_thread(store, exp_id, sig, ref, region):
@@ -18,7 +21,9 @@ def _seed_thread(store, exp_id, sig, ref, region):
 
 
 def test_reach_deep_resolves_on_arrival():
-    conn, store = _store(); _seed_thread(store, 1, "reach_deep", "exp001.r3", "exp001.r3"); conn.commit()
+    conn, store = _store()
+    _seed_thread(store, 1, "reach_deep", "exp001.r3", "exp001.r3")
+    conn.commit()
     snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug="beneath_sunden")
     snap.quest_log["dungeon:exp1"] = QuestEntry(title="t", objective="o", status="active", anchor_id="exp001.r3")
     n = resolve_expansion_quests(snapshot=snap, store=store, reached_region_ids={"exp001.r3"},
@@ -30,7 +35,9 @@ def test_reach_deep_resolves_on_arrival():
 
 
 def test_resolves_thread_even_when_quest_log_entry_absent():
-    conn, store = _store(); _seed_thread(store, 1, "reach_deep", "exp001.r3", "exp001.r3"); conn.commit()
+    conn, store = _store()
+    _seed_thread(store, 1, "reach_deep", "exp001.r3", "exp001.r3")
+    conn.commit()
     snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug="beneath_sunden")
     # quest_log deliberately NOT pre-populated
     n = resolve_expansion_quests(snapshot=snap, store=store, reached_region_ids={"exp001.r3"},
@@ -41,7 +48,9 @@ def test_resolves_thread_even_when_quest_log_entry_absent():
 
 
 def test_unfired_beat_does_not_resolve():
-    conn, store = _store(); _seed_thread(store, 1, "reach_deep", "exp001.r3", "exp001.r3"); conn.commit()
+    conn, store = _store()
+    _seed_thread(store, 1, "reach_deep", "exp001.r3", "exp001.r3")
+    conn.commit()
     snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug="beneath_sunden")
     snap.quest_log["dungeon:exp1"] = QuestEntry(title="t", objective="o", status="active", anchor_id="exp001.r3")
     n = resolve_expansion_quests(snapshot=snap, store=store, reached_region_ids=set(),

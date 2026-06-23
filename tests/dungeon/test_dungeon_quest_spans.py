@@ -6,8 +6,12 @@ test_persistence.py.
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
 from sidequest.telemetry.spans.dungeon_quest import (
-    quest_bound_span, quest_resolved_span, SPAN_QUEST_BOUND, SPAN_QUEST_RESOLVED,
+    SPAN_QUEST_BOUND,
+    SPAN_QUEST_RESOLVED,
+    quest_bound_span,
+    quest_resolved_span,
 )
 
 

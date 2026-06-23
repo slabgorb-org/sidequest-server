@@ -147,6 +147,8 @@ from opentelemetry import trace as _otel_trace
 from sidequest.agents.claude_client import LlmClientError
 from sidequest.agents.model_routing import CallType, resolve_model
 from sidequest.agents.tooling_protocol import CacheableBlock, Message
+from sidequest.dungeon.expansion_quest import _deepest as _expansion_deepest
+from sidequest.dungeon.expansion_quest import seed_expansion_quest
 from sidequest.dungeon.interiors import generate_interior
 from sidequest.dungeon.interiors.grid import WALL, Grid
 from sidequest.dungeon.persistence import FrontierEdge, PersistError
@@ -161,7 +163,6 @@ from sidequest.dungeon.region_graph import (
     attach_expansion,
     generate_expansion,
 )
-from sidequest.dungeon.expansion_quest import _deepest as _expansion_deepest, seed_expansion_quest
 from sidequest.dungeon.setpiece_attach import AttachReport, attach_set_piece
 from sidequest.dungeon.themes import ThemePalette
 from sidequest.game.cookbook.assemble import assemble_region
@@ -1809,7 +1810,7 @@ def _stage_attach(
             )
     except (ValueError, KeyError, PersistError) as exc:
         span.set_attribute("error", str(exc))
-        span.set_attribute("reason", f"attach_set_piece: {exc}")
+        span.set_attribute("reason", f"attach_stage: {exc}")
         raise
 
     return AttachResult(

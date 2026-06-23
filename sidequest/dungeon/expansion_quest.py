@@ -4,17 +4,26 @@ Deterministic — no LLM (Amendment C)."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
-
 import hashlib
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Protocol
 
-from sidequest.dungeon.persistence import ComplicationThread, DungeonStore
+from sidequest.dungeon.persistence import ComplicationThread
 from sidequest.dungeon.region_graph.model import Expansion, RegionNode
 from sidequest.dungeon.themes import ExpansionQuestTemplate
 from sidequest.game.cookbook.models import RegionContentManifest
 from sidequest.game.session import GameSnapshot, QuestEntry
 from sidequest.telemetry.spans.dungeon_quest import quest_bound_span, quest_resolved_span
+
+
+class ThreadLedger(Protocol):
+    """Minimal ledger surface the expansion-quest functions need — satisfied by
+    both DungeonStore (sqlite, in-tests) and PgDungeonRepository (production)."""
+
+    def open_thread(self, thread: ComplicationThread) -> None: ...
+    def open_threads(self) -> list[ComplicationThread]: ...
+    def resolve_thread(self, thread_id: str) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -138,7 +147,7 @@ def seed_expansion_quest(
     expansion: Expansion,
     manifests_by_region: dict[str, RegionContentManifest],
     template: ExpansionQuestTemplate,
-    store: DungeonStore,
+    store: ThreadLedger,
     started_at_depth_score: float,
 ) -> str:
     """Open one expansion-scoped ComplicationThread in the ledger.
@@ -195,7 +204,7 @@ _DUNGEON_QUEST_PREFIX = "dungeon:exp"
 def reconcile_dungeon_quests_into_log(
     *,
     snapshot: GameSnapshot,
-    store: DungeonStore,
+    store: ThreadLedger,
     reached_expansion_ids: set[int],
 ) -> int:
     """Write/update namespaced QuestEntry rows (id ``dungeon:expN``) into
@@ -262,7 +271,7 @@ def _beat_fired(
 def resolve_expansion_quests(
     *,
     snapshot: GameSnapshot,
-    store: DungeonStore,
+    store: ThreadLedger,
     reached_region_ids: set[str],
     resolved_trope_ids: list[str],
     defeated_npc_names: set[str],
@@ -323,7 +332,7 @@ def _expansion_id_of(region_id: str) -> int | None:
         return None
 
 
-def make_expansion_quest_observer(store: DungeonStore) -> _FrontierObserver:
+def make_expansion_quest_observer(store: ThreadLedger) -> _FrontierObserver:
     """Return a frontier observer that, on each region transition:
 
     1. Computes the expansion id from ``to_region`` (None for non-exp regions).

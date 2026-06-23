@@ -15,6 +15,7 @@ apply to.
 from __future__ import annotations
 
 import secrets
+from collections.abc import Callable as _Callable
 from pathlib import Path
 from typing import Any
 
@@ -64,7 +65,6 @@ _SEED_BITS = 63
 # Each entry is (LookaheadWorkerHandle, expansion_quest_observer) so
 # detach_dungeon_from_session can unregister BOTH in one lookup, even though
 # it receives only the handle (the observer has no own lifecycle handle).
-from collections.abc import Callable as _Callable
 
 _ATTACHED_SAVES: dict[str, tuple[LookaheadWorkerHandle, _Callable[..., None]]] = {}
 

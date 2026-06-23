@@ -134,6 +134,7 @@ from sidequest.telemetry.spans import (
     npc_observation_gate_order_violation_span,
     npc_pc_name_skipped_span,
     npc_person_reconciled_span,
+    npc_place_skipped_span,
     npc_referenced_span,
     npc_spawn_disposition_span,
     quest_update_span,
@@ -2559,6 +2560,27 @@ def _apply_npc_mentions(
                     "npc.pc_name_skipped name=%r matched_pc=%r turn=%d",
                     mention.name,
                     matched_pc,
+                    turn_num,
+                )
+            continue
+
+        # Story 158-4 (sq-playtest 2026-06-22, beneath_sunden place-name leak): a
+        # narrator place-name is not an NPC. A bare proper-noun PLACE
+        # ("Torchdeep"/"Torchhold") is structurally indistinguishable from a
+        # person name, so the producer (post-narration extractor) flags it
+        # ``is_place``. DECLINE it before any store is touched — no Step-1 match,
+        # no Step-2/3 mint — so it never lands in ``snapshot.npcs``/``npc_pool``
+        # as a phantom (disp=0, creature_id=None). Emit the lie-detector span so
+        # the GM panel sees the engine refused the roster entry.
+        if mention.is_place:
+            with npc_place_skipped_span(
+                npc_name=mention.name,
+                turn_number=turn_num,
+            ):
+                logger.info(
+                    "npc.place_skipped name=%r turn=%d — place mention, not an NPC "
+                    "(declined the roster mint)",
+                    mention.name,
                     turn_num,
                 )
             continue

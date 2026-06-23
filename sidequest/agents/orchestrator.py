@@ -421,6 +421,16 @@ class NpcMention:
     # trapping the player. Defaults False (No Silent Fallbacks — absence is never
     # read as departure).
     disengaged: bool = False
+    # Story 158-4 (sq-playtest 2026-06-22, beneath_sunden place-name leak): the
+    # narrator/extractor marks a mention whose proper noun names a LOCATION/place
+    # ("Torchdeep", "Torchhold" — dwarfhold locations) rather than a person or
+    # creature. A bare place name is structurally indistinguishable from a person
+    # name, so the reconcile cannot tell them apart from the string alone — this
+    # flag IS the discriminator (twin of ``is_creature``). When True,
+    # ``_apply_npc_mentions`` DECLINES the mint entirely (no roster/pool entry)
+    # and emits ``npc.place_skipped``. Defaults False (No Silent Fallbacks —
+    # absence is never read as place; every existing mention stays a person).
+    is_place: bool = False
 
     @classmethod
     def from_value(cls, value: Any) -> NpcMention:
@@ -449,6 +459,7 @@ class NpcMention:
                 is_new=bool(value.get("is_new", False)),
                 is_creature=bool(value.get("is_creature", False)),
                 disengaged=bool(value.get("disengaged", False)),
+                is_place=bool(value.get("is_place", False)),
             )
         return cls(name=str(value), side="neutral")
 

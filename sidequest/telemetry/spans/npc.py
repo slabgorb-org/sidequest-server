@@ -386,6 +386,25 @@ SPAN_ROUTES[SPAN_NPC_EPITHET_PRESERVED] = SpanRoute(
     },
 )
 
+# Story 158-4 (sq-playtest 2026-06-22 beneath_sunden place-name leak): emitted
+# when a mention flagged ``is_place`` is DECLINED at the reconcile — a proper
+# noun that names a LOCATION ("Torchdeep"/"Torchhold") is not an NPC, so the
+# engine drops it instead of minting a phantom roster entry (disp=0,
+# creature_id=None). The GM-panel lie detector proving the place guard fired;
+# the place tier twin of ``npc.creature_preserved`` / ``npc.epithet_preserved``
+# — except here the mint is REFUSED, not preserved (a place earns no roster row).
+SPAN_NPC_PLACE_SKIPPED = "npc.place_skipped"
+SPAN_ROUTES[SPAN_NPC_PLACE_SKIPPED] = SpanRoute(
+    event_type="state_transition",
+    component="npc_registry",
+    extract=lambda span: {
+        "field": "npc_pool",
+        "op": "place_skipped",
+        "name": (span.attributes or {}).get("npc_name", ""),
+        "turn_number": (span.attributes or {}).get("turn_number", 0),
+    },
+)
+
 # sq-playtest 2026-06-07 (five_points-2 epithet phantom): emitted when an
 # epithet-shaped person mention coreferences an EXISTING person identity —
 # >=2 shared meaningful tokens against a roster ``Npc`` or pool member's
@@ -730,6 +749,34 @@ def npc_epithet_preserved_span(
     }
     with Span.open(
         SPAN_NPC_EPITHET_PRESERVED,
+        attributes,
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def npc_place_skipped_span(
+    *,
+    npc_name: str,
+    turn_number: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Story 158-4 (sq-playtest 2026-06-22, beneath_sunden place-name leak):
+    emitted when a mention flagged ``is_place`` is DECLINED at the reconcile —
+    a proper noun that names a LOCATION ("Torchdeep"/"Torchhold") is not an NPC,
+    so the engine drops it instead of minting a phantom roster entry. ``npc_name``
+    is the skipped place name. The GM-panel lie detector proving the place guard
+    fired; place-tier twin of ``npc.creature_preserved`` / ``npc.epithet_preserved``
+    (here the mint is REFUSED, not preserved)."""
+    attributes: dict[str, Any] = {
+        "npc_name": npc_name,
+        "turn_number": turn_number,
+        **attrs,
+    }
+    with Span.open(
+        SPAN_NPC_PLACE_SKIPPED,
         attributes,
         tracer_override=_tracer,
     ) as span:

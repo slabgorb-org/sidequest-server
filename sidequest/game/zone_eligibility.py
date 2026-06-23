@@ -100,7 +100,9 @@ def _faction_for_region(cartography: CartographyConfig | None, region_id: str | 
     return region.controlled_by
 
 
-def active_factions(snapshot: GameSnapshot, pack: Any, *, perspective: str | None = None) -> set[str]:
+def active_factions(
+    snapshot: GameSnapshot, pack: Any, *, perspective: str | None = None
+) -> set[str]:
     """The party's currently-active faction set (split-party safe; never raises).
 
     - ``perspective`` given (per-perspective seams: creature/NPC injection) →

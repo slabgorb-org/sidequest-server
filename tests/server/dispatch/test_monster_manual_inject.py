@@ -21,6 +21,7 @@ from sidequest.game.monster_manual import EntryState, ManualEncounter, ManualNpc
 from sidequest.game.session import GameSnapshot
 from sidequest.game.turn import TurnManager
 from sidequest.server.dispatch import monster_manual_inject
+from sidequest.server.dispatch import region_population as _rp
 from sidequest.server.dispatch.pregen import EncounterSeedError
 
 
@@ -1081,8 +1082,6 @@ async def test_execute_narration_turn_refreshes_stale_monster_manual(
 # seats on (ADR-116).
 # ---------------------------------------------------------------------------
 
-from sidequest.server.dispatch import region_population as _rp
-
 
 def _sd_with_manual_and_repo() -> _FakeSessionData:
     """A _FakeSessionData seeded with a MonsterManual (for combat_encounters
@@ -1112,15 +1111,25 @@ def test_inject_region_population_stamps_region(monkeypatch: pytest.MonkeyPatch)
     def _fake_load(repo: object, region_id: str) -> tuple[list[_rp.RegionCreature], None]:
         assert region_id == "exp002.r3"
         return (
-            [_rp.RegionCreature(name="Gnaw-Swarm", creature_type="swarm",
-                                telegraph="chittering", hp=6, threat_level=1)],
+            [
+                _rp.RegionCreature(
+                    name="Gnaw-Swarm",
+                    creature_type="swarm",
+                    telegraph="chittering",
+                    hp=6,
+                    threat_level=1,
+                )
+            ],
             None,
         )
 
     monkeypatch.setattr(_rp, "load_region_population", _fake_load)
     monster_manual_inject.inject(
-        sd, snap, current_location="The Winding Catacomb",
-        in_combat=False, room_id="exp002.r3",
+        sd,
+        snap,
+        current_location="The Winding Catacomb",
+        in_combat=False,
+        room_id="exp002.r3",
     )
     gnaw = next((n for n in snap.npcs if n.core.name == "Gnaw-Swarm"), None)
     assert gnaw is not None, "Gnaw-Swarm must be materialized from the region population"
@@ -1152,11 +1161,15 @@ def test_inject_region_population_emits_span(
         ),
     )
     monster_manual_inject.inject(
-        sd, snap, current_location="The Winding Catacomb",
-        in_combat=False, room_id="exp002.r3",
+        sd,
+        snap,
+        current_location="The Winding Catacomb",
+        in_combat=False,
+        room_id="exp002.r3",
     )
     fired = [
-        s for s in otel_capture.get_finished_spans()
+        s
+        for s in otel_capture.get_finished_spans()
         if s.name == SPAN_MONSTER_MANUAL_REGION_POPULATION
     ]
     assert len(fired) == 1, (
@@ -1183,12 +1196,13 @@ def test_inject_region_population_ooc_cap(monkeypatch: pytest.MonkeyPatch) -> No
     ]
     big_bad = _rp.RegionCreature("Boss", "boss", "ominous", 20, 3)
 
-    monkeypatch.setattr(
-        _rp, "load_region_population", lambda repo, rid: (roster, big_bad)
-    )
+    monkeypatch.setattr(_rp, "load_region_population", lambda repo, rid: (roster, big_bad))
     monster_manual_inject.inject(
-        sd, snap, current_location="The Catacomb",
-        in_combat=False, room_id="exp002.r3",
+        sd,
+        snap,
+        current_location="The Catacomb",
+        in_combat=False,
+        room_id="exp002.r3",
     )
     region_npcs = [n for n in snap.npcs if getattr(n, "region", None) == "exp002.r3"]
     region_names = [n.core.name for n in region_npcs]
@@ -1211,12 +1225,13 @@ def test_inject_region_population_in_combat_uncapped(monkeypatch: pytest.MonkeyP
     full_count = _OUT_OF_COMBAT_ENCOUNTER_LIMIT + 3
     roster = [_rp.RegionCreature(f"Mob{i}", "mob", "g", 4, 1) for i in range(full_count)]
 
-    monkeypatch.setattr(
-        _rp, "load_region_population", lambda repo, rid: (roster, None)
-    )
+    monkeypatch.setattr(_rp, "load_region_population", lambda repo, rid: (roster, None))
     monster_manual_inject.inject(
-        sd, snap, current_location="The Catacomb",
-        in_combat=True, room_id="exp002.r3",
+        sd,
+        snap,
+        current_location="The Catacomb",
+        in_combat=True,
+        room_id="exp002.r3",
     )
     region_npcs = [n for n in snap.npcs if getattr(n, "region", None) == "exp002.r3"]
     mob_names = [n.core.name for n in region_npcs if n.core.name.startswith("Mob")]
@@ -1287,8 +1302,11 @@ def test_inject_region_population_authored_name_wins_dedup(
     )
 
     monster_manual_inject.inject(
-        sd, snap, current_location="The Winding Catacomb",
-        in_combat=True, room_id="exp002.r3",
+        sd,
+        snap,
+        current_location="The Winding Catacomb",
+        in_combat=True,
+        room_id="exp002.r3",
     )
 
     gnaw_npcs = [n for n in snap.npcs if n.core.name == "Gnaw-Swarm"]

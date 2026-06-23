@@ -207,7 +207,9 @@ def test_contest_resolves_through_the_fate_action_4df_path():
     )
 
     res = dispatch_fate_action(
-        payload=FateActionPayload(request_id="r1", action="overcome", skill="Rapport", difficulty=0),
+        payload=FateActionPayload(
+            request_id="r1", action="overcome", skill="Rapport", difficulty=0
+        ),
         actor_name="Lady Ash",
         encounter=enc,
         ruleset=get_ruleset_module("fate"),

@@ -374,9 +374,7 @@ SPAN_ROUTES[SPAN_ENCOUNTER_ROSTER_RESOLUTION_SKIPPED] = SpanRoute(
         "field": "encounter.roster_resolution_skipped",
         "router_name": (span.attributes or {}).get("router_name", ""),
         "declined_name": (span.attributes or {}).get("declined_name", ""),
-        "confrontation_category": (span.attributes or {}).get(
-            "confrontation_category", ""
-        ),
+        "confrontation_category": (span.attributes or {}).get("confrontation_category", ""),
     },
 )
 

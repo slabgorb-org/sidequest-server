@@ -509,9 +509,7 @@ def _creature_patch_from_bestiary_entry(entry: Any, *, location: str | None) -> 
     )
 
 
-def _creature_patch_from_region_creature(
-    rc: Any, *, location: str | None, region: str
-) -> NpcPatch:
+def _creature_patch_from_region_creature(rc: Any, *, location: str | None, region: str) -> NpcPatch:
     """Translate one frozen ``RegionCreature`` (Task 4) into a region-stamped
     creature patch. ``region`` is the engine-owned key co-location seats on
     (ADR-116); ``location`` is the free-text scene for narrator/UI display."""

@@ -391,9 +391,7 @@ async def test_dogfight_no_opponent_rejects_loud(otel_capture) -> None:
     assert not _spans_named(otel_capture, SPAN_DOGFIGHT_DISPATCH), (
         "a rejected dogfight must NOT also fire the accepted dogfight.dispatch span"
     )
-    assert snap.encounter is None, (
-        "a rejected dogfight must not seat a phantom encounter"
-    )
+    assert snap.encounter is None, "a rejected dogfight must not seat a phantom encounter"
 
 
 # ---------------------------------------------------------------------------

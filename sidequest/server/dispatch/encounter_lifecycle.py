@@ -475,7 +475,9 @@ def _seed_combat_hp_depletion_to_npcs(
         if not _has_authored_reprisal_source(cdef, opponent_core):
             resolvable = _opponent_reprisal_damage_resolvable(cdef, opponent_core, ruleset)
             unarmed_floor = (
-                ruleset.SRD_UNARMED_DICE if isinstance(ruleset, WithoutNumberRulesetModule) else None
+                ruleset.SRD_UNARMED_DICE
+                if isinstance(ruleset, WithoutNumberRulesetModule)
+                else None
             )
             # ``ruleset`` (always) + WN-only ``unarmed_floor`` discriminate
             # "floor resolved" from a genuine toothless flag; ``reprisal_resolvable``
@@ -2042,7 +2044,9 @@ def instantiate_encounter_from_trigger(
                 # 'dial' default) so the seater can consult the WN SRD unarmed
                 # floor at seat time and stamp the discriminating span fields.
                 ruleset_slug = (
-                    pack.rules.ruleset if pack and pack.rules else _raise_missing_ruleset("hp_depletion_seating")
+                    pack.rules.ruleset
+                    if pack and pack.rules
+                    else _raise_missing_ruleset("hp_depletion_seating")
                 )
                 _seed_combat_hp_depletion_to_npcs(
                     snapshot=snapshot,

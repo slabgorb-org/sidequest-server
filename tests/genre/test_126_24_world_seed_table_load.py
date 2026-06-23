@@ -111,9 +111,7 @@ def test_loader_populates_world_chargen_seed_table_as_fate_hint_seed(
     assert "The Case That Never Closed" in seed.aspects
 
 
-def test_loader_absent_world_seed_table_is_empty(
-    minimal_pack_factory: Any, tmp_path: Path
-) -> None:
+def test_loader_absent_world_seed_table_is_empty(minimal_pack_factory: Any, tmp_path: Path) -> None:
     """No worlds/<slug>/chargen_seed_table.yaml → ``World.chargen_seed_table == {}``.
     Absence is an authored choice (most worlds ship no override), never an error and
     never a default (No Silent Fallbacks)."""

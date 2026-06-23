@@ -87,9 +87,7 @@ def test_classes_yaml_loads_entries(tmp_path: Path) -> None:
         "  prime_requisite: STR\n"
         "  minimum_score: 9\n"
         "  kit_table: warrior_kit\n"
-        "  encounter_beat_choices: []\n"
-        + saves_block
-        + "- id: expert\n"
+        "  encounter_beat_choices: []\n" + saves_block + "- id: expert\n"
         "  display_name: Expert\n"
         "  rpg_role: skirmisher\n"
         "  jungian_default: explorer\n"

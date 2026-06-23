@@ -52,8 +52,7 @@ def test_contest_confrontation_is_contest_mode(ctype: str):
     cdef = find_confrontation_def(_pack().rules.confrontations, ctype)
     assert cdef is not None, f"tea_and_murder must define a {ctype} confrontation"
     assert cdef.resolution_mode == ResolutionMode.contest, (
-        f"{ctype} must be a Fate Contest (resolution_mode=contest); got "
-        f"{cdef.resolution_mode}"
+        f"{ctype} must be a Fate Contest (resolution_mode=contest); got {cdef.resolution_mode}"
     )
 
 

@@ -5,6 +5,7 @@ band — ordinal of the band in affinities.cr_bands, clamped to [1, 4].
 Big-bad gets region tier + 1 (capped at 4). ADR-114: no raw cr on
 CuratedCreature.
 """
+
 from pathlib import Path
 
 import pytest

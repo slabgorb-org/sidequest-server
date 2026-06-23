@@ -85,9 +85,7 @@ def test_loadout_torch_is_found_by_relight_matcher():
     item_dict = _item_dict_from_catalog(torch)
     assert item_dict["quantity"] >= 1, "loadout torch must ship at least one charge"
 
-    core = CreatureCore(
-        name="Delver", description="d", personality="p", inventory=Inventory()
-    )
+    core = CreatureCore(name="Delver", description="d", personality="p", inventory=Inventory())
     core.inventory.items.append(item_dict)
 
     found = _find_torch(core)

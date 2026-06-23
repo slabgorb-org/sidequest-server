@@ -563,12 +563,10 @@ def test_anchor_recipient_sees_full_pronoun_agreement(
     assert queues["p_katia"].qsize() == 1, "Katia must receive her own card"
     katia_text = queues["p_katia"].get_nowait().payload["text"]
     assert "You press your palm" in katia_text, (
-        f"anchor must see full pronoun agreement through the emit path; "
-        f"got: {katia_text!r}"
+        f"anchor must see full pronoun agreement through the emit path; got: {katia_text!r}"
     )
     assert "her palm" not in katia_text, (
-        f"possessive pronoun must agree (her->your) on the anchor's tab; "
-        f"got: {katia_text!r}"
+        f"possessive pronoun must agree (her->your) on the anchor's tab; got: {katia_text!r}"
     )
     assert "Katia" not in katia_text
 

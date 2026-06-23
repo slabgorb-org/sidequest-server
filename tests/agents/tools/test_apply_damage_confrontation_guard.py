@@ -1,5 +1,5 @@
-"""RED tests for Story 158-3 — block narrator apply-path opponent-HP writes
-when no confrontation is seated (the "no-encounter case").
+"""Tests for Story 158-3 — block narrator apply-path opponent-HP writes
+when no live confrontation is seated (no-encounter and resolved-husk cases).
 
 Finding (sq-playtest 2026-06-22, beneath_sunden): during a no-encounter
 narrative beat the narrator narrated damage to an enemy that exists only in
@@ -101,10 +101,11 @@ def _build_snapshot(
     )
 
 
-def _combat_encounter(*, player: str, opponent: str) -> StructuredEncounter:
-    """A minimal seated combat confrontation with one PC and one opponent NPC.
+def _combat_encounter(*, player: str, opponent: str, resolved: bool = False) -> StructuredEncounter:
+    """A seated combat confrontation with one PC and one opponent NPC.
 
-    The guard only inspects ``snapshot.encounter is not None``; the metrics are
+    The guard inspects ``snapshot.encounter`` for both presence and
+    ``resolved`` (a resolved husk is not a live confrontation); the metrics are
     inert placeholders kept valid for the model.
     """
     return StructuredEncounter(
@@ -117,6 +118,7 @@ def _combat_encounter(*, player: str, opponent: str) -> StructuredEncounter:
             EncounterActor(name=player, role="combatant", side="player"),
             EncounterActor(name=opponent, role="combatant", side="opponent"),
         ],
+        resolved=resolved,
     )
 
 
@@ -192,6 +194,28 @@ async def test_npc_damage_rejected_without_confrontation() -> None:
     assert _hp(store, "Goblin") == 8
 
 
+async def test_npc_damage_rejected_when_encounter_resolved() -> None:
+    """A resolved encounter is a husk, not a live confrontation (ADR-139). It
+    lingers between resolution and the next-turn reap (and is deliberately
+    preserved on the dice-replay re-entry), so an NPC write against it must be
+    rejected the same as no encounter — distinguished by guard_reason."""
+    enc = _combat_encounter(player="Alice", opponent="Goblin", resolved=True)
+    snap = _build_snapshot(
+        characters=[_character("Alice")],
+        npcs=[_npc("Goblin", hp_current=8)],
+        encounter=enc,
+    )
+    store = _store_with(snap)
+    ctx = _make_ctx(store)
+
+    r = await _call({"target": "Goblin", "amount": 5}, ctx)
+
+    assert r.status is ToolResultStatus.ERROR_RECOVERABLE
+    assert r.message is not None
+    assert "confrontation" in r.message.lower() or "encounter" in r.message.lower()
+    assert _hp(store, "Goblin") == 8
+
+
 # --------------------------------------------------------------------------
 # Boundary: player-state environmental damage stays legal (out of scope to block)
 # --------------------------------------------------------------------------
@@ -257,7 +281,12 @@ async def test_rejected_npc_write_emits_warning_span(otel_capture) -> None:
         ToolUseBlock(
             id="t-reject",
             name="apply_damage",
-            arguments={"target": "Goblin", "amount": 5},
+            arguments={
+                "target": "Goblin",
+                "amount": 5,
+                "damage_type": "slashing",
+                "source": "prose swing",
+            },
         ),
         ctx,
     )
@@ -266,12 +295,47 @@ async def test_rejected_npc_write_emits_warning_span(otel_capture) -> None:
     attrs = _latest_damage_span(otel_capture)
     assert attrs.get("tool.damage.guard_rejected") is True
     assert attrs.get("tool.damage.guard_reason") == "no_confrontation_seated"
-    # The attempted write spec is recorded so the GM panel sees what was blocked.
+    # The FULL attempted write spec is recorded so the GM panel's blocked-write
+    # view is as complete as the accepted-write view (symmetric observability).
     assert attrs.get("tool.damage.target") == "Goblin"
     assert attrs.get("tool.damage.amount") == 5
+    assert attrs.get("tool.damage.damage_type") == "slashing"
+    assert attrs.get("tool.damage.source") == "prose swing"
     # Warning-level signal in this codebase's idiom: an error result status.
     assert attrs.get("tool.result_status") == "error_recoverable"
     # And nothing was written.
+    assert _hp(store, "Goblin") == 8
+
+
+async def test_resolved_husk_reject_span_uses_distinct_reason(otel_capture) -> None:
+    """The resolved-husk rejection fires a warning span the GM panel can tell
+    apart from the no-encounter case via guard_reason='confrontation_resolved',
+    while still carrying the full attempted write spec."""
+    enc = _combat_encounter(player="Alice", opponent="Goblin", resolved=True)
+    snap = _build_snapshot(
+        characters=[_character("Alice")],
+        npcs=[_npc("Goblin", hp_current=8)],
+        encounter=enc,
+    )
+    store = _store_with(snap)
+    ctx = _make_ctx(store)
+
+    out = await default_registry.dispatch(
+        ToolUseBlock(
+            id="t-husk",
+            name="apply_damage",
+            arguments={"target": "Goblin", "amount": 5, "damage_type": "fire"},
+        ),
+        ctx,
+    )
+    assert out.is_error is True
+
+    attrs = _latest_damage_span(otel_capture)
+    assert attrs.get("tool.damage.guard_rejected") is True
+    assert attrs.get("tool.damage.guard_reason") == "confrontation_resolved"
+    assert attrs.get("tool.damage.target") == "Goblin"
+    assert attrs.get("tool.damage.damage_type") == "fire"
+    assert attrs.get("tool.result_status") == "error_recoverable"
     assert _hp(store, "Goblin") == 8
 
 

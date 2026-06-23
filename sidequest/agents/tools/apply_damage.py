@@ -22,12 +22,14 @@ The OTEL span is emitted via the Phase B Registry dispatcher
 per-tool ``tool.damage.*`` attributes the GM panel reads.
 
 Story 158-3 (sq-playtest 2026-06-22) adds a confrontation guard: damage to a
-non-player creature is rejected when no confrontation is seated
-(``snapshot.encounter is None``), because opponent HP is undefined outside a
-confrontation (ADR-116). Player characters are exempt — they are the
-legitimate target of the freeform/environmental path even with no encounter.
-Every decision sets ``tool.damage.guard_rejected`` (and ``guard_reason`` on a
-block) so the GM panel can see blocked vs. accepted writes.
+non-player creature is rejected when no LIVE confrontation is seated — either
+``snapshot.encounter is None`` (``guard_reason="no_confrontation_seated"``) or
+the encounter is a resolved husk (``guard_reason="confrontation_resolved"``) —
+because opponent HP is undefined outside a confrontation (ADR-116/-139). Player
+characters are exempt — they are the legitimate target of the
+freeform/environmental path even with no encounter. Every decision sets
+``tool.damage.guard_rejected`` (and ``guard_reason`` + the full attempted write
+spec on a block) so the GM panel can see blocked vs. accepted writes.
 
 Sequential-per-session execution is provided by the Registry's
 ``_write_locks`` map — WRITE handlers don't need their own locking.
@@ -85,22 +87,30 @@ async def apply_damage(args: ApplyDamageArgs, ctx: ToolContext) -> ToolResult:
     if core is None:
         return ToolResult.not_found(f"unknown target: {args.target!r}")
 
-    # Story 158-3: opponent HP is only defined inside a seated confrontation
-    # (ADR-116 "A Confrontation Requires an Other"). The narrator's freeform
-    # path may damage a player character at any time — environmental hazards
-    # (a trap, a fall) are the documented use — but damaging a non-player
-    # creature with NO confrontation seated is an unbacked opponent-HP write:
-    # there is no Other to take the hit. Reject it loudly and emit a warning
-    # span so the GM panel (the lie detector) sees the blocked write rather
+    # Story 158-3: opponent HP is only defined inside a LIVE seated confrontation
+    # (ADR-116 "A Confrontation Requires an Other"; ADR-139 confrontation
+    # integrity). The narrator's freeform path may damage a player character at
+    # any time — environmental hazards (a trap, a fall) are the documented use —
+    # but damaging a non-player creature with no live confrontation is an
+    # unbacked opponent-HP write: there is no live Other to take the hit. A
+    # *resolved* encounter is not live — it lingers as a husk between resolution
+    # and the next-turn reap, and is deliberately preserved on the dice-replay
+    # re-entry, so it must be treated the same as no encounter (the phantom-wound
+    # vector). Reject it loudly and emit a warning span so the GM panel (the lie
+    # detector) sees the blocked write with its full attempted write spec rather
     # than a silently-applied, mechanically-backless HP change.
     target_is_player = any(ch.core.name == args.target for ch in snapshot.characters)
-    if not target_is_player and snapshot.encounter is None:
+    encounter = snapshot.encounter
+    if not target_is_player and (encounter is None or encounter.resolved):
+        reason = "no_confrontation_seated" if encounter is None else "confrontation_resolved"
         ctx.otel_span.set_attribute("tool.damage.target", args.target)
         ctx.otel_span.set_attribute("tool.damage.amount", args.amount)
+        ctx.otel_span.set_attribute("tool.damage.damage_type", args.damage_type)
+        ctx.otel_span.set_attribute("tool.damage.source", args.source)
         ctx.otel_span.set_attribute("tool.damage.guard_rejected", True)
-        ctx.otel_span.set_attribute("tool.damage.guard_reason", "no_confrontation_seated")
+        ctx.otel_span.set_attribute("tool.damage.guard_reason", reason)
         return ToolResult.error(
-            f"cannot damage {args.target!r}: no confrontation is seated — opponent HP is "
+            f"cannot damage {args.target!r}: no live confrontation is seated — opponent HP is "
             "undefined outside a confrontation (ADR-116). Seat the encounter first.",
             recoverable=True,
         )

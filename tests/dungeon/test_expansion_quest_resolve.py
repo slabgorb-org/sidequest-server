@@ -1,7 +1,8 @@
 import sqlite3
-from sidequest.dungeon.persistence import DungeonStore, ComplicationThread
-from sidequest.game.session import GameSnapshot, QuestEntry
+
 from sidequest.dungeon.expansion_quest import resolve_expansion_quests
+from sidequest.dungeon.persistence import ComplicationThread, DungeonStore
+from sidequest.game.session import GameSnapshot, QuestEntry
 
 
 def _store():
@@ -48,3 +49,34 @@ def test_unfired_beat_does_not_resolve():
     assert n == 0
     assert snap.quest_log["dungeon:exp1"].status == "active"
     assert len(store.open_threads()) == 1
+
+
+def test_set_piece_resolves_on_trope_resolution():
+    """A set_piece-signature quest completes when its ref_id trope resolves.
+
+    RED: resolve_expansion_quests is not yet called from the trope handshake
+    site, so this drives the function directly to confirm the signature path works.
+    GREEN: wiring in websocket_session_handler.py invokes it alongside
+    resolve_complications_for_resolved_tropes.
+    """
+    conn, store = _store()
+    _seed_thread(store, 2, "set_piece", "the_keeper_wakes", "exp002.r0")
+    conn.commit()
+    snap = GameSnapshot(genre_slug="caverns_and_claudes", world_slug="beneath_sunden")
+    snap.quest_log["dungeon:exp2"] = QuestEntry(
+        title="Wake the Keeper", objective="Trigger the keeper set-piece.", status="active",
+        anchor_id="exp002.r0",
+    )
+    n = resolve_expansion_quests(
+        snapshot=snap,
+        store=store,
+        reached_region_ids=set(),
+        resolved_trope_ids=["the_keeper_wakes"],
+        defeated_npc_names=set(),
+    )
+    conn.commit()
+    assert n == 1, f"expected 1 quest resolved, got {n}"
+    assert snap.quest_log["dungeon:exp2"].status == "completed", (
+        "quest log entry not flipped to 'completed' after set_piece trope resolved"
+    )
+    assert store.open_threads() == [], "ledger thread still open after set_piece resolution"

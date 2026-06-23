@@ -42,6 +42,10 @@ def load_region_population(
     or a non-procedural world) — an absent binding, not a silent fallback."""
     roster: list[RegionCreature] = []
     big_bad: RegionCreature | None = None
+    # Last-write-wins by design: ``_stage_commit`` writes one region_population
+    # row per region (each region is materialized once), so a second row only
+    # appears on a re-materialize — in which case the newest freeze is correct.
+    # Do NOT add an early break: it would change this resolution semantics.
     for m in dungeon_repository.load_mutations():
         if m.kind != "region_population" or m.region_id != region_id:
             continue

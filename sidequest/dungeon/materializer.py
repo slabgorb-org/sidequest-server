@@ -161,6 +161,7 @@ from sidequest.dungeon.region_graph import (
     attach_expansion,
     generate_expansion,
 )
+from sidequest.dungeon.expansion_quest import _deepest as _expansion_deepest, seed_expansion_quest
 from sidequest.dungeon.setpiece_attach import AttachReport, attach_set_piece
 from sidequest.dungeon.themes import ThemePalette
 from sidequest.game.cookbook.assemble import assemble_region
@@ -1776,6 +1777,36 @@ def _stage_attach(
                 )
                 threads_already_lit += report.threads_written
                 attach_reports.append(report)
+
+        # Task 7: seed the per-expansion quest thread from the deepest
+        # region's theme (consistent with select_signature's _deepest —
+        # the deepest region anchors the quest signature beat).
+        # Guard: a no-op when the theme has no quest_template (not every
+        # theme authors a quest; absence is valid, not an error).
+        deepest_node = _expansion_deepest(expansion)
+        if deepest_node.theme not in palette.themes:
+            raise ValueError(
+                f"deepest region {deepest_node.id!r} references theme "
+                f"{deepest_node.theme!r} which is absent from the palette "
+                f"(have: {sorted(palette.themes)}). No silent default theme."
+            )
+        deepest_theme = palette.themes[deepest_node.theme]
+        if deepest_theme.quest_template is not None:
+            deepest_depth_score = graph.nodes[deepest_node.id].depth_score
+            if deepest_depth_score is None:
+                raise ValueError(
+                    f"deepest region {deepest_node.id!r} has no depth_score "
+                    f"after assign_depth_scores — cannot seed expansion quest "
+                    f"(No Silent Fallbacks)"
+                )
+            seed_expansion_quest(
+                campaign_seed=request.campaign_seed,
+                expansion=expansion,
+                manifests_by_region=curation.region_manifests,
+                template=deepest_theme.quest_template,
+                store=tx,
+                started_at_depth_score=deepest_depth_score,
+            )
     except (ValueError, KeyError, PersistError) as exc:
         span.set_attribute("error", str(exc))
         span.set_attribute("reason", f"attach_set_piece: {exc}")

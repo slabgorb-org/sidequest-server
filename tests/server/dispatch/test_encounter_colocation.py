@@ -132,3 +132,90 @@ def test_confrontation_colocation_span_emitted_with_scene_mode(otel_capture):
     )
     assert "encounter_type" in attrs, "span must carry encounter_type"
     assert "opponent_count" in attrs, "span must carry opponent_count"
+
+
+def test_region_mode_seating_integration(otel_capture):
+    """Region-stamped creature seats a confrontation via region co-location only.
+
+    End-to-end path: pc_regions is set → region_for returns a region id →
+    _npc_fallback_at_location calls _co_located with that region → the creature's
+    matching npc.region passes the gate even though last_seen_location does NOT
+    match the PC's character_locations entry.
+
+    This is the keystone integration test for Task 6 / ADR-116 region-keyed
+    seating: proves that region (not scene) seated the creature.
+    """
+    from sidequest.game.session import GameSnapshot
+    from sidequest.game.turn import TurnManager
+    from sidequest.genre.loader import load_genre_pack
+    from tests._helpers.trigger_encounter import trigger_encounter
+
+    _FIXTURE_PACK = Path(__file__).resolve().parents[2] / "fixtures" / "packs" / "test_genre"
+    pack = load_genre_pack(_FIXTURE_PACK)
+
+    _REGION = "exp002.r3"
+    _PC_SCENE = "Dungeon Corridor"
+    # The creature's last_seen_location is deliberately different from _PC_SCENE
+    # so that ONLY the region match (not scene match) can seat it.
+    _CREATURE_STALE_SCENE = "Under the Rope Bridge"
+
+    snap = GameSnapshot(
+        genre_slug="test_pack",
+        world_slug="test_world",
+        turn_manager=TurnManager(interaction=3),
+    )
+    # PC has a known scene location AND a region stamp.
+    snap.character_locations["Hero"] = _PC_SCENE
+    snap.pc_regions["Hero"] = _REGION
+
+    # Region-stamped hostile creature whose last_seen_location does NOT match the
+    # PC's scene — this creature can ONLY be seated via region co-location, not
+    # via the free-text scene fallback (_co_located short-circuits on npc.region
+    # when both pc_region and npc.region are set, ignoring scene_match entirely).
+    region_creature = Npc(
+        core=CreatureCore(
+            name="Gnaw-Swarm",
+            description="A mass of biting insects.",
+            personality="aggressive",
+            level=1,
+            xp=0,
+            hp=HpPool(current=6, max=6, base_max=6),
+        ),
+        npc_role_id="hostile",
+        last_seen_location=_CREATURE_STALE_SCENE,
+        last_seen_turn=1,
+    )
+    region_creature.region = _REGION
+    snap.npcs.append(region_creature)
+
+    # Must not raise NoOpponentAvailableError — the region match seats the creature.
+    trigger_encounter(snap, pack, "combat", "Hero", npcs_present=[])
+
+    # The confrontation was instantiated and the creature is a seated opponent.
+    enc = snap.encounter
+    assert enc is not None, (
+        "the confrontation was not instantiated — region-stamped creature was not "
+        "seated as the opponent despite matching pc_region"
+    )
+    opponent_names = {a.name for a in enc.actors if a.side == "opponent"}
+    assert "Gnaw-Swarm" in opponent_names, (
+        "Gnaw-Swarm must be seated as the opponent (region co-location matched); "
+        f"got opponent_names={opponent_names!r}, actors={[(a.name, a.side) for a in enc.actors]!r}"
+    )
+
+    # The colocation span must record match_mode="region" (PC has a region).
+    colocation_spans = [
+        s for s in otel_capture.get_finished_spans() if s.name == "confrontation.colocation"
+    ]
+    assert colocation_spans, (
+        "confrontation.colocation span never fired; "
+        f"all spans: {[s.name for s in otel_capture.get_finished_spans()]!r}"
+    )
+    attrs = dict(colocation_spans[0].attributes or {})
+    assert attrs.get("match_mode") == "region", (
+        "when the PC has a region (pc_regions set), match_mode must be 'region'; "
+        f"got {attrs.get('match_mode')!r}"
+    )
+    assert attrs.get("pc_region") == _REGION, (
+        f"span must carry the PC's region id; got {attrs.get('pc_region')!r}"
+    )

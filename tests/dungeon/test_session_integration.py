@@ -105,9 +105,6 @@ async def test_attach_seeds_and_registers_then_detach_unregisters(
 ) -> None:
     from sidequest.dungeon import session_integration
     from tests.dungeon.conftest import build_pg_dungeon_repo
-    from tests.dungeon.test_materializer import _reflecting_sdk_client
-
-    monkeypatch.setattr(session_integration, "build_llm_client", _reflecting_sdk_client)
 
     _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
     game_slug = f"attach_{uuid.uuid4().hex[:12]}"
@@ -139,9 +136,7 @@ async def test_attach_is_idempotent_reuses_persisted_seed(
 ) -> None:
     from sidequest.dungeon import session_integration
     from tests.dungeon.conftest import build_pg_dungeon_repo
-    from tests.dungeon.test_materializer import _reflecting_sdk_client
 
-    monkeypatch.setattr(session_integration, "build_llm_client", _reflecting_sdk_client)
     _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
     game_slug = f"idempotent_{uuid.uuid4().hex[:12]}"
 
@@ -181,9 +176,7 @@ async def test_concurrent_attach_same_save_is_idempotent_then_reattaches_after_d
     (sequential reopen is unaffected)."""
     from sidequest.dungeon import session_integration
     from tests.dungeon.conftest import build_pg_dungeon_repo
-    from tests.dungeon.test_materializer import _reflecting_sdk_client
 
-    monkeypatch.setattr(session_integration, "build_llm_client", _reflecting_sdk_client)
     _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
     game_slug = f"concurrent_{uuid.uuid4().hex[:12]}"
 

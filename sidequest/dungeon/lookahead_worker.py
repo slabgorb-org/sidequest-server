@@ -37,7 +37,7 @@ finishes (success OR failure) so a later genuine re-approach can retry.
 Dependency injection
 --------------------
 ``register_lookahead_worker`` closes over an EXPLICIT session context
-(persistence/bundle/palette/pack_tropes/claude_client/campaign_seed/
+(persistence/bundle/palette/pack_tropes/campaign_seed/
 lookahead_breadth) — the snapshot delivered by the producer carries none
 of these, so they are passed in, never magically sourced (No Silent
 Fallbacks). It returns a :class:`LookaheadWorkerHandle` so the session
@@ -137,7 +137,6 @@ class LookaheadWorkerHandle:
     bundle: Any
     palette: Any
     pack_tropes: Any
-    claude_client: Any
     campaign_seed: int
     lookahead_breadth: int = 1
     # Story 55-1 / ADR-109: the session genre + world the materializer's
@@ -378,9 +377,8 @@ class LookaheadWorkerHandle:
                 dungeon_repository=self.persistence,
                 snapshot=snapshot,
                 pack_tropes=self.pack_tropes,
-                claude_client=self.claude_client,
-                # Story 153-26: thread the genre pack so a Layer-2 curate degrade
-                # of a frontier region still surfaces its authored
+                # Story 153-26 / ADR-106 Amendment C: thread the genre pack so the
+                # deterministic curate path surfaces a frontier region's authored
                 # encounter_creatures binding (resolve_room_creatures).
                 pack=self.pack_tropes,
             )
@@ -407,7 +405,6 @@ def register_lookahead_worker(
     bundle: Any,
     palette: Any,
     pack_tropes: Any,
-    claude_client: Any,
     campaign_seed: int,
     lookahead_breadth: int = 1,
     genre_slug: str = "",
@@ -432,7 +429,6 @@ def register_lookahead_worker(
         bundle=bundle,
         palette=palette,
         pack_tropes=pack_tropes,
-        claude_client=claude_client,
         campaign_seed=campaign_seed,
         lookahead_breadth=lookahead_breadth,
         genre_slug=genre_slug,

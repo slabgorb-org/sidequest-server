@@ -15,9 +15,15 @@ apply to.
 from __future__ import annotations
 
 import secrets
+from collections.abc import Callable as _Callable
 from pathlib import Path
 from typing import Any
 
+from sidequest.dungeon.expansion_quest import make_expansion_quest_observer
+from sidequest.dungeon.frontier_hook import (
+    register_frontier_observer,
+    unregister_frontier_observer,
+)
 from sidequest.dungeon.lookahead_worker import (
     LookaheadWorkerHandle,
     register_lookahead_worker,
@@ -54,7 +60,12 @@ _SEED_BITS = 63
 # attach for an already-attached save is a contract violation, not a silent
 # upsert (No Silent Fallbacks). The real playgroup runs ONE shared session
 # per save (submit-and-wait); sequential reopen clears the key in detach.
-_ATTACHED_SAVES: dict[str, LookaheadWorkerHandle] = {}
+#
+# Each entry is (LookaheadWorkerHandle, expansion_quest_observer) so
+# detach_dungeon_from_session can unregister BOTH in one lookup, even though
+# it receives only the handle (the observer has no own lifecycle handle).
+
+_ATTACHED_SAVES: dict[str, tuple[LookaheadWorkerHandle, _Callable[..., None]]] = {}
 
 
 def _save_key(game_slug: str) -> str:
@@ -133,7 +144,7 @@ async def attach_dungeon_to_session(
             # the shared worker drains for the rest. Acceptable for the
             # submit-and-wait playgroup; refcounted teardown is the
             # proper fix and is tracked in the pingpong.
-            existing = _ATTACHED_SAVES[save_key]
+            existing_handle, _existing_observer = _ATTACHED_SAVES[save_key]
             _span.set_attribute("outcome", "already_attached")
             _span.set_attribute(
                 "reason",
@@ -145,7 +156,7 @@ async def attach_dungeon_to_session(
                 "regions",
                 len(dungeon_repository.load_map(entrance_id=ENTRANCE_ID).nodes),
             )
-            return existing
+            return existing_handle
 
         bundle = load_cookbook(world_dir)
         palette = load_theme_palette(_theme_pack_root(world_dir))
@@ -230,10 +241,17 @@ async def attach_dungeon_to_session(
             genre_slug=genre_slug,
             world_slug=world_slug,
         )
+        # Register the expansion-quest frontier observer for this session,
+        # bound to the live dungeon_repository (which satisfies the
+        # open_threads/resolve_thread surface used by expansion_quest.py).
+        # Registered AFTER the lookahead worker so both observe the same
+        # transitions; mirrored unregister is in detach_dungeon_from_session.
+        eq_observer = make_expansion_quest_observer(dungeon_repository)
+        register_frontier_observer(eq_observer)
         # Claim the save AFTER a successful register: a bootstrap/register
         # failure must leave no key behind (a later retry must be able to
         # attach). save-is-truth.
-        _ATTACHED_SAVES[save_key] = handle
+        _ATTACHED_SAVES[save_key] = (handle, eq_observer)
         return handle
 
 
@@ -250,8 +268,10 @@ async def detach_dungeon_from_session(
     # registry holds exactly one entry per live save; detach takes only the
     # handle, and LookaheadWorkerHandle is untouchable per the hard
     # constraint, so we cannot stash the key on it).
-    for key, claimed in list(_ATTACHED_SAVES.items()):
+    for key, (claimed, eq_observer) in list(_ATTACHED_SAVES.items()):
         if claimed is handle:
             del _ATTACHED_SAVES[key]
+            unregister_frontier_observer(eq_observer)
+            break
     handle.unregister()
     await handle.drain()

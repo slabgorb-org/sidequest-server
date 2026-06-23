@@ -119,7 +119,8 @@ async def test_attach_seeds_and_registers_then_detach_unregisters(
         world_dir=_beneath_sunden_world_dir(),
     )
     assert handle is not None
-    assert frontier_hook.registered_observer_count() == 1
+    # Two observers: lookahead worker + expansion-quest observer (Task 8).
+    assert frontier_hook.registered_observer_count() == 2
 
     assert repo.get_campaign_seed() is not None
     nodes = repo.load_map(entrance_id="entrance").nodes
@@ -191,20 +192,23 @@ async def test_concurrent_attach_same_save_is_idempotent_then_reattaches_after_d
     )
     h1 = await session_integration.attach_dungeon_to_session(**kw)
     assert h1 is not None
-    assert frontier_hook.registered_observer_count() == 1
+    # Two observers: lookahead worker + expansion-quest observer (Task 8).
+    assert frontier_hook.registered_observer_count() == 2
 
     h_re = await session_integration.attach_dungeon_to_session(**dict(kw, snapshot=_snapshot()))
     assert h_re is h1, (
         "idempotent re-attach must return the SAME live handle so "
         "additional MP sockets share the one registered worker"
     )
-    assert frontier_hook.registered_observer_count() == 1
+    # Idempotent re-attach: no second pair registered (count stays at 2).
+    assert frontier_hook.registered_observer_count() == 2
 
     await session_integration.detach_dungeon_from_session(h1)
     assert frontier_hook.registered_observer_count() == 0
 
     h2 = await session_integration.attach_dungeon_to_session(**dict(kw, snapshot=_snapshot()))
     assert h2 is not None
-    assert frontier_hook.registered_observer_count() == 1
+    # Fresh attach after detach: two observers again.
+    assert frontier_hook.registered_observer_count() == 2
     await session_integration.detach_dungeon_from_session(h2)
     assert frontier_hook.registered_observer_count() == 0

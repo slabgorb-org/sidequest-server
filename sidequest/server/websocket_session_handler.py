@@ -1557,6 +1557,17 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                             resolved_trope_ids=_resolved_this_turn,
                             store=_dungeon_store,
                         )
+                        from sidequest.dungeon.expansion_quest import (  # noqa: PLC0415
+                            resolve_expansion_quests,
+                        )
+
+                        resolve_expansion_quests(
+                            snapshot=snapshot,
+                            store=_dungeon_store,
+                            reached_region_ids=set(),
+                            resolved_trope_ids=_resolved_this_turn,
+                            defeated_npc_names=set(),
+                        )
 
                     now_encounter = snapshot.encounter
                     now_live = now_encounter is not None and not now_encounter.resolved

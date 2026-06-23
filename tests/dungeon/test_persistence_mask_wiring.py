@@ -25,6 +25,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from sidequest.telemetry.spans.dungeon_materialize import SPAN_DUNGEON_MATERIALIZE_TACTICAL
+
 
 async def test_materialize_pipeline_writes_mask_blobs_for_generated_regions(
     monkeypatch: Any,
@@ -73,7 +75,7 @@ async def test_materialize_pipeline_writes_mask_blobs_for_generated_regions(
     bundle = _real_cookbook_bundle()
     request = MaterializationRequest_build(campaign_seed=7, expansion_id=1, spawn_depth_score=0.0)
 
-    _exporter, _provider, real_tracer = _otel_in_memory()
+    exporter, _provider, real_tracer = _otel_in_memory()
     original_tracer_fn = _spans_module.tracer
     _spans_module.tracer = lambda: real_tracer  # type: ignore[method-assign]
     try:
@@ -131,6 +133,30 @@ async def test_materialize_pipeline_writes_mask_blobs_for_generated_regions(
         assert isinstance(decoded, dict), (
             f"mask BLOB for {r[0]!r} is not a JSON object: {decoded!r}"
         )
+        # Tactical block must be present in every generated region's mask dict.
+        # A miss here means _stage_commit → _stage_tactical wiring did not run:
+        # the tactical block was derived but never merged into the mask dict
+        # before commit_expansion wrote the BLOB.
+        assert "tactical" in decoded, (
+            f"mask BLOB for {r[0]!r} has no 'tactical' key — "
+            "the _stage_commit → _stage_tactical wiring did not run. "
+            "Check that _tactical_into_mask_dicts is called on expansion_masks "
+            "before tx.commit_expansion in _stage_commit."
+        )
+        from sidequest.dungeon.tactical import RegionTactical
+        RegionTactical.from_dict(decoded["tactical"])  # must parse without error
+
+    # OTEL span proof: _stage_commit must have emitted the tactical point-event
+    # span (SPAN_DUNGEON_MATERIALIZE_TACTICAL = "dungeon.materialize.tactical").
+    # A missing span means the _stage_tactical → _tactical_into_mask_dicts
+    # → span-emit wiring inside _stage_commit did not execute.
+    finished_spans = exporter.get_finished_spans()
+    tactical_spans = [s for s in finished_spans if s.name == SPAN_DUNGEON_MATERIALIZE_TACTICAL]
+    assert tactical_spans, (
+        f"no '{SPAN_DUNGEON_MATERIALIZE_TACTICAL}' span in finished spans — "
+        "the _stage_commit → _stage_tactical OTEL wiring did not run. "
+        f"Finished span names: {[s.name for s in finished_spans]!r}"
+    )
 
 
 async def test_materialize_then_reload_returns_masks_for_generated_regions(

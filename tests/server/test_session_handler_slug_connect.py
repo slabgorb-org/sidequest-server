@@ -10,6 +10,7 @@ Verifies that SESSION_EVENT{connect} with a game_slug field:
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 
 import pytest
@@ -260,6 +261,69 @@ async def test_slug_connect_rewrites_font_urls_to_cdn(
     )
     assert "url('/genre/assets/fonts/" not in css and "url(/genre/assets/fonts/" not in css, (
         "raw /genre/ font mount survived the rewrite"
+    )
+
+
+@pytest.mark.asyncio
+async def test_slug_connect_warns_loudly_when_theme_css_absent(
+    seeded_game: Path, monkeypatch: pytest.MonkeyPatch, caplog
+):
+    """Story 158-9: a connect that resolves NO client_theme.css must fail
+    LOUDLY (No-Silent-Fallbacks), not silently emit nothing and leave the UI to
+    collapse ``--accent`` to the near-invisible dark default.
+
+    Every live genre pack ships a genre-level client_theme.css, so a "none"
+    theme source on connect signals a real misconfig (the 2026-06-21
+    beneath_sunden playtest finding). We force that state by nulling the loaded
+    pack's (and its worlds') ``client_theme_css``, then assert:
+      - NO theme_css SESSION_EVENT is emitted (we're on the absent branch), and
+      - a WARNING ``session.theme_css_absent`` log line surfaces the gap
+        server-side immediately, instead of waiting on the UI's 8s loud-fail
+        banner.
+    """
+    from sidequest.genre.loader import GenreLoader
+
+    real_load = GenreLoader.load
+
+    def _load_without_theme(self, slug, *args, **kwargs):  # noqa: ANN001, ANN202
+        pack = real_load(self, slug, *args, **kwargs)
+        pack.client_theme_css = None
+        for world in pack.worlds.values():
+            world.client_theme_css = None
+        return pack
+
+    monkeypatch.setattr(GenreLoader, "load", _load_without_theme)
+
+    handler = _make_handler(seeded_game, [_CONTENT_SEARCH_PATH])
+    msg = SessionEventMessage(
+        type="SESSION_EVENT",
+        player_id="alice",
+        payload=SessionEventPayload(event="connect", game_slug=_SLUG),
+    )
+    with caplog.at_level(logging.WARNING, logger="sidequest.handlers.connect"):
+        outbound = await handler.handle_message(msg)
+
+    # Absent branch: no theme_css event at all.
+    theme_msgs = [
+        m
+        for m in outbound
+        if getattr(m, "type", None) == "SESSION_EVENT"
+        and getattr(getattr(m, "payload", None), "event", None) == "theme_css"
+    ]
+    assert not theme_msgs, (
+        "theme_css must NOT be emitted when no client_theme.css resolves — "
+        f"got {len(theme_msgs)} theme event(s)"
+    )
+
+    # Loud guard: a WARNING log line names the gap so it surfaces server-side.
+    absent_records = [r for r in caplog.records if "session.theme_css_absent" in r.getMessage()]
+    assert absent_records, (
+        "expected a loud session.theme_css_absent WARNING when the genre theme "
+        "is missing — No-Silent-Fallbacks. Got: "
+        f"{[r.getMessage()[:60] for r in caplog.records]}"
+    )
+    assert absent_records[0].levelno == logging.WARNING, (
+        "theme_css_absent must be logged at WARNING (loud), not below"
     )
 
 

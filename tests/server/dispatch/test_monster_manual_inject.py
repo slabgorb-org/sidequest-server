@@ -533,19 +533,22 @@ def test_inject_span_reports_placement_match_count(otel_capture) -> None:
     assert attrs.get("available_placed_dropped") == 0
 
 
-def test_inject_span_reports_placed_dropped_by_cap(otel_capture) -> None:
-    """M5: when more placed NPCs are eligible than the inject slice surfaces, the
-    span reports the dropped count so eligible-vs-matched isn't a silent gap.
+def test_inject_surfaces_all_placed_npcs_above_cap(otel_capture) -> None:
+    """Story 158-11: placed NPCs are the location's intended authored cast and
+    every one surfaces — ``_AVAILABLE_NPC_INJECT_LIMIT`` bounds only unplaced
+    walk-ons. A roster larger than the cap (the oz road's 4 companions /
+    beneath_sunden's 4-NPC Ropefoot camp) no longer drops its tail member: all
+    surface and the span reports ``available_placed_dropped == 0``.
 
-    Previously the span carried ``available_placed_eligible`` (uncapped) next to
-    ``available_placed_matched`` (capped) with no way to tell a cap-drop from a
-    placement miss — the oz road's 4 road companions surfaced 3 and silently
-    dropped 1. ``available_placed_dropped`` makes that bound visible.
+    Supersedes the earlier ``..._reports_placed_dropped_by_cap`` test, which
+    pinned the buggy behavior (4 eligible, 3 matched, 1 dropped) that this story
+    removes; the ``available_placed_dropped`` attribute stays as a regression
+    tripwire that must read 0.
     """
     from sidequest.server.dispatch.monster_manual_inject import _AVAILABLE_NPC_INJECT_LIMIT
     from sidequest.telemetry.spans import SPAN_MONSTER_MANUAL_INJECTED
 
-    n_placed = _AVAILABLE_NPC_INJECT_LIMIT + 1  # one more than the slice surfaces
+    n_placed = _AVAILABLE_NPC_INJECT_LIMIT + 1  # one more than the legacy slice surfaced
     sd = _FakeSessionData()
     sd.monster_manual = _manual_with(
         npcs=[
@@ -557,12 +560,64 @@ def test_inject_span_reports_placed_dropped_by_cap(otel_capture) -> None:
         sd, snap, current_location="The Yellow Brick Road — Morning", in_combat=False
     )
 
+    # Every placed NPC materialized into the snapshot (none guillotined by the cap).
+    surfaced = [n.core.name for n in snap.npcs if n.core.name.startswith("Companion")]
+    assert len(surfaced) == n_placed
+
     fired = [s for s in otel_capture.get_finished_spans() if s.name == SPAN_MONSTER_MANUAL_INJECTED]
     assert len(fired) == 1
     attrs = dict(fired[0].attributes or {})
     assert attrs.get("available_placed_eligible") == n_placed
-    assert attrs.get("available_placed_matched") == _AVAILABLE_NPC_INJECT_LIMIT
-    assert attrs.get("available_placed_dropped") == n_placed - _AVAILABLE_NPC_INJECT_LIMIT
+    assert attrs.get("available_placed_matched") == n_placed
+    assert attrs.get("available_placed_dropped") == 0
+
+
+def test_inject_unplaced_walkons_still_capped_with_no_placed(otel_capture) -> None:
+    """The cap still bounds *unplaced* walk-ons when no placed NPCs compete —
+    story 158-11 lifts the cap only for placed authored cast, not for generic
+    everywhere-eligible walk-ons (which would re-flood a calm scene)."""
+    from sidequest.server.dispatch.monster_manual_inject import _AVAILABLE_NPC_INJECT_LIMIT
+
+    n_unplaced = _AVAILABLE_NPC_INJECT_LIMIT + 2
+    sd = _FakeSessionData()
+    sd.monster_manual = _manual_with(npcs=[_human(f"Walkon{i}") for i in range(n_unplaced)])
+    snap = _snapshot()
+    monster_manual_inject.inject(sd, snap, current_location="The Dome", in_combat=False)
+    assert len(snap.npcs) == _AVAILABLE_NPC_INJECT_LIMIT
+
+
+def test_inject_full_camp_roster_all_seed_authored() -> None:
+    """Story 158-11 regression (beneath_sunden Ropefoot): a 4-NPC authored camp
+    roster, all anchored to the same location, must ALL materialize with
+    ``manual_origin=True`` and a non-None location — not 3-authored-and-1-default.
+
+    Measured ground truth (save session 16097): Brecca/Ondre/Salla seeded
+    ``manual_origin=True`` + ``location='Ropefoot — The Kept Fire'`` while Harmund
+    Fuel-Count (4th in roster order) seeded ``manual_origin=False`` / ``None`` —
+    the inject cap dropped him before he could be patched. All four now seed
+    identically.
+    """
+    roster = [
+        "Brecca Half-Hand",
+        "Ondre Drumhand",
+        "Salla Who Came Back Thin",
+        "Harmund Fuel-Count",
+    ]
+    sd = _FakeSessionData()
+    sd.monster_manual = _manual_with(
+        npcs=[_human(name, location_tags=["ropefoot"]) for name in roster],
+    )
+    snap = _snapshot()
+    monster_manual_inject.inject(
+        sd, snap, current_location="Ropefoot — The Kept Fire", in_combat=False
+    )
+
+    by_name = {n.core.name: n for n in snap.npcs}
+    for name in roster:
+        assert name in by_name, f"{name} dropped from the snapshot roster"
+        npc = by_name[name]
+        assert npc.manual_origin is True, f"{name} seeded manual_origin={npc.manual_origin}"
+        assert npc.location is not None, f"{name} seeded location=None"
 
 
 def test_inject_skips_dormant_humans() -> None:

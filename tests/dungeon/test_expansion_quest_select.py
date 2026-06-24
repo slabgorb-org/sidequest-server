@@ -29,7 +29,10 @@ def test_big_bad_binds_deepest_region_with_big_bad():
     assert b.ref_id == "Bone Tyrant"
     assert b.anchor_region == "exp001.r1"
     assert b.objective == "End the Bone Tyrant."
-    assert b.title == "The bone_crypt Stirs"
+    # Story 158-19 AC-4: same-theme quests carry a per-expansion depth
+    # distinguisher (anchor exp001.r1 @ depth_score 30) so repeats are not
+    # byte-identical duplicates in the Quests tab.
+    assert b.title == "The bone_crypt Stirs — Depth 30"
     assert b.degraded is False
 
 

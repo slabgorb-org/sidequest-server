@@ -39,6 +39,7 @@ SPAN_ROUTES[SPAN_QUEST_BOUND] = SpanRoute(
         "signature_kind": _attr("signature_kind")(s),
         "ref_id": _attr("ref_id")(s),
         "degraded": _attr("degraded")(s),
+        "theme": _attr("theme")(s),
     },
 )
 

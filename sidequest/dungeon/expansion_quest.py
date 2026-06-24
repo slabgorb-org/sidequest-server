@@ -318,18 +318,30 @@ def resolve_expansion_quests(
 
 
 def collect_defeated_npc_names(snapshot: GameSnapshot) -> set[str]:
-    """Return the names of NPCs that have been defeated (HP depleted to 0).
+    """Return the sanitized names of NPCs that have been defeated (HP at 0).
 
     This is the input the turn handshake feeds to ``resolve_expansion_quests``
     so a ``big_bad``-signature quest can resolve when its antagonist falls. An
     NPC at ``core.hp.current == 0`` is the durable defeat signal: the per-turn
     Monster-Manual re-inject deliberately does NOT heal a slain NPC back to a
     full pool (see ``GameSnapshot._merge_npc_patch`` BUG-2b), so a killed
-    big_bad stays pinned at 0/N across turns. Names match the cleaned form
-    minted into ``snapshot.npcs`` (``sanitize_display_name``), which is the same
-    form ``select_signature`` now binds the quest ref_id to.
+    big_bad stays pinned at 0/N across turns.
+
+    Names are normalized through ``sanitize_display_name`` — the SAME transform
+    ``select_signature`` applies when it binds the quest ref_id. The Monster-
+    Manual inject sanitizes most names at the boundary, but the procedural
+    region_population / room_binding inject branches
+    (``monster_manual_inject``) append patches AFTER ``_sanitize_patch_names``
+    runs, so a cache-sourced bracket-bearing big_bad can reach ``snapshot.npcs``
+    raw. Normalizing here makes the ``ref in defeated_npc_names`` comparison
+    symmetric regardless of mint path, so the kill never silently fails to
+    resolve the quest.
     """
-    return {npc.core.name for npc in snapshot.npcs if npc.core.hp.current == 0}
+    return {
+        sanitize_display_name(npc.core.name)
+        for npc in snapshot.npcs
+        if npc.core.hp.current == 0
+    }
 
 
 # ---------------------------------------------------------------------------

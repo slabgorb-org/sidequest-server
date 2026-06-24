@@ -376,3 +376,55 @@ def test_reach_deep_unaffected_by_populated_defeated_names() -> None:
 
     assert n == 1
     assert snap.quest_log["dungeon:exp1"].status == "completed"
+
+
+# ---------------------------------------------------------------------------
+# AC2 (rework, Reviewer 158-17) — symmetric sanitization. The procedural mint
+# path (region_population / room_binding) injects a big_bad into snapshot.npcs
+# with an UNSANITIZED name (bracket junk a cached Manual entry can hold), while
+# select_signature binds the ref_id to the SANITIZED form. The collector must
+# normalize collected names the same way, or the kill silently fails to resolve.
+# ---------------------------------------------------------------------------
+
+
+def test_big_bad_resolves_when_minted_name_is_unsanitized() -> None:
+    """A big_bad minted into snapshot.npcs with a raw bracket-bearing name
+    (the unsanitized region_population path) must still resolve its quest: the
+    collector normalizes via sanitize_display_name so the cleaned name matches
+    the sanitized ref_id select_signature bound. Without symmetric sanitization
+    the quest silently never resolves after the antagonist is defeated."""
+    from sidequest.dungeon.expansion_quest import collect_defeated_npc_names
+    from sidequest.genre.names.generator import sanitize_display_name
+
+    conn, store = _store()
+    raw_minted = "Gormath the Drowned (boss)"  # as region_population mints it (unsanitized)
+    seeded_ref = sanitize_display_name(raw_minted)  # as select_signature binds it
+    assert seeded_ref != raw_minted, "fixture invalid: pick a name the sanitizer changes"
+
+    _seed_big_bad_thread(store, 1, seeded_ref, "exp001.r1")
+    conn.commit()
+
+    snap = _snap()
+    snap.quest_log["dungeon:exp1"] = QuestEntry(
+        title="t", objective="o", status="active", anchor_id="exp001.r1"
+    )
+    snap.npcs.append(_npc(raw_minted, hp_current=0))  # slain big_bad, minted raw
+
+    defeated = collect_defeated_npc_names(snap)
+    assert seeded_ref in defeated, (
+        f"collect_defeated_npc_names must normalize names via sanitize_display_name so the "
+        f"sanitized ref_id {seeded_ref!r} matches the raw-minted name {raw_minted!r}; got {defeated!r}"
+    )
+
+    n = resolve_expansion_quests(
+        snapshot=snap,
+        store=store,
+        reached_region_ids=set(),
+        resolved_trope_ids=[],
+        defeated_npc_names=defeated,
+    )
+    conn.commit()
+
+    assert n == 1, "big_bad quest must resolve even when the minted actor name was unsanitized"
+    assert snap.quest_log["dungeon:exp1"].status == "completed"
+    assert store.open_threads() == []

@@ -43,7 +43,9 @@ from sidequest.game.persistence import (
 from sidequest.game.projection.cache import ProjectionCache
 from sidequest.game.projection.composed import ComposedFilter
 from sidequest.game.projection.rules import load_rules_from_yaml_str
+from sidequest.game.projection.view import SessionGameStateView
 from sidequest.game.session import GameSnapshot
+from sidequest.server.emitters import _apply_pov_swap
 from sidequest.server.session_handler import (
     WebSocketSessionHandler,
     _SessionData,
@@ -851,35 +853,37 @@ def test_158_8_per_recipient_swap_emits_otel_span_for_own_pc(
 
 # ---------------------------------------------------------------------------
 # 8. Story 158-8 REWORK (Reviewer REJECT, 2026-06-23) — non-canonical
-#    (freeform) pronouns must FAIL OPEN, never crash the whole table.
+#    (freeform) pronouns must not crash the whole table.
 #
 #    The Facet-2 re-anchor (section 7) widened a latent crash. The localizer
 #    `swap_to_second_person` raises ValueError for any pronouns outside the
 #    canonical set {he/him, she/her, they/them} (pov_swap.py:877), and that
 #    validation fires BEFORE any name matching. `_apply_pov_swap` now calls it
 #    for EVERY pc_anchored recipient (re-anchored per recipient, not per card),
-#    and the call sits inside emit_event's `repo.transaction()`
-#    (emitters.py:518). So a single recipient whose chargen pronouns are
-#    freeform — "she/they", "any", "xe/xem", "it/its", "ze/zir", all invited by
-#    builder.py `pronouns_allow_freeform=True` — raises mid-fan-out, the turn's
-#    NARRATION event ROLLS BACK, and NO player at the table gets narration.
-#    One honest chargen choice bricks the session for everyone.
+#    and the call sits inside emit_event's `repo.transaction()`. So a single
+#    recipient whose chargen pronouns are freeform — "she/they", "any",
+#    "xe/xem", "it/its", "ze/zir", all invited by builder.py
+#    `pronouns_allow_freeform=True` — raised mid-fan-out and rolled back the
+#    whole table's NARRATION. 158-8 stopped the crash with an in-function
+#    FAIL-OPEN guard (skip + `unsupported_pronouns` span).
 #
-#    Required behavior (Reviewer): guard before swapping — if the recipient's
-#    pronouns are not a canonical form, return the payload unchanged (fail-open
-#    to canonical 3rd-person prose, exactly like the existing empty-pronoun
-#    guard at emitters.py:289) AND emit an OTEL skip span so the GM panel sees
-#    the fail-open decision (OTEL Observability Principle + No-Silent-Fallbacks).
-#    No bare try/except that hides it.
+#    >>> SUPERSEDED BY STORY 158-14 (Keith's design decision, 2026-06-24) <<<
+#    158-8's fail-open was the emergency stop; 158-14 is the durable inclusive
+#    fix. A freeform-pronoun player must no longer be the one player stuck
+#    reading their own name in 3rd person — their pronouns are PROJECTED to a
+#    canonical grammatical set and the swap PROCEEDS (they read "you" like
+#    everyone else). The three 158-8 behavioral tests that pinned freeform
+#    FAIL-OPEN (`..._falls_open_to_canonical`, `..._emitter_does_not_crash`,
+#    `..._emits_skip_span` with reason="unsupported_pronouns") are REMOVED here
+#    and replaced by section 9's projection-and-swap contract. The
+#    `unsupported_pronouns` skip reason is RETIRED — projection is total for
+#    non-empty pronouns, so that branch becomes unreachable (no dead code).
 #
-#    OTEL contract (TEA-defined; Dev implements to match): the skip path emits a
-#    span named `narration.pov_swap_skipped` carrying `recipient_pc` (which
-#    screen), `reason="unsupported_pronouns"` (why), and `pronouns` (the
-#    offending chargen value).
-#
-#    RED until `_apply_pov_swap` guards `pronouns in _PRONOUN_FORMS`. These
-#    currently fail by ValueError escaping the emit path — the documented
-#    table-wide-rollback defect, not a flaky error.
+#    What REMAINS in this section (still GREEN, still true under 158-14):
+#      - the freeform strings are genuinely non-canonical raw values, and
+#      - a freeform-pronoun recipient never bricks the table (no crash; the
+#        NARRATION event still persists), proven on a card that does not name
+#        that recipient (the projected swap is a no-op when the name is absent).
 # ---------------------------------------------------------------------------
 
 # Freeform pronoun strings chargen invites (builder.py pronouns_allow_freeform)
@@ -919,45 +923,25 @@ def test_158_8_freeform_test_pronouns_are_genuinely_noncanonical() -> None:
         )
 
 
-@pytest.mark.parametrize("pronouns", _FREEFORM_PRONOUNS)
-def test_158_8_noncanonical_pronoun_recipient_falls_open_to_canonical(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pronouns: str
-) -> None:
-    """RED (blocking [SEC] fix): Katia chose freeform pronouns at chargen. A
-    pc_anchored card delivered to her must NOT raise and must fall open to
-    canonical 3rd-person prose on her tab — her own name stays a name, no
-    crash. Today _apply_pov_swap hands her unsupported pronouns to
-    swap_to_second_person and the ValueError aborts the whole emit."""
-    handler = _make_handler_three_pcs(tmp_path)
-    _set_pc_pronouns(handler, "Katia", pronouns)
-    queues = _attach_queues(handler._room)
-    _narration_msg_patch(monkeypatch)
-
-    payload = {"text": _TWO_ACTOR_TEXT, "footnotes": [], "_visibility": dict(_TWO_ACTOR_VIZ)}
-    # Must NOT raise — today swap_to_second_person raises ValueError for
-    # non-canonical pronouns and it propagates out of emit_event.
-    handler._emit_event("NARRATION", payload)
-
-    assert queues["p_katia"].qsize() == 1, (
-        "Katia must still receive the card (fail-open), not a rolled-back/empty turn"
-    )
-    katia_text = queues["p_katia"].get_nowait().payload["text"]
-    assert katia_text == _TWO_ACTOR_TEXT, (
-        "a recipient with non-canonical pronouns must fall open to canonical "
-        f"3rd-person prose (no swap, no crash); got: {katia_text!r}"
-    )
+# NOTE (158-14 supersession): the former
+# `test_158_8_noncanonical_pronoun_recipient_falls_open_to_canonical` lived
+# here. It pinned freeform FAIL-OPEN (Katia's name stays 3rd-person). Keith's
+# 2026-06-24 decision replaces that with projection-and-swap — see section 9's
+# `test_158_14_freeform_recipient_swaps_via_canonical_projection`.
 
 
 @pytest.mark.parametrize("pronouns", _FREEFORM_PRONOUNS)
 def test_158_8_noncanonical_pronoun_does_not_brick_the_table(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pronouns: str
 ) -> None:
-    """RED (table-wide blast radius): the crash fires for EVERY pc_anchored
-    card — even one that never names the freeform-pronoun player — because
-    pronoun validation precedes name matching. One recipient's chargen choice
-    must not roll back the whole table's narration. After the guard: Carl
-    (emitter) still gets his 2nd-person frame, Donut + Katia get canonical
-    prose, and the NARRATION event is PERSISTED (not rolled back)."""
+    """GREEN regression-pin (true under 158-8 fail-open AND 158-14 projection):
+    a freeform-pronoun recipient must never roll back the whole table's
+    narration. This card never names the freeform-pronoun player (Katia), so
+    under 158-14 her projected swap is a no-op (her name is absent) and she sees
+    canonical prose — identical observable text to the old fail-open path, which
+    is why this stays GREEN across the supersession. Carl (emitter) still gets
+    his 2nd-person frame, Donut + Katia get canonical prose, and the NARRATION
+    event is PERSISTED (not rolled back)."""
     handler = _make_handler_three_pcs(tmp_path)
     _set_pc_pronouns(handler, "Katia", pronouns)
     queues = _attach_queues(handler._room)
@@ -978,7 +962,8 @@ def test_158_8_noncanonical_pronoun_does_not_brick_the_table(
         "Donut (canonical pronouns, not named in card) must see canonical prose"
     )
     assert queues["p_katia"].get_nowait().payload["text"] == _CARL_ONLY_TEXT, (
-        "Katia (freeform pronouns) must fall open to canonical prose, not crash"
+        "Katia (freeform pronouns) is not named in this card, so the projected "
+        "swap is a no-op → canonical prose (no crash, no rollback)"
     )
 
     # The canonical NARRATION event must be PERSISTED — proof the freeform-
@@ -991,14 +976,126 @@ def test_158_8_noncanonical_pronoun_does_not_brick_the_table(
     )
 
 
-@pytest.mark.parametrize("pronouns", ["she/they", "xe/xem"])
-def test_158_8_noncanonical_pronoun_emitter_does_not_crash(
+# NOTE (158-14 supersession): the former
+# `test_158_8_noncanonical_pronoun_emitter_does_not_crash` and
+# `test_158_8_noncanonical_pronoun_emits_skip_span` lived here. Both pinned
+# freeform FAIL-OPEN (emitter unchanged; an `unsupported_pronouns` skip span).
+# Keith's 2026-06-24 decision replaces that with projection-and-swap — see
+# section 9's `test_158_14_freeform_emitter_swaps_via_canonical_projection`,
+# `test_158_14_freeform_swap_emits_second_person_span`, and
+# `test_158_14_projection_emits_observability_span`. The `unsupported_pronouns`
+# skip reason is retired (projection is total for non-empty pronouns).
+
+
+# ===========================================================================
+# 9. Story 158-14 — DURABLE harden of Character.pronouns + complete skip-path
+#    observability + bounded span attribute.
+#
+#    158-8 stopped the freeform-pronoun crash with an in-function fail-open
+#    guard. 158-14 is the durable, inclusive fix (Keith's design decision,
+#    2026-06-24, "Project to canonical & swap"):
+#
+#    AC1 — A non-empty freeform pronoun ("she/they", "any", "xe/xem", "it/its",
+#          "ze/zir") is PROJECTED to a canonical grammatical set and the swap
+#          PROCEEDS, so the freeform-pronoun player reads "you" like everyone
+#          else (no longer the one player stuck in 3rd person). The projection
+#          must be derivable from `Character.pronouns` itself — these tests set
+#          `c.pronouns` directly (the "loaded save / ANY caller" shape), so a
+#          chargen-only normalization that leaves a freeform `pronouns` value
+#          unprojected would NOT satisfy them. Mapping-agnostic: assertions use
+#          a pronoun-free clause ("you steady the winch") so they hold whichever
+#          canonical form the projection picks.
+#
+#    AC2 — Complete the skip-path observability. The empty-pronoun guard and the
+#          `_pronouns_for_pc` not-found case are split into DISTINCT skip
+#          reasons ('pronouns_empty' vs 'pc_not_in_snapshot'), and the
+#          invalid-text guard emits 'text_missing_or_invalid'. (The old
+#          'unsupported_pronouns' reason is retired — nothing non-empty reaches
+#          it once projection is total.)
+#
+#    AC3 — Bound the player-supplied pronoun value written to OTEL ([SEC][LOW]).
+#
+#    OTEL contract (TEA-defined; Dev implements to match, Reviewer may rename
+#    the span/attrs but the contract stands): the display->grammatical
+#    projection emits `narration.pov_swap_projected` with `recipient_pc`,
+#    `display_pronouns` (the player's freeform choice, TRUNCATED), and
+#    `grammatical_pronouns` (a member of the canonical set the localizer
+#    accepts). The skip path keeps `narration.pov_swap_skipped` with
+#    `recipient_pc` + `reason`.
+#
+#    All section-9 tests are RED against the current (post-158-8) code.
+# ===========================================================================
+
+
+# A pc_anchored visibility sidecar for DIRECT _apply_pov_swap unit calls — the
+# anchor just has to be present + pc_anchored to get past the early-return gate.
+_PC_ANCHORED_VIZ = {
+    "visible_to": "all",
+    "fidelity": {},
+    "anchor_pc": "Carl",
+    "pov_strategy": "pc_anchored",
+}
+
+
+def _direct_view_snapshot(
+    player_id: str, pc_name: str, *, pronouns: str, in_snapshot: bool = True
+) -> tuple[SessionGameStateView, GameSnapshot]:
+    """Build a (view, snapshot) pair for a DIRECT `_apply_pov_swap` call,
+    bypassing the room/queue machinery. ``view.character_of(player_id)`` resolves
+    to ``pc_name``. The snapshot contains ``pc_name`` (with ``pronouns``) unless
+    ``in_snapshot=False`` — the pc_not_in_snapshot case, where the view names a PC
+    the snapshot has dropped (a desync ``_pronouns_for_pc`` reports as "")."""
+    view = SessionGameStateView(player_id_to_character={player_id: pc_name})
+    snap = GameSnapshot(genre_slug=_GENRE, world_slug=_WORLD)
+    snap.characters = [_pc(pc_name, pronouns=pronouns)] if in_snapshot else []
+    return view, snap
+
+
+# --- AC1: freeform pronouns project to canonical and the swap PROCEEDS --------
+
+
+@pytest.mark.parametrize("pronouns", _FREEFORM_PRONOUNS)
+def test_158_14_freeform_recipient_swaps_via_canonical_projection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pronouns: str
 ) -> None:
-    """RED (distinct call site): the freeform-pronoun crash also reaches the
-    EMITTER's own swap path (_apply_pov_swap at emitters.py:~689/707), not just
-    the peer fan-out. If Carl — the emitter and anchor — chose freeform
-    pronouns, his own frame must fail open to canonical prose, not raise."""
+    """AC1 (RED, supersedes 158-8 fail-open): Katia chose freeform pronouns. Her
+    OWN action in a pc_anchored card must now re-anchor to 2nd person — she reads
+    "you steady the winch", not "Katia steadies" — because her freeform pronouns
+    are PROJECTED to a canonical grammatical set and the swap PROCEEDS. The
+    asserted clause carries no gendered pronoun, so this holds whichever canonical
+    form the projection picks (mapping-agnostic). Today _apply_pov_swap skips her
+    (fail-open) and she reads her own name in 3rd person — the inclusive defect."""
+    handler = _make_handler_three_pcs(tmp_path)
+    _set_pc_pronouns(handler, "Katia", pronouns)
+    queues = _attach_queues(handler._room)
+    _narration_msg_patch(monkeypatch)
+
+    payload = {"text": _TWO_ACTOR_TEXT, "footnotes": [], "_visibility": dict(_TWO_ACTOR_VIZ)}
+    handler._emit_event("NARRATION", payload)
+
+    assert queues["p_katia"].qsize() == 1, "Katia must receive the card"
+    katia_text = queues["p_katia"].get_nowait().payload["text"]
+    assert "you steady the winch" in katia_text, (
+        f"freeform pronouns {pronouns!r} must project to canonical and SWAP "
+        f"(name->you), not fall open to 3rd person; got: {katia_text!r}"
+    )
+    assert "Katia steadies" not in katia_text, (
+        f"the freeform-pronoun player must not read her own name in 3rd person; got: {katia_text!r}"
+    )
+    assert "Carl hauls the rope" in katia_text, (
+        f"the other PC must stay a 3rd-person name on her screen; got: {katia_text!r}"
+    )
+
+
+@pytest.mark.parametrize("pronouns", ["she/they", "xe/xem", "any"])
+def test_158_14_freeform_emitter_swaps_via_canonical_projection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pronouns: str
+) -> None:
+    """AC1 (RED, distinct call site — the emitter path): the emitter+anchor (Carl)
+    with freeform pronouns must ALSO project-and-swap on his own returned frame —
+    "You haul the rope", the other PC left a name. Supersedes
+    test_158_8_noncanonical_pronoun_emitter_does_not_crash (which pinned the
+    emitter's freeform frame as unchanged/fail-open)."""
     handler = _make_handler_three_pcs(tmp_path)
     _set_pc_pronouns(handler, "Carl", pronouns)
     _attach_queues(handler._room)
@@ -1009,23 +1106,24 @@ def test_158_8_noncanonical_pronoun_emitter_does_not_crash(
 
     assert out_to_self is not None
     carl_text = out_to_self.payload["text"]
-    assert carl_text == _TWO_ACTOR_TEXT, (
-        "the emitter's own freeform pronouns must fail open to canonical prose "
-        f"(no crash, no swap); got: {carl_text!r}"
+    assert "You haul the rope" in carl_text, (
+        f"emitter's freeform pronouns {pronouns!r} must project-and-swap; got: {carl_text!r}"
+    )
+    assert "Katia steadies the winch" in carl_text, (
+        f"the other PC must stay a 3rd-person name on the emitter's screen; got: {carl_text!r}"
     )
 
 
 @pytest.mark.parametrize("pronouns", _FREEFORM_PRONOUNS)
-def test_158_8_noncanonical_pronoun_emits_skip_span(
+def test_158_14_freeform_swap_emits_second_person_span(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, otel_capture, pronouns: str
 ) -> None:
-    """RED (AC-4 / OTEL Observability Principle / No-Silent-Fallbacks): when
-    _apply_pov_swap declines to swap because the recipient's pronouns are not a
-    canonical form, it must emit a `narration.pov_swap_skipped` span naming the
-    recipient PC, the reason, and the offending pronoun value — so the GM panel
-    sees the fail-open decision instead of bare canonical prose. Today no span
-    fires (the emit crashes), so the GM panel cannot tell the swap was skipped
-    vs. the narrator simply never anchoring."""
+    """AC1 (RED, OTEL lie-detector): a freeform-pronoun recipient's re-anchor must
+    fire a narration.second_person_swap span for HER own PC (swap_target_name=
+    'Katia', swap_count>=1). The localizer raises on non-canonical pronouns, so a
+    swap span firing for Katia is positive proof the projection fed it a CANONICAL
+    value — the GM panel's signal that the projection engaged. Today Katia is
+    skipped, so no swap span fires for her."""
     handler = _make_handler_three_pcs(tmp_path)
     _set_pc_pronouns(handler, "Katia", pronouns)
     _attach_queues(handler._room)
@@ -1034,20 +1132,209 @@ def test_158_8_noncanonical_pronoun_emits_skip_span(
     payload = {"text": _TWO_ACTOR_TEXT, "footnotes": [], "_visibility": dict(_TWO_ACTOR_VIZ)}
     handler._emit_event("NARRATION", payload)
 
-    skip_spans = [
-        s for s in otel_capture.get_finished_spans() if s.name == "narration.pov_swap_skipped"
+    swap_spans = [
+        s for s in otel_capture.get_finished_spans() if s.name == "narration.second_person_swap"
     ]
-    katia_skips = [s for s in skip_spans if dict(s.attributes).get("recipient_pc") == "Katia"]
-    assert katia_skips, (
-        "a narration.pov_swap_skipped span must fire for Katia's freeform "
-        f"pronouns ({pronouns!r}); got skip spans for recipients: "
-        f"{[dict(s.attributes).get('recipient_pc') for s in skip_spans]}"
+    katia = [s for s in swap_spans if dict(s.attributes).get("swap_target_name") == "Katia"]
+    assert katia, (
+        f"a second_person_swap span must fire for Katia ({pronouns!r} projected to canonical); "
+        f"got swap targets: {[dict(s.attributes).get('swap_target_name') for s in swap_spans]}"
     )
-    attrs = dict(katia_skips[0].attributes)
-    assert attrs.get("reason") == "unsupported_pronouns", (
-        f"skip span must record WHY it fell open; got reason={attrs.get('reason')!r}"
+    assert int(dict(katia[0].attributes).get("swap_count", 0)) >= 1, (
+        "Katia's projected re-anchor must record a positive swap_count"
     )
-    assert attrs.get("pronouns") == pronouns, (
-        "skip span must record the offending pronoun value so the GM panel can "
-        f"see which chargen choice fell open; got pronouns={attrs.get('pronouns')!r}"
+
+
+@pytest.mark.parametrize("pronouns", _FREEFORM_PRONOUNS)
+def test_158_14_projection_emits_observability_span(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, otel_capture, pronouns: str
+) -> None:
+    """AC1 OTEL contract (RED, TEA-defined): the display->grammatical projection
+    is a subsystem decision and MUST be observable (OTEL Observability Principle —
+    the GM panel is the lie detector). A narration.pov_swap_projected span must
+    fire naming recipient_pc, the player's freeform display_pronouns, and the
+    canonical grammatical_pronouns it projected to — and grammatical_pronouns MUST
+    be a member of the canonical set the localizer accepts. Mapping-agnostic:
+    asserts membership, not a specific canonical choice."""
+    from sidequest.agents.pov_swap import _PRONOUN_FORMS
+
+    handler = _make_handler_three_pcs(tmp_path)
+    _set_pc_pronouns(handler, "Katia", pronouns)
+    _attach_queues(handler._room)
+    _narration_msg_patch(monkeypatch)
+
+    payload = {"text": _TWO_ACTOR_TEXT, "footnotes": [], "_visibility": dict(_TWO_ACTOR_VIZ)}
+    handler._emit_event("NARRATION", payload)
+
+    proj = [
+        s for s in otel_capture.get_finished_spans() if s.name == "narration.pov_swap_projected"
+    ]
+    katia = [s for s in proj if dict(s.attributes).get("recipient_pc") == "Katia"]
+    assert katia, (
+        f"projecting freeform {pronouns!r}->canonical must emit a "
+        "narration.pov_swap_projected span for the GM panel; got projection spans: "
+        f"{[dict(s.attributes) for s in proj]}"
+    )
+    grammatical = dict(katia[0].attributes).get("grammatical_pronouns")
+    assert grammatical in _PRONOUN_FORMS, (
+        "the recorded grammatical projection must be a canonical form the localizer "
+        f"accepts ({sorted(_PRONOUN_FORMS)}); got grammatical_pronouns={grammatical!r}"
+    )
+
+
+# --- AC2: complete + split the skip-path observability ------------------------
+
+
+def test_158_14_skip_reason_pronouns_empty(otel_capture) -> None:
+    """AC2 (RED): a recipient whose PC IS in the snapshot but has EMPTY pronouns
+    must skip with a distinct reason='pronouns_empty' span. Today the empty-pronoun
+    guard (emitters.py:292) returns silently with no span — the GM panel can't see
+    the fail-open, and can't distinguish it from a missing PC."""
+    view, snap = _direct_view_snapshot("p_x", "Katia", pronouns="", in_snapshot=True)
+    payload = {"text": "Carl hauls the rope.", "_visibility": dict(_PC_ANCHORED_VIZ)}
+
+    out = _apply_pov_swap(payload, recipient_player_id="p_x", view=view, snapshot=snap)
+
+    assert out.get("text") == "Carl hauls the rope.", "empty pronouns must fail open (no swap)"
+    skips = [s for s in otel_capture.get_finished_spans() if s.name == "narration.pov_swap_skipped"]
+    katia = [s for s in skips if dict(s.attributes).get("recipient_pc") == "Katia"]
+    assert katia, (
+        "empty pronouns must emit a pov_swap_skipped span for Katia; got: "
+        f"{[dict(s.attributes) for s in skips]}"
+    )
+    assert dict(katia[0].attributes).get("reason") == "pronouns_empty", (
+        f"reason must be 'pronouns_empty'; got {dict(katia[0].attributes).get('reason')!r}"
+    )
+
+
+def test_158_14_skip_reason_pc_not_in_snapshot(otel_capture) -> None:
+    """AC2 (RED): the view maps the recipient to a PC name the snapshot does NOT
+    contain (a dropped/desynced PC). _pronouns_for_pc returns "" today — the SAME
+    value as the empty-pronoun case — conflating two distinct failures. The fix
+    must split them: this path emits reason='pc_not_in_snapshot', NOT
+    'pronouns_empty'.
+
+    Driven as a direct _apply_pov_swap call by necessity — constructing a
+    view/snapshot desync through the live room would require seating a player to a
+    slot the snapshot never had, which the room fixture cannot express."""
+    view, snap = _direct_view_snapshot("p_x", "Ghost", pronouns="", in_snapshot=False)
+    payload = {"text": "Carl hauls the rope.", "_visibility": dict(_PC_ANCHORED_VIZ)}
+
+    out = _apply_pov_swap(payload, recipient_player_id="p_x", view=view, snapshot=snap)
+
+    assert out.get("text") == "Carl hauls the rope.", "a missing PC must fail open (no swap)"
+    skips = [s for s in otel_capture.get_finished_spans() if s.name == "narration.pov_swap_skipped"]
+    ghost = [s for s in skips if dict(s.attributes).get("recipient_pc") == "Ghost"]
+    assert ghost, (
+        "a PC named by the view but absent from the snapshot must emit a skip span; got: "
+        f"{[dict(s.attributes) for s in skips]}"
+    )
+    reason = dict(ghost[0].attributes).get("reason")
+    assert reason == "pc_not_in_snapshot", (
+        "the _pronouns_for_pc conflation must be split — not-found is distinct from "
+        f"empty-pronouns; got reason={reason!r}"
+    )
+
+
+def test_158_14_skip_reason_text_missing_or_invalid(otel_capture) -> None:
+    """AC2 (RED): a recipient with CANONICAL pronouns but a payload whose text is
+    missing/non-str hits the invalid-text guard (emitters.py:314), which today
+    returns silently. It must emit reason='text_missing_or_invalid' so the GM panel
+    sees the fail-open."""
+    view, snap = _direct_view_snapshot("p_x", "Katia", pronouns="she/her", in_snapshot=True)
+    payload = {"_visibility": dict(_PC_ANCHORED_VIZ)}  # no "text" key
+
+    out = _apply_pov_swap(payload, recipient_player_id="p_x", view=view, snapshot=snap)
+
+    assert out is payload, "missing text must fail open (payload returned unchanged)"
+    skips = [s for s in otel_capture.get_finished_spans() if s.name == "narration.pov_swap_skipped"]
+    katia = [s for s in skips if dict(s.attributes).get("recipient_pc") == "Katia"]
+    assert katia, (
+        "missing/invalid text must emit a pov_swap_skipped span; got: "
+        f"{[dict(s.attributes) for s in skips]}"
+    )
+    assert dict(katia[0].attributes).get("reason") == "text_missing_or_invalid", (
+        f"reason must be 'text_missing_or_invalid'; got {dict(katia[0].attributes).get('reason')!r}"
+    )
+
+
+def test_158_14_skip_reason_pronouns_empty_through_emit_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, otel_capture
+) -> None:
+    """AC2 wiring (RED): drive the REAL per-recipient emit path — not just the
+    function in isolation. Katia has empty pronouns; her frame must skip with
+    reason='pronouns_empty' (an observable fail-open, not a silent return), and the
+    table must still receive narration."""
+    handler = _make_handler_three_pcs(tmp_path)
+    _set_pc_pronouns(handler, "Katia", "")
+    queues = _attach_queues(handler._room)
+    _narration_msg_patch(monkeypatch)
+
+    payload = {"text": _TWO_ACTOR_TEXT, "footnotes": [], "_visibility": dict(_TWO_ACTOR_VIZ)}
+    handler._emit_event("NARRATION", payload)
+
+    assert queues["p_katia"].qsize() == 1, "Katia must still receive narration"
+    skips = [s for s in otel_capture.get_finished_spans() if s.name == "narration.pov_swap_skipped"]
+    katia = [s for s in skips if dict(s.attributes).get("recipient_pc") == "Katia"]
+    assert katia, "the empty-pronoun skip must be observable through the real emit path"
+    assert dict(katia[0].attributes).get("reason") == "pronouns_empty"
+
+
+# --- AC3: bound the player-supplied pronoun value written to OTEL -------------
+
+
+def test_158_14_projection_span_bounds_player_display_pronouns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, otel_capture
+) -> None:
+    """AC3 (RED, [SEC][LOW]): a player can type an arbitrarily long freeform
+    pronoun string at chargen. The projection observability must not write that
+    unbounded player-supplied value to OTEL verbatim — it must be truncated. A
+    ~350-char freeform value must be recorded in display_pronouns bounded to
+    <=64 chars."""
+    handler = _make_handler_three_pcs(tmp_path)
+    long_value = "xe/" + ("x" * 350)
+    _set_pc_pronouns(handler, "Katia", long_value)
+    _attach_queues(handler._room)
+    _narration_msg_patch(monkeypatch)
+
+    payload = {"text": _TWO_ACTOR_TEXT, "footnotes": [], "_visibility": dict(_TWO_ACTOR_VIZ)}
+    handler._emit_event("NARRATION", payload)
+
+    proj = [
+        s for s in otel_capture.get_finished_spans() if s.name == "narration.pov_swap_projected"
+    ]
+    katia = [s for s in proj if dict(s.attributes).get("recipient_pc") == "Katia"]
+    assert katia, "the projection span must fire even for a long freeform value"
+    recorded = dict(katia[0].attributes).get("display_pronouns", "")
+    assert isinstance(recorded, str) and len(recorded) <= 64, (
+        "player-supplied display_pronouns must be bounded (<=64 chars) before it is "
+        f"written to OTEL; got len={len(recorded) if isinstance(recorded, str) else recorded!r}"
+    )
+
+
+def test_158_14_no_span_leaks_unbounded_player_pronouns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, otel_capture
+) -> None:
+    """AC3 defense-in-depth (RED, span/attr-agnostic): regardless of WHICH span or
+    attribute records the player's pronoun choice, no OTEL attribute may carry the
+    full untruncated player-supplied value. (Today the post-158-8 skip span writes
+    the raw `pronouns` attribute verbatim — this catches that leak without naming
+    the span.)"""
+    handler = _make_handler_three_pcs(tmp_path)
+    long_value = "ze/" + ("z" * 350)
+    _set_pc_pronouns(handler, "Katia", long_value)
+    _attach_queues(handler._room)
+    _narration_msg_patch(monkeypatch)
+
+    payload = {"text": _TWO_ACTOR_TEXT, "footnotes": [], "_visibility": dict(_TWO_ACTOR_VIZ)}
+    handler._emit_event("NARRATION", payload)
+
+    offenders = []
+    for s in otel_capture.get_finished_spans():
+        for key, value in dict(s.attributes).items():
+            if isinstance(value, str) and long_value in value:
+                offenders.append(f"{s.name}.{key}")
+    assert not offenders, (
+        "no OTEL attribute may carry the unbounded player-supplied pronoun value; "
+        f"leaked verbatim in: {offenders}"
     )

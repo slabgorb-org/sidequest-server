@@ -90,6 +90,41 @@ _PRONOUN_FORMS = {
     },
 }
 
+
+def project_to_canonical_pronouns(pronouns: str) -> str | None:
+    """Project a (possibly freeform) pronoun string to a canonical grammatical
+    set the localizer accepts — a key of :data:`_PRONOUN_FORMS`.
+
+    Chargen permits freeform pronouns (builder.py ``pronouns_allow_freeform``):
+    "she/they", "any", "xe/xem", "it/its", "ze/zir", and so on. The localizer
+    :func:`swap_to_second_person` only knows the three canonical grammatical
+    sets, so every caller must hand it a canonical value. This derives that
+    value from the player's DISPLAY pronouns without discarding their choice
+    (Story 158-14 — the player keeps their freeform pronouns; only the grammar
+    handed to the localizer is canonicalized):
+
+      - an already-canonical value maps to itself
+      - a value naming she/her -> ``"she/her"``
+      - else a value naming he/him/his -> ``"he/him"``
+      - everything else (they, them, "any", neopronouns) -> ``"they/them"``
+
+    Returns ``None`` only for an empty/blank input — there is no grammar to
+    derive from nothing, and the caller treats that as a distinct skip reason.
+    Matching is whole-token (split on non-letters) so "they" is never mistaken
+    for the "he" substring it contains.
+    """
+    if not pronouns or not pronouns.strip():
+        return None
+    if pronouns in _PRONOUN_FORMS:
+        return pronouns
+    tokens = {t for t in re.split(r"[^a-z]+", pronouns.lower()) if t}
+    if tokens & {"she", "her", "hers", "herself"}:
+        return "she/her"
+    if tokens & {"he", "him", "his", "himself"}:
+        return "he/him"
+    return "they/them"
+
+
 # Irregular verbs that need explicit 3rd-person -> 2nd-person mapping.
 # Regular -s/-es/-ies suffixes are handled by _conjugate's algorithmic
 # fallback.

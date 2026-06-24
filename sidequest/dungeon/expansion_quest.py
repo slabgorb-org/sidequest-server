@@ -1,0 +1,373 @@
+"""Per-expansion quest lifecycle (ADR-137 × ADR-106): select signature beat,
+seed a ledger thread, project into quest_log, resolve on the beat.
+Deterministic — no LLM (Amendment C)."""
+
+from __future__ import annotations
+
+import hashlib
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Protocol
+
+from sidequest.dungeon.persistence import ComplicationThread
+from sidequest.dungeon.region_graph.model import Expansion, RegionNode
+from sidequest.dungeon.themes import ExpansionQuestTemplate
+from sidequest.game.cookbook.models import RegionContentManifest
+from sidequest.game.session import GameSnapshot, QuestEntry
+from sidequest.telemetry.spans.dungeon_quest import quest_bound_span, quest_resolved_span
+
+
+class ThreadLedger(Protocol):
+    """Minimal ledger surface the expansion-quest functions need — satisfied by
+    both DungeonStore (sqlite, in-tests) and PgDungeonRepository (production)."""
+
+    def open_thread(self, thread: ComplicationThread) -> None: ...
+    def open_threads(self) -> list[ComplicationThread]: ...
+    def resolve_thread(self, thread_id: str) -> None: ...
+
+
+@dataclass(frozen=True)
+class SignatureBinding:
+    kind: str            # "big_bad" | "set_piece" | "reach_deep" (effective, post-degrade)
+    ref_id: str          # bound element id: region id, or big_bad name, or set_piece id
+    anchor_region: str   # the region id the quest anchors to
+    title: str
+    objective: str
+    degraded: bool
+
+
+def _deepest(expansion: Expansion) -> RegionNode:
+    """Return the node with the highest depth_score; None scores as -inf so
+    attached (scored) nodes always win over unattached ones."""
+    return max(
+        expansion.new_nodes,
+        key=lambda n: (n.depth_score if n.depth_score is not None else float("-inf")),
+    )
+
+
+def _fill(text: str, *, theme: str, big_bad: str, anchor: str) -> str:
+    return (
+        text.replace("{theme}", theme)
+            .replace("{big_bad}", big_bad)
+            .replace("{anchor}", anchor)
+    )
+
+
+def select_signature(
+    *,
+    expansion: Expansion,
+    manifests_by_region: dict[str, RegionContentManifest],
+    template: ExpansionQuestTemplate,
+) -> SignatureBinding:
+    """Pick the expansion's signature beat from a theme quest_template and the
+    per-region content manifests.  Pure logic — no I/O, no randomness."""
+    deepest = _deepest(expansion)
+    theme = deepest.theme
+
+    if template.signature == "big_bad":
+        # Deepest region (by depth_score) that rolled a big_bad.
+        candidates = sorted(
+            (
+                n
+                for n in expansion.new_nodes
+                if (manifests_by_region.get(n.id) or _empty_manifest()).big_bad
+            ),
+            key=lambda n: (n.depth_score if n.depth_score is not None else float("-inf")),
+            reverse=True,
+        )
+        if candidates:
+            node = candidates[0]
+            bb = manifests_by_region[node.id].big_bad or {}
+            name = str(bb.get("name", "")).strip() or "the master of this place"
+            return SignatureBinding(
+                kind="big_bad",
+                ref_id=name,
+                anchor_region=node.id,
+                title=_fill(template.title, theme=theme, big_bad=name, anchor=node.id),
+                objective=_fill(template.objective, theme=theme, big_bad=name, anchor=node.id),
+                degraded=False,
+            )
+        # No big_bad rolled — loud degrade to reach_deep (caller emits the span).
+        return _bind_reach_deep(template, deepest, theme, degraded=True)
+
+    if template.signature == "set_piece":
+        sp = (template.set_piece_id or "").strip()
+        return SignatureBinding(
+            kind="set_piece",
+            ref_id=sp,
+            anchor_region=deepest.id,
+            title=_fill(template.title, theme=theme, big_bad="", anchor=deepest.id),
+            objective=_fill(template.objective, theme=theme, big_bad="", anchor=deepest.id),
+            degraded=False,
+        )
+
+    return _bind_reach_deep(template, deepest, theme, degraded=False)
+
+
+def _bind_reach_deep(
+    template: ExpansionQuestTemplate,
+    deepest: RegionNode,
+    theme: str,
+    *,
+    degraded: bool,
+) -> SignatureBinding:
+    return SignatureBinding(
+        kind="reach_deep",
+        ref_id=deepest.id,
+        anchor_region=deepest.id,
+        title=_fill(template.title, theme=theme, big_bad="", anchor=deepest.id),
+        objective=_fill(template.objective, theme=theme, big_bad="", anchor=deepest.id),
+        degraded=degraded,
+    )
+
+
+def _empty_manifest() -> RegionContentManifest:
+    """Null object for regions not yet in the manifest dict."""
+    return RegionContentManifest(
+        race="",
+        cr_band="",
+        size_budget={},
+        wandering_table=[],
+        loot_table=[],
+        special_rooms=[],
+        big_bad=None,
+    )
+
+
+def _expansion_quest_thread_id(campaign_seed: int, expansion_id: int) -> str:
+    h = hashlib.blake2b(
+        f"{campaign_seed}:{expansion_id}:expansion_quest".encode(), digest_size=8
+    )
+    return f"q.exp{expansion_id}.{h.hexdigest()}"
+
+
+def seed_expansion_quest(
+    *,
+    campaign_seed: int,
+    expansion: Expansion,
+    manifests_by_region: dict[str, RegionContentManifest],
+    template: ExpansionQuestTemplate,
+    store: ThreadLedger,
+    started_at_depth_score: float,
+) -> str:
+    """Open one expansion-scoped ComplicationThread in the ledger.
+
+    Calls ``select_signature`` to pick the quest's signature beat, then
+    writes a single ``ComplicationThread(kind="quest")`` to ``store`` via
+    ``DungeonStore.open_thread``.  Emits ``quest_bound_span`` so the GM
+    panel can verify the quest engine engaged rather than the narrator
+    improvising quest outcomes.
+
+    Returns the thread_id (deterministic: same campaign_seed + expansion_id
+    always yields the same id regardless of store state).
+    """
+    b = select_signature(
+        expansion=expansion,
+        manifests_by_region=manifests_by_region,
+        template=template,
+    )
+    thread_id = _expansion_quest_thread_id(campaign_seed, expansion.expansion_id)
+    with quest_bound_span(
+        expansion_id=expansion.expansion_id,
+        signature_kind=b.kind,
+        ref_id=b.ref_id,
+        degraded=b.degraded,
+    ):
+        store.open_thread(
+            ComplicationThread(
+                thread_id=thread_id,
+                origin_region_id=b.anchor_region,
+                kind="quest",
+                status="open",
+                started_at_depth_score=started_at_depth_score,
+                payload={
+                    "scope": "expansion",
+                    "expansion_id": expansion.expansion_id,
+                    "signature_kind": b.kind,
+                    "ref_id": b.ref_id,
+                    "anchor_region": b.anchor_region,
+                    "title": b.title,
+                    "objective": b.objective,
+                },
+            )
+        )
+    return thread_id
+
+
+# ---------------------------------------------------------------------------
+# Projection: reconcile open expansion-quest threads into snapshot.quest_log
+# ---------------------------------------------------------------------------
+
+_DUNGEON_QUEST_PREFIX = "dungeon:exp"
+
+
+def reconcile_dungeon_quests_into_log(
+    *,
+    snapshot: GameSnapshot,
+    store: ThreadLedger,
+    reached_expansion_ids: set[int],
+) -> int:
+    """Write/update namespaced QuestEntry rows (id ``dungeon:expN``) into
+    ``snapshot.quest_log`` for every open expansion-quest thread whose
+    expansion_id is in ``reached_expansion_ids``.
+
+    - NEVER touches non-``dungeon:`` quest_log entries.
+    - Idempotent: already-active entries are not duplicated; already-resolved
+      entries are not reopened.
+    - Returns the count of entries newly projected (0 on a no-op re-run).
+    """
+    projected = 0
+    for thread in store.open_threads():
+        if thread.kind != "quest" or thread.payload.get("scope") != "expansion":
+            continue
+        exp_id = thread.payload.get("expansion_id")
+        if exp_id not in reached_expansion_ids:
+            continue
+        qid = f"{_DUNGEON_QUEST_PREFIX}{exp_id}"
+        existing = snapshot.quest_log.get(qid)
+        title = thread.payload.get("title", "")
+        objective = thread.payload.get("objective", "")
+        anchor = thread.payload.get("anchor_region")
+        if existing is None:
+            snapshot.quest_log[qid] = QuestEntry(
+                title=title,
+                objective=objective,
+                status="active",
+                anchor_id=anchor,
+            )
+            if anchor and anchor not in snapshot.quest_anchors:
+                snapshot.quest_anchors.append(anchor)
+            projected += 1
+        elif existing.status != "active":
+            # Entry was externally resolved (e.g. "completed", "failed") — preserve it.
+            continue
+    return projected
+
+
+# ---------------------------------------------------------------------------
+# Resolution: check each open expansion-quest thread against fired beats
+# ---------------------------------------------------------------------------
+
+
+def _beat_fired(
+    payload: dict,
+    *,
+    reached_region_ids: set[str],
+    resolved_trope_ids: list[str],
+    defeated_npc_names: set[str],
+) -> str | None:
+    """Return the resolving_event name if the thread's signature beat fired, else None."""
+    kind = payload.get("signature_kind")
+    ref = payload.get("ref_id", "")
+    if kind == "reach_deep" and payload.get("anchor_region") in reached_region_ids:
+        return "reach_deep"
+    if kind == "set_piece" and ref in resolved_trope_ids:
+        return "set_piece"
+    if kind == "big_bad" and ref in defeated_npc_names:
+        return "hp_depletion"
+    return None
+
+
+def resolve_expansion_quests(
+    *,
+    snapshot: GameSnapshot,
+    store: ThreadLedger,
+    reached_region_ids: set[str],
+    resolved_trope_ids: list[str],
+    defeated_npc_names: set[str],
+) -> int:
+    """For each open expansion-quest thread whose signature beat has fired,
+    resolve the ledger thread, flip the projected QuestEntry to "completed",
+    and emit a quest_resolved_span.  Returns the count of quests resolved.
+    """
+    resolved = 0
+    for thread in store.open_threads():
+        if thread.kind != "quest" or thread.payload.get("scope") != "expansion":
+            continue
+        event = _beat_fired(
+            thread.payload,
+            reached_region_ids=reached_region_ids,
+            resolved_trope_ids=resolved_trope_ids,
+            defeated_npc_names=defeated_npc_names,
+        )
+        if event is None:
+            continue
+        exp_id = thread.payload.get("expansion_id")
+        if exp_id is None:
+            raise ValueError(
+                f"expansion-quest thread {thread.thread_id!r} missing expansion_id in payload"
+            )
+        with quest_resolved_span(
+            expansion_id=exp_id,
+            signature_kind=thread.payload.get("signature_kind", ""),
+            resolving_event=event,
+        ):
+            store.resolve_thread(thread.thread_id)
+            entry = snapshot.quest_log.get(f"dungeon:exp{exp_id}")
+            if entry is not None:
+                entry.status = "completed"
+        resolved += 1
+    return resolved
+
+
+# ---------------------------------------------------------------------------
+# Frontier observer factory — Task 8 wiring seam
+# ---------------------------------------------------------------------------
+
+# Type alias matching FrontierObserver (collections.abc.Callable[..., None]).
+_FrontierObserver = Callable[..., None]
+
+
+def _expansion_id_of(region_id: str) -> int | None:
+    """Parse the expansion id from a region id (e.g. 'exp001.r3' → 1).
+
+    Non-``exp`` ids (e.g. 'entrance') return ``None`` — they carry no
+    expansion association and must not trigger quest projection.
+    """
+    if not region_id.startswith("exp"):
+        return None
+    try:
+        return int(region_id.split(".", 1)[0][3:])
+    except ValueError:
+        return None
+
+
+def make_expansion_quest_observer(store: ThreadLedger) -> _FrontierObserver:
+    """Return a frontier observer that, on each region transition:
+
+    1. Computes the expansion id from ``to_region`` (None for non-exp regions).
+    2. Calls ``reconcile_dungeon_quests_into_log`` to project open expansion-quest
+       threads for the reached expansion into ``snapshot.quest_log``.
+    3. Calls ``resolve_expansion_quests`` to resolve any whose ``reach_deep``
+       beat fired this transition.
+
+    ``resolved_trope_ids`` and ``defeated_npc_names`` are deferred to later
+    tasks (set_piece / big_bad resolution) and passed as empty here.
+
+    The returned callable matches the ``FrontierObserver`` signature:
+    ``observer(*, snapshot, pc_name, from_region, to_region) -> None``.
+    """
+
+    def _observer(
+        *,
+        snapshot: GameSnapshot,
+        pc_name: str,
+        from_region: str | None,
+        to_region: str,
+    ) -> None:
+        exp_id = _expansion_id_of(to_region)
+        reached_exps: set[int] = {exp_id} if exp_id is not None else set()
+        reconcile_dungeon_quests_into_log(
+            snapshot=snapshot,
+            store=store,
+            reached_expansion_ids=reached_exps,
+        )
+        resolve_expansion_quests(
+            snapshot=snapshot,
+            store=store,
+            reached_region_ids={to_region},
+            resolved_trope_ids=[],
+            defeated_npc_names=set(),
+        )
+
+    return _observer

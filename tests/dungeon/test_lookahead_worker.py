@@ -14,9 +14,9 @@ Three plan bullets, TDD:
 No mocking of the dungeon/persistence/region_graph layer — real
 ``PgDungeonRepository`` over a migrated Postgres database, real
 ``materialize()`` pipeline through Tasks 1–6, real ``frontier_hook``
-producer. The ONLY mock is the curation LLM call (an injected
-ToolingLlmClient-shaped fake — the Task-4 SDK precedent; never a real
-network call).
+producer. ADR-106 Amendment C removed the LLM from the curate stage, so
+there is no curation client to inject — the whole pipeline (including
+curate) is real, deterministic, seeded compute.
 """
 
 from __future__ import annotations
@@ -76,7 +76,6 @@ def _register(dungeon_repository: Any, palette: Any, *, lookahead_breadth: int =
     from tests.dungeon.test_materializer import (
         _attach_pack,
         _real_cookbook_bundle,
-        _reflecting_sdk_client,
     )
 
     return register_lookahead_worker(
@@ -84,7 +83,6 @@ def _register(dungeon_repository: Any, palette: Any, *, lookahead_breadth: int =
         bundle=_real_cookbook_bundle(),
         palette=palette,
         pack_tropes=_attach_pack("cave_in"),
-        claude_client=_reflecting_sdk_client(),
         campaign_seed=7,
         lookahead_breadth=lookahead_breadth,
     )
@@ -220,7 +218,6 @@ async def test_default_lookahead_breadth_is_one(
     from tests.dungeon.test_materializer import (
         _attach_pack,
         _real_cookbook_bundle,
-        _reflecting_sdk_client,
     )
 
     _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
@@ -231,7 +228,6 @@ async def test_default_lookahead_breadth_is_one(
         bundle=_real_cookbook_bundle(),
         palette=palette,
         pack_tropes=_attach_pack("cave_in"),
-        claude_client=_reflecting_sdk_client(),
         campaign_seed=7,
     )
     try:
@@ -240,80 +236,6 @@ async def test_default_lookahead_breadth_is_one(
         )
     finally:
         handle.unregister()
-
-
-def _yielding_concurrency_probe_client(probe: dict[str, int]) -> Any:
-    """A ToolingLlmClient-shaped fake whose ``complete_with_tools`` (a)
-    reflects the curation verdict (the Task-4 SDK precedent — never a real
-    network call) and (b) yields control with ``await asyncio.sleep(0)``
-    so that IF two edges' ``materialize`` ran concurrently their curate
-    awaits would interleave. It tracks live concurrency: ``probe['max']``
-    is the peak number of simultaneously-suspended materialize runs.
-
-    With the breadth>1 serial fix, ``probe['max']`` MUST stay 1 (one task
-    materialises all edges serially — the next edge's ``load_map``/build
-    only runs after the prior edge's ``materialize`` incl. commit fully
-    returns). If the worker reverted to per-edge parallel tasks, the
-    sleep(0) yields would let curates overlap → ``probe['max'] >= 2`` AND
-    the expansion_id reads would collide on the same ``max+1`` → a
-    PersistError re-commit. This asserts REAL serialization, not an
-    instant fake resolving before the next task starts."""
-    import asyncio as _asyncio
-    import json as _json
-
-    from sidequest.agents.tooling_protocol import ToolingResult
-
-    class _ProbeSdk:
-        async def complete_with_tools(
-            self,
-            system_blocks: Any,
-            messages: Any,
-            tools: Any,
-            tool_dispatch: Any = None,
-            *,
-            model: str,
-            max_iterations: int = 8,
-            max_tokens: int = 4096,
-            # Absorb forward-added client kwargs (Story 82-9: caller=) so this
-            # probe double keeps tracking the real complete_with_tools signature.
-            **_kwargs: Any,
-        ) -> ToolingResult:
-            probe["live"] = probe.get("live", 0) + 1
-            probe["max"] = max(probe.get("max", 0), probe["live"])
-            try:
-                # Real cooperative yield: if a sibling edge's materialize
-                # were running concurrently it would advance here and
-                # bump 'live'.
-                await _asyncio.sleep(0)
-                await _asyncio.sleep(0)
-                prompt = messages[0].content
-                _, _, input_blob = prompt.partition("INPUT:\n")
-                payload = _json.loads(input_blob)
-                verdict = {
-                    region_id: {
-                        "race": region["race"],
-                        "cr_band": region["cr_band"],
-                        "wandering_table": [
-                            {**row, "telegraph": (row.get("telegraph") or "It is here.")}
-                            for row in region["wandering_table"]
-                        ],
-                        "big_bad": region["big_bad"],
-                    }
-                    for region_id, region in payload.items()
-                }
-                return ToolingResult(
-                    text=_json.dumps(verdict),
-                    stop_reason="end_turn",
-                    input_tokens=1,
-                    output_tokens=7,
-                    cached_input_read_tokens=0,
-                    cached_input_write_tokens=0,
-                    model=model,
-                )
-            finally:
-                probe["live"] -= 1
-
-    return _ProbeSdk()
 
 
 async def test_lookahead_breadth_greater_than_one_materializes_near_set_serially(
@@ -325,15 +247,12 @@ async def test_lookahead_breadth_greater_than_one_materializes_near_set_serially
     edges with breadth=N commits N new expansions (the nearest N by
     spawn_depth_score).
 
-    IMPORTANT: this asserts the REAL post-fix behaviour — the N edges are
-    materialised SERIALLY inside ONE background task, so the
-    ``expansion_id`` (``max+1``) reads cannot race even with a genuinely
-    suspending (slow) curate LLM call. The deterministic ``[2,3,4]`` is
-    a consequence of real serialization, NOT of an instant fake
-    resolving before the next task starts. The concurrency probe proves
-    only ONE materialize is ever in-flight at a time (peak == 1); a
-    parallel-per-edge regression would overlap the suspending curates
-    (peak >= 2) and collide the expansion_ids (PersistError)."""
+    The N edges are materialised SERIALLY inside ONE background task, so
+    the ``expansion_id`` (``max+1``) reads cannot race; the deterministic
+    ``[2,3,4]`` is a consequence of that serialization. (ADR-106
+    Amendment C removed the LLM from curate, so there is no longer a
+    suspending curate call to interleave — the former concurrency probe
+    is gone.)"""
     from sidequest.dungeon.lookahead_worker import register_lookahead_worker
     from sidequest.dungeon.persistence import FrontierEdge
     from sidequest.game.session import WorldStatePatch
@@ -367,13 +286,11 @@ async def test_lookahead_breadth_greater_than_one_materializes_near_set_serially
     rooted = [fe for fe in repo.load_frontier() if fe.from_region_id == target]
     assert len(rooted) >= 3, "test precondition: >=3 rooted edges"
 
-    probe: dict[str, int] = {"live": 0, "max": 0}
     obs = register_lookahead_worker(
         persistence=repo,
         bundle=_real_cookbook_bundle(),
         palette=palette,
         pack_tropes=_attach_pack("cave_in"),
-        claude_client=_yielding_concurrency_probe_client(probe),
         campaign_seed=7,
         lookahead_breadth=3,
     )
@@ -392,127 +309,12 @@ async def test_lookahead_breadth_greater_than_one_materializes_near_set_serially
         f"regression would collide expansion_ids → PersistError / fewer "
         f"than 3 distinct expansions)"
     )
-    # The keystone of IMPORTANT #2/#3: only ONE materialize was ever
-    # in-flight (real serialization, race-free regardless of curate
-    # suspension). A parallel regression would show peak >= 2.
-    assert probe["max"] == 1, (
-        f"breadth>1 materialized edges CONCURRENTLY (peak in-flight "
-        f"curate = {probe['max']}) — the expansion_id max+1 read races a "
-        f"slow curate subprocess (IMPORTANT #2); edges must be serialized "
-        f"within one background task"
-    )
 
 
 # ---------------------------------------------------------------------------
 # Bullet 3 (THE CENTRAL CONSTRAINT): worker exception is LOUD on a
 # terminal span AND does NOT propagate into the sync region transition.
 # ---------------------------------------------------------------------------
-
-
-async def test_worker_failure_loud_on_span_and_does_not_abort_transition(
-    monkeypatch: Any,
-    migrated_db: str,
-) -> None:
-    """Force ``materialize()`` to raise via a RETAINED hard curate
-    failure — ADR-106 Amendment A (story 50-26) carve-out (ii): a parsed
-    curated row missing ``cr`` still raises ``CurationError`` (degrading
-    it would corrupt the CR→Edge seam). NOTE: a *generic* curate failure
-    (unparseable verdict / ``LlmClientError``) no longer raises under
-    Amendment A — it Layer-2-degrades and the expansion commits uncurated,
-    so it would NOT exercise this central-constraint test. The carve-out
-    is the correct still-aborting failure mode. The worker MUST:
-
-      - emit a LOUD terminal ``frontier.lookahead`` span carrying the
-        failure (routed → GM-panel-visible; the dungeon failed to grow);
-      - NOT propagate the exception out of the synchronous
-        ``apply_world_patch`` region transition (the transition itself
-        completes: ``snap.current_region`` is the new region, no
-        exception raised to the caller).
-
-    Decisive central-constraint test: must FAIL if the observer re-raises
-    synchronously (the region crossing would abort for a mere prefetch
-    failure — core-gameplay fragility)."""
-    import sidequest.telemetry.spans as _spans_module
-    from sidequest.dungeon.lookahead_worker import register_lookahead_worker
-    from sidequest.game.session import WorldStatePatch
-    from sidequest.telemetry.spans import SPAN_ROUTES
-    from sidequest.telemetry.spans.dungeon_materialize import (
-        SPAN_FRONTIER_LOOKAHEAD,
-    )
-    from tests.dungeon.conftest import build_pg_dungeon_repo
-    from tests.dungeon.test_materializer import (
-        _attach_pack,
-        _missing_cr_sdk_client,
-        _real_cookbook_bundle,
-    )
-
-    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
-    palette = await _seed_expansion_one(repo)
-
-    frontier = repo.load_frontier()
-    target = frontier[0].from_region_id
-
-    # A fake SDK client returning a parseable verdict whose kept rows
-    # dropped `cr` → ADR-106 Amendment A retained carve-out (ii):
-    # _stage_curate STILL raises CurationError (NOT degraded — degrading
-    # would corrupt CR→Edge) → materialize raises → the background worker
-    # fails. The ONLY mocked seam (Task-4 SDK precedent).
-    failing_client = _missing_cr_sdk_client()
-
-    exporter, _provider, real_tracer = _otel_in_memory()
-    original_tracer_fn = _spans_module.tracer
-    _spans_module.tracer = lambda: real_tracer  # type: ignore[method-assign]
-
-    handle = register_lookahead_worker(
-        persistence=repo,
-        bundle=_real_cookbook_bundle(),
-        palette=palette,
-        pack_tropes=_attach_pack("cave_in"),
-        claude_client=failing_client,
-        campaign_seed=7,
-        lookahead_breadth=1,
-    )
-    try:
-        snap = _fresh_snapshot(target)
-        # THE CENTRAL CONSTRAINT: this synchronous apply must NOT raise
-        # even though the scheduled background worker will fail.
-        snap.apply_world_patch(WorldStatePatch(current_region=target))
-        # The region transition itself completed (not aborted by the
-        # prefetch failure).
-        assert snap.current_region == target, (
-            "the region transition did not complete — a background "
-            "look-ahead failure aborted the party's crossing (the central "
-            "constraint is violated: the observer must never re-raise "
-            "synchronously)"
-        )
-        await handle.drain()
-    finally:
-        handle.unregister()
-        _spans_module.tracer = original_tracer_fn  # type: ignore[method-assign]
-
-    # No expansion 2 committed (the worker genuinely failed).
-    nodes = repo.load_map(entrance_id="entrance").nodes.values()
-    assert all(n.expansion_id < 2 for n in nodes), (
-        "an expansion was committed despite the forced curation failure"
-    )
-
-    # The failure is LOUD on a terminal, ROUTED frontier.lookahead span
-    # (GM-panel-visible — the dungeon failed to grow, never silently
-    # swallowed).
-    finished = exporter.get_finished_spans()
-    la_spans = [s for s in finished if s.name == SPAN_FRONTIER_LOOKAHEAD]
-    failed = [s for s in la_spans if (s.attributes or {}).get("error") is not None]
-    assert failed, (
-        "no frontier.lookahead span carrying an `error` — the background "
-        "worker failure was silently swallowed (the GM panel cannot see "
-        "the dungeon failed to grow)"
-    )
-    route = SPAN_ROUTES[SPAN_FRONTIER_LOOKAHEAD]
-    routed = route.extract(failed[0])
-    assert routed.get("error") is not None and routed.get("reason"), (
-        "the failure marker is set on the span but NOT routed through "
-        "SPAN_ROUTES (the Task-2 lesson: set-but-not-routed is the defect)"
-    )
 
 
 async def test_no_frontier_along_heading_is_observable_not_silent(
@@ -629,7 +431,6 @@ async def test_sync_observer_body_failure_does_not_abort_region_crossing(
     from tests.dungeon.test_materializer import (
         _attach_pack,
         _real_cookbook_bundle,
-        _reflecting_sdk_client,
     )
 
     _pool, real_repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
@@ -651,7 +452,6 @@ async def test_sync_observer_body_failure_does_not_abort_region_crossing(
         bundle=_real_cookbook_bundle(),
         palette=palette,
         pack_tropes=_attach_pack("cave_in"),
-        claude_client=_reflecting_sdk_client(),
         campaign_seed=7,
         lookahead_breadth=1,
     )

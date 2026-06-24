@@ -233,7 +233,6 @@ async def test_lookahead_worker_materializes_from_real_region_transition(
     from tests.dungeon.test_materializer import (
         _attach_pack,
         _real_cookbook_bundle,
-        _reflecting_sdk_client,
     )
 
     # --- Teeth half: worker NOT registered → no look-ahead expansion. ---
@@ -267,7 +266,6 @@ async def test_lookahead_worker_materializes_from_real_region_transition(
         bundle=_real_cookbook_bundle(),
         palette=palette_b,
         pack_tropes=_attach_pack("cave_in"),
-        claude_client=_reflecting_sdk_client(),
         campaign_seed=7,
         lookahead_breadth=1,
     )
@@ -337,7 +335,6 @@ async def test_mask_emit_fires_from_real_materialize_pipeline(
         _make_request_task3,
         _otel_in_memory,
         _real_cookbook_bundle,
-        _reflecting_sdk_client,
         _seed_graph_themed,
     )
 
@@ -361,7 +358,6 @@ async def test_mask_emit_fires_from_real_materialize_pipeline(
             dungeon_repository=repo,
             snapshot=_fresh_snapshot(),
             pack_tropes=_attach_pack("cave_in"),
-            claude_client=_reflecting_sdk_client(),
         )
     finally:
         _spans_module.tracer = original_tracer_fn  # type: ignore[method-assign]

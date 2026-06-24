@@ -14,12 +14,11 @@ Pipeline shape
     design → fill → curate → attach → commit
 
 All stages run inside a parent ``dungeon.materialize`` OTEL span; each stage's child span
-nests under it in order.  Only the curate stage is ``await``-ed; the other four are
-synchronous calls inside the async coordinator.  The async shape is forced by the SDK
-``complete_with_tools`` being a coroutine: a nested ``asyncio.run`` from the running uvicorn
-event loop (or from the Task-7 async look-ahead worker) would raise ``RuntimeError``
-unconditionally, so ``materialize`` is declared ``async def`` and the curate stage is
-``async def _stage_curate``.
+nests under it in order.  All five stages are synchronous (ADR-106 Amendment C removed the
+LLM from curate, so ``_stage_curate`` is plain seeded compute and is no longer awaited).
+``materialize`` itself remains ``async def`` so the existing ``await materialize(...)`` call
+sites (session integration, the look-ahead worker, the suite) are unchanged; collapsing the
+coordinator + worker to synchronous calls is a separable fast-follow (story 158-12 AC7).
 
 ``MaterializationRequest`` is a frozen, hashable value object (``@dataclass(frozen=True,
 slots=True)``) carrying the full specification for one materialisation run.
@@ -91,18 +90,17 @@ Byte-pinned span contracts (consumed here)
 Contracts (No Silent Fallbacks / save-is-truth)
 -----
 
-- **Curation-failure-is-LOUD**: the one-shot SDK curation pass
-  (``complete_with_tools``) failing (``LlmClientError``), returning non-JSON, or
-  returning a non-dict ALWAYS raises ``CurationError`` and
-  aborts the materialisation transaction.  There is NO fallback that ships the raw
-  assembled manifest stamped as curated.  The curate span carries ``curated=false`` +
+- **Invalid-manifest-is-LOUD**: a structurally-invalid *assembled* manifest (a wandering
+  row missing ``cr``, an unknown ``cr_band`` big_bad — carve-out (i)) ALWAYS raises
+  ``CurationError`` and aborts the materialisation transaction.  There is NO fallback that
+  ships a corrupt manifest as content.  The curate span carries ``curated=false`` +
   ``reason`` before the raise (lie-detector visibility).
 
-- **Save-is-truth**: the raw design + fill output is seed-reproducible (``_region_interior_seed``
-  is a deterministic blake2b mixer).  Curation DELIBERATELY breaks byte-reproducibility
-  (the LLM pass selects/refines; its output is not seed-deterministic).  Frozen expansions
-  and ``.rolled`` set-piece state are NEVER recomputed from seed — if they are in the save
-  they are final.
+- **Save-is-truth AND seed-reproducible**: ADR-106 Amendment C removed the LLM from curate,
+  so the WHOLE pipeline (design + fill + curate) is now seed-reproducible — same seed ⇒ same
+  roster (``_region_interior_seed`` is a deterministic blake2b mixer; curate is pure seeded
+  translation).  Frozen expansions and ``.rolled`` set-piece state are still NEVER recomputed
+  from seed once persisted — if they are in the save they are final.
 
 -----
 Async pipeline + look-ahead worker
@@ -110,8 +108,9 @@ Async pipeline + look-ahead worker
 
 ``async def materialize`` is the coordinator; the frontier look-ahead worker
 (``lookahead_worker.register_lookahead_worker``) is its async consumer — it ``await``s
-``materialize(...)`` directly from inside a background task, which is why the event-loop
-ownership must be unambiguous (no nested ``asyncio.run``).
+``materialize(...)`` directly from inside a background task.  Post-Amendment-C the
+coordinator no longer awaits anything internally (curate is synchronous seeded compute);
+it stays ``async def`` only so these call sites are unchanged until the AC7 sync collapse.
 
 **HONEST AS-BUILT STATUS (do not overclaim):**  ``lookahead_worker.register_lookahead_worker``
 is a complete, wiring-tested implementation proven end-to-end against the REAL
@@ -131,12 +130,10 @@ without checking for that story.
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import hashlib
 import json
 import logging
-import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -144,9 +141,8 @@ from typing import Any
 
 from opentelemetry import trace as _otel_trace
 
-from sidequest.agents.claude_client import LlmClientError
-from sidequest.agents.model_routing import CallType, resolve_model
-from sidequest.agents.tooling_protocol import CacheableBlock, Message
+from sidequest.dungeon.expansion_quest import _deepest as _expansion_deepest
+from sidequest.dungeon.expansion_quest import seed_expansion_quest
 from sidequest.dungeon.interiors import generate_interior
 from sidequest.dungeon.interiors.grid import WALL, Grid
 from sidequest.dungeon.persistence import FrontierEdge, PersistError
@@ -172,8 +168,6 @@ from sidequest.game.repository import DungeonRepository, DungeonTransaction
 from sidequest.game.session import GameSnapshot
 from sidequest.telemetry.spans.dungeon_materialize import (
     dungeon_curate_authored_bind_failed_span,
-    dungeon_curate_degraded_span,
-    dungeon_curate_parse_failed_span,
     dungeon_materialize_attach_span,
     dungeon_materialize_commit_span,
     dungeon_materialize_curate_span,
@@ -186,22 +180,6 @@ from sidequest.telemetry.spans.dungeon_materialize import (
 )
 
 logger = logging.getLogger(__name__)
-
-# ADR-106 Amendment A (story 50-26) — Layer-1 wall-clock cap on the WHOLE
-# curate stage (all attempts). Module-level so it is injectable (tests set
-# a tiny value; the deadline path is otherwise unverifiable without a 25 s
-# test). The load-bearing no-multi-minute-freeze guarantee.
-CURATE_DEADLINE_S: float = 25.0
-
-# Story 153-26: the band cap is the per-region budget × region count (so the
-# deadline tracks the work — see _stage_curate), but it MUST stay bounded. The
-# bootstrap materialize() is awaited on the connect handler, so an unbounded
-# N×budget could hold the player-facing connect open for minutes on a large
-# expansion (up to JaquaysConfig.new_regions_per_expansion regions). This ceiling
-# restores the load-bearing no-multi-minute-freeze guarantee the old fixed cap
-# gave. Module-level so it is injectable (tests clamp it tiny). 120s ≈ the old
-# fixed cap times a generous band — honest, but never a multi-minute hang.
-MAX_BAND_DEADLINE_S: float = 120.0
 
 __all__ = [
     "AttachResult",
@@ -513,14 +491,14 @@ def _curated_to_payload(c: CuratedCreature) -> dict:
 class RegionCuration:
     """In-memory curated content for one expansion (Plan 7 Task 4).
 
-    Curation deliberately breaks byte-reproducibility (the one-shot SDK
-    ``complete_with_tools`` pass): ``assemble_region`` is deterministic up
-    to the seam, the post-curation output is NOT seed-reproducible — the save, not the
-    seed, is truth (spec §7). This is the curate stage's OUTPUT; applying
-    it to a ``GameSnapshot`` / persisting it is Task 6 (commit). Because
-    every creature here already carries an :class:`HpPool` and no raw
-    cr, Task 6 commits an HP-seeded snapshot (no raw-cr-in-committed-
-    snapshot — flagged for Task 6's snapshot-application binding).
+    ADR-106 Amendment C: curation is now pure-deterministic and
+    seed-reproducible — the LLM was removed, so the same campaign_seed
+    produces the SAME roster (``assemble_region`` is deterministic and
+    ``_creatures_from_manifest`` is a pure CR→Edge translation of it).
+    This is the curate stage's OUTPUT; applying it to a ``GameSnapshot`` /
+    persisting it is the commit stage. Because every creature here already
+    carries an :class:`HpPool` and no raw cr, commit writes an HP-seeded
+    snapshot (no raw-cr-in-committed-snapshot).
 
     Note: ``frozen`` blocks field reassignment but the dict/list fields
     are mutable; treat them as read-only by convention (same
@@ -532,12 +510,11 @@ class RegionCuration:
     region_big_bad: dict[str, CuratedCreature | None]
     region_look: dict[str, str]
     curated: bool = True
-    raw_seed_reproducible: bool = field(default=False)
-    # ADR-106 Amendment A: region ids that Layer-2-degraded (shipped the
-    # deterministic assemble_region manifest instead of a curated verdict).
-    # Empty on a fully-curated expansion. `curated` is the expansion-level
-    # rollup — it is False whenever this is non-empty (a degraded region is
-    # NEVER stamped curated=True: the forbidden silent fallback).
+    # ADR-106 Amendment C: materialization is seed-reproducible end-to-end.
+    raw_seed_reproducible: bool = field(default=True)
+    # ADR-106 Amendment C: the deterministic path never degrades, so this is
+    # always empty. Retained as a frozen field for the GM-panel/commit contract
+    # (a non-empty set would mean a region shipped uncurated — impossible now).
     uncurated_regions: frozenset[str] = field(default=frozenset())
 
     def creatures_for_region(self, region_id: str) -> list[CuratedCreature]:
@@ -874,12 +851,14 @@ def _stage_fill(
 
 
 class CurationError(RuntimeError):
-    """The bounded one-shot SDK ``complete_with_tools`` curation pass failed.
+    """A structurally-invalid *assembled* manifest reached the curate stage.
 
-    Raised loudly so the materialization transaction aborts — there is no
-    fallback that ships the raw manifest stamped curated (spec §7 / No
-    Silent Fallbacks). The curate span carries ``curated=false`` + a
-    specific ``reason`` before this propagates so the GM panel sees it.
+    ADR-106 Amendment C carve-out (i): a wandering row missing ``cr`` or an
+    unknown ``cr_band`` big_bad is a real upstream content bug. Raised loudly
+    so the materialization transaction aborts — there is no fallback that
+    ships a corrupt manifest as content (No Silent Fallbacks). The curate span
+    carries ``curated=false`` + a specific ``reason`` before this propagates so
+    the GM panel sees it.
     """
 
 
@@ -920,101 +899,26 @@ def _resolve_look_for_theme(bundle: CookbookBundle, theme: Any, *, region_id: st
     return matches[0]
 
 
-def _build_curation_prompt(
-    manifests: dict[str, RegionContentManifest],
-    looks: dict[str, str],
-) -> str:
-    """One bounded prompt covering spec §7 'pass 1 content, pass 2
-    creatures' in a SINGLE one-shot SDK ``complete_with_tools`` call
-    (ADR-098: no tools mid-generation, no --resume). The model
-    selects/refines to ship quality and returns a strict JSON verdict
-    mirroring the manifest shape (so curation is auditable, not free-form
-    prose)."""
-    payload = {
-        region_id: {
-            "look": looks[region_id],
-            "race": m.race,
-            "cr_band": m.cr_band,
-            "wandering_table": m.wandering_table,
-            "big_bad": m.big_bad,
-        }
-        for region_id, m in manifests.items()
-    }
-    return (
-        "You are curating one procedurally-assembled dungeon expansion for "
-        "Beneath Sünden (grave, lethal, Moria-as-tragedy; no winking).\n"
-        "PASS 1 (content): for each region keep the cohesive subset of the "
-        "wandering table that fits the region's look and CR band; drop rows "
-        "that read as noise. PASS 2 (creatures): tighten each kept row's "
-        "telegraph to one grave, specific sentence. Keep the big_bad if "
-        "present.\n"
-        "Return ONLY strict JSON, no prose, of the shape: "
-        '{"<region_id>": {"race": str, "cr_band": str, '
-        '"wandering_table": [{"name": str, "cr": number, "xp": number, '
-        '"type": str, "weight": number, "count": str, "telegraph": str}], '
-        '"big_bad": {"name": str, "min_band": str} | null}}.\n'
-        "Preserve every kept row's name/cr/xp/type verbatim (curation "
-        "selects and refines telegraphs; it does not invent stats).\n\n"
-        f"INPUT:\n{json.dumps(payload, sort_keys=True)}"
-    )
-
-
-def _parse_curation_verdict(text: str) -> dict[str, Any]:
-    """Parse the curator's JSON verdict. Unparseable → loud CurationError
-    (never a fallback to the raw manifest)."""
-    stripped = text.strip()
-    # Tolerate a ```json fence the model may wrap around the object.
-    if stripped.startswith("```"):
-        stripped = stripped.strip("`")
-        if stripped.startswith("json"):
-            stripped = stripped[4:]
-        stripped = stripped.strip()
-    try:
-        verdict = json.loads(stripped)
-    except json.JSONDecodeError as exc:
-        raise CurationError(
-            f"curation pass returned unparseable output (not JSON): {exc}; head={stripped[:200]!r}"
-        ) from exc
-    if not isinstance(verdict, dict):
-        raise CurationError(
-            f"curation verdict must be a JSON object keyed by region_id; "
-            f"got {type(verdict).__name__}"
-        )
-    return verdict
-
-
-def _classify_parse_failure(exc: Exception) -> str:
-    """Map a curate-attempt failure to an ADR-106 Amendment A
-    ``failure_kind`` ∈ {truncated, malformed, llm_error}. ``deadline`` is
-    set by the caller (it is a timeout, not an exception of the call)."""
-    if isinstance(exc, LlmClientError):
-        return "llm_error"
-    # CurationError from _parse_curation_verdict. "Unterminated string" is
-    # the pingpong truncation signature; everything else (Expecting value,
-    # non-dict, …) is malformed.
-    return "truncated" if "Unterminated" in str(exc) else "malformed"
-
-
 def _creatures_from_manifest(
     manifest: RegionContentManifest, bundle: CookbookBundle
 ) -> tuple[list[CuratedCreature], CuratedCreature | None]:
-    """ADR-106 Amendment A Layer-2 degrade content: CR→Edge translate the
-    deterministic pre-curation ``assemble_region`` manifest itself (clause
-    9 — valid, complete, seed-reproducible). Same CR→Edge seam the curated
-    path uses; sourced from the manifest, not a (failed) verdict.
+    """ADR-106 Amendment C — the deterministic curate MAIN path: CR→Edge
+    translate the seeded ``assemble_region`` manifest itself (clause 9 — valid,
+    complete, seed-reproducible). Sourced from the manifest (no LLM verdict). The
+    same payload Amendment A used only on its Layer-2 degrade is now the ONLY
+    curate path.
 
     A manifest row/big_bad that cannot CR→Edge translate is the RETAINED
-    ``CurationError`` carve-out (i): the assembled input is itself
-    structurally invalid — a real upstream bug; never degrade a corrupt
-    input into shipped content.
+    ``CurationError`` carve-out (i): the assembled input is itself structurally
+    invalid — a real upstream content bug; fail loud, never ship a corrupt input.
     """
     creatures: list[CuratedCreature] = []
     for row in manifest.wandering_table:
         if "cr" not in row:
             raise CurationError(
                 f"assembled manifest wandering row {row!r} has no 'cr' — "
-                f"the pre-curation manifest is itself invalid (Amendment A "
-                f"carve-out i); cannot degrade a corrupt input"
+                f"the assembled manifest is itself invalid (carve-out i); "
+                f"fail loud, never ship a corrupt input"
             )
         creatures.append(
             CuratedCreature(
@@ -1039,8 +943,7 @@ def _creatures_from_manifest(
                 raise CurationError(
                     f"assembled manifest big_bad has no cr and cr_band "
                     f"{manifest.cr_band!r} is not in affinities.cr_bands — "
-                    f"the pre-curation manifest is itself invalid "
-                    f"(Amendment A carve-out i)"
+                    f"the assembled manifest is itself invalid (carve-out i)"
                 )
             bb_cr = band.cr_max
         bb_src = manifest.big_bad if isinstance(manifest.big_bad, dict) else {}
@@ -1061,30 +964,29 @@ def _append_authored_creatures(
     pack: Any,
     world_slug: str,
 ) -> list[CuratedCreature]:
-    """Story 153-26: even when a region Layer-2-degrades, surface its AUTHORED
-    ``rooms/<id>.yaml`` ``encounter_creatures`` binding.
+    """Surface a region's AUTHORED ``rooms/<id>.yaml`` ``encounter_creatures``
+    binding (Story 153-26; ADR-106 Amendment C: this runs on the deterministic
+    curate MAIN path, for every region — not a degrade fallback).
 
     ``_creatures_from_manifest`` translates only the PROCEDURAL
-    ``assemble_region`` manifest, so a degrade silently drops authored
-    encounters (``entrance`` → ``gnaw_swarm``). ``resolve_room_creatures`` is the
-    LLM-free authored-binding read shared with the runtime Monster Manual seam
-    (it emits ``monster_manual.room_bound``); consulting it here makes authored
-    content survive the degrade rather than vanish into the deterministic coal.
+    ``assemble_region`` manifest, so without this step authored encounters
+    (``entrance`` → ``gnaw_swarm``) would never surface. ``resolve_room_creatures``
+    is the LLM-free authored-binding read shared with the runtime Monster Manual
+    seam (it emits ``monster_manual.room_bound``); consulting it here makes
+    authored content join the deterministic procedural roster.
 
     A region with no authored binding (the common procedural case) is returned
     unchanged. ``pack=None`` / blank ``world_slug`` (test/bootstrap inputs with no
-    world context) is a no-op, preserving the prior packless degrade shape — NOT
-    a silent fallback, just an absent binding.
+    world context) is a no-op — NOT a silent fallback, just an absent binding.
 
     A binding referencing an unknown bestiary id (or a world with no bestiary at
     all) is an AUTHORING error: ``resolve_room_creatures`` raises
     ``RoomCreatureBindingError``. On THIS path that error must stay LOUD-but-
-    GRACEFUL (ADR-106 Amendment A degrade contract: "LOUD degrade, the turn
-    proceeds, no table freeze") — it is caught, logged at ERROR, and surfaced on
-    the ``dungeon.curate.authored_bind_failed`` span, then the degrade PROCEEDS
-    with the procedural coal. Letting it propagate would crash the player-facing
-    bootstrap ``await materialize()`` at connect for a single content typo
-    (Reviewer 153-26 HIGH).
+    GRACEFUL: it is caught, logged at ERROR, and surfaced on the
+    ``dungeon.curate.authored_bind_failed`` span, then curate PROCEEDS with the
+    procedural roster (the turn proceeds, no table freeze). Letting it propagate
+    would crash the player-facing bootstrap ``await materialize()`` at connect for
+    a single content typo (Reviewer 153-26 HIGH).
     """
     if pack is None or not world_slug:
         return creatures
@@ -1098,14 +1000,15 @@ def _append_authored_creatures(
     try:
         bound_ids = resolve_room_creatures(pack, world_slug, region_id)
     except RoomCreatureBindingError as exc:
-        # Loud-but-graceful: the degrade is already shipping coal — a broken
-        # authored binding must NOT additionally crash the connect. Surface it
-        # (ERROR log + GM-panel span) and proceed with the procedural creatures.
+        # Loud-but-graceful: curate is already shipping the procedural roster —
+        # a broken authored binding must NOT additionally crash the connect.
+        # Surface it (ERROR log + GM-panel span) and proceed with the procedural
+        # creatures.
         logger.error(
-            "dungeon curate degrade: authored room binding for region=%s "
-            "world=%s could not be resolved (%s); shipping procedural coal only "
-            "— authored encounter dropped (ADR-106 Amendment A: loud, but the "
-            "turn proceeds, no table freeze)",
+            "dungeon curate: authored room binding for region=%s "
+            "world=%s could not be resolved (%s); shipping the procedural roster "
+            "only — authored encounter dropped (ADR-106 Amendment C: loud-but-"
+            "graceful on the main path, the turn proceeds, no table freeze)",
             region_id,
             world_slug,
             exc,
@@ -1129,7 +1032,7 @@ def _append_authored_creatures(
             # reads diverged (effective_bestiary is pure — should be impossible).
             # Log LOUD for observability rather than dropping it silently.
             logger.error(
-                "dungeon curate degrade: authored binding id=%s for region=%s "
+                "dungeon curate: authored binding id=%s for region=%s "
                 "resolved by resolve_room_creatures but is absent from the "
                 "effective bestiary — dropping (divergent bestiary read?)",
                 cid,
@@ -1152,54 +1055,7 @@ def _append_authored_creatures(
     return merged
 
 
-def _degrade_region(
-    *,
-    region_id: str,
-    manifest: RegionContentManifest,
-    bundle: CookbookBundle,
-    failure_kind: str,
-    attempts: int,
-    elapsed_ms: int,
-    reason: str,
-    pack: Any = None,
-    world_slug: str = "",
-) -> tuple[list[CuratedCreature], CuratedCreature | None]:
-    """ADR-106 Amendment A Layer 2 — LOUD degrade for one region: an
-    ERROR-level log (No-Silent-Fallbacks: never a swallowed except) + a
-    routed ``dungeon.curate.degraded`` span (clause-12 GM-panel lie
-    detector) + the deterministic manifest content. The region is honest
-    coal stamped ``curated=false``, never a raw-manifest-stamped-curated
-    silent lie.
-
-    Story 153-26: the degraded region ALSO surfaces its authored
-    ``encounter_creatures`` binding (``_append_authored_creatures``) so a
-    timeout/parse degrade no longer silently drops authored encounters."""
-    logger.error(
-        "dungeon curate degraded region=%s failure_kind=%s attempts=%d "
-        "elapsed_ms=%d reason=%s — shipping the deterministic "
-        "assemble_region manifest stamped curated=false (ADR-106 "
-        "Amendment A Layer 2; turn proceeds, no table freeze)",
-        region_id,
-        failure_kind,
-        attempts,
-        elapsed_ms,
-        reason,
-    )
-    with dungeon_curate_degraded_span(
-        region_id=region_id,
-        failure_kind=failure_kind,
-        attempts=attempts,
-        elapsed_ms=elapsed_ms,
-    ):
-        pass
-    creatures, big_bad = _creatures_from_manifest(manifest, bundle)
-    creatures = _append_authored_creatures(
-        creatures, region_id=region_id, pack=pack, world_slug=world_slug
-    )
-    return creatures, big_bad
-
-
-async def _stage_curate(
+def _stage_curate(
     request: MaterializationRequest,
     *,
     bundle: CookbookBundle | None,
@@ -1207,36 +1063,34 @@ async def _stage_curate(
     expansion: Expansion | None,
     fill_result: dict[str, RegionFill] | None,
     is_first_band_entry: bool,
-    claude_client: Any,
     span: _otel_trace.Span,
     pack: Any = None,
 ) -> RegionCuration:
-    """Plan 7 Task 4: curate stage — assemble_region + one-shot SDK
-    ``complete_with_tools`` + the owned CR→Edge seam.
+    """ADR-106 Amendment C: deterministic curate stage — NO LLM.
 
-    Generation proposes; curation disposes. For every region in the
+    Generation proposes; the seed disposes. For every region in the
     expansion: derive its cookbook LOOK from its theme (the resolved
     look→theme seam), call the pure deterministic
     ``cookbook.assemble_region`` (campaign_seed/expansion_id int→str at
-    this seam — DIVERGENCE 1), then run ONE bounded one-shot SDK
-    ``complete_with_tools`` pass (ADR-098 one-shot; spec §7 pass1+pass2 in
-    a single call, the codebase-idiomatic SDK precedent) to select/refine
-    to ship quality. Every corpus creature crossing the seam (wandering
-    rows AND big_bad) is CR→Edge translated via the single canonical
-    ``hp_pool_from_hp`` — no raw cr/hp leaks into the
-    curate-stage OUTPUT (so Task 6 commits HP-seeded actors).
+    this seam — DIVERGENCE 1), then CR→Edge translate the seeded manifest
+    directly via ``_creatures_from_manifest`` and surface the authored
+    ``rooms/<id>.yaml`` ``encounter_creatures`` binding via
+    ``_append_authored_creatures``. This is the Amendment-A Layer-2 payload
+    promoted to the ONLY path: materialization is pure-deterministic and
+    seed-reproducible end-to-end. The live narrator owns creature prose at
+    narration time (the deterministic ``telegraph`` is its hint), so the
+    former Haiku ``complete_with_tools`` curate call — and the whole
+    retry/deadline/degrade ladder that existed only to survive it — are
+    deleted. Every corpus creature crossing the seam (wandering rows AND
+    big_bad) is CR→Edge translated via the canonical ``hp_pool_from_hp`` —
+    no raw cr/hp leaks into the curate-stage OUTPUT.
 
-    ``async def``: ``complete_with_tools`` is a coroutine and the event
-    loop is owned by the caller (uvicorn in prod, pytest-asyncio
-    ``asyncio_mode=auto`` in tests). There is NO ``asyncio.run`` anywhere
-    in production — a nested ``asyncio.run`` from the running uvicorn loop
-    (and from Task 7's async look-ahead worker) would raise
-    ``RuntimeError`` unconditionally. The other four stages stay
-    synchronous; only curate awaits.
+    Synchronous (Amendment C): with no coroutine to await, the curate stage
+    is plain seeded compute. ``materialize`` calls it without ``await``.
 
     Invariants (No Silent Fallbacks):
-    - ``bundle``/``palette``/``expansion``/``claude_client`` must be real
-      objects — ``None`` is rejected loudly.
+    - ``bundle``/``palette``/``expansion`` must be real objects — ``None``
+      is rejected loudly.
     - A region's cookbook LOOK is ALWAYS derived loudly from its theme
       (``_resolve_look_for_theme`` — an unresolved look is a loud
       ``ValueError``; NEVER a ``looks[0]`` default; a multi-bind is also
@@ -1245,14 +1099,14 @@ async def _stage_curate(
     - ``is_first_band_entry`` is an EXPLICIT threaded input — true
       band-entry history needs Plan 5 persistence (``load_frontier`` /
       ``load_map``) the curate stage does NOT own. Computing it from
-      incomplete state here would be a silent fallback; Task 6 (commit,
-      which owns persistence) owns the real band-entry-history
-      computation. (Reconcile seam: ``is_first_band_entry``.)
-    - A curation LLM-call failure (``LlmClientError`` — network / API /
-      empty) OR an unparseable verdict raises a loud ``CurationError``
-      and aborts the transaction — it does NOT fall back to shipping the
-      raw manifest stamped curated. The span records ``curated=false`` +
-      a specific ``reason`` before the raise (lie-detector visibility).
+      incomplete state here would be a silent fallback; the commit stage
+      owns the real band-entry-history computation. (Reconcile seam:
+      ``is_first_band_entry``.)
+    - A structurally-invalid *assembled* manifest (a wandering row missing
+      ``cr``, an unknown ``cr_band`` big_bad) raises a loud ``CurationError``
+      (carve-out (i)) — a real upstream content bug is never degraded into
+      shipped content. The span records ``curated=false`` + a specific
+      ``reason`` before the raise (lie-detector visibility).
     """
     if bundle is None:
         raise ValueError(
@@ -1276,12 +1130,6 @@ async def _stage_curate(
             "_stage_curate requires the fill stage result — "
             "fill_result=None is not valid (No Silent Fallbacks)"
         )
-    if claude_client is None:
-        raise ValueError(
-            "_stage_curate requires an injected SDK client "
-            "(ToolingLlmClient) — claude_client=None is not valid "
-            "(No Silent Fallbacks)"
-        )
 
     campaign_seed_s = str(request.campaign_seed)  # DIVERGENCE 1: int→str seam
     expansion_id_s = str(request.expansion_id)  # DIVERGENCE 1: int→str seam
@@ -1289,6 +1137,8 @@ async def _stage_curate(
 
     manifests: dict[str, RegionContentManifest] = {}
     region_look: dict[str, str] = {}
+    region_creatures: dict[str, list[CuratedCreature]] = {}
+    region_big_bad: dict[str, CuratedCreature | None] = {}
     try:
         for node in expansion.new_nodes:
             if node.theme not in palette.themes:
@@ -1305,7 +1155,7 @@ async def _stage_curate(
             # default, never a first-match).
             resolved_look = _resolve_look_for_theme(bundle, theme, region_id=node.id)
             region_look[node.id] = resolved_look
-            manifests[node.id] = assemble_region(
+            manifest = assemble_region(
                 bundle,
                 campaign_seed=campaign_seed_s,
                 expansion_id=expansion_id_s,
@@ -1326,250 +1176,68 @@ async def _stage_curate(
                 pack_id=request.genre_slug or None,
                 world_slug=request.world_slug or None,
             )
-    except ValueError as exc:
-        span.set_attribute("curated", False)
-        span.set_attribute("reason", f"assemble: {exc}")
-        raise
-
-    # ADR-106 Amendment A — Curate-stage robustness contract (story 50-26).
-    # Layer 0: max_tokens=16384 (retained, b846544). Layer 1: ONE bounded
-    # whole-call retry (exactly 2 attempts) under a wall-clock cap
-    # (CURATE_DEADLINE_S). Layer 2: LOUD degrade-to-uncurated — ship the
-    # deterministic assemble_region manifest stamped curated=false, with a
-    # per-region uncurated marker, an ERROR log, and a routed
-    # dungeon.curate.degraded span; the turn proceeds (no table freeze).
-    # CurationError is RETAINED only for the two carve-outs: (i) the
-    # assembled manifest itself invalid (_creatures_from_manifest), (ii) a
-    # parsed curated row missing 'cr' (degrading would corrupt the CR→Edge
-    # seam). complete_with_tools is a coroutine; the loop is owned by the
-    # caller (uvicorn / pytest) — NO asyncio.run. Each attempt is an
-    # independent one-shot (ADR-098: no --resume, no mid-gen tools, no
-    # continuation, NOT JSON repair — the truncated tail is never invented).
-    prompt = _build_curation_prompt(manifests, region_look)
-    system_blocks = [
-        CacheableBlock(
-            text=(
-                "You curate procedural dungeon regions: select and refine "
-                "each region's creatures, CR band, wandering table, and "
-                "telegraphs. Reply with the verdict JSON only."
-            ),
-            cache=False,
-        )
-    ]
-    region_ids_repr = ",".join(sorted(manifests))
-    started = time.monotonic()
-
-    async def _one_attempt() -> dict[str, Any]:
-        # Story 92-2: SCRATCH consults the classification seam. With
-        # SIDEQUEST_CLASSIFICATION_BACKEND=ollama the curate one-shot routes
-        # to the local rung — the call is a plain completion (tools=[]), so
-        # ``send_stateless`` serves it. ``OllamaClientError`` is an
-        # ``LlmClientError``, so a transport failure flows the SAME loud
-        # retry→degrade ladder below — never a silent fallback to Anthropic
-        # (the injected ``claude_client`` is untouched on this path). The
-        # seam is consulted per attempt and fails loud on an unknown value
-        # (``UnknownClassificationBackend`` is a ``ValueError``, outside the
-        # ladder's catch — a config typo aborts, it does not degrade).
-        from sidequest.agents.llm_factory import build_local_classifier_client
-        from sidequest.agents.model_routing import classification_backend
-
-        if classification_backend() == "ollama":
-            # Review rework [SEC HIGH]: ``send_with_session`` (role-separated
-            # /api/chat messages) NOT ``send_stateless`` (flattens system+user).
-            # The curate instruction is the ``role: system`` turn; the manifest
-            # INPUT is the ``role: user`` turn — never folded together.
-            resp = await build_local_classifier_client().send_with_session(
-                prompt=prompt,
-                system_prompt=system_blocks[0].text,
-                session_id=None,
-                model=resolve_model(CallType.SCRATCH),
-            )
-            return _parse_curation_verdict(resp.text)
-        result = await claude_client.complete_with_tools(
-            system_blocks=system_blocks,
-            messages=[Message(role="user", content=prompt)],
-            tools=[],
-            tool_dispatch=None,
-            model=resolve_model(CallType.SCRATCH),
-            max_tokens=16384,  # Layer 0 (retained)
-            # Story 82-9: tag this non-narrator curate loop so its tool_loop
-            # summary span is filtered OUT of the narrator solo-turn p95 source.
-            caller="dungeon_curate",
-        )
-        return _parse_curation_verdict(result.text)
-
-    verdict: dict[str, Any] | None = None
-    attempts = 0
-    degrade_kind = "malformed"
-    degrade_reason = "curate verdict never parsed"
-    # Story 153-26: an HONEST per-region budget. The whole band is curated in
-    # one bounded call, so a single FIXED cap degraded the ENTIRE band the
-    # instant the band grew large enough that normal LLM latency crossed it
-    # (the 30337ms-vs-25000ms beneath_sunden playtest failure on exp001.r2..r5).
-    # Scale the wall-clock cap with the region count so the budget tracks the
-    # work: CURATE_DEADLINE_S is now the per-region budget; the band gets N x it,
-    # BOUNDED by MAX_BAND_DEADLINE_S so a large band can never hold the connect
-    # open for minutes (the no-multi-minute-freeze guarantee — story 153-26).
-    band_deadline_s = min(CURATE_DEADLINE_S * max(1, len(manifests)), MAX_BAND_DEADLINE_S)
-    try:
-        async with asyncio.timeout(band_deadline_s):
-            for attempt in range(1, 3):  # Layer 1: exactly 1 retry
-                attempts = attempt
-                try:
-                    verdict = await _one_attempt()
-                    break
-                except (LlmClientError, CurationError) as exc:
-                    degrade_kind = _classify_parse_failure(exc)
-                    degrade_reason = str(exc)
-                    with dungeon_curate_parse_failed_span(
-                        region_id=region_ids_repr,
-                        failure_kind=degrade_kind,
-                        attempt=attempt,
-                    ):
-                        pass
-    except TimeoutError:
-        degrade_kind = "deadline"
-        degrade_reason = (
-            f"curate exceeded the {band_deadline_s}s band wall-clock cap "
-            f"({CURATE_DEADLINE_S}s/region x {len(manifests)} regions)"
-        )
-        attempts = attempts or 1
-
-    elapsed_ms = int((time.monotonic() - started) * 1000)
-
-    region_creatures: dict[str, list[CuratedCreature]] = {}
-    region_big_bad: dict[str, CuratedCreature | None] = {}
-    uncurated: set[str] = set()
-
-    if verdict is None:
-        # Layer 1 exhausted (2 failed attempts) OR the wall-clock cap fired
-        # → Layer 2 LOUD degrade for EVERY region. No raise, no frozen turn.
-        for region_id, manifest in manifests.items():
-            creatures, big_bad = _degrade_region(
-                region_id=region_id,
-                manifest=manifest,
-                bundle=bundle,
-                failure_kind=degrade_kind,
-                attempts=attempts,
-                elapsed_ms=elapsed_ms,
-                reason=degrade_reason,
+            manifests[node.id] = manifest
+            # ADR-106 Amendment C: deterministic curate — CR→Edge translate
+            # the seeded manifest directly (the Amendment-A Layer-2 payload,
+            # now the ONLY path), then surface the authored rooms/<id>.yaml
+            # encounter_creatures binding. No LLM, no degrade ladder.
+            creatures, big_bad = _creatures_from_manifest(manifest, bundle)
+            creatures = _append_authored_creatures(
+                creatures,
+                region_id=node.id,
                 pack=pack,
                 world_slug=request.world_slug,
             )
-            region_creatures[region_id] = creatures
-            region_big_bad[region_id] = big_bad
-            uncurated.add(region_id)
-    else:
-        # The verdict PARSED. Per-region isolation: a structurally-invalid
-        # region degrades THAT region loudly; siblings stay curated (one
-        # bad region never aborts the expansion). A curated row missing
-        # 'cr' is the RETAINED CurationError carve-out (ii) — it RAISES,
-        # it does NOT degrade (degrading would corrupt the CR→Edge seam).
-        for region_id, manifest in manifests.items():
-            rv = verdict.get(region_id)
-            kept_rows = rv.get("wandering_table") if isinstance(rv, dict) else None
-            if not isinstance(rv, dict) or not isinstance(kept_rows, list):
-                creatures, big_bad = _degrade_region(
-                    region_id=region_id,
-                    manifest=manifest,
-                    bundle=bundle,
-                    failure_kind="malformed",
-                    attempts=attempts,
-                    elapsed_ms=elapsed_ms,
-                    reason=(
-                        f"region {region_id!r} verdict is not an object with "
-                        f"a wandering_table list (got {type(rv).__name__})"
-                    ),
-                    pack=pack,
-                    world_slug=request.world_slug,
-                )
-                region_creatures[region_id] = creatures
-                region_big_bad[region_id] = big_bad
-                uncurated.add(region_id)
-                continue
-            creatures = []
-            for row in kept_rows:
-                if "cr" not in row:
-                    # RETAINED carve-out (ii): NOT degradable.
-                    span.set_attribute("curated", False)
-                    span.set_attribute("reason", f"curated row for {region_id!r} dropped 'cr'")
-                    raise CurationError(
-                        f"curated row for {region_id!r} dropped the 'cr' "
-                        f"field ({row!r}); CR→Edge translation is impossible "
-                        f"— the curator must preserve cr verbatim (ADR-106 "
-                        f"Amendment A retained carve-out ii: NOT degraded, "
-                        f"degrading would corrupt mechanics)"
-                    )
-                creatures.append(
-                    CuratedCreature(
-                        name=str(row["name"]),
-                        creature_type=str(row.get("type", "")),
-                        telegraph=str(row.get("telegraph", "")),
-                        hp=_hp_from_cr(float(row["cr"])),
-                        threat_level=_threat_from_band(bundle, manifest.cr_band),
-                    )
-                )
-            region_creatures[region_id] = creatures
+            region_creatures[node.id] = creatures
+            region_big_bad[node.id] = big_bad
+    except ValueError as exc:
+        # ValueError covers all three region-build sources: a theme absent from
+        # the palette, an unresolved/multi-bound look (_resolve_look_for_theme),
+        # and assemble_region itself — so the prefix is "region-build", not the
+        # narrower "assemble" (Reviewer 158-12 LOW: GM-panel legibility).
+        span.set_attribute("curated", False)
+        span.set_attribute("reason", f"region-build: {exc}")
+        raise
+    except CurationError as exc:
+        # Carve-out (i): a structurally-invalid *assembled* manifest is a
+        # real upstream content bug — fail loud, never degrade into shipped
+        # content (ADR-106 Amendment C / No Silent Fallbacks). Record the
+        # lie-detector marker before the raise propagates and aborts the txn.
+        span.set_attribute("curated", False)
+        span.set_attribute("reason", f"invalid manifest: {exc}")
+        raise
+    except Exception as exc:
+        # Any OTHER unexpected failure (e.g. a malformed homebrew pack object
+        # whose effective_bestiary misbehaves) must STILL tag the curate span
+        # before it propagates and aborts the txn — the GM-panel lie-detector
+        # must never go dark on an error path (OTEL principle / No Silent
+        # Fallbacks; consistent with the typed handlers above). Reviewer 158-12
+        # MEDIUM: the typed handlers tag-before-raise; an unexpected exception
+        # left the span untagged.
+        span.set_attribute("curated", False)
+        span.set_attribute("reason", f"unexpected: {exc}")
+        raise
 
-            bb_v = rv.get("big_bad")
-            if bb_v is None:
-                region_big_bad[region_id] = None
-            else:
-                # The cookbook big_bad row is {name, min_band} only — no cr.
-                # Source its CR from the manifest's raw big_bad if present;
-                # otherwise the band ceiling (the capstone is a lair boss,
-                # spec §4.2 big_bad_forces_size). Either way it crosses the
-                # SAME CR→Edge seam — never a raw cr/hp.
-                bb_cr = None
-                if isinstance(manifest.big_bad, dict):
-                    bb_cr = manifest.big_bad.get("cr")
-                if bb_cr is None:
-                    band = next(
-                        (b for b in bundle.affinities.cr_bands if b.id == manifest.cr_band),
-                        None,
-                    )
-                    if band is None:
-                        raise CurationError(
-                            f"big_bad for {region_id!r} has no cr and its "
-                            f"cr_band {manifest.cr_band!r} is not in "
-                            f"affinities.cr_bands — cannot CR→Edge translate"
-                        )
-                    bb_cr = band.cr_max
-                region_big_bad[region_id] = CuratedCreature(
-                    name=str(bb_v.get("name", "")),
-                    creature_type="big_bad",
-                    telegraph=str(bb_v.get("min_band", "")),
-                    hp=_hp_from_cr(float(bb_cr)),
-                    threat_level=min(4, _threat_from_band(bundle, manifest.cr_band) + 1),
-                )
-
-    # Lie-detector summary on the curate STAGE span. `curated` is the
-    # expansion rollup: False whenever any region Layer-2-degraded (never a
-    # raw-manifest-stamped-curated lie — the forbidden silent fallback).
-    curated = len(uncurated) == 0
+    # ADR-106 Amendment C: lie-detector summary on the curate STAGE span.
+    # Deterministic ⇒ always curated; the failure-span taxonomy is retired.
     total_creatures = sum(len(v) for v in region_creatures.values())
     races = sorted({m.race for m in manifests.values()})
     bands = sorted({m.cr_band for m in manifests.values()})
-    span.set_attribute("curated", curated)
-    if not curated:
-        span.set_attribute(
-            "reason",
-            f"degraded {sorted(uncurated)} (failure_kind={degrade_kind}): {degrade_reason}",
-        )
+    span.set_attribute("curated", True)
     span.set_attribute("region_count", len(manifests))
     span.set_attribute("creature_count", total_creatures)
     span.set_attribute("manifest_race", json.dumps(races, sort_keys=True))
     span.set_attribute("cr_band", json.dumps(bands, sort_keys=True))
-    span.set_attribute("raw_seed_reproducible", False)
+    span.set_attribute("raw_seed_reproducible", True)
 
     return RegionCuration(
         region_manifests=manifests,
         region_creatures=region_creatures,
         region_big_bad=region_big_bad,
         region_look=region_look,
-        curated=curated,
-        raw_seed_reproducible=False,
-        uncurated_regions=frozenset(uncurated),
+        curated=True,
+        raw_seed_reproducible=True,
+        uncurated_regions=frozenset(),
     )
 
 
@@ -1778,9 +1446,39 @@ def _stage_attach(
                 )
                 threads_already_lit += report.threads_written
                 attach_reports.append(report)
+
+        # Task 7: seed the per-expansion quest thread from the deepest
+        # region's theme (consistent with select_signature's _deepest —
+        # the deepest region anchors the quest signature beat).
+        # Guard: a no-op when the theme has no quest_template (not every
+        # theme authors a quest; absence is valid, not an error).
+        deepest_node = _expansion_deepest(expansion)
+        if deepest_node.theme not in palette.themes:
+            raise ValueError(
+                f"deepest region {deepest_node.id!r} references theme "
+                f"{deepest_node.theme!r} which is absent from the palette "
+                f"(have: {sorted(palette.themes)}). No silent default theme."
+            )
+        deepest_theme = palette.themes[deepest_node.theme]
+        if deepest_theme.quest_template is not None:
+            deepest_depth_score = graph.nodes[deepest_node.id].depth_score
+            if deepest_depth_score is None:
+                raise ValueError(
+                    f"deepest region {deepest_node.id!r} has no depth_score "
+                    f"after assign_depth_scores — cannot seed expansion quest "
+                    f"(No Silent Fallbacks)"
+                )
+            seed_expansion_quest(
+                campaign_seed=request.campaign_seed,
+                expansion=expansion,
+                manifests_by_region=curation.region_manifests,
+                template=deepest_theme.quest_template,
+                store=tx,
+                started_at_depth_score=deepest_depth_score,
+            )
     except (ValueError, KeyError, PersistError) as exc:
         span.set_attribute("error", str(exc))
-        span.set_attribute("reason", f"attach_set_piece: {exc}")
+        span.set_attribute("reason", f"attach_stage: {exc}")
         raise
 
     return AttachResult(
@@ -2308,7 +2006,6 @@ async def materialize(
     dungeon_repository: DungeonRepository,
     snapshot: GameSnapshot,
     pack_tropes: Any,
-    claude_client: Any,
     is_first_band_entry: bool = True,
     pack: Any = None,
 ) -> None:
@@ -2320,13 +2017,12 @@ async def materialize(
     Stages design/fill/curate are implemented (Plan 7 Tasks 2–4); attach
     and commit remain ``NotImplementedError`` until Plan 7 Tasks 5–6.
 
-    ``async def``: the curate stage awaits the SDK
-    ``complete_with_tools``. The event loop is owned by the caller
-    (uvicorn in prod, pytest-asyncio ``asyncio_mode=auto`` in tests) —
-    there is NO ``asyncio.run`` anywhere, so Task 7's async look-ahead
-    worker can ``await materialize()`` directly from inside its
-    coroutine. design/fill/attach/commit remain plain synchronous calls
-    inside this async coordinator; only curate is awaited.
+    ``async def``: ADR-106 Amendment C removed the LLM from curate, so all
+    five stages are now synchronous and the coordinator awaits nothing
+    internally. ``materialize`` stays ``async def`` only so the existing
+    ``await materialize()`` call sites (session integration, the look-ahead
+    worker's coroutine, the suite) are unchanged; collapsing the coordinator
+    + worker to synchronous calls is a separable fast-follow (158-12 AC7).
 
     Parameters
     ----------
@@ -2355,14 +2051,6 @@ async def materialize(
         REQUIRED, no silent default. Production sourcing (the resolved
         genre-pack) is the Task-7 session-wiring concern; Task 5 binds the
         API. (Reconcile seam: ``pack_tropes``.)
-    claude_client:
-        Required. The session supplies the SDK client
-        (``build_llm_client()`` default ``AnthropicSdkClient``); the
-        curate stage issues a one-shot ``complete_with_tools``. Tests
-        inject a ``ToolingLlmClient``-shaped fake so no real network call
-        is made (DI discipline mirrored from the rest of the codebase —
-        NOT a hardcoded non-injectable client; No Silent Fallbacks —
-        ``None`` raises, no implicit construction).
     is_first_band_entry:
         Caller-asserted band-entry flag threaded into the curate stage's
         ``assemble_region`` call. The TRUE band-entry-history computation
@@ -2372,19 +2060,12 @@ async def materialize(
         caller-supplied value (NOT a silent default computed from
         incomplete state). (Reconcile seam: ``is_first_band_entry``.)
     """
-    if claude_client is None:
-        raise ValueError(
-            "materialize requires an explicit claude_client (the look-ahead "
-            "worker/session supplies the SDK client via build_llm_client(); "
-            "No Silent Fallbacks — no implicit ClaudeClient())"
-        )
     if graph is None:
         raise ValueError(
             "materialize requires a real RegionGraph — graph=None is not valid "
             "(No Silent Fallbacks); the coordinator reads graph.entrance_id for "
             "fresh-save detection and every stage threads it"
         )
-    curation_client = claude_client
 
     # The per-region look is derived from each region's theme INSIDE
     # _stage_curate (it has bundle+palette+expansion) — the theme is the
@@ -2404,14 +2085,15 @@ async def materialize(
             fill_result = _stage_fill(request, expansion=expansion, palette=palette, span=fill_span)
 
         with dungeon_materialize_curate_span(expansion_id=request.expansion_id) as curate_span:
-            curation = await _stage_curate(
+            # ADR-106 Amendment C: curate is deterministic seeded compute —
+            # no LLM, no await. The narrator owns creature prose at narration.
+            curation = _stage_curate(
                 request,
                 bundle=bundle,
                 palette=palette,
                 expansion=expansion,
                 fill_result=fill_result,
                 is_first_band_entry=is_first_band_entry,
-                claude_client=curation_client,
                 span=curate_span,
                 pack=pack,
             )

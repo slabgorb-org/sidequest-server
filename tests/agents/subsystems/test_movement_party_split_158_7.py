@@ -147,6 +147,33 @@ def _hybrid_cartography() -> CartographyConfig:
     )
 
 
+def _lateral_cartography() -> CartographyConfig:
+    """Two adjacent surface regions and NO seam routes — isolates the
+    lateral cartography-adjacency advance site (``_resolve_cartography_lateral``)
+    from any seam-crossing logic. ``market_square`` and ``temple_row`` are
+    mutually adjacent; neither owns a registered-kind route, so a move between
+    them is a pure lateral cartography hop, not a descent/ascent."""
+    return CartographyConfig(
+        starting_region="market_square",
+        navigation_mode=NavigationMode.region,
+        regions={
+            "market_square": Region(
+                name="Market Square",
+                summary="The bustling market.",
+                description="Stalls and crowds under awnings.",
+                adjacent=["temple_row"],
+            ),
+            "temple_row": Region(
+                name="Temple Row",
+                summary="The temple district.",
+                description="A quiet row of shrines.",
+                adjacent=["market_square"],
+            ),
+        },
+        routes=[],
+    )
+
+
 def _pack_with_cartography(world_slug: str, cartography: CartographyConfig):
     """Duck-typed GenrePack: exposes ``pack.worlds[slug].cartography``."""
     world = types.SimpleNamespace(cartography=cartography)
@@ -268,6 +295,85 @@ def test_colocated_party_advances_together_in_dungeon(capture_spans):
     assert snap.pc_regions["Groucho"] == "exp001.r0"
     assert snap.pc_regions["Harpo"] == "exp001.r0", (
         f"co-located peer must advance to the same node; Harpo at {snap.pc_regions.get('Harpo')!r}"
+    )
+
+
+def test_colocated_party_ascends_together(capture_spans):
+    """Reverse seam (Story 105-3 surface_ascent): both PCs co-located ON the
+    dungeon entrance node leave together with a non-``deeper`` intent. The
+    acting PC ascends to the surface region that OWNS the deep crossing
+    (``the_dropmouth``, the seam route's ``from_id``) — and the co-located
+    peer must ascend WITH the party, not be stranded below.
+
+    158-13 coverage: ``surface_ascent`` is one of the two ``_advance_colocated_peers``
+    call sites the 158-7 suite never exercised."""
+    snap = _party_snapshot(
+        {"Groucho": ENTRANCE_ID, "Harpo": ENTRANCE_ID},
+        {"p1": "Groucho", "p2": "Harpo"},
+    )
+    pack = _pack_with_cartography("beneath_sunden", _hybrid_cartography())
+
+    out = _run(
+        run_movement_dispatch(
+            _movement("toward_exit", "back up the rope"),
+            snapshot=snap,
+            player_name="Groucho",
+            additional_player_names=["Harpo"],
+            dungeon_store=_StoreWithEntrance(),
+            palette=_FakePalette(),
+            pack=pack,
+        )
+    )
+
+    assert out.data.get("resolved_via") == "surface_ascent", (
+        f"expected the reverse seam crossing, got: {out.data}"
+    )
+    assert snap.pc_regions["Groucho"] == "the_dropmouth", (
+        "acting PC must ascend to the surface owner"
+    )
+    assert snap.pc_regions["Harpo"] == "the_dropmouth", (
+        "co-located peer must ascend WITH the party, not lag at the entrance; "
+        f"Harpo is at {snap.pc_regions.get('Harpo')!r}"
+    )
+
+
+def test_colocated_party_moves_laterally_together(capture_spans):
+    """Lateral cartography travel: both PCs co-located on a surface region
+    (``market_square``) move to an ADJACENT region (``temple_row``) together.
+    The co-located peer must advance with the party, not lag behind.
+
+    158-13 coverage: the lateral cartography-adjacency path is the second of
+    the two ``_advance_colocated_peers`` call sites the 158-7 suite never
+    exercised."""
+    snap = _party_snapshot(
+        {"Groucho": "market_square", "Harpo": "market_square"},
+        {"p1": "Groucho", "p2": "Harpo"},
+    )
+    pack = _pack_with_cartography("beneath_sunden", _lateral_cartography())
+
+    out = _run(
+        run_movement_dispatch(
+            _movement("toward_exit", "head to temple row"),
+            snapshot=snap,
+            player_name="Groucho",
+            additional_player_names=["Harpo"],
+            # region-mode lateral travel threads no dungeon store / palette.
+            dungeon_store=None,
+            palette=None,
+            pack=pack,
+        )
+    )
+
+    assert out.data.get("to_region") == "temple_row", (
+        f"acting PC must make the lateral hop: {out.data}"
+    )
+    assert out.data.get("resolved_via") == "region_lateral", (
+        f"expected a lateral cartography resolution, got: {out.data}"
+    )
+    assert snap.pc_regions["Groucho"] == "temple_row"
+    assert snap.pc_regions["Harpo"] == "temple_row", (
+        "co-located peer must make the lateral hop WITH the party; "
+        f"Harpo is at {snap.pc_regions.get('Harpo')!r}"
     )
 
 
@@ -421,6 +527,24 @@ def test_party_advance_emits_per_pc_movement_span(capture_spans):
     to_regions = {(s.attributes or {}).get("to_region") for s in resolved}
     assert to_regions == {ENTRANCE_ID}, (
         f"every advanced PC's span must record the shared destination; got {to_regions}"
+    )
+
+    # AC-4 lie-detector: the FANNED-OUT peer span (Harpo) must carry the
+    # party-advance attributes so the GM panel sees WHICH PCs advanced together
+    # and WHO anchored the beat — not merely that each PC has a span. The acting
+    # PC's span is emitted by the seam resolver and does NOT carry these (it is
+    # the anchor, not a fanned-out peer); only ``_advance_colocated_peers``
+    # stamps them.
+    peer_spans = [s for s in resolved if (s.attributes or {}).get("pc_name") == "Harpo"]
+    assert len(peer_spans) == 1, f"expected exactly one peer span for Harpo; got {len(peer_spans)}"
+    peer_attrs = peer_spans[0].attributes or {}
+    assert peer_attrs.get("party_advance") is True, (
+        "the fanned-out peer span must mark party_advance=True so the GM panel "
+        f"reads it as a co-located party advance; got {dict(peer_attrs)!r}"
+    )
+    assert peer_attrs.get("anchor_pc") == "Groucho", (
+        "the peer span must name the acting PC as the anchor of the shared beat; "
+        f"got anchor_pc={peer_attrs.get('anchor_pc')!r}"
     )
 
 

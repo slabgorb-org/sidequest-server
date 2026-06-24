@@ -719,6 +719,14 @@ def test_move_toward_uncommitted_edge_sync_materializes(capture_spans):
     )
     assert out.data["to_region"] == "frontier_target"
     assert handle.materialize_calls == ["fe1"]  # sync materialize ran
+    # Affordance-race fix (movement.py:858): after the §Q2 patch, the handler
+    # awaits the onward-ring look-ahead exactly once so the destination's
+    # forward exits are committed BEFORE narration (generation-before-narrate).
+    # Asserting the drain was awaited makes the _FakeHandle.drain_calls counter
+    # live instrumentation, not dead code.
+    assert handle.drain_calls == 1, (
+        f"onward-ring drain must be awaited exactly once; got {handle.drain_calls}"
+    )
     assert snap.pc_regions["Rux"] == "frontier_target"
     # the resolved target is now a real node in the fresh load_map.
     assert "frontier_target" in store.load_map(entrance_id="entrance").nodes

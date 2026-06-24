@@ -77,9 +77,6 @@ async def test_session_lifecycle_registers_worker_and_dungeon_grows(
         SPAN_FRONTIER_REGION_TRANSITION,
     )
     from tests.dungeon.conftest import build_pg_dungeon_repo
-    from tests.dungeon.test_materializer import _reflecting_sdk_client
-
-    monkeypatch.setattr(session_integration, "build_llm_client", _reflecting_sdk_client)
 
     _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
     game_slug = f"lifecycle_{uuid.uuid4().hex[:12]}"
@@ -102,9 +99,11 @@ async def test_session_lifecycle_registers_worker_and_dungeon_grows(
             world_dir=_beneath_sunden_world_dir(),
         )
         assert handle is not None
-        assert frontier_hook.registered_observer_count() == 1, (
-            "the look-ahead worker is not registered for the live session "
-            "(observers=0 — the dungeon would not grow in a real game)"
+        # Two observers: lookahead worker + expansion-quest observer (Task 8).
+        assert frontier_hook.registered_observer_count() == 2, (
+            "the look-ahead worker and expansion-quest observer are not both "
+            "registered for the live session (observers < 2 — the dungeon would "
+            "not grow and quests would not project in a real game)"
         )
 
         before = {n.expansion_id for n in repo.load_map(entrance_id="entrance").nodes.values()}
@@ -156,7 +155,8 @@ async def test_session_lifecycle_registers_worker_and_dungeon_grows(
             "idempotent re-attach must return the SAME live handle so "
             "additional MP sockets share the one registered worker"
         )
-        assert frontier_hook.registered_observer_count() == 1, (
+        # Idempotent re-attach: count stays at 2 (no double-register).
+        assert frontier_hook.registered_observer_count() == 2, (
             "the concurrent-same-save re-attach double-registered — the "
             "§14.D save-keyed dedup did not hold"
         )

@@ -167,12 +167,17 @@ def _mirror_movement_span_to_sink(span_name: str, span: trace.Span) -> None:
     if route is None:
         return
     # A NonRecordingSpan — produced when no recording TracerProvider is
-    # installed (a process that never called init_tracer, or a dropped
-    # sampling decision) — exposes no ``attributes`` for ``route.extract`` to
-    # read, so reading them raises ``AttributeError``. That exception must
-    # NEVER propagate: this mirror is a telemetry side-channel wrapped around
-    # the movement dispatch, and a non-recording span carries nothing to
-    # mirror. Skip silently (No Silent Fallbacks does not apply — there is no
+    # installed: a process that never called ``init_tracer`` (the realistic
+    # case — tests, or any non-telemetry context). A *sampling* drop is NOT a
+    # realistic cause here: ``init_tracer`` (telemetry/setup.py) leaves the SDK
+    # default sampler in place (``ParentBased(ALWAYS_ON)``) and movement spans
+    # are roots with no remote parent, so they are always recorded unless an
+    # external ``OTEL_TRACES_SAMPLER`` env override is deliberately configured.
+    # Such a span exposes no ``attributes`` for ``route.extract`` to read, so
+    # reading them raises ``AttributeError``. That exception must NEVER
+    # propagate: this mirror is a telemetry side-channel wrapped around the
+    # movement dispatch, and a non-recording span carries nothing to mirror.
+    # Skip silently (No Silent Fallbacks does not apply — there is no
     # alternative path being masked; the recording-span path is unchanged, and
     # a telemetry helper crashing a region advance is the 158-7 tail we are
     # removing). In production ``init_tracer`` runs at startup, so spans are

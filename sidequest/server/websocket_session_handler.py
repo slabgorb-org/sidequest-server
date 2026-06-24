@@ -1558,15 +1558,20 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                             store=_dungeon_store,
                         )
                         from sidequest.dungeon.expansion_quest import (  # noqa: PLC0415
+                            collect_defeated_npc_names,
                             resolve_expansion_quests,
                         )
 
+                        # 158-17: collect the names of NPCs defeated this turn
+                        # (HP depleted to 0) so a big_bad-signature quest can
+                        # resolve when its antagonist falls — replaces the dead
+                        # hardcoded empty set that left big_bad quests unwinnable.
                         resolve_expansion_quests(
                             snapshot=snapshot,
                             store=_dungeon_store,
                             reached_region_ids=set(),
                             resolved_trope_ids=_resolved_this_turn,
-                            defeated_npc_names=set(),
+                            defeated_npc_names=collect_defeated_npc_names(snapshot),
                         )
 
                     now_encounter = snapshot.encounter

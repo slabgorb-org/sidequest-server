@@ -14,6 +14,7 @@ from sidequest.dungeon.region_graph.model import Expansion, RegionNode
 from sidequest.dungeon.themes import ExpansionQuestTemplate
 from sidequest.game.cookbook.models import RegionContentManifest
 from sidequest.game.session import GameSnapshot, QuestEntry
+from sidequest.genre.names.generator import sanitize_display_name
 from sidequest.telemetry.spans.dungeon_quest import quest_bound_span, quest_resolved_span
 
 
@@ -78,7 +79,12 @@ def select_signature(
         if candidates:
             node = candidates[0]
             bb = manifests_by_region[node.id].big_bad or {}
-            name = str(bb.get("name", "")).strip() or "the master of this place"
+            # Sanitize identically to the Monster-Manual inject boundary
+            # (``monster_manual_inject._sanitize_patch_names`` →
+            # ``sanitize_display_name``): the minted encounter actor enters
+            # ``snapshot.npcs`` cleaned, so the seeded quest ref_id MUST match
+            # that cleaned name or ``ref in defeated_npc_names`` never fires.
+            name = sanitize_display_name(str(bb.get("name", ""))) or "the master of this place"
             return SignatureBinding(
                 kind="big_bad",
                 ref_id=name,
@@ -301,6 +307,7 @@ def resolve_expansion_quests(
             expansion_id=exp_id,
             signature_kind=thread.payload.get("signature_kind", ""),
             resolving_event=event,
+            ref_id=thread.payload.get("ref_id", ""),
         ):
             store.resolve_thread(thread.thread_id)
             entry = snapshot.quest_log.get(f"dungeon:exp{exp_id}")
@@ -308,6 +315,33 @@ def resolve_expansion_quests(
                 entry.status = "completed"
         resolved += 1
     return resolved
+
+
+def collect_defeated_npc_names(snapshot: GameSnapshot) -> set[str]:
+    """Return the sanitized names of NPCs that have been defeated (HP at 0).
+
+    This is the input the turn handshake feeds to ``resolve_expansion_quests``
+    so a ``big_bad``-signature quest can resolve when its antagonist falls. An
+    NPC at ``core.hp.current == 0`` is the durable defeat signal: the per-turn
+    Monster-Manual re-inject deliberately does NOT heal a slain NPC back to a
+    full pool (see ``GameSnapshot._merge_npc_patch`` BUG-2b), so a killed
+    big_bad stays pinned at 0/N across turns.
+
+    Names are normalized through ``sanitize_display_name`` — the SAME transform
+    ``select_signature`` applies when it binds the quest ref_id. The Monster-
+    Manual inject sanitizes most names at the boundary, but the procedural
+    region_population / room_binding inject branches
+    (``monster_manual_inject``) append patches AFTER ``_sanitize_patch_names``
+    runs, so a cache-sourced bracket-bearing big_bad can reach ``snapshot.npcs``
+    raw. Normalizing here makes the ``ref in defeated_npc_names`` comparison
+    symmetric regardless of mint path, so the kill never silently fails to
+    resolve the quest.
+    """
+    return {
+        sanitize_display_name(npc.core.name)
+        for npc in snapshot.npcs
+        if npc.core.hp.current == 0
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -341,8 +375,13 @@ def make_expansion_quest_observer(store: ThreadLedger) -> _FrontierObserver:
     3. Calls ``resolve_expansion_quests`` to resolve any whose ``reach_deep``
        beat fired this transition.
 
-    ``resolved_trope_ids`` and ``defeated_npc_names`` are deferred to later
-    tasks (set_piece / big_bad resolution) and passed as empty here.
+    ``resolved_trope_ids`` is empty here — set_piece tropes resolve from the
+    45-20 trope handshake in ``websocket_session_handler``, not from a region
+    move. ``defeated_npc_names`` IS collected (158-17): a big_bad killed in a
+    region we then walk out of should resolve on the move too, so we pass the
+    live defeated set rather than a dead ``set()``. Resolution is idempotent
+    (the ledger thread closes once), so the handshake + observer call sites
+    cannot double-resolve.
 
     The returned callable matches the ``FrontierObserver`` signature:
     ``observer(*, snapshot, pc_name, from_region, to_region) -> None``.
@@ -367,7 +406,7 @@ def make_expansion_quest_observer(store: ThreadLedger) -> _FrontierObserver:
             store=store,
             reached_region_ids={to_region},
             resolved_trope_ids=[],
-            defeated_npc_names=set(),
+            defeated_npc_names=collect_defeated_npc_names(snapshot),
         )
 
     return _observer

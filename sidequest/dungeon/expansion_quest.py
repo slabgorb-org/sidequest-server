@@ -29,12 +29,13 @@ class ThreadLedger(Protocol):
 
 @dataclass(frozen=True)
 class SignatureBinding:
-    kind: str            # "big_bad" | "set_piece" | "reach_deep" (effective, post-degrade)
-    ref_id: str          # bound element id: region id, or big_bad name, or set_piece id
-    anchor_region: str   # the region id the quest anchors to
+    kind: str  # "big_bad" | "set_piece" | "reach_deep" (effective, post-degrade)
+    ref_id: str  # bound element id: region id, or big_bad name, or set_piece id
+    anchor_region: str  # the region id the quest anchors to
     title: str
     objective: str
     degraded: bool
+    theme: str  # the deepest region's theme id the quest bound (AC-5: GM-panel verifiable)
 
 
 def _deepest(expansion: Expansion) -> RegionNode:
@@ -42,16 +43,45 @@ def _deepest(expansion: Expansion) -> RegionNode:
     attached (scored) nodes always win over unattached ones."""
     return max(
         expansion.new_nodes,
-        key=lambda n: (n.depth_score if n.depth_score is not None else float("-inf")),
+        key=lambda n: n.depth_score if n.depth_score is not None else float("-inf"),
     )
 
 
-def _fill(text: str, *, theme: str, big_bad: str, anchor: str) -> str:
+def _fill(text: str, *, theme: str, big_bad: str, anchor: str, depth: str = "") -> str:
     return (
         text.replace("{theme}", theme)
-            .replace("{big_bad}", big_bad)
-            .replace("{anchor}", anchor)
+        .replace("{big_bad}", big_bad)
+        .replace("{anchor}", anchor)
+        .replace("{depth}", depth)
     )
+
+
+def _depth_token(node: RegionNode) -> str:
+    """AC-4 distinguisher: a deterministic, per-expansion marker so two
+    same-theme quests do not read as byte-identical duplicates in the Quests
+    tab.  The anchor region's depth_score is the natural "how deep does this
+    one go" marker and differs per descent; fall back to the region id when a
+    node carries no score so the token is never blank (No Silent Fallbacks)."""
+    if node.depth_score is not None:
+        return f"Depth {int(node.depth_score)}"
+    return node.id
+
+
+def _distinguished_title(
+    template_title: str, *, theme: str, big_bad: str, anchor_node: RegionNode
+) -> str:
+    """Fill the quest title and guarantee same-theme expansions diverge (AC-4).
+
+    Supports both distinguisher paths TEA flagged: a YAML title carrying an
+    explicit ``{depth}`` slot fills it; a slotless title (every shipped
+    beneath_sunden title today) gets the token appended at seed time.  The
+    token is a pure function of the anchor region, so determinism holds —
+    two seeds of the same expansion still produce identical titles."""
+    token = _depth_token(anchor_node)
+    title = _fill(template_title, theme=theme, big_bad=big_bad, anchor=anchor_node.id, depth=token)
+    if "{depth}" not in template_title and token:
+        title = f"{title} — {token}"
+    return title
 
 
 def select_signature(
@@ -73,7 +103,7 @@ def select_signature(
                 for n in expansion.new_nodes
                 if (manifests_by_region.get(n.id) or _empty_manifest()).big_bad
             ),
-            key=lambda n: (n.depth_score if n.depth_score is not None else float("-inf")),
+            key=lambda n: n.depth_score if n.depth_score is not None else float("-inf"),
             reverse=True,
         )
         if candidates:
@@ -89,9 +119,12 @@ def select_signature(
                 kind="big_bad",
                 ref_id=name,
                 anchor_region=node.id,
-                title=_fill(template.title, theme=theme, big_bad=name, anchor=node.id),
+                title=_distinguished_title(
+                    template.title, theme=theme, big_bad=name, anchor_node=node
+                ),
                 objective=_fill(template.objective, theme=theme, big_bad=name, anchor=node.id),
                 degraded=False,
+                theme=theme,
             )
         # No big_bad rolled — loud degrade to reach_deep (caller emits the span).
         return _bind_reach_deep(template, deepest, theme, degraded=True)
@@ -102,9 +135,12 @@ def select_signature(
             kind="set_piece",
             ref_id=sp,
             anchor_region=deepest.id,
-            title=_fill(template.title, theme=theme, big_bad="", anchor=deepest.id),
+            title=_distinguished_title(
+                template.title, theme=theme, big_bad="", anchor_node=deepest
+            ),
             objective=_fill(template.objective, theme=theme, big_bad="", anchor=deepest.id),
             degraded=False,
+            theme=theme,
         )
 
     return _bind_reach_deep(template, deepest, theme, degraded=False)
@@ -121,9 +157,10 @@ def _bind_reach_deep(
         kind="reach_deep",
         ref_id=deepest.id,
         anchor_region=deepest.id,
-        title=_fill(template.title, theme=theme, big_bad="", anchor=deepest.id),
+        title=_distinguished_title(template.title, theme=theme, big_bad="", anchor_node=deepest),
         objective=_fill(template.objective, theme=theme, big_bad="", anchor=deepest.id),
         degraded=degraded,
+        theme=theme,
     )
 
 
@@ -141,9 +178,7 @@ def _empty_manifest() -> RegionContentManifest:
 
 
 def _expansion_quest_thread_id(campaign_seed: int, expansion_id: int) -> str:
-    h = hashlib.blake2b(
-        f"{campaign_seed}:{expansion_id}:expansion_quest".encode(), digest_size=8
-    )
+    h = hashlib.blake2b(f"{campaign_seed}:{expansion_id}:expansion_quest".encode(), digest_size=8)
     return f"q.exp{expansion_id}.{h.hexdigest()}"
 
 
@@ -178,6 +213,7 @@ def seed_expansion_quest(
         signature_kind=b.kind,
         ref_id=b.ref_id,
         degraded=b.degraded,
+        theme=b.theme,
     ):
         store.open_thread(
             ComplicationThread(
@@ -394,8 +430,20 @@ def make_expansion_quest_observer(store: ThreadLedger) -> _FrontierObserver:
         from_region: str | None,
         to_region: str,
     ) -> None:
-        exp_id = _expansion_id_of(to_region)
-        reached_exps: set[int] = {exp_id} if exp_id is not None else set()
+        # AC-3: a multi-expansion-per-turn jump (e.g. exp1 -> exp5) descends
+        # PAST the intermediate expansions; project every expansion traversed
+        # this transition, not just the landed one, so their diverse quests
+        # reach the quest_log.  When the origin is a non-exp region (entrance)
+        # or absent, only the landed expansion is reachable this step.
+        to_exp = _expansion_id_of(to_region)
+        from_exp = _expansion_id_of(from_region) if from_region is not None else None
+        reached_exps: set[int] = set()
+        if to_exp is not None:
+            if from_exp is not None:
+                lo, hi = sorted((from_exp, to_exp))
+                reached_exps = set(range(lo, hi + 1))
+            else:
+                reached_exps = {to_exp}
         reconcile_dungeon_quests_into_log(
             snapshot=snapshot,
             store=store,

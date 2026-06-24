@@ -31,11 +31,11 @@ import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 
-import sidequest.telemetry.spans as _spans_module
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+import sidequest.telemetry.spans as _spans_module
 from sidequest.dungeon.expansion_quest import (
     make_expansion_quest_observer,
     seed_expansion_quest,
@@ -45,16 +45,17 @@ from sidequest.dungeon.region_graph.model import Expansion, RegionNode
 from sidequest.dungeon.themes import (
     ThemePalette,
     load_theme_palette,
-    theme_eligible_at_depth,
 )
 from sidequest.game.session import GameSnapshot
 from sidequest.telemetry.spans.dungeon_quest import SPAN_QUEST_BOUND
 
-# The depth at which the 2026-06-23 playtest DB showed drowned_cavern wrongly
-# winning the deepest slot (exp005.r3@42.2, exp010.r0@52.8).  A region this deep
-# must NOT be eligible for drowned once its band is narrowed.  Keith owns the
-# exact max; this is only the bug-repro floor.
-_DROWNED_DOMINATION_DEPTH = 50.0
+# Random-dungeon invariant (Keith, 2026-06-24): beneath_sunden is a random
+# dungeon, not an authored shallow->deep staircase.  Every stratum must offer a
+# broad grab-bag of themes; depth tunes ENCOUNTER difficulty (cookbook cr_bands
+# + per-creature depth_band), NOT theme eligibility.  These depths span the
+# whole dungeon — the floor must hold at each.
+_STRATA_DEPTHS = (0.0, 15.0, 50.0, 120.0)
+_MIN_THEMES_PER_STRATUM = 5
 
 
 # --------------------------------------------------------------------------- #
@@ -149,24 +150,31 @@ def test_shallow_depth_has_at_least_two_eligible_themes() -> None:
     )
 
 
-def test_drowned_cavern_no_longer_dominates_deep_slot() -> None:
-    """AC-2 second half + root cause #1.  drowned_cavern's band {0,60} is the
-    widest, so it keeps winning the deepest-region slot deep in the dungeon (the
-    playtest DB showed it at depth 42.2 and 52.8 beside winding/bone siblings).
-    Once narrowed, a depth-50 region must no longer be drowned-eligible.
+def test_every_depth_offers_at_least_five_themes() -> None:
+    """AC-2, reworked (Keith 2026-06-24 — see gm-decisions.md 'Random-dungeon
+    theme eligibility').  The original framing — "narrow drowned_cavern's max so
+    it stops dominating the deepest slot" — is OVERRULED.  beneath_sunden is a
+    RANDOM dungeon: themes are broadly eligible at EVERY depth (target >=5 per
+    stratum) and depth tunes ENCOUNTER difficulty, not theme eligibility.  The
+    anti-domination invariant is now "drowned is 1-of-N at every depth, INCLUDING
+    deep" — available, never banished, never forced.
 
-    Keith owns the exact max — this asserts only that it drops below the
-    bug-repro depth (50), not a specific value."""
-    drowned = _palette().get("drowned_cavern")
-    assert drowned.depth_band.max is not None, (
-        "drowned_cavern must keep a bounded max so it stops spanning the whole "
-        "dungeon and dominating the deepest slot"
-    )
-    assert not theme_eligible_at_depth(drowned, _DROWNED_DOMINATION_DEPTH), (
-        f"drowned_cavern is still eligible at depth_score {_DROWNED_DOMINATION_DEPTH} "
-        f"(band max={drowned.depth_band.max}); the 2026-06-23 playtest proved it "
-        "wins the deepest slot at depth 42-52 — narrow its max below the deep zone"
-    )
+    This replaces the old `test_drowned_cavern_no_longer_dominates_deep_slot`,
+    which asserted the inverse (drowned NOT eligible deep) and now fails by
+    design."""
+    pal = _palette()
+    for depth in _STRATA_DEPTHS:
+        eligible = pal.themes_for_depth(depth)
+        ids = sorted(t.id for t in eligible)
+        assert len(eligible) >= _MIN_THEMES_PER_STRATUM, (
+            f"depth_score {depth} offers only {len(eligible)} theme(s) ({ids}); a "
+            f"random dungeon must keep >= {_MIN_THEMES_PER_STRATUM} themes eligible at "
+            "every stratum so no descent reads monotone"
+        )
+        assert "drowned_cavern" in ids, (
+            f"drowned_cavern must stay 1-of-N at depth {depth} (available, never "
+            f"banished from the deep): eligible themes are {ids}"
+        )
 
 
 # --------------------------------------------------------------------------- #

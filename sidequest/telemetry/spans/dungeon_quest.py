@@ -51,6 +51,7 @@ SPAN_ROUTES[SPAN_QUEST_RESOLVED] = SpanRoute(
         "expansion_id": _attr("expansion_id")(s),
         "signature_kind": _attr("signature_kind")(s),
         "resolving_event": _attr("resolving_event")(s),
+        "ref_id": _attr("ref_id")(s),
     },
 )
 
@@ -92,6 +93,7 @@ def quest_resolved_span(
     expansion_id: int,
     signature_kind: str,
     resolving_event: str,
+    ref_id: str = "",
     _tracer: trace.Tracer | None = None,
     **attrs: Any,
 ) -> Iterator[trace.Span]:
@@ -100,6 +102,9 @@ def quest_resolved_span(
     Emitted when the bound quest for an expansion resolves via a game event.
     ``resolving_event`` names the win-condition or encounter outcome that
     triggered the resolution (e.g. ``"hp_depletion"``, ``"scenario_clue"``).
+    ``ref_id`` is the bound element id that closed the quest — for a big_bad
+    signature it is the defeated antagonist's name, so the GM panel can verify
+    WHICH antagonist closed the quest, not merely that one did.
     """
     with Span.open(
         SPAN_QUEST_RESOLVED,
@@ -107,6 +112,7 @@ def quest_resolved_span(
             "expansion_id": expansion_id,
             "signature_kind": signature_kind,
             "resolving_event": resolving_event,
+            "ref_id": ref_id,
             **attrs,
         },
         tracer_override=_tracer,

@@ -1820,6 +1820,31 @@ class ConnectHandler:
                     snapshot=snapshot,
                     emit_fn=lambda msg, _label: bootstrap_msgs.append(msg),
                 )
+                # QUESTS — hydrate the player-facing quest/objective spine on
+                # connect/resume (sq-playtest 2026-06-23, beneath_sunden MP; the
+                # 4th instance of this bootstrap re-emit gap after FATE_STATE /
+                # LOCATION_DESCRIPTION / FATE_DEFEND_REQUEST in 153-7). The
+                # reactive emitter (_maybe_emit_quests) rides only the per-turn
+                # cadence (_execute_narration_turn), so a reloaded/reconnected
+                # session showed a blank Quests tab until the first action even
+                # though snapshot.quest_log was fully persisted. Project straight
+                # from the saved snapshot — connect → read DB → project, no
+                # narrator turn (Keith: "the data is in the database, we don't
+                # need a narrator loop to hydrate it"). Internally empty-spine-
+                # gated (no quests/anchors/stakes → silent no-op) and genre-
+                # agnostic (ADR-137 — no ruleset gate). Passing ``session`` (the
+                # same handler the per-turn path uses) also seeds the change-gate
+                # signature so the first turn won't re-emit an identical frame.
+                # Mirrors the FATE_STATE resume re-emit above.
+                from sidequest.server.websocket_handlers.quests_emit import (
+                    _maybe_emit_quests,
+                )
+
+                _maybe_emit_quests(
+                    session,
+                    snapshot=snapshot,
+                    emit_fn=lambda msg, _label: bootstrap_msgs.append(msg),
+                )
                 # FATE DEFEND barrier resume (Story 153-7, ADR-151). A round parked
                 # at the DEFEND barrier emits its FATE_DEFEND_REQUEST(s) ONCE; a
                 # reconnecting defender would otherwise never see the prompt again

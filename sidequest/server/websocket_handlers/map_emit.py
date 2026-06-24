@@ -33,10 +33,88 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _place_tokens_on_anchors(*, snapshot, room_id: str, anchors) -> list:
+    """Place revealed live tokens onto anchors, enriched with faction/hp/ac.
+
+    Concealment gate (spec §4.3): party PCs located in this room + opponent
+    actors in the LIVE encounter. Pre-ambush creatures are not yet encounter
+    actors, so gating on the actor roster never leaks them onto the map.
+
+    Enrichment (158-18): each token carries faction, hp (HpPayload), and ac
+    drawn from the live game state via snapshot.find_creature_core (PCs) and
+    snapshot.npcs match (creatures). If a core cannot be resolved, hp/ac are
+    left as None — the token is still placed positionally.
+    """
+    from sidequest.protocol.models import HpPayload, TokenPayload
+
+    _SIDE_TO_FACTION = {"player": "ally", "opponent": "hostile", "neutral": "neutral"}
+
+    tokens: list[TokenPayload] = []
+    entrance = [a for a in anchors if a.role == "entrance"]
+    creature_anchors = [a for a in anchors if a.role == "creature"]
+
+    # Party PCs whose location is this room -> entrance anchor, then spillover.
+    pcs = [
+        name
+        for name, loc in (getattr(snapshot, "character_locations", {}) or {}).items()
+        if loc == room_id
+    ]
+    pc_cells = ([entrance[0].cell] if entrance else []) + [a.cell for a in creature_anchors]
+    for i, name in enumerate(pcs):
+        if i < len(pc_cells):
+            # v1: excess PCs beyond available anchor slots are intentionally dropped;
+            # finer overflow placement (e.g. nearest floor cell) is a follow-up.
+            core = snapshot.find_creature_core(name)
+            hp = HpPayload(current=core.hp.current, max=core.hp.max) if core is not None else None
+            ac = core.armor_class if core is not None else None
+            tokens.append(
+                TokenPayload(
+                    token_id=f"pc:{name}",
+                    label=name,
+                    position=pc_cells[i],
+                    faction="player",
+                    hp=hp,
+                    ac=ac,
+                )
+            )
+
+    # REVEALED creatures only = live opponent actors (not withdrawn).
+    enc = getattr(snapshot, "encounter", None)
+    actors = (getattr(enc, "actors", None) or []) if enc is not None else []
+    revealed = [
+        a
+        for a in actors
+        if getattr(a, "side", None) == "opponent" and not getattr(a, "withdrawn", False)
+    ]
+    npcs = getattr(snapshot, "npcs", []) or []
+    for i, actor in enumerate(revealed):
+        if i < len(creature_anchors):
+            faction = _SIDE_TO_FACTION.get(getattr(actor, "side", "neutral"), "neutral")
+            npc = next((n for n in npcs if n.core.name == actor.name), None)
+            hp = (
+                HpPayload(current=npc.core.hp.current, max=npc.core.hp.max)
+                if npc is not None
+                else None
+            )
+            ac = npc.core.armor_class if npc is not None else None
+            tokens.append(
+                TokenPayload(
+                    token_id=f"creature:{actor.name}",
+                    label=actor.name,
+                    position=creature_anchors[i].cell,
+                    faction=faction,
+                    hp=hp,
+                    ac=ac,
+                )
+            )
+    return tokens
+
+
 def _maybe_build_runtime_cavern_payload(
     *,
     sd: _SessionData,
     room_id: str,
+    snapshot: GameSnapshot,
 ) -> TacticalGridPayload | None:
     """Build a TacticalGridPayload from a persisted runtime cavern mask.
 
@@ -156,6 +234,52 @@ def _maybe_build_runtime_cavern_payload(
         floor_count = mask_text.count(".")
         block = mask_dict["block"]
 
+        from sidequest.dungeon.tactical import RegionTactical
+        from sidequest.protocol.models import TacticalFeature
+
+        tactical_raw = mask_dict.get("tactical")
+        if tactical_raw is None:
+            # No silent fallback: a materialised region should carry tactical data.
+            # Loud watcher event so the GM panel sees the gap without a turn crash.
+            _watcher_publish(
+                "tactical_grid.tactical_missing",
+                {"genre": sd.genre_slug, "world": sd.world_slug, "room_id": room_id},
+                component="cavern_renderer",
+                severity="warning",
+            )
+            tactical = RegionTactical(region_id=room_id)
+        else:
+            tactical = RegionTactical.from_dict(tactical_raw)
+
+        features = [
+            TacticalFeature(feature_type=f.feature_type, cell=f.cell, label=f.label)
+            for f in tactical.features
+        ]
+        pois = list(tactical.pois)
+
+        # derived.exits: pair each neighbour-threshold cell with the bearing the
+        # narrator uses (assign_bearings — one source of truth so map agrees with prose).
+        exits: dict[str, tuple[int, int] | None] = {}
+        try:
+            from sidequest.dungeon.region_projection import assign_bearings
+            from sidequest.dungeon.seed_bootstrap import ENTRANCE_ID
+
+            graph = sd.dungeon_repository.load_map(entrance_id=ENTRANCE_ID)
+            bearings = assign_bearings(graph, room_id) if room_id in graph.nodes else {}
+            for neighbor_id, cell in tactical.exit_thresholds.items():
+                bearing = bearings.get(neighbor_id)
+                if bearing:
+                    exits[bearing] = cell
+        except Exception as exc:  # noqa: BLE001 — never crash a turn on bearing lookup
+            logger.warning(
+                "tactical_grid.bearing_pair_failed room_id=%s error=%s", room_id, exc
+            )
+
+        # Tokens: party PCs in this room + REVEALED encounter creatures, onto anchors.
+        tokens = _place_tokens_on_anchors(
+            snapshot=snapshot, room_id=room_id, anchors=tactical.anchors
+        )
+
         return TacticalGridPayload(
             room_id=room_id,
             room_name=room_id,  # procedural rooms have no authored name — region_id IS the name
@@ -166,12 +290,13 @@ def _maybe_build_runtime_cavern_payload(
             cellular=None,  # originating generation params not persisted in the mask BLOB
             derived=DerivedRoomData(
                 floor_count=floor_count,
-                exits={},  # procedural exits live at the region-graph level, not the mask
-                pois=[],
+                exits=exits,
+                pois=pois,
             ),
-            tokens=[],
+            tokens=tokens,
             initiative=None,
             entities=[],
+            features=features,
         )
 
     return None
@@ -242,7 +367,7 @@ def _maybe_emit_tactical_grid(
         # TacticalGridPayload from the mask. Falls through (return)
         # if the world has no procedural dungeon or no mask exists for
         # this room_id — the existing static-path absence is non-fatal.
-        runtime_payload = _maybe_build_runtime_cavern_payload(sd=sd, room_id=room_id)
+        runtime_payload = _maybe_build_runtime_cavern_payload(sd=sd, room_id=room_id, snapshot=snapshot)
         if runtime_payload is not None:
             payload = runtime_payload
             source = "runtime"
@@ -326,6 +451,10 @@ def _maybe_emit_tactical_grid(
             "room_type": payload.room_type,
             "room_name": payload.room_name,
             "source": source,
+            "token_count": len(payload.tokens),
+            "feature_count": len(payload.features),
+            "exit_count": len(payload.derived.exits) if payload.derived else 0,
+            "poi_count": len(payload.derived.pois) if payload.derived else 0,
         },
         component="cavern_renderer",
     )

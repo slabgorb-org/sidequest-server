@@ -10,7 +10,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 from sidequest.protocol.base import ProtocolBase
 from sidequest.protocol.dice import ThrowParams
@@ -706,6 +706,25 @@ class DerivedRoomData(ProtocolBase):
     pois: list[tuple[int, int]]
 
 
+class TacticalFeature(ProtocolBase):
+    """A positioned tactical-map feature marker (ADR-096 token+feature phase).
+
+    v1 is pure visual/positional — ``feature_type`` + ``cell`` + ``label`` only.
+    A future ``mechanics`` field attaches WWN math without reshaping this.
+    """
+
+    feature_type: str
+    """One of the UI FeatureType vocabulary: cover|hazard|difficult_terrain|water|atmosphere|interactable."""
+    cell: tuple[int, int]
+    """(x, y) cell into the mask grid."""
+    label: str
+    """Player-facing one-liner shown on hover."""
+
+    @field_serializer("cell")
+    def _ser_cell(self, value: tuple[int, int]) -> list[int]:
+        return list(value)
+
+
 # ---------------------------------------------------------------------------
 # Location manifest (Story 54-2 / ADR-109)
 # ---------------------------------------------------------------------------
@@ -1253,12 +1272,27 @@ class LocationEntityResolution(BaseModel):
     from_promotion: bool = False
 
 
+class HpPayload(ProtocolBase):
+    """Current/max HP for a tactical-map token (ADR-096 token+feature phase)."""
+
+    current: int
+    max: int
+
+
 class TokenPayload(ProtocolBase):
-    """A token placed on the tactical grid (placeholder — populated at dispatch)."""
+    """A token placed on the tactical grid — populated from live game state (158-18)."""
 
     token_id: str
     label: str
     position: tuple[int, int]
+    faction: str = "neutral"
+    """player|ally|neutral|hostile — UI token color."""
+    hp: HpPayload | None = None
+    ac: int | None = None
+
+    @field_serializer("position")
+    def _ser_position(self, value: tuple[int, int]) -> list[int]:
+        return list(value)
 
 
 class InitiativeEntry(ProtocolBase):
@@ -1304,6 +1338,9 @@ class TacticalGridPayload(ProtocolBase):
     """Typed location-entity manifest per ADR-109. Loaded from the room
     YAML's top-level ``entities`` block. Empty when the room has no
     manifest authored yet — graceful absence, not a lookup failure."""
+
+    features: list[TacticalFeature] = Field(default_factory=list)
+    """Positioned tactical feature markers (water/hazard/cover/...). ADR-096 token+feature phase."""
 
 
 # ---------------------------------------------------------------------------

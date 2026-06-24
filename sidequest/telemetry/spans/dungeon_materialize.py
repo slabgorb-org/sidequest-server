@@ -42,6 +42,8 @@ SPAN_DUNGEON_MATERIALIZE_CURATE = "dungeon.materialize.curate"
 SPAN_DUNGEON_CURATE_AUTHORED_BIND_FAILED = "dungeon.curate.authored_bind_failed"
 SPAN_DUNGEON_MATERIALIZE_ATTACH = "dungeon.materialize.attach"
 SPAN_DUNGEON_MATERIALIZE_COMMIT = "dungeon.materialize.commit"
+# ADR-096 token+feature: tactical data derived and persisted in the mask blob.
+SPAN_DUNGEON_MATERIALIZE_TACTICAL = "dungeon.materialize.tactical"
 SPAN_FRONTIER_EXPAND = "frontier.expand"
 SPAN_FRONTIER_REGION_TRANSITION = "frontier.region_transition"
 SPAN_FRONTIER_LOOKAHEAD = "frontier.lookahead"
@@ -204,6 +206,25 @@ SPAN_ROUTES[SPAN_DUNGEON_MATERIALIZE_ATTACH] = SpanRoute(
 # Note: "stage" above is a routed CONSTANT (the GM-panel column), not a
 # span attribute lookup — the span no longer pre-bakes a "stage" attr so
 # the stage can write EXACTLY DepthReport.as_dict()'s 4 keys (byte-pinned).
+
+SPAN_ROUTES[SPAN_DUNGEON_MATERIALIZE_TACTICAL] = SpanRoute(
+    event_type="state_transition",
+    component="dungeon",
+    # ADR-096 token+feature: one point-event span per materialize() call,
+    # emitted inside _stage_commit after tactical data has been derived and
+    # merged into the per-region mask dicts. region_count proves derivation
+    # ran for every filled region; feature_count + anchor_count are the GM-
+    # panel lie-detector signal that the derivation was non-trivial (not a
+    # silent empty pass). They read None on skip (expansion_masks=None —
+    # harmless via the graceful-get idiom).
+    extract=lambda s: {
+        "field": "dungeon_map",
+        "op": "materialize.tactical",
+        "region_count": _attr("region_count")(s),
+        "feature_count": _attr("feature_count")(s),
+        "anchor_count": _attr("anchor_count")(s),
+    },
+)
 
 SPAN_ROUTES[SPAN_DUNGEON_MATERIALIZE_COMMIT] = SpanRoute(
     event_type="state_transition",
@@ -470,6 +491,35 @@ def dungeon_materialize_attach_span(
 
 
 @contextmanager
+def dungeon_materialize_tactical_span(
+    *,
+    region_count: int,
+    feature_count: int,
+    anchor_count: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Open the ``dungeon.materialize.tactical`` point-event span.
+
+    Emitted once per materialize() call inside _stage_commit after
+    ``_stage_tactical`` has derived and ``_tactical_into_mask_dicts`` has
+    merged the tactical records into the per-region mask dicts.  Closed
+    immediately — this is a point event, not a long-lived stage span.
+    """
+    with Span.open(
+        SPAN_DUNGEON_MATERIALIZE_TACTICAL,
+        {
+            "region_count": region_count,
+            "feature_count": feature_count,
+            "anchor_count": anchor_count,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
 def dungeon_materialize_commit_span(
     *,
     expansion_id: int,
@@ -565,6 +615,7 @@ __all__ = [
     "SPAN_DUNGEON_MATERIALIZE_DESIGN",
     "SPAN_DUNGEON_MATERIALIZE_FILL",
     "SPAN_DUNGEON_MATERIALIZE_MASK",
+    "SPAN_DUNGEON_MATERIALIZE_TACTICAL",
     "SPAN_FRONTIER_EXPAND",
     "SPAN_FRONTIER_LOOKAHEAD",
     "SPAN_FRONTIER_REGION_TRANSITION",
@@ -576,6 +627,7 @@ __all__ = [
     "dungeon_materialize_fill_span",
     "dungeon_materialize_mask_span",
     "dungeon_materialize_span",
+    "dungeon_materialize_tactical_span",
     "frontier_expand_span",
     "frontier_lookahead_span",
     "frontier_region_transition_span",

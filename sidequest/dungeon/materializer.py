@@ -158,6 +158,7 @@ from sidequest.dungeon.region_graph import (
     generate_expansion,
 )
 from sidequest.dungeon.setpiece_attach import AttachReport, attach_set_piece
+from sidequest.dungeon.tactical import RegionTactical, derive_region_tactical
 from sidequest.dungeon.themes import ThemePalette
 from sidequest.game.cookbook.assemble import assemble_region
 from sidequest.game.cookbook.loader import CookbookBundle
@@ -174,6 +175,7 @@ from sidequest.telemetry.spans.dungeon_materialize import (
     dungeon_materialize_fill_span,
     dungeon_materialize_mask_span,
     dungeon_materialize_span,
+    dungeon_materialize_tactical_span,
     frontier_expand_span,
 )
 
@@ -1559,6 +1561,62 @@ def _new_frontier_edges(
     return edges
 
 
+def _stage_tactical(
+    *,
+    expansion: Expansion,
+    graph: RegionGraph,
+    fill_result: Mapping[str, RegionFill],
+    curation: RegionCuration,
+    attach_result: AttachResult,
+) -> dict[str, RegionTactical]:
+    """Derive deterministic tactical data per filled region (ADR-096 token+feature).
+
+    Thin adapter over ``derive_region_tactical``: pulls neighbours from the
+    graph, theme from each region node, attached set-pieces from the attach
+    reports, and creature counts from curation.  Pure given its inputs;
+    placement is seeded by region_id inside the derivation (no random/clock).
+    Only regions that carry a mask (``fill.mask is not None``) get a tactical
+    record — matching the mask-persist set so there is never a tactical record
+    for a region whose mask was not stored.
+    """
+    out: dict[str, RegionTactical] = {}
+    for node in expansion.new_nodes:
+        fill = fill_result.get(node.id)
+        if fill is None or fill.mask is None:
+            continue
+        hazard_setpieces = [
+            r.setpiece_id for r in attach_result.attach_reports if r.region_id == node.id
+        ]
+        out[node.id] = derive_region_tactical(
+            region_id=node.id,
+            grid=fill.grid,
+            theme_key=node.theme,
+            neighbor_ids=list(graph.neighbors(node.id)),
+            hazard_setpieces=hazard_setpieces,
+            creature_count=len(curation.region_creatures.get(node.id, [])),
+        )
+    return out
+
+
+def _tactical_into_mask_dicts(
+    mask_dicts: dict[str, dict],
+    tactical: dict[str, RegionTactical],
+) -> dict[str, dict]:
+    """Merge each region's tactical record into its mask dict under ``tactical``.
+
+    Mutates ``mask_dicts`` in place and returns it for chaining.
+
+    Called inside ``_stage_commit`` immediately after ``expansion_masks`` is
+    built and BEFORE ``tx.commit_expansion`` so the ``tactical`` key rides
+    inside the existing mask JSON blob (no schema/DDL change — the merge
+    happens in memory before JSON-encoding by the persistence layer).
+    """
+    for region_id, rt in tactical.items():
+        if region_id in mask_dicts:
+            mask_dicts[region_id]["tactical"] = rt.to_dict()
+    return mask_dicts
+
+
 def _stage_commit(
     request: MaterializationRequest,
     *,
@@ -1734,6 +1792,28 @@ def _stage_commit(
             expansion_masks = {
                 rid: rf.mask.to_dict() for rid, rf in fill_result.items() if rf.mask is not None
             } or None
+
+        # ADR-096 token+feature: derive deterministic tactical data and ride it
+        # inside each region's mask dict (one JSON blob, no schema/DDL change).
+        # Runs only when expansion_masks is non-None (fill results with masks
+        # are available). No silent fallback — a derive error propagates and
+        # rolls back the whole transaction (No Silent Fallbacks doctrine).
+        if expansion_masks is not None:
+            tactical = _stage_tactical(
+                expansion=expansion,
+                graph=graph,
+                fill_result=fill_result,  # type: ignore[arg-type]
+                curation=curation,
+                attach_result=attach_result,
+            )
+            _tactical_into_mask_dicts(expansion_masks, tactical)
+            with dungeon_materialize_tactical_span(
+                region_count=len(tactical),
+                feature_count=sum(len(rt.features) for rt in tactical.values()),
+                anchor_count=sum(len(rt.anchors) for rt in tactical.values()),
+            ):
+                pass
+
         tx.commit_expansion(
             expansion,
             graph,

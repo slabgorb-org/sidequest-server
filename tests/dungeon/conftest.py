@@ -213,3 +213,92 @@ def build_pg_dungeon_repo(monkeypatch: Any, migrated_db: str) -> tuple[Any, Any,
     )
     repo = PgDungeonRepository(pool, session_id=sid)
     return pool, repo, sid
+
+
+# ---------------------------------------------------------------------------
+# Task-4 (158-18): tactical_fill_fixture — real-shaped RegionFill objects for
+# wiring tests of _stage_tactical / _tactical_into_mask_dicts.
+# ---------------------------------------------------------------------------
+
+import hashlib as _hashlib
+from dataclasses import dataclass as _dataclass
+
+from sidequest.dungeon.materializer import BlockInfo, RegionFill, RegionMask
+
+_GRID = [[1, 1, 1], [1, 0, 1], [1, 1, 1]]  # 3x3, one floor cell at (1,1)
+
+
+def _make_region_fill(region_id: str) -> RegionFill:
+    """Build a real RegionFill with a non-None RegionMask for test fixtures."""
+    mask_bytes = b"###\n#.#\n###"
+    mask_sha = _hashlib.sha256(mask_bytes).hexdigest()
+    block = BlockInfo(cell_width=28, grid_width=3, grid_height=3)
+    mask = RegionMask(grid=_GRID, mask_bytes=mask_bytes, mask_sha=mask_sha, block=block)
+    return RegionFill(
+        region_id=region_id,
+        algorithm="cellular",
+        width=3,
+        height=3,
+        braid_ratio=0.0,
+        grid=_GRID,
+        mask=mask,
+    )
+
+
+@_dataclass
+class _TacticalNode:
+    id: str
+    theme: str
+
+
+@_dataclass
+class _TacticalExpansion:
+    new_nodes: list
+
+
+class _TacticalGraph:
+    def neighbors(self, region_id: str) -> list:  # mirrors RegionGraph.neighbors
+        return []
+
+
+@_dataclass
+class _TacticalAttachReport:
+    region_id: str
+    setpiece_id: str
+
+
+@_dataclass
+class _TacticalAttachResult:
+    attach_reports: list
+
+
+class _TacticalCuration:
+    # mirrors RegionCuration.region_creatures: dict[str, list[CuratedCreature]]
+    def __init__(self) -> None:
+        self.region_creatures: dict = {
+            "exp001.r0": [object()],
+            "exp001.r1": [],
+        }
+
+
+@pytest.fixture
+def tactical_fill_fixture():
+    """Two real RegionFill objects with masks + one set-piece on exp001.r0."""
+    fill = {
+        "exp001.r0": _make_region_fill("exp001.r0"),
+        "exp001.r1": _make_region_fill("exp001.r1"),
+    }
+    return {
+        "expansion": _TacticalExpansion(
+            new_nodes=[
+                _TacticalNode("exp001.r0", "bone_crypt"),
+                _TacticalNode("exp001.r1", "bone_crypt"),
+            ]
+        ),
+        "graph": _TacticalGraph(),
+        "fill_result": fill,
+        "curation": _TacticalCuration(),
+        "attach_result": _TacticalAttachResult(
+            attach_reports=[_TacticalAttachReport("exp001.r0", "collapse_gallery")]
+        ),
+    }

@@ -18,7 +18,10 @@ from typing import TYPE_CHECKING, Any
 from opentelemetry import trace
 
 from sidequest.agents.perception_rewriter import rewrite_for_recipient
-from sidequest.agents.pov_swap import _PRONOUN_FORMS, swap_to_second_person
+from sidequest.agents.pov_swap import (
+    project_to_canonical_pronouns,
+    swap_to_second_person,
+)
 
 if TYPE_CHECKING:
     from sidequest.game.projection.view import SessionGameStateView
@@ -29,6 +32,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 _tracer = trace.get_tracer("sidequest.server.emitters")
+
+# Story 158-14 (AC3, [SEC]): player-supplied pronoun strings are freeform at
+# chargen. Bound the value before it is written to an OTEL attribute so a player
+# cannot stuff an unbounded essay into telemetry.
+_MAX_PRONOUN_ATTR_LEN = 64
 
 
 def _emit_recipient_dropped(kind: str, player_id: str, reason: str) -> None:
@@ -247,15 +255,20 @@ def update_scrapbook_image_url(
     )
 
 
-def _pronouns_for_pc(snapshot: GameSnapshot, pc_name: str) -> str:
-    """Return the pronouns string for a PC by name, or empty if not found.
+def _pronouns_for_pc(snapshot: GameSnapshot, pc_name: str) -> str | None:
+    """Return the pronouns string for a PC by name.
 
     Story 49-8: drives 2nd-person POV swap for the anchor recipient.
+
+    Story 158-14: returns ``None`` when ``pc_name`` is absent from the snapshot
+    entirely (a view/snapshot desync), distinct from ``""`` for a PC that IS
+    present but has no pronouns. The caller emits different skip reasons for the
+    two cases — previously both collapsed to ``""`` and were indistinguishable.
     """
     for c in snapshot.characters:
         if c.core.name == pc_name:
             return c.pronouns or ""
-    return ""
+    return None
 
 
 def _apply_pov_swap(
@@ -288,36 +301,55 @@ def _apply_pov_swap(
     recipient_pc_name = view.character_of(recipient_player_id)
     if recipient_pc_name is None:
         return payload_dict
-    pronouns = _pronouns_for_pc(snapshot, recipient_pc_name)
-    if not pronouns:
-        # Cannot safely swap without pronouns — return canonical prose.
-        # Genre-side chargen should always populate pronouns; this is a
-        # defensive guard against a malformed save.
-        return payload_dict
-    if pronouns not in _PRONOUN_FORMS:
-        # Story 158-8 (rework): chargen permits freeform pronouns
-        # (builder.py pronouns_allow_freeform), but the localizer only swaps
-        # the three canonical sets. Handing a non-canonical value to
-        # swap_to_second_person raises ValueError, and because this call sits
-        # inside emit_event's repo.transaction() that ValueError would roll
-        # back the NARRATION turn for the WHOLE table. Fail open to canonical
-        # 3rd-person prose — same shape as the empty-pronoun guard above — and
-        # emit a skip span so the GM panel sees the fail-open decision instead
-        # of a silent return (OTEL Observability Principle / No Silent
-        # Fallbacks). This is the in-function guard; the root-cause fix is a
-        # constrained Character.pronouns type (see Delivery Findings).
+    raw_pronouns = _pronouns_for_pc(snapshot, recipient_pc_name)
+    if raw_pronouns is None:
+        # The view maps this recipient to a PC the snapshot does not contain
+        # (a view/snapshot desync). Cannot swap; fail open to canonical prose
+        # and emit a distinct skip span so the GM panel sees WHICH failure
+        # (Story 158-14 AC2 — split from the empty-pronoun case below; both
+        # previously collapsed to a silent return).
         with _tracer.start_as_current_span("narration.pov_swap_skipped") as span:
             span.set_attribute("recipient_pc", recipient_pc_name)
-            span.set_attribute("reason", "unsupported_pronouns")
-            span.set_attribute("pronouns", pronouns)
+            span.set_attribute("reason", "pc_not_in_snapshot")
         return payload_dict
+    # Story 158-14: chargen permits freeform pronouns (builder.py
+    # pronouns_allow_freeform). Project the player's DISPLAY pronouns to a
+    # canonical grammatical set so the localizer (which only knows the three
+    # canonical sets) always receives a valid value from ANY caller, while the
+    # player's freeform choice is preserved for display. A non-blank value
+    # projects to a canonical set and the swap PROCEEDS — the freeform-pronoun
+    # player reads "you" like everyone else, superseding 158-8's
+    # fail-open-for-freeform.
+    grammatical = project_to_canonical_pronouns(raw_pronouns)
+    if grammatical is None:
+        # Blank/whitespace-only pronouns — no grammar to derive. Fail open to
+        # canonical prose and emit the skip span (Story 158-14 AC2 — this guard
+        # was previously a silent return).
+        with _tracer.start_as_current_span("narration.pov_swap_skipped") as span:
+            span.set_attribute("recipient_pc", recipient_pc_name)
+            span.set_attribute("reason", "pronouns_empty")
+        return payload_dict
+    if grammatical != raw_pronouns:
+        # A non-canonical (freeform) value was projected — record the decision
+        # for the GM panel (OTEL Observability Principle; the panel is the lie
+        # detector). The player-supplied display value is bounded before it is
+        # written (Story 158-14 AC3 — [SEC] PII/length).
+        with _tracer.start_as_current_span("narration.pov_swap_projected") as span:
+            span.set_attribute("recipient_pc", recipient_pc_name)
+            span.set_attribute("display_pronouns", raw_pronouns[:_MAX_PRONOUN_ATTR_LEN])
+            span.set_attribute("grammatical_pronouns", grammatical)
     text = payload_dict.get("text", "")
     if not isinstance(text, str) or not text:
+        # Nothing to rewrite — fail open and emit the skip span (Story 158-14
+        # AC2 — the previously-silent invalid-text guard).
+        with _tracer.start_as_current_span("narration.pov_swap_skipped") as span:
+            span.set_attribute("recipient_pc", recipient_pc_name)
+            span.set_attribute("reason", "text_missing_or_invalid")
         return payload_dict
     swapped, _ = swap_to_second_person(
         text,
         target_name=recipient_pc_name,
-        pronouns=pronouns,
+        pronouns=grammatical,
     )
     return {**payload_dict, "text": swapped}
 

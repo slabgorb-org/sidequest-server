@@ -543,9 +543,12 @@ def is_live_wn_combat(encounter: StructuredEncounter | None, bound_ruleset: str 
     player's DICE_THROW via ``run_wn_round`` (epic 108), and the narrator must
     NARRATE the seated/resolved beat — it must not be handed the combat-
     resolution toolset or told to drive beats (the max-turns starve). This
-    predicate gates (1) the narrator tool filter, (2) the de-nativized narrator
-    prompt branch, and (3) the narration-apply stray-beat drop, so all three
-    agree on exactly when WN combat is live.
+    predicate gates the two ENCOUNTER-level halves of the fix: (2) the
+    de-nativized narrator prompt branch, and (3) the narration-apply stray-beat
+    drop — both only matter once a combat is seated. The (1) narrator TOOL filter
+    was split out to :func:`wn_binding_owns_combat_resolution` (binding-level, no
+    live encounter required) by the sq-playtest 2026-06-24 criticals — see that
+    function for why.
 
     Gated on the WN family (``swn``/``wwn``/``cwn``/``awn``) — NOT win_condition
     alone — so a native ``dial`` pack's ``hp_depletion`` combat keeps the legacy
@@ -562,3 +565,33 @@ def is_live_wn_combat(encounter: StructuredEncounter | None, bound_ruleset: str 
     if bound_ruleset not in WN_FAMILY:
         return False
     return encounter.win_condition == "hp_depletion"
+
+
+def wn_binding_owns_combat_resolution(bound_ruleset: str | None) -> bool:
+    """True iff a Without-Number binding owns mechanical resolution, so the
+    narrator must never hold the combat-RESOLUTION tools — live encounter or not.
+
+    This is the BINDING-level half of the tool gate, split out from
+    :func:`is_live_wn_combat` by the sq-playtest 2026-06-24 criticals. The
+    encounter-level predicate still gates the de-nativized prompt branch and the
+    narration-apply stray-beat drop (both only matter once a combat is seated).
+    The TOOL filter is broader: under a WN binding the ruleset owns the round
+    (ADR-143) AND out-of-combat checks resolve on the player's throw (ADR-074 —
+    determinative dice / ``check_throw``), so the narrator never resolves
+    mechanics on a WN pack at all.
+
+    Gating the tool filter on a *live* encounter left the gap the criticals hit:
+    on a fresh descent the player's attack fails to seat (a surfaced creature's
+    stale zone, or literary-verb routing), so no encounter is live, the narrator
+    keeps the full combat toolset and grinds ``roll_dice``/``apply_damage``/
+    ``advance_encounter_beat``/``advance_confrontation`` past ``max_turns`` — a
+    fatal turn crash. Keying the filter on the BINDING closes it: the narrator
+    can't grind tools it never holds. Native (``dial``) and Fate packs are
+    untouched (ADR-143's "leave the native engine alone" guard cuts both ways).
+    """
+    if bound_ruleset is None:
+        return False
+    # Local import avoids any chance of an import-order cycle at module load.
+    from sidequest.genre.ruleset_reference import WN_FAMILY
+
+    return bound_ruleset in WN_FAMILY

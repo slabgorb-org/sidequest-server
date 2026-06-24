@@ -25,15 +25,24 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import sidequest.agents.tools  # noqa: F401 — wires the WRITE-tool adapters onto default_registry
 from sidequest.agents.narrator import NarratorAgent
-from sidequest.agents.orchestrator import BeatSelection, NarrationTurnResult, NpcMention
+from sidequest.agents.orchestrator import (
+    BeatSelection,
+    NarrationTurnResult,
+    NpcMention,
+    Orchestrator,
+    TurnContext,
+)
 from sidequest.agents.prompt_framework.core import PromptRegistry
-from sidequest.agents.tool_registry import default_registry
+from sidequest.agents.tool_registry import ToolContext, default_registry
+from sidequest.agents.tooling_protocol import ToolResultBlock, ToolUseBlock
 from sidequest.game.encounter import (
     EncounterActor,
     EncounterMetric,
     StructuredEncounter,
     is_live_wn_combat,
+    wn_binding_owns_combat_resolution,
 )
 from sidequest.game.persistence import GameMode
 from sidequest.game.repository import SaveRepository
@@ -51,6 +60,10 @@ from sidequest.protocol.dice import RollOutcome
 from sidequest.server import narration_apply
 from sidequest.server.narration_apply import _apply_narration_result_to_snapshot
 from sidequest.server.session_room import SessionRoom
+from tests.agents.fakes.fake_anthropic_sdk_client import (
+    FakeAnthropicSdkClient,
+    ScriptedResponse,
+)
 
 # The five combat-RESOLUTION tools withheld from the narrator on a live WN combat.
 _COMBAT_RESOLUTION_TOOLS = frozenset(
@@ -271,3 +284,129 @@ def test_live_wn_combat_drops_stray_beat_and_does_not_touch_the_dial(
         f"surface it on the GM panel; got ops={[e['fields'].get('op') for e in events]}"
     )
     assert dropped[0]["fields"].get("beat_id") == "strike"
+
+
+# ---------------------------------------------------------------------------
+# A1 EXTENDED (sq-playtest 2026-06-24 criticals) — the tool filter keys on the
+# WN BINDING, not a live encounter. On a fresh descent the attack can fail to
+# seat (stale-zone creature / literary-verb routing), so NO encounter is live —
+# yet the narrator must STILL be denied the combat-resolution toolset, or it
+# grinds roll/apply/advance past max_turns and the websocket turn crashes.
+# ---------------------------------------------------------------------------
+
+
+def test_wn_binding_owns_combat_resolution_true_for_whole_family_no_encounter_needed() -> None:
+    # The tool-gate predicate is BINDING-level: it ignores the encounter entirely
+    # (that is the whole point — it must fire when nothing has seated).
+    for slug in ("swn", "wwn", "cwn", "awn"):
+        assert wn_binding_owns_combat_resolution(slug) is True
+
+
+def test_wn_binding_owns_combat_resolution_false_for_native_fate_and_unbound() -> None:
+    # Native dial + Fate keep their own toolset (ADR-143 cuts both ways); an
+    # unbound/pack-less path is unchanged.
+    assert wn_binding_owns_combat_resolution("dial") is False
+    assert wn_binding_owns_combat_resolution("fate") is False
+    assert wn_binding_owns_combat_resolution(None) is False
+
+
+def _dial_pack() -> GenrePack:
+    """A native (non-WN) pack — the regression guard: it must KEEP combat tools."""
+    pack = MagicMock(spec=GenrePack)
+    pack.rules = RulesConfig(ruleset="dial", confrontations=[_combat_cdef()])
+    pack.effective_cultures.return_value = ([], "genre")
+    pack.source_dir = None
+    pack.worlds = {}
+    return pack
+
+
+class _StubReg:
+    """Minimal PromptRegistry stand-in for the SDK drive (mirrors the hybrid-split
+    fake): the tool gate reads ``context.pack``, never the registry, so a stub
+    that satisfies the compose API is enough to reach ``complete_with_tools``."""
+
+    def compose_split(self, agent_name: str) -> tuple[str, str]:
+        return ("system text", "user text")
+
+    def compose_split_by_zone(self, agent_name: str):
+        from sidequest.agents.prompt_framework.types import AttentionZone
+
+        return ({AttentionZone.Primacy: "system text"}, "user text")
+
+    def registry(self, agent_name: str) -> list:
+        return []
+
+
+async def _advertised_tools_on_sdk_turn(
+    monkeypatch: pytest.MonkeyPatch, *, pack: GenrePack, encounter: object | None
+) -> set[str]:
+    """Drive the SDK narration path for ``pack`` (with ``encounter`` live or None)
+    and return the set of tool NAMES actually advertised to the model — the real
+    A1 wiring assertion (``FakeAnthropicSdkClient`` records the ``tools=`` array)."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    client = FakeAnthropicSdkClient(
+        responses=[
+            ScriptedResponse(
+                text="The black water is still.",
+                stop_reason="end_turn",
+                input_tokens=200,
+                output_tokens=24,
+                cached_input_read_tokens=0,
+                cached_input_write_tokens=0,
+                model="claude-sonnet-4-6",
+            )
+        ]
+    )
+    orch = Orchestrator(client=client)
+
+    async def _spy_dispatch(block: ToolUseBlock, ctx: ToolContext) -> ToolResultBlock:
+        return ToolResultBlock(tool_use_id=block.id, content="ok", is_error=False)
+
+    monkeypatch.setattr(default_registry, "dispatch", _spy_dispatch)
+
+    async def _fake_build_prompt(self: Orchestrator, action: str, context: TurnContext):
+        return ("prompt-text", _StubReg())
+
+    monkeypatch.setattr(Orchestrator, "build_narrator_prompt", _fake_build_prompt)
+
+    ctx = TurnContext(
+        character_name="Groucho",
+        genre="caverns_and_claudes",
+        turn_number=2,
+        pack=pack,
+        encounter=encounter,
+    )
+    await orch.run_narration_turn("I attack the pale thing with my short sword.", ctx)
+    assert client.recorded_requests, "SDK path never reached complete_with_tools"
+    return {t.name for t in client.recorded_requests[0].tools}
+
+
+@pytest.mark.asyncio
+async def test_wn_pack_withholds_combat_tools_with_no_live_encounter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The regression the 2026-06-24 criticals hit: a WN pack with NO live
+    encounter (the unseated attack) must still withhold every combat-resolution
+    tool, so the narrator cannot grind them past max_turns."""
+    advertised = await _advertised_tools_on_sdk_turn(monkeypatch, pack=_wn_pack(), encounter=None)
+    leaked = advertised & set(_COMBAT_RESOLUTION_TOOLS)
+    assert not leaked, (
+        "on a WN pack the narrator must hold NO combat-resolution tool even with "
+        f"no live encounter (the unseated-attack starve); leaked={sorted(leaked)}"
+    )
+    # The read/lookup tools it needs to NARRATE the scene must still be advertised.
+    assert {"query_encounter", "lookup_monster"} <= advertised
+
+
+@pytest.mark.asyncio
+async def test_native_dial_pack_keeps_combat_tools_with_no_encounter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression guard: a native (non-WN) pack is untouched — it keeps the full
+    combat toolset whether or not an encounter is live (ADR-143 leaves native
+    engines alone)."""
+    advertised = await _advertised_tools_on_sdk_turn(monkeypatch, pack=_dial_pack(), encounter=None)
+    assert set(_COMBAT_RESOLUTION_TOOLS) <= advertised, (
+        "a native dial pack must keep its combat-resolution tools; "
+        f"missing={sorted(set(_COMBAT_RESOLUTION_TOOLS) - advertised)}"
+    )

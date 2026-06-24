@@ -4205,11 +4205,22 @@ class Orchestrator:
             # narrator grinds roll/apply/advance in its own tool loop past
             # max_turns (the seated-but-never-resolves crash). Gated on the WN
             # family + a live combat so native-dial packs keep the full toolset.
-            from sidequest.game.encounter import is_live_wn_combat
+            from sidequest.game.encounter import (
+                is_live_wn_combat,
+                wn_binding_owns_combat_resolution,
+            )
 
+            # sq-playtest 2026-06-24: the tool filter keys on the WN BINDING, not
+            # a live encounter. On a fresh descent the attack can fail to seat
+            # (stale-zone creature / literary-verb routing) so no encounter is
+            # live — yet the narrator must STILL not hold the combat-resolution
+            # toolset, or it grinds roll/apply/advance past max_turns (the fatal
+            # crash). The encounter-level predicate still gates the prompt's
+            # de-nativized zone (A2) + the stray-beat drop (A3) below.
             _wn_combat_live = is_live_wn_combat(context.encounter, bound_ruleset)
+            _wn_owns_combat = wn_binding_owns_combat_resolution(bound_ruleset)
             advertised_tool_defs = default_registry.tool_definitions(
-                bound_ruleset, exclude_combat_resolution=_wn_combat_live
+                bound_ruleset, exclude_combat_resolution=_wn_owns_combat
             )
             _total_tool_count = len(default_registry.list_names())
             _advertised_tool_count = len(advertised_tool_defs)
@@ -4224,7 +4235,8 @@ class Orchestrator:
                     "tools.bound_ruleset": bound_ruleset or "none",
                     "tools.advertised_count": _advertised_tool_count,
                     "tools.excluded_count": _total_tool_count - _advertised_tool_count,
-                    "tools.combat_resolution_withheld": _wn_combat_live,
+                    "tools.combat_resolution_withheld": _wn_owns_combat,
+                    "tools.wn_binding_owns_combat": _wn_owns_combat,
                     "encounter.live_wn_combat": _wn_combat_live,
                 },
             ):

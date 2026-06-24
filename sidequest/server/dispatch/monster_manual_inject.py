@@ -245,12 +245,14 @@ def _npc_patches_for_available_humans(
       the explicit anchor location. Capped at
       :data:`_ACTIVE_NPC_INJECT_LIMIT` (sq-playtest 2026-06-13): the loop was
       previously uncapped and re-surfaced every named NPC every turn.
-    - First :data:`_AVAILABLE_NPC_INJECT_LIMIT` Available NPCs, selected via
-      :meth:`MonsterManual.available_at_location` (wry_whimsy/oz fix): a
-      *placed* Available NPC (non-empty ``location_tags``) only surfaces where
-      its tags match ``current_location``; an *unplaced* one stays eligible
-      everywhere. Each is a name-only patch stamped with the party's
-      ``current_location`` so the projection layer's ``in_same_zone()`` matches.
+    - Available NPCs, selected via :meth:`MonsterManual.available_at_location`
+      (wry_whimsy/oz fix): a *placed* Available NPC (non-empty ``location_tags``)
+      only surfaces where its tags match ``current_location``; an *unplaced* one
+      stays eligible everywhere. Every *placed* match surfaces uncapped (it is the
+      location's authored cast — story 158-11); only the *unplaced* walk-ons are
+      bounded by :data:`_AVAILABLE_NPC_INJECT_LIMIT`. Each is a name-only patch
+      stamped with the party's ``current_location`` so the projection layer's
+      ``in_same_zone()`` matches.
 
     Dormant NPCs are skipped — same exclusion as the Rust formatter.
 
@@ -258,11 +260,13 @@ def _npc_patches_for_available_humans(
     available_placed_eligible)`` — ``active_capped`` is the number of
     Active-at-location humans dropped by the cap; ``available_placed_matched`` is
     how many of the surfaced Available humans were matched by ``location_tags``
-    (vs unplaced fallback); ``available_placed_eligible`` is the UNCAPPED count of
-    placed NPCs matching this location (so ``eligible - matched`` is the cap-loss,
-    reported as ``available_placed_dropped``). All are surfaced in the injection
-    span so the GM panel sees placement-aware selection working and the bench
-    bounded (No Silent Fallbacks).
+    (vs unplaced fallback); ``available_placed_eligible`` is the count of placed
+    NPCs matching this location. Since story 158-11 every placed match surfaces,
+    so ``matched == eligible`` and the span's ``available_placed_dropped``
+    (``eligible - matched``) is now always 0 — it remains emitted as a regression
+    tripwire (a non-zero value would mean placed authored NPCs are being dropped
+    again). All are surfaced in the injection span so the GM panel sees
+    placement-aware selection working and the bench bounded (No Silent Fallbacks).
 
     Playtest 2026-05-11 regression: prior versions left ``location=None``
     on every patch, which silently masked every co-located target from
@@ -305,11 +309,22 @@ def _npc_patches_for_available_humans(
     # surfacing race against generic generated walk-ons. Mirrors
     # ``MonsterManual.available_at_location`` exactly.
     eligible_all = manual.available_at_location(current_location)
-    # Uncapped count of placed-and-matching NPCs — computed from the SAME list as
-    # the surfaced slice so the span's eligible/matched/dropped are a consistent
-    # snapshot (no second available_at_location traversal in inject()).
-    available_placed_eligible = sum(1 for n in eligible_all if n.location_tags)
-    available = eligible_all[:_AVAILABLE_NPC_INJECT_LIMIT]
+    # Story 158-11: a *placed* NPC (non-empty ``location_tags`` matching here) is
+    # part of this location's intended authored cast, not a generic walk-on —
+    # every one surfaces, UNCAPPED. ``_AVAILABLE_NPC_INJECT_LIMIT`` bounds only the
+    # *unplaced* fallback walk-ons so a calm scene isn't flooded. Before this, the
+    # cap sliced the combined list and silently guillotined the tail of an authored
+    # roster larger than the cap: beneath_sunden's 4-NPC Ropefoot camp lost its 4th
+    # member (Harmund Fuel-Count) every turn, leaving him manual_origin=False /
+    # location=None while his 3 siblings seeded authored (the same class as the oz
+    # road's "4 companions surfaced 3, dropped 1" — that work only made the drop
+    # observable; this removes it). ``available_at_location`` already orders placed
+    # matches ahead of unplaced, so partitioning preserves the surfacing order.
+    placed = [n for n in eligible_all if n.location_tags]
+    unplaced = [n for n in eligible_all if not n.location_tags]
+    available_placed_eligible = len(placed)
+    unplaced_budget = max(0, _AVAILABLE_NPC_INJECT_LIMIT - len(placed))
+    available = placed + unplaced[:unplaced_budget]
     available_placed_matched = sum(1 for n in available if n.location_tags)
     for npc in available:
         patches.append(_human_patch(npc, location=fallback_location))

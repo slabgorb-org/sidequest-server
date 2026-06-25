@@ -385,6 +385,7 @@ def test_ensure_loaded_world_slug_absent_from_pack_warns_and_no_backfill(
 # also purge encounters whose creatures are absent from the CURRENT world's
 # effective bestiary, and emit an OTEL span so the GM panel sees the scope held.
 
+
 # A bestiary-sourced encounter (encountergen stamps class="creature"). The
 # inject-suite's `_creature_encounter` stamps class="salt_burrower" (a native-ish
 # class that a ruleset binding would purge), so it can't exercise the cross-world
@@ -509,7 +510,9 @@ def test_ensure_loaded_foreign_purge_emits_span(tmp_path: Path, otel_capture) ->
     fired = [
         s for s in otel_capture.get_finished_spans() if s.name == "monster_manual.foreign_purged"
     ]
-    assert len(fired) == 1, "the foreign-bestiary purge must emit an OTEL span (GM-panel lie-detector)"
+    assert len(fired) == 1, (
+        "the foreign-bestiary purge must emit an OTEL span (GM-panel lie-detector)"
+    )
     attrs = fired[0].attributes
     assert attrs["genre"] == "heavy_metal"
     assert attrs["world"] == "barsoom"

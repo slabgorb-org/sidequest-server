@@ -41,6 +41,7 @@ from sidequest.genre.names.generator import sanitize_display_name
 from sidequest.telemetry.spans import Span
 from sidequest.telemetry.spans.monster_manual import (
     SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL,
+    SPAN_MONSTER_MANUAL_FOREIGN_PURGED,
     SPAN_MONSTER_MANUAL_INJECTED,
     SPAN_MONSTER_MANUAL_REGION_POPULATION,
     SPAN_MONSTER_MANUAL_STALE_PURGED,
@@ -165,6 +166,43 @@ def ensure_loaded(sd: _SessionData) -> MonsterManual | None:
                 },
             ):
                 pass
+
+        # Cross-world bestiary bleed (story 158-33): the same genre+world-keyed
+        # cache may carry encounter enemies authored ONLY in a SIBLING world's
+        # bestiary — a stale seed from the pre-ADR-120 genre-tier-bestiary era,
+        # never re-validated after rosters moved to per-world bestiary.yaml. They
+        # are class="creature", so the native-class purge above does NOT catch
+        # them (long_foundry's "Knight of the Ashen Banner" surfaced as the
+        # Barsoom arena champion). Drop encounters whose creatures are absent from
+        # the CURRENT world's effective bestiary so re-seeding repopulates only
+        # world-true hostiles (SOUL: Crunch in the Genre, Flavor in the World).
+        # ``effective_bestiary`` may be absent on a minimal pack stub (nothing to
+        # scope against) — skip cleanly, same defensive shape as the ``ruleset``
+        # getattr above; a real GenrePack always exposes it.
+        effective_bestiary = getattr(pack, "effective_bestiary", None)
+        if callable(effective_bestiary):
+            world_bestiary, _bestiary_source = effective_bestiary(sd.world_slug or "")
+            foreign = manual.purge_foreign_bestiary_encounters(world_bestiary)
+            if foreign:
+                manual.save()
+                logger.warning(
+                    "monster_manual.foreign_encounter_purged genre=%s world=%s ruleset=%s purged=%d",
+                    sd.genre_slug,
+                    sd.world_slug,
+                    ruleset,
+                    len(foreign),
+                )
+                with Span.open(
+                    SPAN_MONSTER_MANUAL_FOREIGN_PURGED,
+                    {
+                        "genre": sd.genre_slug,
+                        "world": sd.world_slug or "",
+                        "ruleset": ruleset or "",
+                        "purged": len(foreign),
+                        "remaining_encounters": len(manual.encounters),
+                    },
+                ):
+                    pass
 
     source_dir = getattr(pack, "source_dir", None) if pack is not None else None
     if manual.needs_seeding() and source_dir is not None:

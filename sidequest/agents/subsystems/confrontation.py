@@ -37,6 +37,7 @@ from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.pack import GenrePack
 from sidequest.protocol.dispatch import SubsystemDispatch
 from sidequest.server.dispatch.encounter_lifecycle import (
+    InitiativeUnresolvableError,
     NoOpponentAvailableError,
     SealedLetterArityError,
     instantiate_encounter_from_trigger,
@@ -179,6 +180,18 @@ async def run_confrontation_dispatch(
             exc,
         )
         return SubsystemOutput(data={"error": "sealed_letter_arity_rejected"})
+    except InitiativeUnresolvableError as exc:
+        # 158-28 / ADR-006: the combat is ALREADY seated (snapshot.encounter set
+        # before the initiative roll); a player stat block missing DEXTERITY must
+        # degrade LOUDLY — keep the seat, surface an error outcome the GM panel
+        # sees (the bank stamps it on the subsystem span) — not wedge the turn.
+        logger.warning(
+            "encounter.initiative_unresolvable confrontation=%s player=%s reason=%s",
+            enc_type,
+            player_name,
+            exc,
+        )
+        return SubsystemOutput(data={"error": "initiative_unresolvable"})
 
     return SubsystemOutput()
 

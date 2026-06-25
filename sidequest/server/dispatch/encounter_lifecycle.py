@@ -105,6 +105,21 @@ class SealedLetterArityError(ValueError):
     """
 
 
+class InitiativeUnresolvableError(ValueError):
+    """Raised when a seated combat cannot roll initiative because a player
+    actor's stat block carries no DEXTERITY score (story 158-28).
+
+    The encounter is ALREADY seated (``snapshot.encounter`` is set before the
+    initiative roll), so this is a partial-seat condition, not a failed seat.
+    Subclass of ``ValueError`` so existing ``except ValueError`` blocks still
+    catch it; the dedicated class lets ``run_confrontation_dispatch`` degrade
+    LOUDLY (ADR-006) — keep the seat, surface an error outcome the GM panel
+    sees — rather than letting the bare ValueError wedge the turn. Distinct
+    from the player-NOT-FOUND initiative guard, which stays a fail-loud
+    ValueError (a genuine roster name-skew defect, not a degradable condition).
+    """
+
+
 def _validate_side(actor_name: str, declared: str) -> ActorSide:
     """Validate that side is in {player, opponent, neutral}.
 
@@ -681,7 +696,18 @@ def _roll_and_persist_initiative(
                 )
             score = ch.stats.get(dex_key)
             if score is None:
-                raise ValueError(
+                # 158-28: degrade LOUDLY (ADR-006), don't wedge the turn. The
+                # encounter is already seated; the typed error lets the
+                # confrontation handler keep the seat and surface an error
+                # outcome the GM panel sees, instead of a bare ValueError.
+                _log.warning(
+                    "encounter.initiative_unresolvable actor=%s dex_key=%s stats=%s "
+                    "— seated combat cannot roll initiative (degrading loudly)",
+                    actor.name,
+                    dex_key,
+                    sorted(ch.stats),
+                )
+                raise InitiativeUnresolvableError(
                     f"player '{actor.name}' stat block has no '{dex_key}' "
                     f"(DEXTERITY flavor) — cannot roll initiative (stats={sorted(ch.stats)})"
                 )

@@ -38,6 +38,18 @@ SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL = "monster_manual.authored_backfill"
 # via the bestiary path.
 SPAN_MONSTER_MANUAL_STALE_PURGED = "monster_manual.stale_encounter_purged"
 
+# Story 158-33 (cross-world bestiary bleed, 2026-06-25): emitted when
+# ``ensure_loaded`` purges an encounter whose creature(s) are absent from the
+# CURRENT world's effective bestiary. The genre+world-keyed Manual was seeded
+# under the pre-ADR-120 genre-tier bestiary (which mixed every world's
+# creatures) and never re-validated after rosters moved to per-world
+# ``bestiary.yaml``. These foreign enemies are ``class="creature"``, so the
+# native-class STALE_PURGED signal above does NOT catch them; this is the
+# sibling, world-membership purge. The GM-panel lie-detector that a Barsoom
+# arena never seats a long_foundry "Knight of the Ashen Banner" (SOUL: Crunch
+# in the Genre, Flavor in the World).
+SPAN_MONSTER_MANUAL_FOREIGN_PURGED = "monster_manual.foreign_purged"
+
 # Story 153-x (ADR-106 region population): emitted when a generated region's
 # frozen procedural roster (Task 3) is injected into snapshot.npcs, region-
 # stamped for region-keyed seating. The GM-panel lie-detector that procedural
@@ -49,4 +61,5 @@ FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_HP_PRESERVED)
 FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_ROOM_BOUND)
 FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL)
 FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_STALE_PURGED)
+FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_FOREIGN_PURGED)
 FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_REGION_POPULATION)

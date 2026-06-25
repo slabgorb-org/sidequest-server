@@ -16,9 +16,12 @@ from __future__ import annotations
 import logging
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from sidequest.genre.models.bestiary import Bestiary
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +62,39 @@ def _encounter_has_native_class_enemy(enc: ManualEncounter) -> bool:
             continue
         cls = enemy.get("class")
         if isinstance(cls, str) and cls.strip() and cls != "creature":
+            return True
+    return False
+
+
+def _encounter_has_foreign_creature(enc: ManualEncounter, allowed_names: set[str]) -> bool:
+    """Whether a cached encounter fields a bestiary creature absent from the world.
+
+    Companion to :func:`_encounter_has_native_class_enemy` (see
+    :meth:`MonsterManual.purge_foreign_bestiary_encounters`): the encountergen
+    bestiary path stamps every enemy ``class="creature"`` and copies the source
+    :class:`~sidequest.genre.models.bestiary.BestiaryEntry` name verbatim, so the
+    name (case-insensitive) is the stable link back to the world bestiary. An
+    enemy whose name is NOT in ``allowed_names`` is a sibling-world creature that
+    bled into this world's Manual.
+
+    Conservative, mirroring its sibling: only an explicit ``class="creature"``
+    enemy WITH a name is judged. A native player-class enemy (handled by
+    :func:`_encounter_has_native_class_enemy`), a missing class/name, or a
+    non-list ``enemies`` is NOT a foreign signal — no over-purging of native or
+    partial data. ``allowed_names`` must already be lowercased.
+    """
+    enemies = enc.data.get("enemies") if isinstance(enc.data, dict) else None
+    if not isinstance(enemies, list):
+        return False
+    for enemy in enemies:
+        if not isinstance(enemy, dict):
+            continue
+        if enemy.get("class") != "creature":
+            continue
+        name = enemy.get("name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        if name.lower() not in allowed_names:
             return True
     return False
 
@@ -377,6 +413,47 @@ class MonsterManual(BaseModel):
             stale_ids = {id(enc) for enc in stale}
             self.encounters = [enc for enc in self.encounters if id(enc) not in stale_ids]
         return stale
+
+    def purge_foreign_bestiary_encounters(self, bestiary: Bestiary | None) -> list[ManualEncounter]:
+        """Drop cached encounters whose creatures belong to a SIBLING world.
+
+        Story 158-33 (sq-playtest 2026-06-25, heavy_metal/barsoom): this
+        genre+world-keyed cache persists across sessions. barsoom's Manual carried
+        encounter enemies — "Foundry Automaton", "Grave Knight", "Knight of the
+        Ashen Banner" — authored ONLY in the sibling world long_foundry's
+        ``bestiary.yaml``. They were seeded when a *genre-tier* bestiary still
+        existed (mixing every world's creatures into one pool); ADR-120 then moved
+        rosters to per-world ``worlds/<slug>/bestiary.yaml``, but the persisted
+        Manual was never re-validated. Salensus Oll then latched the long_foundry
+        "Knight of the Ashen Banner" as the Barsoom arena champion — a
+        Genre/World-Truth break (SOUL: Crunch in the Genre, Flavor in the World).
+
+        These foreign enemies are ``class="creature"`` (bestiary-sourced), so
+        :meth:`purge_ruleset_incoherent_encounters` (the native-class signal) does
+        NOT catch them — this is the sibling, world-membership purge. Drop any
+        encounter that fields a creature absent from the CURRENT world's effective
+        ``bestiary`` so :meth:`needs_seeding` re-fires and the Manual re-seeds via
+        the correctly-scoped bestiary path.
+
+        Conservative (No Silent Fallbacks): a ``None`` bestiary means scope is
+        unresolvable (neither world nor genre tier supplies one) — purge NOTHING
+        rather than empty the pool (the 87-4 silently-empty-pool failure mode).
+        Only ``class="creature"`` enemies with a name are judged; native-class and
+        partial data are left to the other purge / untouched.
+
+        Returns the purged encounters (empty when nothing was foreign). Pure; the
+        caller persists + emits the OTEL span.
+        """
+        if bestiary is None:
+            return []
+        allowed_names = {entry.name.lower() for entry in bestiary.entries}
+        foreign = [
+            enc for enc in self.encounters if _encounter_has_foreign_creature(enc, allowed_names)
+        ]
+        if foreign:
+            foreign_ids = {id(enc) for enc in foreign}
+            self.encounters = [enc for enc in self.encounters if id(enc) not in foreign_ids]
+        return foreign
 
     # ── Placement ───────────────────────────────────────────────
 

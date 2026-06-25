@@ -1474,8 +1474,10 @@ class ConnectHandler:
                 )
 
             # MP-03 Task 4 / ProjectionFilter-Rules Task 18: replay from
-            # projection_cache when present (byte-identical to what the live
-            # player received). Legacy fallback runs filter live.
+            # projection_cache when present (the cache stores the pre-POV-swap
+            # projection decision — 3rd-person prose — so the per-recipient
+            # 2nd-person swap is re-applied below via `_localize_replay`, Story
+            # 158-38). Legacy fallback runs filter live.
             #
             # Lie-detector for pingpong 2026-04-24 "Empty narrative on
             # resume" — the cache read + per-kind replay path are the
@@ -1492,6 +1494,30 @@ class ConnectHandler:
             _replay_skipped_internal = 0
             _replay_kinds: dict[str, int] = {}
             _replay_footnote_fact_ids_minted = 0
+
+            # Story 158-38: the projection cache stores pre-swap 3rd-person
+            # prose (the per-recipient POV swap runs at live fan-out, after the
+            # cache write), so every rebuilt NARRATION must be re-localized to
+            # the resuming player's POV or they read their own past action in
+            # 3rd person. Build the view/snapshot once for both replay branches.
+            from sidequest.server.emitters import localize_replay_message
+
+            _replay_snapshot = (
+                session._session_data.snapshot if session._session_data is not None else None
+            )
+            _replay_view = (
+                views.build_game_state_view(session) if _replay_snapshot is not None else None
+            )
+
+            def _localize_replay(msg: object) -> object:
+                if _replay_view is None or _replay_snapshot is None:
+                    return msg
+                return localize_replay_message(
+                    msg,
+                    recipient_player_id=session._current_player_id,
+                    view=_replay_view,
+                    snapshot=_replay_snapshot,
+                )
 
             # Playtest 2026-05-02 [OBS] "Scrapbook state lost on reload":
             # SCRAPBOOK_ENTRY events were emitted with image_url=None at
@@ -1554,6 +1580,7 @@ class ConnectHandler:
                             )
                     _built, _fn_minted = _mint_replay_footnote_fact_ids(_built)
                     _replay_footnote_fact_ids_minted += _fn_minted
+                    _built = _localize_replay(_built)
                     _replay_kinds[_kind] = _replay_kinds.get(_kind, 0) + 1
                     replay_msgs.append(_built)
             else:
@@ -1596,6 +1623,7 @@ class ConnectHandler:
                             )
                     _built, _fn_minted = _mint_replay_footnote_fact_ids(_built)
                     _replay_footnote_fact_ids_minted += _fn_minted
+                    _built = _localize_replay(_built)
                     _replay_kinds[event_row.kind] = _replay_kinds.get(event_row.kind, 0) + 1
                     replay_msgs.append(_built)
 

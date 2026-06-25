@@ -246,6 +246,60 @@ def _topo_sort(dispatches: list[SubsystemDispatch]) -> list[SubsystemDispatch]:
     return order
 
 
+_CONFRONTATION_SUBSYSTEM = "confrontation"
+
+
+def _confrontation_types(pack: Any) -> frozenset[str]:
+    """The confrontation TYPE names the active pack authors (combat, negotiation,
+    chase, …) — these are ``params["type"]`` values for the ``confrontation``
+    subsystem, NOT subsystem keys. Empty when the pack/rules are unavailable
+    (the normalization simply no-ops)."""
+    rules = getattr(pack, "rules", None)
+    cdefs = getattr(rules, "confrontations", None) or []
+    return frozenset(c.confrontation_type for c in cdefs if getattr(c, "confrontation_type", None))
+
+
+def _normalize_confrontation_type_subsystems(
+    dispatches: list[SubsystemDispatch], context: dict[str, Any]
+) -> tuple[list[SubsystemDispatch], dict[str, str]]:
+    """Repair a dispatch whose ``subsystem`` is actually a confrontation TYPE.
+
+    The Intent Router (a Haiku LLM) intermittently emits ``subsystem="combat"``
+    for a blunt combat verb ("I attack the banth") — conflating the confrontation
+    *type* with the *subsystem* key. ``combat`` is not a registered subsystem, so
+    the bank would silently drop it and the narrator would confabulate a kill over
+    an empty encounter (story 158-28). Rewrite such a dispatch to the registered
+    ``confrontation`` engager, carrying the type through ``params["type"]``.
+
+    Loud, not silent (No Silent Fallbacks): the caller logs each repair and stamps
+    ``normalized_from`` on the per-subsystem OTEL span so the GM panel sees the
+    router-vocabulary repair (reuse the existing ``intent_router.subsystem`` span —
+    one mechanism per problem). Only an UNREGISTERED subsystem that matches a pack
+    confrontation type is rewritten, so a real registered subsystem is never
+    hijacked. Returns the (possibly-rewritten) dispatch list and a
+    ``{idempotency_key: original_subsystem}`` map for the span/audit.
+    """
+    types = _confrontation_types(context.get("pack"))
+    if not types:
+        return dispatches, {}
+    normalized: dict[str, str] = {}
+    out: list[SubsystemDispatch] = []
+    for d in dispatches:
+        if (
+            d.subsystem != _CONFRONTATION_SUBSYSTEM
+            and d.subsystem not in _REGISTRY
+            and d.subsystem in types
+        ):
+            new_params = dict(d.params)
+            new_params.setdefault("type", d.subsystem)
+            normalized[d.idempotency_key] = d.subsystem
+            d = d.model_copy(
+                update={"subsystem": _CONFRONTATION_SUBSYSTEM, "params": new_params}
+            )
+        out.append(d)
+    return out, normalized
+
+
 async def run_dispatch_bank(
     package: DispatchPackage,
     *,
@@ -286,6 +340,20 @@ async def run_dispatch_bank(
     # Authored directives flow only through per_player[*].narrator_instructions.
     for ca in package.cross_player:
         all_dispatches.extend(ca.dispatch)
+
+    # Repair a router-vocabulary slip (158-28): a dispatch whose subsystem is
+    # actually a confrontation TYPE ("combat") is rewritten to the registered
+    # ``confrontation`` engager BEFORE topo-sort/dispatch, so a misclassified
+    # combat verb seats instead of being silently dropped into a phantom kill.
+    all_dispatches, _normalized_subsystems = _normalize_confrontation_type_subsystems(
+        all_dispatches, context
+    )
+    for _ik, _orig in _normalized_subsystems.items():
+        logger.warning(
+            "subsystems.confrontation_type_subsystem_normalized original=%s -> confrontation key=%s",
+            _orig,
+            _ik,
+        )
 
     with intent_router_dispatch_bank_span(
         turn_id=package.turn_id,
@@ -330,6 +398,12 @@ async def run_dispatch_bank(
                 threshold = _threshold_for(d.subsystem, context)
                 sub_span.set_attribute("confidence", float(d.confidence))
                 sub_span.set_attribute("threshold", float(threshold))
+                # 158-28: a confrontation-type-as-subsystem slip was repaired
+                # upstream — stamp the original name on the span + audit so the GM
+                # panel sees the router-vocabulary normalization (loud, not silent).
+                _normalized_from = _normalized_subsystems.get(d.idempotency_key)
+                if _normalized_from is not None:
+                    sub_span.set_attribute("normalized_from", _normalized_from)
                 # The durable audit entry (see BankResult.decisions) —
                 # mutated in place as the gate/handler outcome lands below.
                 decision_entry: dict[str, Any] = {
@@ -344,6 +418,8 @@ async def run_dispatch_bank(
                     # (the exact hole that hid the flavor-descriptor veto).
                     "params": dict(d.params),
                 }
+                if _normalized_from is not None:
+                    decision_entry["normalized_from"] = _normalized_from
                 result.decisions.append(decision_entry)
                 if d.confidence < threshold:
                     hint = NarratorDirective(

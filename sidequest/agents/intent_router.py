@@ -144,6 +144,10 @@ For each player action:
      handler reads. Emit exactly the keys listed; do not invent extra keys.
      Available subsystem keys and their required params:
        - confrontation: structured encounter (combat, negotiation, chase, etc.).
+         The subsystem KEY is ALWAYS "confrontation" — combat/negotiation/chase
+         are confrontation TYPES that belong in params["type"], NEVER the
+         subsystem key. A blunt "I attack the banth" is subsystem="confrontation",
+         params={"type":"combat", ...} — do NOT emit subsystem="combat".
          params={"type": "<one of game_state.confrontation_types[].type>",
                  "opponent": {"name": "<the adversary>", "description": "<one clause>"}}.
          Choose the single type whose category fits the action (a physical

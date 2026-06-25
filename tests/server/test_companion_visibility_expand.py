@@ -1,10 +1,11 @@
 """expand_visibility_for_companions widens owner-private events to bonded pets,
 leaves everything else untouched, and emits companion.routed_as_pet (Plan B T4).
 
-Span capture: emitters.py imports ``_watcher_publish`` function-locally from
-session_handler (to avoid an import cycle), so we patch the alias on BOTH
-modules with ``raising=False`` — robust to whichever import site the helper
-resolves through. See Delivery Findings re: the plan's dead patch target.
+Span capture: the helper imports ``_watcher_publish`` function-locally from
+session_handler (the emitters↔session_handler import cycle), re-fetching it from
+the session_handler module object on each call. So the one live capture point is
+``sidequest.server.session_handler._watcher_publish`` (the back-compat re-export
+at session_handler.py:51) — that is the correct, and only, patch target.
 """
 
 from __future__ import annotations
@@ -19,10 +20,9 @@ from sidequest.server.session_room import CompanionRelationship, SessionRoom
 
 def _capture_pet_spans(monkeypatch) -> list[tuple[str, dict]]:
     spans: list[tuple[str, dict]] = []
-    sink = lambda name, fields, **_kw: spans.append((name, fields))  # noqa: E731
-    monkeypatch.setattr("sidequest.server.emitters._watcher_publish", sink, raising=False)
     monkeypatch.setattr(
-        "sidequest.server.session_handler._watcher_publish", sink, raising=False
+        "sidequest.server.session_handler._watcher_publish",
+        lambda name, fields, **_kw: spans.append((name, fields)),
     )
     return spans
 
@@ -64,22 +64,26 @@ def test_pet_added_to_owner_private_secret_note(monkeypatch):
     assert any(n == "companion.routed_as_pet" for n, _ in spans)
 
 
-def test_hireling_is_not_widened():
+def test_hireling_is_not_widened(monkeypatch):
+    spans = _capture_pet_spans(monkeypatch)
     room = SessionRoom(slug="companion-expand-h", mode=GameMode.SOLO)
     room.set_player_identity("owner-pid", "alice@home")
     room.register_companion_bond("gus-pid", "alice@home", CompanionRelationship.HIRELING)
     env = _gated("NARRATION_SEGMENT", ["owner-pid"])
     out = expand_visibility_for_companions(env, room)
     assert out.payload_json == env.payload_json  # hireling never inherits
+    assert all(n != "companion.routed_as_pet" for n, _ in spans)  # exclusion is quiet at OTEL
 
 
-def test_peer_is_not_widened():
+def test_peer_is_not_widened(monkeypatch):
+    spans = _capture_pet_spans(monkeypatch)
     room = SessionRoom(slug="companion-expand-p", mode=GameMode.SOLO)
     room.set_player_identity("owner-pid", "alice@home")
     room.register_companion_bond("kit-pid", "alice@home", CompanionRelationship.PEER)
     env = _gated("NARRATION_SEGMENT", ["owner-pid"])
     out = expand_visibility_for_companions(env, room)
     assert out.payload_json == env.payload_json  # peer never inherits
+    assert all(n != "companion.routed_as_pet" for n, _ in spans)
 
 
 def test_pet_with_unresolved_owner_identity_is_not_widened():

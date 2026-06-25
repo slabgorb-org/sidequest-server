@@ -745,14 +745,6 @@ class SessionRoom:
         with self._lock:
             self._companion_bonds[companion_player_id] = (owner_identity, relationship)
 
-    def companion_owner_identity(self, companion_player_id: str) -> str | None:
-        """Owner identity iff this companion is a PET (the only widening role)."""
-        with self._lock:
-            bond = self._companion_bonds.get(companion_player_id)
-        if bond is None or bond[1] is not CompanionRelationship.PET:
-            return None
-        return bond[0]
-
     def pets_of(self, owner_player_id: str) -> list[str]:
         """Companion player_ids bonded as PET to the identity currently mapped
         to ``owner_player_id``. Empty if the owner has no resolved identity."""

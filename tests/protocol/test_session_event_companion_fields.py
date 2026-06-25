@@ -6,6 +6,9 @@ constructions raise ValidationError — the correct RED signal.
 
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from sidequest.protocol.messages import SessionEventPayload
 
 
@@ -39,3 +42,19 @@ def test_relationship_is_transport_opaque_string():
         relationship="overlord",
     )
     assert p.relationship == "overlord"
+
+
+def test_companion_of_is_length_bounded_at_the_boundary():
+    # lang-review #11: a crafted client must not stuff an unbounded string into
+    # the room dict / telemetry via companion_of.
+    with pytest.raises(ValidationError):
+        SessionEventPayload(
+            event="connect", game_slug="abc", player_name="X", companion_of="a" * 255
+        )
+
+
+def test_relationship_is_length_bounded_at_the_boundary():
+    with pytest.raises(ValidationError):
+        SessionEventPayload(
+            event="connect", game_slug="abc", player_name="X", relationship="x" * 33
+        )

@@ -4,15 +4,20 @@ panel sees the rejection rather than a silent grant (Plan B Task 3).
 
 The watcher span is captured by patching the module-level ``_watcher_publish``
 alias in connect.py (imported at connect.py:69) — patch where USED, per the
-project's monkeypatch convention.
+project's monkeypatch convention. The capture keeps the kwargs (incl. severity)
+so the fail-closed ``warning`` signal is assertable. The bond EFFECT is verified
+through ``pets_of`` — the SAME read path the production fan-out uses.
 """
 
 from __future__ import annotations
 
+from sidequest.game.persistence import GameMode
 from sidequest.handlers.connect import bind_companion_bond
 from sidequest.protocol.messages import SessionEventPayload
 from sidequest.server.session_room import SessionRoom
-from sidequest.game.persistence import GameMode
+
+_OWNER_PID = "owner-pid"
+_OWNER_IDENTITY = "alice@home"
 
 
 def _payload(**kw) -> SessionEventPayload:
@@ -20,33 +25,43 @@ def _payload(**kw) -> SessionEventPayload:
 
 
 def _room() -> SessionRoom:
-    return SessionRoom(slug="companion-connect", mode=GameMode.SOLO)
+    # The owner's player_id -> identity mapping must exist for pets_of to resolve
+    # the owner's bonded pets (the production fan-out read path).
+    room = SessionRoom(slug="companion-connect", mode=GameMode.SOLO)
+    room.set_player_identity(_OWNER_PID, _OWNER_IDENTITY)
+    return room
 
 
-def _capture_spans(monkeypatch) -> list[tuple[str, dict]]:
-    spans: list[tuple[str, dict]] = []
+def _capture_spans(monkeypatch) -> list[tuple[str, dict, dict]]:
+    """Capture (name, fields, kwargs) so severity (a kwarg) is assertable."""
+    spans: list[tuple[str, dict, dict]] = []
     monkeypatch.setattr(
         "sidequest.handlers.connect._watcher_publish",
-        lambda name, fields, **_kw: spans.append((name, fields)),
+        lambda name, fields, **kw: spans.append((name, fields, kw)),
     )
     return spans
+
+
+def _bond_span(spans) -> tuple[dict, dict]:
+    return next((f, kw) for n, f, kw in spans if n == "companion.bond_resolved")
 
 
 def test_pet_bond_registered_and_span_emitted(monkeypatch):
     spans = _capture_spans(monkeypatch)
     room = _room()
-    room.set_player_identity("rex-pid", "donut.local")
 
     bind_companion_bond(
         room,
         "rex-pid",
-        _payload(player_name="Donut", companion_of="alice@home", relationship="pet"),
+        _payload(player_name="Donut", companion_of=_OWNER_IDENTITY, relationship="pet"),
     )
 
-    assert room.companion_owner_identity("rex-pid") == "alice@home"
-    fields = next(f for n, f in spans if n == "companion.bond_resolved")
+    assert room.pets_of(_OWNER_PID) == ["rex-pid"]  # pet widens via the production read path
+    fields, kw = _bond_span(spans)
     assert fields["relationship"] == "pet"
     assert fields["resolved"] is True
+    assert kw.get("severity") == "info"
+    assert "owner_identity" not in fields  # PII (email) must NOT be in telemetry
 
 
 def test_unknown_relationship_fails_closed_and_emits_span(monkeypatch):
@@ -56,12 +71,13 @@ def test_unknown_relationship_fails_closed_and_emits_span(monkeypatch):
     bind_companion_bond(
         room,
         "x-pid",
-        _payload(player_name="X", companion_of="alice@home", relationship="overlord"),
+        _payload(player_name="X", companion_of=_OWNER_IDENTITY, relationship="overlord"),
     )
 
-    assert room.companion_owner_identity("x-pid") is None  # no pet bond — fail closed
-    fields = next(f for n, f in spans if n == "companion.bond_resolved")
+    assert room.pets_of(_OWNER_PID) == []  # no pet bond — fail closed
+    fields, kw = _bond_span(spans)
     assert fields["resolved"] is False  # loud rejection, not a silent grant
+    assert kw.get("severity") == "warning"  # the GM-panel security signal
 
 
 def test_empty_relationship_fails_closed_and_emits_span(monkeypatch):
@@ -73,12 +89,13 @@ def test_empty_relationship_fails_closed_and_emits_span(monkeypatch):
     bind_companion_bond(
         room,
         "y-pid",
-        _payload(player_name="Y", companion_of="alice@home", relationship=""),
+        _payload(player_name="Y", companion_of=_OWNER_IDENTITY, relationship=""),
     )
 
-    assert room.companion_owner_identity("y-pid") is None
-    fields = next(f for n, f in spans if n == "companion.bond_resolved")
+    assert room.pets_of(_OWNER_PID) == []
+    fields, kw = _bond_span(spans)
     assert fields["resolved"] is False
+    assert kw.get("severity") == "warning"
 
 
 def test_peer_bond_registered_but_grants_no_owner_view(monkeypatch):
@@ -90,12 +107,33 @@ def test_peer_bond_registered_but_grants_no_owner_view(monkeypatch):
     bind_companion_bond(
         room,
         "kit-pid",
-        _payload(player_name="Kit", companion_of="alice@home", relationship="peer"),
+        _payload(player_name="Kit", companion_of=_OWNER_IDENTITY, relationship="peer"),
     )
 
-    assert room.companion_owner_identity("kit-pid") is None  # peer != pet
-    fields = next(f for n, f in spans if n == "companion.bond_resolved")
+    assert room.pets_of(_OWNER_PID) == []  # peer != pet — no widening
+    fields, kw = _bond_span(spans)
     assert fields["resolved"] is True
+    assert kw.get("severity") == "info"
+
+
+def test_hireling_bond_registered_but_grants_no_owner_view(monkeypatch):
+    # A HIRELING is a known, resolved relationship (registered in the bond
+    # registry, span resolved=True) but must NEVER widen perception. This is the
+    # security-relevant case: a regression handling hirelings as pets in
+    # bind_companion_bond would otherwise go undetected.
+    spans = _capture_spans(monkeypatch)
+    room = _room()
+
+    bind_companion_bond(
+        room,
+        "gus-pid",
+        _payload(player_name="Gus", companion_of=_OWNER_IDENTITY, relationship="hireling"),
+    )
+
+    assert room.pets_of(_OWNER_PID) == []  # hireling != pet — no widening
+    fields, kw = _bond_span(spans)
+    assert fields["resolved"] is True
+    assert kw.get("severity") == "info"
 
 
 def test_non_companion_connect_is_a_noop(monkeypatch):
@@ -113,5 +151,5 @@ def test_blank_companion_of_is_a_noop(monkeypatch):
     bind_companion_bond(
         room, "bob-pid", _payload(player_name="Bob", companion_of="   ", relationship="pet")
     )
-    assert room.companion_owner_identity("bob-pid") is None
+    assert room.pets_of(_OWNER_PID) == []
     assert spans == []

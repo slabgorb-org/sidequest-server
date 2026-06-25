@@ -34,7 +34,6 @@ def test_pet_bond_resolves_owner_and_pets():
     room.set_player_identity("owner-pid", "alice@home")
     room.register_companion_bond("rex-pid", "alice@home", CompanionRelationship.PET)
 
-    assert room.companion_owner_identity("rex-pid") == "alice@home"
     assert room.pets_of("owner-pid") == ["rex-pid"]
 
 
@@ -43,19 +42,17 @@ def test_hireling_bond_does_not_widen():
     room.set_player_identity("owner-pid", "alice@home")
     room.register_companion_bond("gus-pid", "alice@home", CompanionRelationship.HIRELING)
 
-    assert room.companion_owner_identity("gus-pid") is None  # hireling: no owner-private view
     assert room.pets_of("owner-pid") == []  # hireling is not a pet
 
 
 def test_peer_bond_does_not_widen():
     # PEER is a full independent seat, not a window into the owner's view.
-    # Only PET widens — a PEER must resolve no owner identity and never appear
-    # in pets_of (fail-closed invariant: exactly one widening role).
+    # Only PET widens — a PEER must never appear in pets_of (fail-closed
+    # invariant: exactly one widening role).
     room = _room()
     room.set_player_identity("owner-pid", "alice@home")
     room.register_companion_bond("kit-pid", "alice@home", CompanionRelationship.PEER)
 
-    assert room.companion_owner_identity("kit-pid") is None
     assert room.pets_of("owner-pid") == []
 
 

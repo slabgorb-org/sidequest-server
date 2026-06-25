@@ -290,13 +290,26 @@ def bind_companion_bond(
     resolved = relationship is not None
     if relationship is not None:
         room.register_companion_bond(player_id, owner_identity, relationship)
+    else:
+        # Fail closed AND loud (No Silent Fallbacks): an unknown relationship
+        # registers no bond. Log it for any aggregator not wired to the OTEL
+        # pipeline; the watcher span below is the GM-panel signal.
+        logger.warning(
+            "companion bond rejected: unknown relationship %r for player %s",
+            payload.relationship,
+            player_id,
+        )
 
+    # NB: owner_identity is PII (Cf-Access email) and is deliberately NOT
+    # published here — mirrors bind_player_identity ("the SOURCE only, never the
+    # identity value, no PII in telemetry"). player_id + relationship + resolved
+    # are sufficient for the GM panel; pet→owner correlation rides the
+    # companion.routed_as_pet span (server-minted player_ids, no PII).
     _watcher_publish(
         "companion.bond_resolved",
         {
             "field": "companion.bond_resolved",
             "player_id": player_id,
-            "owner_identity": owner_identity,
             "relationship": payload.relationship,
             "resolved": resolved,
         },

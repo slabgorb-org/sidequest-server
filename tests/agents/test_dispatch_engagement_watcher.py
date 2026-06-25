@@ -523,6 +523,156 @@ def test_multiple_mismatches_emit_one_span_per_mismatch() -> None:
     ]
 
 
+# ---------------------------------------------------------------------------
+# AC5 — course + dogfight dispatch vocabulary coverage (Story 153-5, 153-6)
+#
+# Wiring test for course and dogfight subsystem mismatch spans
+# (dispatch_engagement.course.mismatch, dispatch_engagement.dogfight.mismatch).
+# These subsystems were added by 153-5 (#1026) and 153-6 (#1036) but the
+# span constants and _SUBSYSTEM_TO_SPAN_NAME entries were missing (Story 158-26).
+# ---------------------------------------------------------------------------
+
+
+def test_course_dispatched_with_no_plotted_course_emits_mismatch_span() -> None:
+    """Router dispatched ``course:destination_body`` + snapshot has no
+    plotted_course and party hasn't arrived → mismatch span fires.
+
+    The watcher observes that the router said "plot a course" but the engine
+    left snapshot.plotted_course == None and snapshot.party_body_id did not
+    match the destination. This is the lie-detector for "narrator described
+    plotting a course but the engine never engaged the course/clock subsystem."
+    """
+    from sidequest.agents.dispatch_engagement_watcher import (
+        run_dispatch_engagement_watcher,
+    )
+
+    tracer, exporter = _fresh_tracer_and_exporter()
+    package = _package_with(_make_dispatch(subsystem="course", params={"destination": "sol"}))
+    # No plotted course, no arrival — engine idle
+    snap = _snapshot(encounter=None)
+    snap.plotted_course = None
+    snap.party_body_id = "alpha_centauri"  # not at destination
+
+    run_dispatch_engagement_watcher(package=package, snapshot=snap, tracer=tracer)
+
+    spans = [s for s in exporter.get_finished_spans() if "dispatch_engagement" in s.name]
+    assert len(spans) == 1, (
+        f"expected exactly 1 mismatch span, got {len(spans)}: {[s.name for s in spans]}"
+    )
+    assert spans[0].name == "dispatch_engagement.course.mismatch"
+    attrs = dict(spans[0].attributes or {})
+    assert attrs.get("subsystem") == "course"
+
+
+def test_course_dispatched_with_matching_plotted_course_emits_no_span() -> None:
+    """Happy path: router dispatched course to destination + plotted_course
+    exists with matching to_body_id → no mismatch span."""
+    from sidequest.agents.dispatch_engagement_watcher import (
+        run_dispatch_engagement_watcher,
+    )
+    from sidequest.orbital.course import CourseSource, PlottedCourse
+
+    tracer, exporter = _fresh_tracer_and_exporter()
+    package = _package_with(_make_dispatch(subsystem="course", params={"destination": "sol"}))
+    # Engine plotted the course correctly
+    snap = _snapshot(encounter=None)
+    snap.plotted_course = PlottedCourse(
+        to_body_id="sol",
+        label="Sol",
+        eta_hours=72.5,
+        delta_v=3.2,
+        plotted_at_t_hours=100.0,
+        source=CourseSource.IN_SCOPE,
+    )
+
+    run_dispatch_engagement_watcher(package=package, snapshot=snap, tracer=tracer)
+
+    spans = [s for s in exporter.get_finished_spans() if "dispatch_engagement" in s.name]
+    assert spans == []
+
+
+def test_course_dispatched_with_arrival_emits_no_span() -> None:
+    """Arrival case: router dispatched course to destination + arrival has
+    occurred (party_body_id == destination) → no mismatch, course cleared."""
+    from sidequest.agents.dispatch_engagement_watcher import (
+        run_dispatch_engagement_watcher,
+    )
+
+    tracer, exporter = _fresh_tracer_and_exporter()
+    package = _package_with(_make_dispatch(subsystem="course", params={"destination": "sol"}))
+    # Engine arrived — course clears on arrival
+    snap = _snapshot(encounter=None)
+    snap.plotted_course = None
+    snap.party_body_id = "sol"  # arrived!
+
+    run_dispatch_engagement_watcher(package=package, snapshot=snap, tracer=tracer)
+
+    spans = [s for s in exporter.get_finished_spans() if "dispatch_engagement" in s.name]
+    assert spans == []
+
+
+def test_dogfight_dispatched_with_no_encounter_emits_mismatch_span() -> None:
+    """Router dispatched ``dogfight`` + snapshot has no encounter →
+    mismatch span fires.
+
+    The watcher observes that the router said "engage dogfight" but the engine
+    left snapshot.encounter == None. This is the lie-detector for "narrator
+    described a ship combat but the dogfight engine never seated an encounter."
+    """
+    from sidequest.agents.dispatch_engagement_watcher import (
+        run_dispatch_engagement_watcher,
+    )
+
+    tracer, exporter = _fresh_tracer_and_exporter()
+    package = _package_with(_make_dispatch(subsystem="dogfight", params={"type": "fighter_duel"}))
+    snap = _snapshot(encounter=None)
+
+    run_dispatch_engagement_watcher(package=package, snapshot=snap, tracer=tracer)
+
+    spans = [s for s in exporter.get_finished_spans() if "dispatch_engagement" in s.name]
+    assert len(spans) == 1, (
+        f"expected exactly 1 mismatch span, got {len(spans)}: {[s.name for s in spans]}"
+    )
+    assert spans[0].name == "dispatch_engagement.dogfight.mismatch"
+    attrs = dict(spans[0].attributes or {})
+    assert attrs.get("subsystem") == "dogfight"
+
+
+def test_dogfight_dispatched_with_matching_encounter_emits_no_span() -> None:
+    """Happy path: router dispatched dogfight with type + encounter exists
+    with matching encounter_type → no mismatch span."""
+    from sidequest.agents.dispatch_engagement_watcher import (
+        run_dispatch_engagement_watcher,
+    )
+
+    tracer, exporter = _fresh_tracer_and_exporter()
+    package = _package_with(_make_dispatch(subsystem="dogfight", params={"type": "fighter_duel"}))
+    snap = _snapshot(encounter=_make_encounter("fighter_duel"))
+
+    run_dispatch_engagement_watcher(package=package, snapshot=snap, tracer=tracer)
+
+    spans = [s for s in exporter.get_finished_spans() if "dispatch_engagement" in s.name]
+    assert spans == []
+
+
+def test_dogfight_dispatched_with_untyped_dispatch_accepts_any_encounter() -> None:
+    """Dogfight dispatch with no ``type`` param is engaged by ANY live
+    encounter (the subsystem resolves the sealed-letter type itself)."""
+    from sidequest.agents.dispatch_engagement_watcher import (
+        run_dispatch_engagement_watcher,
+    )
+
+    tracer, exporter = _fresh_tracer_and_exporter()
+    # Dispatch with no type parameter — subsystem resolves it
+    package = _package_with(_make_dispatch(subsystem="dogfight", params={}))
+    snap = _snapshot(encounter=_make_encounter("fighter_duel"))
+
+    run_dispatch_engagement_watcher(package=package, snapshot=snap, tracer=tracer)
+
+    spans = [s for s in exporter.get_finished_spans() if "dispatch_engagement" in s.name]
+    assert spans == []
+
+
 def test_partial_engagement_emits_spans_only_for_unengaged_dispatches() -> None:
     """Mixed turn: confrontation engaged correctly, magic_working did not.
     Watcher emits exactly ONE span — for the magic mismatch — and stays

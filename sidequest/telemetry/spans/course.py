@@ -89,14 +89,22 @@ def emit_course_plot_accepted(
     *,
     from_body: str | None,
     course: PlottedCourse | None,
+    resolved_via: str | None = None,
 ) -> None:
-    """Emit a ``course.plot`` span when a plot_course state patch is accepted."""
+    """Emit a ``course.plot`` span when a plot_course state patch is accepted.
+
+    ``resolved_via`` (``exact_id`` / ``normalized_id`` / ``label``) records how a
+    player-named destination was matched to a canonical body id, so the GM panel
+    can see whether a burn engaged on the exact id or on a tolerant label match.
+    """
     attrs: dict[str, object] = {"from_body": from_body or ""}
     if course is not None:
         attrs["to_body"] = course.to_body_id
         attrs["eta_hours"] = float(course.eta_hours)
         attrs["delta_v"] = float(course.delta_v)
         attrs["source"] = str(course.source.value)
+    if resolved_via is not None:
+        attrs["resolved_via"] = resolved_via
     with Span.open(SPAN_COURSE_PLOT, attrs=attrs):
         pass
 

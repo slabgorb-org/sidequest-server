@@ -118,6 +118,26 @@ EVENT_LOBBY_STATE_TRANSITION = "lobby.state_transition"
 EVENT_LOBBY_SEAT_ABANDONED = "lobby.seat_abandoned"
 
 
+class CompanionRelationship(StrEnum):
+    """How an AI companion seat relates to its bonded human. Only PET widens
+    perception to the owner's private routes; PEER/HIRELING are vanilla seats."""
+
+    PET = "pet"
+    PEER = "peer"
+    HIRELING = "hireling"
+
+
+def parse_companion_relationship(raw: str | None) -> CompanionRelationship | None:
+    """Exact-match a wire string to a relationship. Unknown/None/empty -> None so
+    the caller fails CLOSED (treats it as a non-widening seat) — never a pet."""
+    if not raw:
+        return None
+    try:
+        return CompanionRelationship(raw)
+    except ValueError:
+        return None
+
+
 @dataclass
 class _Seat:
     player_id: str
@@ -167,6 +187,14 @@ class SessionRoom:
     # connect, never persisted to the snapshot/save. PARTY_STATUS reads it
     # so peer identity is the human, not the character name.
     _player_identities: dict[str, str] = field(default_factory=dict)
+    # Companion bonds: companion player_id -> (owner_identity, relationship).
+    # Keyed by the companion's player_id; the OWNER is named by identity
+    # (Cf-Access email / dev Host, ADR-119) because a companion cannot know the
+    # owner's server-minted player_id. Resolved to live player_ids at fan-out
+    # time. Room-only and ephemeral, like _player_identities.
+    _companion_bonds: dict[str, tuple[str, CompanionRelationship]] = field(
+        default_factory=dict
+    )
     _lock: RLock = field(default_factory=RLock, repr=False)
     # socket_id -> asyncio.Queue for per-socket outbound message fan-out (MP-02 Task 4)
     _outbound_queues: dict[str, asyncio.Queue[Any]] = field(default_factory=dict)
@@ -705,6 +733,30 @@ class SessionRoom:
     def get_player_identity(self, player_id: str) -> str | None:
         with self._lock:
             return self._player_identities.get(player_id)
+
+    def register_companion_bond(
+        self,
+        companion_player_id: str,
+        owner_identity: str,
+        relationship: CompanionRelationship,
+    ) -> None:
+        """Record that ``companion_player_id`` is bonded to the human identified
+        by ``owner_identity`` as ``relationship``. Room-only and ephemeral."""
+        with self._lock:
+            self._companion_bonds[companion_player_id] = (owner_identity, relationship)
+
+    def pets_of(self, owner_player_id: str) -> list[str]:
+        """Companion player_ids bonded as PET to the identity currently mapped
+        to ``owner_player_id``. Empty if the owner has no resolved identity."""
+        with self._lock:
+            owner_identity = self._player_identities.get(owner_player_id)
+            if owner_identity is None:
+                return []
+            return [
+                cid
+                for cid, (ident, rel) in self._companion_bonds.items()
+                if rel is CompanionRelationship.PET and ident == owner_identity
+            ]
 
     def connected_player_ids(self) -> list[str]:
         with self._lock:

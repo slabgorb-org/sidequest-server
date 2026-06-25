@@ -269,6 +269,55 @@ def bind_player_identity(
     )
 
 
+def bind_companion_bond(
+    room: SessionRoom, player_id: str, payload: SessionEventPayload
+) -> None:
+    """Register an AI companion's bond from the connect handshake (Story 159-3).
+
+    A no-op for ordinary players (no ``companion_of``). For a companion, the
+    relationship is parsed exactly; an unknown value resolves CLOSED — no bond
+    is registered (the seat behaves as a non-widening hireling) — and the span
+    records ``resolved=False`` so the GM panel sees the rejection, never a
+    silent grant of the owner's private view.
+    """
+    from sidequest.server.session_room import parse_companion_relationship
+
+    owner_identity = (payload.companion_of or "").strip()
+    if not owner_identity:
+        return  # ordinary player connect
+
+    relationship = parse_companion_relationship(payload.relationship)
+    resolved = relationship is not None
+    if relationship is not None:
+        room.register_companion_bond(player_id, owner_identity, relationship)
+    else:
+        # Fail closed AND loud (No Silent Fallbacks): an unknown relationship
+        # registers no bond. Log it for any aggregator not wired to the OTEL
+        # pipeline; the watcher span below is the GM-panel signal.
+        logger.warning(
+            "companion bond rejected: unknown relationship %r for player %s",
+            payload.relationship,
+            player_id,
+        )
+
+    # NB: owner_identity is PII (Cf-Access email) and is deliberately NOT
+    # published here — mirrors bind_player_identity ("the SOURCE only, never the
+    # identity value, no PII in telemetry"). player_id + relationship + resolved
+    # are sufficient for the GM panel; pet→owner correlation rides the
+    # companion.routed_as_pet span (server-minted player_ids, no PII).
+    _watcher_publish(
+        "companion.bond_resolved",
+        {
+            "field": "companion.bond_resolved",
+            "player_id": player_id,
+            "relationship": payload.relationship,
+            "resolved": resolved,
+        },
+        component="companion",
+        severity="info" if resolved else "warning",
+    )
+
+
 def _starting_region_for(genre_pack: GenrePack | None, world_slug: str) -> str | None:
     """The world's ``cartography.starting_region``, or ``None``.
 
@@ -467,6 +516,10 @@ class ConnectHandler:
                     _mp_span.set_attribute("solo_slot_conflict", True)
                     return [_error_msg(str(exc))]
                 session._room = room
+                # Register a companion seat's bond (Story 159-3). No-op for
+                # ordinary players; a pet's owner-private view is widened at
+                # fan-out via expand_visibility_for_companions.
+                bind_companion_bond(room, player_id, payload)
                 room.attach_outbound(session._socket_id, session._out_queue)
                 room.broadcast(
                     _presence_msg(player_id, "connected"),

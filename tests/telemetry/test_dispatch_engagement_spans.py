@@ -58,6 +58,28 @@ def test_dispatch_engagement_scenario_clue_mismatch_span_constant_registered() -
     assert name in SPAN_ROUTES
 
 
+def test_dispatch_engagement_course_mismatch_span_constant_registered() -> None:
+    """Story 158-26: course subsystem (153-5) mismatch span is registered."""
+    from sidequest.telemetry.spans import SPAN_ROUTES
+    from sidequest.telemetry.spans import dispatch_engagement as mod
+
+    assert hasattr(mod, "SPAN_DISPATCH_ENGAGEMENT_COURSE_MISMATCH")
+    name = mod.SPAN_DISPATCH_ENGAGEMENT_COURSE_MISMATCH
+    assert name == "dispatch_engagement.course.mismatch"
+    assert name in SPAN_ROUTES
+
+
+def test_dispatch_engagement_dogfight_mismatch_span_constant_registered() -> None:
+    """Story 158-26: dogfight subsystem (153-6) mismatch span is registered."""
+    from sidequest.telemetry.spans import SPAN_ROUTES
+    from sidequest.telemetry.spans import dispatch_engagement as mod
+
+    assert hasattr(mod, "SPAN_DISPATCH_ENGAGEMENT_DOGFIGHT_MISMATCH")
+    name = mod.SPAN_DISPATCH_ENGAGEMENT_DOGFIGHT_MISMATCH
+    assert name == "dispatch_engagement.dogfight.mismatch"
+    assert name in SPAN_ROUTES
+
+
 def test_dispatch_engagement_route_carries_subsystem_attribute() -> None:
     """The SPAN_ROUTES extract function must surface the dispatched
     subsystem name as a span attribute so the GM panel can filter by

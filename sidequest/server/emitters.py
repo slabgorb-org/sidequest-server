@@ -24,11 +24,13 @@ from sidequest.agents.pov_swap import (
 )
 
 if TYPE_CHECKING:
+    from sidequest.game.projection.envelope import MessageEnvelope
     from sidequest.game.projection.view import SessionGameStateView
     from sidequest.game.projection_filter import FilterDecision
     from sidequest.game.session import GameSnapshot
     from sidequest.protocol.messages import ScrapbookEntryPayload
     from sidequest.server.session_handler import WebSocketSessionHandler, _SessionData
+    from sidequest.server.session_room import SessionRoom
 
 logger = logging.getLogger(__name__)
 _tracer = trace.get_tracer("sidequest.server.emitters")
@@ -77,6 +79,60 @@ def _emit_recipient_dropped(kind: str, player_id: str, reason: str) -> None:
         )
     except Exception:  # noqa: BLE001 — telemetry must never crash a turn
         logger.warning("emit_event.recipient_dropped watcher publish failed kind=%s", kind)
+
+
+def expand_visibility_for_companions(
+    envelope: MessageEnvelope, room: SessionRoom | None
+) -> MessageEnvelope:
+    """Widen an owner-private event's ``_visibility.visible_to`` to include the
+    owner's bonded PETs, BEFORE projection runs (Story 159-3).
+
+    This is the ONLY companion change to perception: the firewall in
+    ``CoreInvariantStage`` is untouched; we only add an authorized recipient (a
+    pet shares its owner's view). Only a list-valued ``visible_to`` on a
+    visibility-gated kind (NARRATION_SEGMENT / SECRET_NOTE) is widened — the
+    ``"all"`` sentinel and non-gated kinds pass through unchanged. Returns the
+    same envelope object when nothing is added.
+    """
+    import json
+
+    from sidequest.game.projection.envelope import MessageEnvelope as _Envelope
+    from sidequest.game.projection.invariants import VISIBILITY_GATED_KINDS
+    from sidequest.server.session_handler import _watcher_publish
+
+    if room is None or envelope.kind not in VISIBILITY_GATED_KINDS:
+        return envelope
+    payload = json.loads(envelope.payload_json)
+    viz = payload.get("_visibility")
+    visible_to = viz.get("visible_to") if isinstance(viz, dict) else None
+    if not isinstance(visible_to, list):
+        return envelope
+
+    added: list[str] = []
+    widened = list(visible_to)
+    for owner_pid in visible_to:
+        for pet_pid in room.pets_of(owner_pid):
+            if pet_pid not in widened:
+                widened.append(pet_pid)
+                added.append(pet_pid)
+                _watcher_publish(
+                    "companion.routed_as_pet",
+                    {
+                        "field": "companion.routed_as_pet",
+                        "pet_player_id": pet_pid,
+                        "owner_player_id": owner_pid,
+                        "kind": envelope.kind,
+                    },
+                    component="companion",
+                )
+    if not added:
+        return envelope
+    payload["_visibility"]["visible_to"] = widened
+    return _Envelope(
+        kind=envelope.kind,
+        payload_json=json.dumps(payload),
+        origin_seq=envelope.origin_seq,
+    )
 
 
 def _deliver_to_connected_recipients(
@@ -596,6 +652,10 @@ def emit_event(
                     payload_json=row.payload_json,
                     origin_seq=row.seq,
                 )
+                # Story 159-3: widen owner-private visibility to bonded pets
+                # BEFORE projection, so a pet recipient passes the existing
+                # CoreInvariantStage gate (the firewall is untouched).
+                envelope = expand_visibility_for_companions(envelope, room)
                 # G6: status-effect perception overlay. Built once per
                 # event (not per recipient) — snapshot statuses don't
                 # change mid-fanout.

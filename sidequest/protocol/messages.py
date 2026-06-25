@@ -361,6 +361,14 @@ class SessionEventPayload(ProtocolBase):
     last_seen_seq: int = 0
     """Last event-log sequence number the client has seen (MP-03 Task 3).
     Used on reconnect so the server can replay missed events."""
+    companion_of: str | None = None
+    """Companion-bond metadata (Plan B / Story 159-3). Present only when the
+    connecting seat is an AI companion. The OWNER's identity (Cf-Access email or
+    dev Host, ADR-119), not a player_id — a companion cannot know the owner's
+    server-minted player_id."""
+    relationship: str | None = None
+    """Companion role: "pet" | "peer" | "hireling". Carried verbatim; an unknown
+    value resolves CLOSED (non-widening) server-side, never as a pet."""
 
 
 # ---------------------------------------------------------------------------

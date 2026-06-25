@@ -700,6 +700,33 @@ def _rewrite_clause(
         text = re.sub(r",\s+(\w+)(?:\s+(\w+))?", _comma_verb_sub, text)
 
     # ------------------------------------------------------------------
+    # Pass 9b: bare "then <verb>" continuation (Story 158-38). Passes 8 and 9
+    # re-conjugate a verb coordinated by "and" or "," (including an
+    # "and then" / ", then" adverb-skip), but a verb coordinated by a BARE
+    # "then" with no preceding "and"/"," was left stranded in 3rd person:
+    # "...the anchor then grips the rope" stayed "then grips" (want "then
+    # grip"; pingpong 2026-06-23 MP beneath_sunden). Same ``had_subject_swap``
+    # gate and ``_looks_like_verb``/``_is_pronoun`` heuristics as Pass 8/9 so
+    # it stays clause-local and never de-pluralizes a following noun
+    # ("then the gate slams" leaves "slams" — its subject is "the gate", not
+    # "you"; "then" before a non-verb is a no-op).
+    # ------------------------------------------------------------------
+    if had_subject_swap:
+
+        def _then_verb_sub(m: re.Match) -> str:
+            nonlocal count
+            word = m.group(1)
+            if not _looks_like_verb(word) or _is_pronoun(word):
+                return m.group(0)
+            conjugated = _conjugate(word)
+            if conjugated == word:
+                return m.group(0)
+            count += 1
+            return f"then {conjugated}"
+
+        text = re.sub(r"\bthen\s+(\w+)", _then_verb_sub, text)
+
+    # ------------------------------------------------------------------
     # Passes 5/6/7 RE-INTRODUCED, ANTECEDENT-GATED (Story 153-29,
     # MP-PRONOUN-LOCALIZATION-INCOMPLETE, sq-playtest 2026-06-20/21).
     #
@@ -791,6 +818,36 @@ def _rewrite_clause(
             return "You" if at_start else "you"
 
         text = re.sub(obj_pat, _obj_pron_sub, text)
+
+    # ------------------------------------------------------------------
+    # Pass 10: subject-auxiliary inversion (Story 158-38). In a question the
+    # auxiliary precedes its subject ("does Carl mean to go" -> name-swap ->
+    # "does you mean to go"); the name + following-verb passes only ever
+    # conjugate the verb AFTER the subject, so the leading 3rd-person auxiliary
+    # was left disagreeing ("does you" / "has you" / "is you" / "was you";
+    # pingpong 2026-06-23). Re-agree an irregular auxiliary sitting immediately
+    # before the swapped "you".
+    #
+    # Gated on a "?" in the clause so a DECLARATIVE object-"you" is never
+    # touched — "It is you." and "the dragon has you in its claws" are not
+    # interrogative inversions ("you" is the predicate/object, not the inverted
+    # subject), and only the small irregular-auxiliary set is eligible, so a
+    # lexical "tells you" / "watches you" passes through unchanged.
+    # ------------------------------------------------------------------
+    if name_swap_occurred and "?" in text:
+
+        def _inverted_aux_sub(m: re.Match) -> str:
+            nonlocal count
+            aux = m.group(1)
+            if aux.lower() not in _IRREGULAR_VERBS:
+                return m.group(0)
+            conjugated = _conjugate(aux)
+            if conjugated == aux:
+                return m.group(0)
+            count += 1
+            return f"{conjugated} {m.group(2)}"
+
+        text = re.sub(r"\b(\w+)\s+(you|You)\b", _inverted_aux_sub, text)
 
     return text, count
 
@@ -885,6 +942,7 @@ def swap_to_second_person(
     *,
     target_name: str,
     pronouns: str,
+    origin: str = "live",
 ) -> tuple[str, int]:
     """Rewrite third-person references to ``target_name`` into second-person.
 
@@ -894,6 +952,11 @@ def swap_to_second_person(
         target_name: The PC name to swap to "You". Must be non-empty.
         pronouns: One of ``"he/him"``, ``"she/her"``, ``"they/them"``.
             Drives pronoun substitution and reflexive choice.
+        origin: Provenance marker stamped on the ``narration.second_person_swap``
+            OTEL span — ``"live"`` for the emit fan-out, ``"replay"`` for the
+            resume/reconnect reconstruction (Story 158-38). Lets the GM panel
+            tell a replayed swap from a live one and prove the replay path
+            engaged rather than silently shipping stored 3rd-person prose.
 
     Returns:
         ``(rewritten_text, swap_count)`` — the count is the total number
@@ -939,5 +1002,6 @@ def swap_to_second_person(
     with _tracer.start_as_current_span("narration.second_person_swap") as span:
         span.set_attribute("swap_target_name", target_name)
         span.set_attribute("swap_count", total_count)
+        span.set_attribute("origin", origin)
 
     return result, total_count

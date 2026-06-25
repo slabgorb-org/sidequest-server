@@ -297,6 +297,7 @@ def backfill_last_narration_block(
     step — ``_build_message_for_kind`` per ``BackfillRow`` — remains here
     because the adapter is protocol-layer-agnostic.
     """
+    from sidequest.server.emitters import localize_replay_message
     from sidequest.server.session_handler import _build_message_for_kind
 
     if handler._event_log is None or handler._projection_cache is None:
@@ -307,6 +308,13 @@ def backfill_last_narration_block(
     repository = handler._event_log.repository
     backfill_rows = repository.read_narration_backfill(player_id=player_id, limit=limit)
 
+    # Story 158-38: the cache holds pre-swap 3rd-person prose, so the rebuilt
+    # NARRATIONs must be re-localized to the resuming player's POV (the live
+    # emit swap never ran on the replay path). Build the view/snapshot once.
+    session_data = handler._session_data
+    snapshot = session_data.snapshot if session_data is not None else None
+    view = build_game_state_view(handler) if snapshot is not None else None
+
     messages: list[object] = []
     for row in backfill_rows:
         built = _build_message_for_kind(
@@ -316,6 +324,13 @@ def backfill_last_narration_block(
         )
         if built is None:
             continue
+        if view is not None and snapshot is not None:
+            built = localize_replay_message(
+                built,
+                recipient_player_id=player_id,
+                view=view,
+                snapshot=snapshot,
+            )
         messages.append(built)
     return messages
 

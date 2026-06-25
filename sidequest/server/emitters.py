@@ -333,6 +333,7 @@ def _apply_pov_swap(
     recipient_player_id: str,
     view: SessionGameStateView,
     snapshot: GameSnapshot,
+    origin: str = "live",
 ) -> dict:
     """Rewrite the ``text`` field so the RECIPIENT reads their OWN PC in
     2nd-person ("you"), re-anchored per recipient — not per card.
@@ -367,6 +368,7 @@ def _apply_pov_swap(
         with _tracer.start_as_current_span("narration.pov_swap_skipped") as span:
             span.set_attribute("recipient_pc", recipient_pc_name)
             span.set_attribute("reason", "pc_not_in_snapshot")
+            span.set_attribute("origin", origin)
         return payload_dict
     # Story 158-14: chargen permits freeform pronouns (builder.py
     # pronouns_allow_freeform). Project the player's DISPLAY pronouns to a
@@ -384,6 +386,7 @@ def _apply_pov_swap(
         with _tracer.start_as_current_span("narration.pov_swap_skipped") as span:
             span.set_attribute("recipient_pc", recipient_pc_name)
             span.set_attribute("reason", "pronouns_empty")
+            span.set_attribute("origin", origin)
         return payload_dict
     if grammatical != raw_pronouns:
         # A non-canonical (freeform) value was projected — record the decision
@@ -394,6 +397,7 @@ def _apply_pov_swap(
             span.set_attribute("recipient_pc", recipient_pc_name)
             span.set_attribute("display_pronouns", raw_pronouns[:_MAX_PRONOUN_ATTR_LEN])
             span.set_attribute("grammatical_pronouns", grammatical)
+            span.set_attribute("origin", origin)
     text = payload_dict.get("text", "")
     if not isinstance(text, str) or not text:
         # Nothing to rewrite — fail open and emit the skip span (Story 158-14
@@ -401,13 +405,68 @@ def _apply_pov_swap(
         with _tracer.start_as_current_span("narration.pov_swap_skipped") as span:
             span.set_attribute("recipient_pc", recipient_pc_name)
             span.set_attribute("reason", "text_missing_or_invalid")
+            span.set_attribute("origin", origin)
         return payload_dict
     swapped, _ = swap_to_second_person(
         text,
         target_name=recipient_pc_name,
         pronouns=grammatical,
+        origin=origin,
     )
     return {**payload_dict, "text": swapped}
+
+
+def localize_replay_message(
+    message: object,
+    *,
+    recipient_player_id: str,
+    view: SessionGameStateView,
+    snapshot: GameSnapshot,
+) -> object:
+    """Re-apply the per-recipient 2nd-person POV swap to a rebuilt replay
+    message (Story 158-38).
+
+    The live emit path swaps prose per recipient at fan-out
+    (:func:`_apply_pov_swap`), but the projection cache is written from the
+    pre-swap projection decision, so the cache (and the event log) hold the
+    canonical 3rd-person prose. On reconnect the replay reconstruction
+    (``connect.py`` resume loop + :func:`sidequest.server.views.backfill_last_narration_block`)
+    rebuilds messages straight from that stored payload, so without this step
+    the resuming player reads their OWN past action in 3rd person where the
+    live frame had read "You ..." (pingpong 2026-06-24).
+
+    Returns the message unchanged when it has no swappable prose (non-NARRATION
+    kinds, atmospheric/no-anchor cards, or a recipient whose PC is absent from
+    the prose). Reuses :func:`_apply_pov_swap` so the replay path carries the
+    SAME pronoun-validation guards and OTEL spans as live emit, marked
+    ``origin="replay"``.
+    """
+    from pydantic import BaseModel
+
+    if not isinstance(message, BaseModel):
+        return message
+    payload = getattr(message, "payload", None)
+    if payload is None or not isinstance(payload, BaseModel):
+        return message
+    # Only narration-shaped payloads carry the pc-anchored prose we localize.
+    if not hasattr(payload, "text"):
+        return message
+    # Dump to the wire dict (by_alias => the "_visibility" sidecar key that
+    # _apply_pov_swap reads for anchor_pc / pov_strategy), localize, rebuild.
+    payload_dict = payload.model_dump(by_alias=True)
+    swapped_dict = _apply_pov_swap(
+        payload_dict,
+        recipient_player_id=recipient_player_id,
+        view=view,
+        snapshot=snapshot,
+        origin="replay",
+    )
+    if swapped_dict is payload_dict:
+        # _apply_pov_swap returns the SAME object on an early-return no-op
+        # (not pc_anchored / recipient absent / skip) — nothing to rebuild.
+        return message
+    new_payload = type(payload).model_validate(swapped_dict)
+    return message.model_copy(update={"payload": new_payload})
 
 
 def _clear_confrontation_like(payload_model: object) -> object:

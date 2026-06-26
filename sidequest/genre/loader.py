@@ -1619,8 +1619,11 @@ def _load_single_world(
         # instead of ``npcs:``, so the old ``.get("npcs", [])`` silently returned
         # [] and the canon roster never reached game state — every canon mention
         # then fractured through the invented-name mint. Fail loud instead so the
-        # mistake surfaces at load, not in a playtest. An explicit ``npcs: []`` is
-        # an authored "no NPCs" choice and is honored (key present).
+        # mistake surfaces at load, not in a playtest. Only an explicit
+        # ``npcs: []`` (an empty *list*) is the sanctioned "no NPCs" choice; a
+        # null value (bare ``npcs:``) or a non-list value (a mapping/scalar from a
+        # mis-indent) is a malformed file and also fails loud, world-named —
+        # never a silent ``or []`` swallow (the bug this story retires).
         if not isinstance(npcs_raw, dict) or "npcs" not in npcs_raw:
             present_keys = sorted(npcs_raw) if isinstance(npcs_raw, dict) else []
             raise GenreLoadError(
@@ -1632,7 +1635,17 @@ def _load_single_world(
                     "(see a working world such as wry_whimsy/wonderland/npcs.yaml)."
                 ),
             )
-        npcs_list_raw = npcs_raw.get("npcs") or []
+        npcs_list_raw = npcs_raw["npcs"]
+        if not isinstance(npcs_list_raw, list):
+            raise GenreLoadError(
+                path=f"worlds/{world_path.name}/npcs.yaml",
+                detail=(
+                    "the `npcs:` key must be a list of AuthoredNpc entries, got "
+                    f"{type(npcs_list_raw).__name__} — a null/mis-indented `npcs:` "
+                    "value silently drops the whole roster. Author the list under "
+                    "`npcs:`, or write an explicit `npcs: []` for a world with no NPCs."
+                ),
+            )
         authored_npcs = [AuthoredNpc.model_validate(n) for n in npcs_list_raw]
 
     char_creation_path = world_path / "char_creation.yaml"

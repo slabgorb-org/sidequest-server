@@ -187,6 +187,63 @@ def test_loader_accepts_well_formed_npcs_yaml(minimal_pack_factory: Any, tmp_pat
     )
 
 
+def test_loader_fails_loud_on_null_npcs_value(minimal_pack_factory: Any, tmp_path: Path) -> None:
+    """A present `npcs:` key with a NULL value (bare `npcs:` / wrong-indent typo)
+    must raise a LOUD, world-named error — not silently load an empty roster.
+
+    `yaml.safe_load("npcs:")` → `{"npcs": None}`: the key IS present (so the
+    missing-key guard passes), and `None or []` collapses to `[]` — the exact
+    silent-empty-roster the story exists to eliminate (No Silent Fallbacks),
+    wearing a different hat. Only an EXPLICIT `npcs: []` is the sanctioned empty
+    roster; a null value is a malformed file. RED today (no raise); GREEN once the
+    loader validates the `npcs:` value.
+    """
+    pack = minimal_pack_factory(tmp_path)
+    world_dir = pack.path / "worlds" / "flickering_reach"
+    # `npcs:` with nothing under it → parses to {"npcs": None}.
+    (world_dir / "npcs.yaml").write_text("npcs:\n", encoding="utf-8")
+
+    with pytest.raises(Exception) as exc_info:  # noqa: PT011 - Dev picks the exact error type
+        load_genre_pack(pack.path)
+
+    message = str(exc_info.value)
+    assert "flickering_reach" in message or "npcs.yaml" in message, (
+        "a null `npcs:` value must fail loud naming the world/file, never silently "
+        f"yield an empty roster; got: {message!r}"
+    )
+
+
+def test_loader_fails_loud_on_non_list_npcs_value(
+    minimal_pack_factory: Any, tmp_path: Path
+) -> None:
+    """A present `npcs:` mapped to a NON-LIST (a mapping/scalar — e.g. entries
+    indented as a dict by mistake) must raise a LOUD, WORLD-NAMED error.
+
+    Today such a value is truthy, so `… or []` passes it through and
+    `AuthoredNpc.model_validate(n) for n in <mapping>` blows up with a bare
+    pydantic/TypeError that names neither the file nor the world — defeating the
+    story's "world-named error" requirement. RED today (raises, but anonymous);
+    GREEN once the loader asserts the value is a list and raises a world-named
+    `GenreLoadError`.
+    """
+    pack = minimal_pack_factory(tmp_path)
+    world_dir = pack.path / "worlds" / "flickering_reach"
+    # `npcs:` as a MAPPING instead of a list (a plausible indent mistake).
+    (world_dir / "npcs.yaml").write_text(
+        'npcs:\n  canon_boss:\n    name: "Canon Boss"\n    role: "the warlord"\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(Exception) as exc_info:  # noqa: PT011 - Dev picks the exact error type
+        load_genre_pack(pack.path)
+
+    message = str(exc_info.value)
+    assert "flickering_reach" in message or "npcs.yaml" in message, (
+        "a non-list `npcs:` value must fail loud naming the world/file so the "
+        f"config mistake is locatable; got: {message!r}"
+    )
+
+
 # ===========================================================================
 # Group C — end-to-end regression: a loaded + preloaded canon name never fractures
 # ===========================================================================

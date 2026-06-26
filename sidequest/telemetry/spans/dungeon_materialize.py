@@ -29,6 +29,11 @@ from .span import Span
 
 SPAN_DUNGEON_MATERIALIZE = "dungeon.materialize"
 SPAN_DUNGEON_MATERIALIZE_DESIGN = "dungeon.materialize.design"
+# Story 158-37 — a region themed against the frontier spawn_depth_score can land
+# at a final depth its own depth_band excludes; the design stage re-resolves it
+# against its own depth. This span is the GM-panel lie-detector for that
+# correction (which regions changed theme, from/to, and at what depth).
+SPAN_DUNGEON_MATERIALIZE_THEME_RESOLVE = "dungeon.materialize.theme_resolve"
 SPAN_DUNGEON_MATERIALIZE_FILL = "dungeon.materialize.fill"
 # Story 52-2 — ADR-096 mask emit, one per region inside the fill stage.
 SPAN_DUNGEON_MATERIALIZE_MASK = "dungeon.materialize.mask"
@@ -89,6 +94,22 @@ SPAN_ROUTES[SPAN_DUNGEON_MATERIALIZE_DESIGN] = SpanRoute(
         "invariants_passed": _attr("invariants_passed")(s),
         "error": _attr("error")(s),
         "failing": _attr("failing")(s),
+    },
+)
+
+SPAN_ROUTES[SPAN_DUNGEON_MATERIALIZE_THEME_RESOLVE] = SpanRoute(
+    event_type="state_transition",
+    component="dungeon",
+    # Story 158-37 lie-detector: `resolved_count` is how many regions were
+    # re-themed to honor their own depth_band; `resolutions` is the JSON
+    # from/to/depth audit. resolved_count==0 (the common case) proves the
+    # corrector ran and found the generation already depth-coherent.
+    extract=lambda s: {
+        "field": "dungeon_map",
+        "op": "materialize.theme_resolve",
+        "expansion_id": _attr("expansion_id")(s),
+        "resolved_count": _attr("resolved_count")(s),
+        "resolutions": _attr("resolutions")(s),
     },
 )
 
@@ -371,6 +392,34 @@ def dungeon_materialize_design_span(
     with Span.open(
         SPAN_DUNGEON_MATERIALIZE_DESIGN,
         {"expansion_id": expansion_id, **attrs},
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def dungeon_materialize_theme_resolve_span(
+    *,
+    expansion_id: int,
+    resolved_count: int,
+    resolutions: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Open the ``dungeon.materialize.theme_resolve`` child span (Story 158-37).
+
+    Nests under the design span. ``resolutions`` is a JSON string (the
+    ThemeResolutionReport's ``resolutions`` list) so OTEL can carry the
+    per-region from/to/depth audit; ``resolved_count`` is the scalar headline.
+    """
+    with Span.open(
+        SPAN_DUNGEON_MATERIALIZE_THEME_RESOLVE,
+        {
+            "expansion_id": expansion_id,
+            "resolved_count": resolved_count,
+            "resolutions": resolutions,
+            **attrs,
+        },
         tracer_override=_tracer,
     ) as span:
         yield span

@@ -50,6 +50,7 @@ from sidequest.dungeon.region_graph.config import JaquaysConfig
 from sidequest.dungeon.region_graph.depth import assign_depth_scores
 from sidequest.dungeon.region_graph.generator import attach_expansion, generate_expansion
 from sidequest.dungeon.region_graph.model import RegionEdge, RegionGraph, RegionNode
+from sidequest.dungeon.theme_resolution import resolve_themes_for_final_depth
 from sidequest.dungeon.themes import (
     DungeonTheme,
     ThemePalette,
@@ -148,16 +149,17 @@ def _band_violations(graph: RegionGraph, palette: ThemePalette, new_ids: set[str
 
 
 def test_every_region_theme_is_eligible_at_its_own_final_depth_score():
-    """The invariant the fix must establish: after the pipeline, EVERY region's
+    """The invariant the fix establishes: after the pipeline, EVERY region's
     theme is eligible at that region's own final depth_score.
 
     Forcing setup: the frontier we spawn from is deep (spawn_depth_score=100),
     so the theme_pool — gated by that single frontier depth — contains only the
     deep theme. Every new node is themed deep. But the new nodes' ordinary route
-    to the surface is short, so assign_depth_scores lands them shallow. Each
-    ends up wearing the deep theme at a shallow depth -> band violation.
-
-    RED today: theme is chosen against the frontier depth, not the node's own.
+    to the surface is short, so assign_depth_scores lands them shallow. Without
+    correction each ends up wearing the deep theme at a shallow depth (a band
+    violation); `resolve_themes_for_final_depth` re-themes them against their own
+    depth. This test exercises that corrector directly (the unit contract); the
+    production wiring through `_stage_design` is covered by Test 2.
     """
     palette = _palette(
         _theme("shallow_theme", band_min=0.0, band_max=60.0),
@@ -183,9 +185,13 @@ def test_every_region_theme_is_eligible_at_its_own_final_depth_score():
     )
     new_ids = expansion.new_region_ids()
 
-    # Mirror _stage_attach:1383 then :1393 — attach, then assign final depths.
+    # Mirror _stage_attach:1383 then :1393 — attach, then assign final depths —
+    # then the Story 158-37 corrector re-resolves any band-violating theme.
     attach_expansion(graph, expansion)
     assign_depth_scores(graph, campaign_seed=_CAMPAIGN_SEED)
+    resolve_themes_for_final_depth(
+        graph, expansion, palette, campaign_seed=_CAMPAIGN_SEED, expansion_id=2
+    )
 
     violations = _band_violations(graph, palette, new_ids)
     assert violations == [], (
@@ -201,22 +207,17 @@ def test_every_region_theme_is_eligible_at_its_own_final_depth_score():
 
 def test_stage_design_themed_nodes_are_eligible_at_their_final_depth():
     """Same invariant as Test 1, but routed through the REAL production
-    ``materializer._stage_design`` (which builds the theme_pool from
-    ``request.frontier_edge.spawn_depth_score``) followed by the SAME
-    attach + assign_depth_scores calls ``_stage_attach`` makes. This is the
-    wiring proof: the defect rides the production theme-pool construction, not
-    just a hand-assembled call to ``generate_expansion``.
+    ``materializer._stage_design``. This is the WIRING proof: the corrector is
+    invoked inside production, not just from a hand-assembled test sequence.
 
-    RED today — _stage_design themes against the deep frontier depth, the nodes
-    land shallow, and nothing re-resolves the theme against the node's own
-    final depth.
-
-    Fix-placement note for Dev: this test deliberately runs only the real
-    design -> attach -> assign sequence. Land the re-resolution so it executes
-    within that sequence (e.g. folded into the design pick once per-node depth
-    is known, or a deterministic re-resolve step invoked right after
-    ``assign_depth_scores`` and also called here). The CONTRACT is the
-    invariant assertion below, not where the code lives.
+    ``_stage_design`` builds the theme_pool from the deep frontier
+    ``spawn_depth_score`` (themes everything ``deep_theme``), then — per Story
+    158-37 — probes each region's final depth and re-resolves any band violation
+    BEFORE returning, so the themes it hands downstream are already
+    depth-coherent. This test does NOT call the corrector itself: it runs the
+    production ``_stage_design`` then the same attach + assign_depth_scores
+    ``_stage_attach`` makes, and asserts the persisted graph is coherent. If the
+    production wiring regresses, this goes RED.
     """
     palette = _palette(
         _theme("shallow_theme", band_min=0.0, band_max=60.0),

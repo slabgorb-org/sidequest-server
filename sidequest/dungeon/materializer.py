@@ -159,6 +159,7 @@ from sidequest.dungeon.region_graph import (
 )
 from sidequest.dungeon.setpiece_attach import AttachReport, attach_set_piece
 from sidequest.dungeon.tactical import RegionTactical, derive_region_tactical
+from sidequest.dungeon.theme_resolution import resolve_themes_for_final_depth
 from sidequest.dungeon.themes import ThemePalette
 from sidequest.game.cookbook.assemble import assemble_region
 from sidequest.game.cookbook.loader import CookbookBundle
@@ -176,6 +177,7 @@ from sidequest.telemetry.spans.dungeon_materialize import (
     dungeon_materialize_mask_span,
     dungeon_materialize_span,
     dungeon_materialize_tactical_span,
+    dungeon_materialize_theme_resolve_span,
     frontier_expand_span,
 )
 
@@ -705,6 +707,34 @@ def _stage_design(
             span.set_attribute(k, json.dumps(v, sort_keys=True))
         else:
             span.set_attribute(k, v)
+
+    # Story 158-37: the theme_pool above was gated by the SINGLE frontier
+    # spawn_depth_score, but each new region's FINAL depth_score is computed
+    # independently by assign_depth_scores at attach — AFTER the fill/curate
+    # stages have already consumed the theme. So a region can be themed for the
+    # frontier's depth and land at a depth its own depth_band excludes (the
+    # exp011.r2 bone_crypt-at-8.2 playtest bug). Learn the final depths NOW, on a
+    # throwaway clone (the real graph stays untouched until _stage_attach), and
+    # re-resolve any band-violating region BEFORE fill/curate read the theme. The
+    # real attach reproduces identical depths (same topology + campaign_seed), so
+    # the correction holds end-to-end. Clone-not-mutate keeps _stage_attach's
+    # byte-pinned depth_report contract intact (it still scores the new regions).
+    depth_probe = RegionGraph.from_dict(graph.to_dict())
+    attach_expansion(depth_probe, expansion)
+    assign_depth_scores(depth_probe, campaign_seed=request.campaign_seed)
+    theme_report = resolve_themes_for_final_depth(
+        depth_probe,
+        expansion,
+        palette,
+        campaign_seed=request.campaign_seed,
+        expansion_id=request.expansion_id,
+    )
+    with dungeon_materialize_theme_resolve_span(
+        expansion_id=request.expansion_id,
+        resolved_count=theme_report.resolved_count,
+        resolutions=json.dumps(theme_report.as_dict()["resolutions"], sort_keys=True),
+    ):
+        pass
 
     return expansion, report
 

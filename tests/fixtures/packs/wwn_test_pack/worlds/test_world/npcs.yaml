@@ -1,127 +1,13 @@
-world_name: Barsoom
+version: "0.1.0"
+world: test_world
 
-authored_npcs:
-  - id: helium_jed_host
-    name: "Kantos Vah"
-    culture: red_martian
-    role: "A Heliumetic dwar (captain) who vouches for newcomers at the landing-stage"
-    location: helium
-    disposition: cautious-honorable
-    goals:
-      - "judge whether the newcomers keep the guest-code"
-      - "raise fliers and blades against a coming Zodangan move he can't yet prove"
-    timeline: "If the party proves honorable, he offers a commission; if they break the code, he calls a blade-debt."
-
-  - id: zodanga_agent
-    name: "Sab Tor"
-    culture: red_martian
-    role: "A quiet Zodangan in Helium who is not what his papers say"
-    location: helium
-    disposition: smiling-false
-    goals:
-      - "learn Helium's flier dispositions"
-      - "turn or remove anyone who notices him — by the guild, never by his own hand"
-    timeline: "Advances whether or not the party engages; the canal tribute talks are his clock."
-
-  - id: thark_chieftain
-    name: "Gor Hajus"
-    culture: green_martian
-    role: "A lesser chieftain of the Thark horde camped in Korad's ruins"
-    location: korad_dead_sea_bottom
-    disposition: cruel-curious
-    goals:
-      - "take rank by killing the holder above him"
-      - "decide whether a captive is sport, salvage, or — rarely — a thing worth keeping alive"
-    timeline: "His challenge for rank comes whether or not the party is present; a captive who shows courage can change his calculus."
-
-  # ---------------------------------------------------------------------------
-  # The South (Story 89-2) — the Lore Cast of the death-pilgrimage country.
-  # Portraits arrive in a later asset story; these are placeholder-free,
-  # fully-authored Living-World NPCs on the wired npcs.yaml path.
-  # ---------------------------------------------------------------------------
-  - id: thern_hekkador
-    name: "Sator Throg"
-    culture: thern
-    role: "Hekkador, the Father of Therns, who rules the death-cult from the temples of the Golden Cliffs"
-    location: otz_mountains
-    disposition: serene-merciless
-    goals:
-      - "keep the ten-thousand-year secret of the Valley Dor from ever climbing back up the River Iss"
-      - "harvest the season's pilgrims and feed the share owed up to the First Born without losing more Therns to their raids than the fraud can bear"
-    timeline: "Runs the harvest on the cult's calendar regardless of the party; any sign the truth of Dor is escaping turns his serenity to a hunt that does not stop at the cliffs."
-
-  - id: first_born_dator
-    name: "Xodar"
-    culture: first_born
-    role: "A dator (noble captain) of the black corsairs of Omean"
-    location: omean
-    disposition: proud-contemptuous
-    goals:
-      - "command his flier and his slaves with the cold artistry expected of a First Born, and take what the surface and the Therns owe Issus"
-      - "preserve the certainty that his race has never truly been beaten — a certainty he has begun, privately, to doubt"
-    timeline: "Raids and harvests on Issus's account whether or not the party is present; a defeat he cannot explain away is the one thing that can crack his contempt into something like an ally."
-
-  - id: issus_goddess
-    name: "Issus"
-    culture: first_born
-    role: "The goddess of the First Born, enthroned on the island temple of Omean"
-    location: omean
-    disposition: divine-rotten
-    goals:
-      - "be served and fed as a god is fed, and let no captive or corsair ever see that she is only a cruel old woman in a goddess's mask"
-      - "hold the faith of the First Born and the Therns alike as the load-bearing lie of the whole South"
-    timeline: "Demands her tribute on the cult's calendar; the moment a mortal looks on her and lives to name what she is, the entire southern fraud begins to come apart."
-
-  # ---------------------------------------------------------------------------
-  # The North & Lothar (Story 89-3) — the Lore Cast of the frozen north and the
-  # dreaming western ruin. Fully-authored Living-World NPCs on the wired
-  # npcs.yaml path; portraits arrive in the asset story (89-6).
-  # NOTE for 89-4 (magic content): the Lotharian NPCs below describe the
-  # phantom-bowman / mentalist tradition as PLACE + CULTURE flavor only. The
-  # actual Mentalist `spells_wwn` list and `cast_spell` wiring (phantom bowmen
-  # as a caster tradition on the inherited High Magic engine) is 89-4 scope —
-  # do NOT author spell beats here.
-  # ---------------------------------------------------------------------------
-  - id: okar_jeddak_of_jeddaks
-    name: "Salensus Oll"
-    culture: yellow_martian
-    role: "Jeddak of jeddaks of Okar, tyrant of the crystal domes, ruling the north from Kadabra"
-    location: okar
-    disposition: cold-tyrannical
-    goals:
-      - "keep the world below ignorant of Okar and its one ice-gate, and keep his arenas full of the prisoners the Carrion Caves deliver"
-      - "make ready, in his own slow time, to carry the warmth and power of the domes down from the pole and conquer the red world he pretends to scorn"
-    timeline: "Rules and schemes on his own calendar regardless of the party; any prisoner who survives his arena, or any sign Marentina is harbouring his enemies, draws his full and jealous attention."
-
-  - id: marentina_prince
-    name: "Talu"
-    culture: yellow_martian
-    role: "Prince of Marentina, the free dome that defies the jeddak of jeddaks"
-    location: marentina
-    disposition: guarded-honorable
-    goals:
-      - "hold Marentina's independence from Salensus Oll without giving the throne at Kadabra the open pretext it needs to crush the free dome"
-      - "shelter those the tyrant would throw to the pits, and quietly weigh whether an outsider who reached the north alive is an ally worth the risk"
-    timeline: "Walks his careful line whether or not the party is present; a stranger who proves both capable and discreet can become the lever he has lacked against the throne."
-
-  - id: lothar_jeddak
-    name: "Tario"
-    culture: lotharian
-    role: "Jeddak of Lothar, the half-mad master of the phantom bowmen"
-    location: lothar
-    disposition: imperious-uncanny
-    goals:
-      - "hold the crumbling walls of Lothar against the besieging green hordes with the conjured armies only his will sustains"
-      - "prove, against the rival faction of his own city, that the phantom bowmen are nothing but illusions of his mind — and punish any stranger who suggests otherwise or fails his test of the real"
-    timeline: "Conjures and rules from his dreaming hall regardless of the party; a guest who cannot tell a willed thing from a true one does not leave Lothar, and one who can may learn what the city is really defending."
-
-  - id: lothar_materialist
-    name: "Jav"
-    culture: lotharian
-    role: "A Lotharian of the rival faction, who holds the phantom bowmen are realer than mere illusion"
-    location: lothar
-    disposition: courteous-treacherous
-    goals:
-      - "uphold the heresy of his faction — that a sufficiently believed-in phantom, like the materialized hero Kar Komak, can be made real enough to outlive the thought that shaped it"
-      - "use a useful outsider against Tario's faction without ever quite letting that outsider know which of his courtesies, allies, and armies are flesh and which are will"
-    timeline: "Feuds with Tario's faction on a centuries-old clock the party only briefly intersects; a stranger he can use becomes a guest he flatters, and a stranger he cannot use becomes a phantom's target."
+# Intentionally empty authored roster. This WWN fixture world exercises the
+# class roster, equipment tables, and chargen — NOT the authored-NPC path; no
+# test reads its NPCs (authored-placement tests use SimpleNamespace stand-ins).
+#
+# It previously authored a barsoom roster under the WRONG top-level key
+# (`authored_npcs:` instead of `npcs:`), so the loader silently loaded it as []
+# — the exact regression fixed in story 158-32. The loader now fails loud on a
+# present-but-keyless npcs.yaml, so this file declares its empty roster
+# explicitly under the correct `npcs:` key.
+npcs: []

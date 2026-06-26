@@ -1613,7 +1613,26 @@ def _load_single_world(
     authored_npcs: list[AuthoredNpc] = []
     if npcs_path.exists():
         npcs_raw = _load_yaml_raw(npcs_path)
-        npcs_list_raw = npcs_raw.get("npcs", []) if isinstance(npcs_raw, dict) else []
+        # No Silent Fallbacks (story 158-32): a present npcs.yaml that carries no
+        # top-level ``npcs:`` key is a configuration mistake, NOT an empty roster.
+        # The barsoom/evropi regression authored the list under ``authored_npcs:``
+        # instead of ``npcs:``, so the old ``.get("npcs", [])`` silently returned
+        # [] and the canon roster never reached game state — every canon mention
+        # then fractured through the invented-name mint. Fail loud instead so the
+        # mistake surfaces at load, not in a playtest. An explicit ``npcs: []`` is
+        # an authored "no NPCs" choice and is honored (key present).
+        if not isinstance(npcs_raw, dict) or "npcs" not in npcs_raw:
+            present_keys = sorted(npcs_raw) if isinstance(npcs_raw, dict) else []
+            raise GenreLoadError(
+                path=f"worlds/{world_path.name}/npcs.yaml",
+                detail=(
+                    "npcs.yaml is present but has no top-level `npcs:` key — the "
+                    f"authored roster cannot load. Found top-level keys: {present_keys}. "
+                    "Author the NPC list under `npcs:` using the AuthoredNpc schema "
+                    "(see a working world such as wry_whimsy/wonderland/npcs.yaml)."
+                ),
+            )
+        npcs_list_raw = npcs_raw.get("npcs") or []
         authored_npcs = [AuthoredNpc.model_validate(n) for n in npcs_list_raw]
 
     char_creation_path = world_path / "char_creation.yaml"

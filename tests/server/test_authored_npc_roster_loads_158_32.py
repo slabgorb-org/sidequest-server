@@ -153,7 +153,7 @@ def test_loader_fails_loud_on_npcs_yaml_unrecognized_top_level_key(
     (world_dir / "npcs.yaml").write_text(
         "world_name: Flickering Reach\n"
         "authored_npcs:\n"
-        '  - id: canon_boss\n'
+        "  - id: canon_boss\n"
         '    name: "Canon Boss"\n'
         '    role: "the warlord"\n',
         encoding="utf-8",
@@ -169,19 +169,14 @@ def test_loader_fails_loud_on_npcs_yaml_unrecognized_top_level_key(
     )
 
 
-def test_loader_accepts_well_formed_npcs_yaml(
-    minimal_pack_factory: Any, tmp_path: Path
-) -> None:
+def test_loader_accepts_well_formed_npcs_yaml(minimal_pack_factory: Any, tmp_path: Path) -> None:
     """Positive control: a well-formed ``npcs:`` roster still loads cleanly — the
     fail-loud guard must be targeted at the malformed shape, not a blanket
     rejection of npcs.yaml."""
     pack = minimal_pack_factory(tmp_path)
     world_dir = pack.path / "worlds" / "flickering_reach"
     (world_dir / "npcs.yaml").write_text(
-        "npcs:\n"
-        '  - id: canon_boss\n'
-        '    name: "Canon Boss"\n'
-        '    role: "the warlord"\n',
+        'npcs:\n  - id: canon_boss\n    name: "Canon Boss"\n    role: "the warlord"\n',
         encoding="utf-8",
     )
 

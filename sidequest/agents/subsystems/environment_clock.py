@@ -139,14 +139,17 @@ def _emit_light_relit(data: dict[str, object], pool_max: float) -> None:
         pass
 
 
-def _run_relight(
-    dispatch: SubsystemDispatch,
-    *,
+def perform_relight(
+    core: CreatureCore,
     snapshot: GameSnapshot,
     pool: ResourcePool,
-) -> SubsystemOutput:
-    """Light a torch: consume one torch charge, set the ``light`` pool to its
-    max, and clear the darkness penalty on the acting PC.
+    *,
+    region: str = "",
+) -> dict[str, object]:
+    """Light a carried torch on ``core``: consume one ``light_source`` charge, set
+    the ``light`` pool to its max, and clear the darkness penalty. Returns the
+    assembled ``light.relit`` ``data`` dict and emits the span from it (the single
+    source of truth, success and no-torch failure alike).
 
     Charge model: a torch is an inventory item dict tagged ``light_source``
     (the dedicated light-source tag — see :func:`_find_torch`); its ``quantity``
@@ -156,16 +159,14 @@ def _run_relight(
 
     Fail loud (No Silent Fallbacks): no usable torch ⇒ ``data["error"] =
     "no_torch"`` and NOTHING is mutated (light unchanged, penalty unchanged) so
-    the relight visibly fails and the player knows.
+    the relight visibly fails and the player knows. Does NOT burn light.
 
-    Does NOT burn light. Every return path emits the ``light.relit`` OTEL span
-    (success and no-torch failure alike) from the assembled ``data`` dict.
+    Shared by the deliberate relight intent (:func:`_run_relight`, "I light a
+    torch") and the equip-a-light-source path (``subsystems.equip``, "I take up a
+    torch") so both produce identical mechanical light.
     """
-    character_name = dispatch.params.get("character_name")
-    core = snapshot.find_creature_core(character_name) if character_name else None
-
     data: dict[str, object] = {
-        "region": dispatch.params.get("region", ""),
+        "region": region,
         "lit": True,
         "burned": False,
         "light_current": pool.current,
@@ -173,19 +174,12 @@ def _run_relight(
         "relit": False,
     }
 
-    if character_name and core is None:
-        # A name was given but no seated PC matched — surface it, mutate nothing.
-        data["character_unresolved"] = character_name
-        data["error"] = "no_torch"
-        _emit_light_relit(data, pool.max)
-        return SubsystemOutput(directives=[], data=data)
-
-    torch = _find_torch(core) if core is not None else None
+    torch = _find_torch(core)
     if torch is None:
         # No usable torch: fail loud, mutate nothing.
         data["error"] = "no_torch"
         _emit_light_relit(data, pool.max)
-        return SubsystemOutput(directives=[], data=data)
+        return data
 
     # Consume one charge. Remove the item dict when its last charge is spent.
     remaining = int(torch.get("quantity", 0) or 0) - 1
@@ -207,6 +201,44 @@ def _run_relight(
     data["relit"] = True
     data["torch_charges_remaining"] = remaining
     _emit_light_relit(data, pool.max)
+    return data
+
+
+def _run_relight(
+    dispatch: SubsystemDispatch,
+    *,
+    snapshot: GameSnapshot,
+    pool: ResourcePool,
+) -> SubsystemOutput:
+    """Deliberate relight intent ("I light a torch") → :func:`perform_relight` on
+    the named PC.
+
+    A name given but unmatched — or no name at all — cannot relight a specific PC:
+    fail loud with ``no_torch`` and mutate nothing (No Silent Fallbacks). Every
+    return path emits the ``light.relit`` OTEL span.
+    """
+    character_name = dispatch.params.get("character_name")
+    core = snapshot.find_creature_core(character_name) if character_name else None
+    region = dispatch.params.get("region", "")
+
+    if core is None:
+        # A name was given but no seated PC matched (or none was given) — surface
+        # it, mutate nothing.
+        data: dict[str, object] = {
+            "region": region,
+            "lit": True,
+            "burned": False,
+            "light_current": pool.current,
+            "crossed": None,
+            "relit": False,
+            "error": "no_torch",
+        }
+        if character_name:
+            data["character_unresolved"] = character_name
+        _emit_light_relit(data, pool.max)
+        return SubsystemOutput(directives=[], data=data)
+
+    data = perform_relight(core, snapshot, pool, region=region)
     return SubsystemOutput(directives=[], data=data)
 
 

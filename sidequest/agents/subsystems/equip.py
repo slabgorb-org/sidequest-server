@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 
 from sidequest.agents.subsystems import SubsystemOutput
+from sidequest.game.creature_core import CreatureCore
 from sidequest.game.session import GameSnapshot
 from sidequest.protocol.dispatch import NarratorDirective, SubsystemDispatch, VisibilityTag
 from sidequest.telemetry.spans import equip_resolved_span, equip_unresolved_span
@@ -153,15 +154,47 @@ async def run_equip_dispatch(
         changed,
         matched_by,
     )
-    return SubsystemOutput(
-        data={
-            "item_id": item_id,
-            "item_name": item_name,
-            "equipped": target_equipped,
-            "changed": changed,
-            "matched_by": matched_by,
-        }
+    out_data: dict[str, object] = {
+        "item_id": item_id,
+        "item_name": item_name,
+        "equipped": target_equipped,
+        "changed": changed,
+        "matched_by": matched_by,
+    }
+
+    # Take-up-a-torch IS lighting it: equipping a light_source while in the dark
+    # (the survival-clock ``light`` pool is exhausted) drives a relight so the
+    # player action deterministically produces light — instead of depending on the
+    # Haiku router to split "take up a torch" (equip) from "light a torch"
+    # (relight). No-op on an UNequip, a non-light-source, a pack with no light
+    # pool, or a PC not in the dark (a spare torch taken up while lit is not
+    # wastefully burned). sq-playtest 2026-06-27 lie-detector catch.
+    if target_equipped and "light_source" in (matched.get("tags") or []):
+        relit = _relight_on_equip(snapshot, character.core)
+        if relit is not None:
+            out_data["relit"] = bool(relit.get("relit"))
+            if relit.get("penalty_cleared"):
+                out_data["penalty_cleared"] = True
+
+    return SubsystemOutput(data=out_data)
+
+
+def _relight_on_equip(snapshot: GameSnapshot, core: CreatureCore) -> dict | None:
+    """Drive a survival-clock relight when a light source is equipped in the dark.
+
+    Returns the relight ``data`` dict, or None when there is no ``light`` pool or
+    the PC is not in the dark (pool above its floor — so a spare torch taken up
+    while already lit is not wastefully burned). Lazy import: ``environment_clock``
+    pulls heavy ``game`` modules, so importing it at call time keeps equip's import
+    light and avoids an import cycle (mirrors server/session_helpers.py)."""
+    pool = snapshot.resources.get("light")
+    if pool is None or pool.current > pool.min:
+        return None
+    from sidequest.agents.subsystems.environment_clock import (  # noqa: PLC0415
+        perform_relight,
     )
+
+    return perform_relight(core, snapshot, pool)
 
 
 def _unresolved(

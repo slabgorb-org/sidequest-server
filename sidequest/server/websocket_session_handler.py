@@ -1082,10 +1082,12 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         # can flail the loop to exhaustion, not just the dogfight
                         # router-decline that surfaced it (coyote_star 2026-06-25).
                         # Do NOT let it propagate: an escaped exception unwinds the
-                        # method-level try (whose only clause is the finally below,
-                        # which files a degraded TurnRecord) and forces
-                        # session.disconnect_save -> room teardown -> reconnect,
-                        # wedging the player mid-turn. Degrade LOUDLY instead —
+                        # method-level try (whose only top-level clause is the
+                        # finally below, which files a degraded TurnRecord) up to
+                        # ws_endpoint, whose generic handler tears the socket down
+                        # (session.disconnect_save -> room teardown; the player must
+                        # reconnect to keep playing), wedging the player mid-turn.
+                        # Degrade LOUDLY instead —
                         # emit a GM-panel watcher event (the lie-detector must see
                         # the degraded path engaged), surface a player-facing
                         # "try rephrasing" notice WITHOUT a forced reconnect, and

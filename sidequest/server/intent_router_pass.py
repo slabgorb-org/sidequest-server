@@ -61,6 +61,7 @@ from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.pack import GenrePack
 from sidequest.protocol.dispatch import (
     DispatchPackage,
+    PlayerDispatch,
     SubsystemDispatch,
     VisibilityTag,
 )
@@ -218,6 +219,105 @@ def _confrontation_verb_hits(action: str, pack: GenrePack | None) -> list[str]:
             if verb_tokens and verb_tokens <= action_tokens:
                 hits.append(f"{cdef.confrontation_type}:{verb}")
     return hits
+
+
+# ADR-153 §7 (158-29): the unambiguous ship-combat verbs. A hit on one of these,
+# OR ≥2 distinct dogfight-verb hits, is a strong-enough signal to force-seat the
+# dogfight when the LLM router emitted no confrontation dispatch. The generic
+# singles (lock/gun/engage) alone are NOT — "lock the door" must never seat a
+# fight (the over-fire / phantom-encounter risk the OTEL lie-detector exists to
+# catch).
+_STRONG_DOGFIGHT_VERBS = frozenset({"dogfight", "intercept", "pursue", "missile"})
+
+
+def force_dispatch_dogfight_on_verb_miss(
+    package: DispatchPackage,
+    *,
+    snapshot: GameSnapshot,
+    pack: GenrePack | None,
+    action: str,
+    player_name: str,
+) -> bool:
+    """Seat the dogfight when ship-combat verbs hit but the router routed nothing.
+
+    The 158-29 contract (ADR-153 §7): a dogfight-verb match with no confrontation
+    dispatch and no live fight must DISPATCH the seater — not log-and-continue and
+    leave the narrator a raw ship-combat action to grind into a max_turns crash
+    (the 2026-06-25 coyote_star repro). Gated on a STRONG signal (see
+    ``_STRONG_DOGFIGHT_VERBS``) so a generic verb on a non-combat action cannot
+    phantom-seat a fight. Returns True when it injected a dogfight dispatch.
+    Fail-loud / observable: emits ``dogfight.forced_dispatch``. The injected
+    dispatch then seats (Plan-1 frame-default) or rejects loud
+    (``dogfight.dispatch.rejected``) in ``run_dogfight_dispatch``.
+
+    The general "narrator max_turns must degrade, not crash" robustness fix is a
+    SEPARATE story (158-41); this only guarantees the dogfight path seats-or-
+    degrades-loud.
+    """
+    from sidequest.agents.subsystems.dogfight import _resolve_dogfight_type
+    from sidequest.telemetry.spans.dogfight import dogfight_forced_dispatch_span
+
+    dogfight_type = _resolve_dogfight_type(pack) if pack is not None else None
+    if not dogfight_type:
+        return False  # pack authors no sealed-letter dogfight — nothing to seat.
+
+    enc = snapshot.encounter
+    if enc is not None and not getattr(enc, "resolved", False):
+        return False  # a live fight: the verb match is an in-fight beat, not a miss.
+
+    if _confrontation_types_emitted(package):
+        return False  # the router already routed a confrontation — not a miss.
+
+    # Dogfight-verb hits only (``type:verb`` where type == the dogfight type).
+    hits = [
+        h for h in _confrontation_verb_hits(action, pack) if h.startswith(f"{dogfight_type}:")
+    ]
+    verbs = {h.split(":", 1)[1] for h in hits}
+    strong = bool(verbs & _STRONG_DOGFIGHT_VERBS) or len(verbs) >= 2
+    if not strong:
+        return False
+
+    # Inject into the submitting seat's per_player entry. After
+    # ``_normalize_per_player_ids`` the slot's player_id is the seat id (when
+    # ``player_seats`` is bound); pre-normalization (and in unit tests with no
+    # seats) it is the raw player_name — match either, then fall back to the
+    # single submitter slot, then create one. ``confidence=1.0`` is a deliberate
+    # force-seat that clears run_dispatch_bank's per-subsystem gate (a sub-
+    # threshold value would degrade to a narrator hint and seat nothing).
+    seat_id = next(
+        (pid for pid, nm in snapshot.player_seats.items() if nm == player_name),
+        None,
+    )
+    target = next(
+        (pd for pd in package.per_player if pd.player_id in (player_name, seat_id)),
+        None,
+    )
+    if target is None:
+        target = package.per_player[0] if package.per_player else None
+    if target is None:
+        target = PlayerDispatch(player_id=seat_id or player_name, raw_action=action, dispatch=[])
+        package.per_player.append(target)
+    target.dispatch.append(
+        SubsystemDispatch(
+            subsystem="dogfight",
+            params={"type": dogfight_type},
+            idempotency_key=f"dogfight-forced-{dogfight_type}",
+            confidence=1.0,
+        )
+    )
+
+    verb_csv = ",".join(sorted(verbs))
+    with dogfight_forced_dispatch_span(encounter_type=dogfight_type, verb_hits=verb_csv):
+        pass
+    logger.info(
+        "intent_router.dogfight_forced_dispatch type=%s verbs=%s action_len=%d — "
+        "dogfight verbs hit, router routed no confrontation, no live fight; seating "
+        "the dogfight so the narrator is not left to grind (ADR-153 §7 / 158-29)",
+        dogfight_type,
+        verb_csv,
+        len(action),
+    )
+    return True
 
 
 def _beat_invocations_outside_confrontation(
@@ -913,6 +1013,20 @@ async def execute_intent_router_pre_narrator_pass(
                     ",".join(verb_hits),
                     len(action),
                 )
+                # ADR-153 §7 (158-29): the unrouted miss is the max_turns crash
+                # trigger. On a STRONG ship-combat signal, force-dispatch the
+                # dogfight seater HERE so the narrator gets a real engine instead
+                # of grinding a raw ship-combat action to a max_turns crash. The
+                # injector self-gates (strong-verb gate + dogfight-type resolution),
+                # so a weak/generic hit ("lock the door") seats nothing. The
+                # general max_turns-degrade robustness gap is tracked by 158-41.
+                force_dispatch_dogfight_on_verb_miss(
+                    package,
+                    snapshot=snapshot,
+                    pack=pack,
+                    action=action,
+                    player_name=player_name,
+                )
 
         # Ability-invocation decline evidence (sq-playtest 2026-06-07 Reroute
         # Power): a party character's ADR-097 ability declared verbatim has NO
@@ -1050,5 +1164,6 @@ __all__ = [
     "_normalize_per_player_ids",
     "effective_dispatch_turn_number",
     "execute_intent_router_pre_narrator_pass",
+    "force_dispatch_dogfight_on_verb_miss",
     "inject_environment_clock",
 ]

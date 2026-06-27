@@ -65,11 +65,19 @@ def _resolve_dogfight_type(pack: GenrePack) -> str | None:
     is the ADR-077 dogfight). Returns ``None`` when the pack authors no such def
     — the handler then rejects LOUD rather than guessing a type.
     """
-    confrontations = pack.rules.confrontations if pack.rules else []
+    # getattr-walk so duck-typed packs (bare fakes without ``rules`` /
+    # ConfrontationDefs without ``resolution_mode``) pass through cleanly — this
+    # resolver is now reached from the pre-narrator pass (158-29 force-dispatch),
+    # which legitimately sees fixture/fake packs, the same access style
+    # ``_confrontation_verb_hits`` already uses. A real pack's ConfrontationDef
+    # always carries ``resolution_mode`` (required field), so behavior is
+    # unchanged for live content — only fakes resolve to None.
+    rules = getattr(pack, "rules", None)
+    confrontations = getattr(rules, "confrontations", None) or []
     for cdef in confrontations:
         if (
-            cdef.resolution_mode == ResolutionMode.sealed_letter_lookup
-            and cdef.category == "combat"
+            getattr(cdef, "resolution_mode", None) == ResolutionMode.sealed_letter_lookup
+            and getattr(cdef, "category", None) == "combat"
         ):
             return cdef.confrontation_type
     return None

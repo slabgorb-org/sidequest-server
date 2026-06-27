@@ -15,7 +15,7 @@ import json
 import logging
 import re
 from collections.abc import Iterable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from sidequest.agents.npc_context import build_npc_working_set
 from sidequest.agents.orchestrator import (
@@ -605,6 +605,57 @@ def _project_current_region(sd: _SessionData, snapshot: GameSnapshot) -> object 
         return proj
 
 
+class _EncounterProjection(NamedTuple):
+    """The six encounter-projection fields derived from ``snapshot.encounter``
+    plus the pack's confrontation defs.
+
+    Shared by ``_build_turn_context`` (pre-dispatch) and
+    ``refresh_turn_context_post_dispatch`` (post-dispatch) so the two sites
+    cannot drift on exactly WHEN combat is live — the A1 tool gate, the A2
+    de-nativized prompt zone, and the A3 stray-beat drop all key on these
+    fields via ``is_live_wn_combat`` (No Silent Fallbacks: both halves of the
+    gate must agree)."""
+
+    encounter: Any
+    in_combat: bool
+    in_chase: bool
+    in_encounter: bool
+    confrontation_def: Any
+    encounter_summary: str | None
+
+
+def _project_encounter_fields(snapshot: GameSnapshot, genre_pack: GenrePack) -> _EncounterProjection:
+    """Derive the encounter flags + matched ConfrontationDef + summary from the
+    snapshot's live encounter. Skips resolved encounters so a closed combat does
+    not keep flipping ``in_combat=True`` (mirrors the original inline logic in
+    ``_build_turn_context``)."""
+    from sidequest.agents.encounter_render import render_encounter_summary
+    from sidequest.server.dispatch.confrontation import find_confrontation_def
+
+    encounter = snapshot.encounter
+    confrontation_def = None
+    encounter_summary = None
+    in_combat = False
+    in_chase = False
+    in_encounter = False
+    all_defs = genre_pack.rules.confrontations if genre_pack.rules else []
+    if encounter is not None and not encounter.resolved:
+        in_encounter = True
+        confrontation_def = find_confrontation_def(all_defs, encounter.encounter_type)
+        if confrontation_def is not None:
+            in_combat = confrontation_def.category == "combat"
+            in_chase = confrontation_def.category == "movement"
+        encounter_summary = render_encounter_summary(encounter)
+    return _EncounterProjection(
+        encounter=encounter if in_encounter else None,
+        in_combat=in_combat,
+        in_chase=in_chase,
+        in_encounter=in_encounter,
+        confrontation_def=confrontation_def,
+        encounter_summary=encounter_summary,
+    )
+
+
 def refresh_turn_context_post_dispatch(
     turn_context: TurnContext,
     *,
@@ -623,12 +674,53 @@ def refresh_turn_context_post_dispatch(
       re-projection the narrator's YOU-ARE-HERE names the room the party
       just LEFT on exactly the turns a move lands — the narrator must just
       get the updated map (sq-playtest 2026-06-12, Keith).
+    - **encounter projection** (sq-playtest 2026-06-27, the PRIMARY
+      lie-detector crash): a confrontation dispatch SEATS an encounter on the
+      snapshot mid-turn — after ``_build_turn_context`` already computed the
+      encounter fields as not-in-combat. Without recomputing them here, the
+      cold-seat turn runs with ``in_combat=False``: the A2 de-nativized prompt
+      zone never fires (so the narrator is never told the player throws to
+      resolve), the "AVAILABLE ENCOUNTER TYPES" start-a-confrontation menu DOES
+      fire, and — with the combat-resolution tools withheld (A1, binding-keyed)
+      — the narrator grinds the SDK tool loop past ``max_turns=8`` and crashes
+      the websocket. Recompute the projection from the just-seated snapshot so
+      the seat turn behaves like an already-seated turn (which converges).
 
     Emits a second ``dungeon.region_projection`` span on dungeon worlds
     (pre/post-dispatch pair) — the GM panel sees both sides of the move.
     """
     turn_context.npcs = list(snapshot.npcs)
     turn_context.region_projection = _project_current_region(sd, snapshot)
+    prev_in_encounter = turn_context.in_encounter
+    enc = _project_encounter_fields(snapshot, sd.genre_pack)
+    turn_context.encounter = enc.encounter
+    turn_context.in_combat = enc.in_combat
+    turn_context.in_chase = enc.in_chase
+    turn_context.in_encounter = enc.in_encounter
+    turn_context.confrontation_def = enc.confrontation_def
+    turn_context.encounter_summary = enc.encounter_summary
+    if enc.in_encounter and not prev_in_encounter:
+        # COLD-SEAT detected: the dispatch bank seated an encounter this turn
+        # that the pre-dispatch _build_turn_context did not see. Surface it on
+        # the GM panel (CLAUDE.md OTEL principle) so the lie detector can verify
+        # the seat-turn narration got the live-encounter zone (the de-nativized
+        # WN directive) rather than the stale "start a confrontation" menu — the
+        # exact gap that ground the SDK loop past max_turns (sq-playtest
+        # 2026-06-27).
+        from sidequest.telemetry.watcher_hub import publish_event
+
+        publish_event(
+            "state_transition",
+            {
+                "field": "encounter",
+                "op": "cold_seat_context_refreshed",
+                "encounter_type": (
+                    enc.encounter.encounter_type if enc.encounter is not None else None
+                ),
+                "in_combat": enc.in_combat,
+            },
+            component="encounter",
+        )
 
 
 def _build_turn_context(
@@ -651,21 +743,21 @@ def _build_turn_context(
     the seat map so MP can identify the acting PC by player_id rather
     than guessing snapshot.characters[0].
     """
-    from sidequest.agents.encounter_render import render_encounter_summary
-    from sidequest.server.dispatch.confrontation import find_confrontation_def
-
     snapshot = sd.snapshot
     char_name = _resolve_acting_character_name(sd, room)
 
     # Encounter flags from snapshot.encounter (Story 3.4). Category-based
     # flags from the matched ConfrontationDef; skip resolved encounters
-    # so a closed combat doesn't keep flipping in_combat=True.
-    encounter = snapshot.encounter
-    confrontation_def = None
-    encounter_summary = None
-    in_combat = False
-    in_chase = False
-    in_encounter = False
+    # so a closed combat doesn't keep flipping in_combat=True. Shared with
+    # refresh_turn_context_post_dispatch via _project_encounter_fields so the
+    # pre- and post-dispatch context agree on exactly when combat is live.
+    enc_proj = _project_encounter_fields(snapshot, sd.genre_pack)
+    encounter = enc_proj.encounter
+    confrontation_def = enc_proj.confrontation_def
+    encounter_summary = enc_proj.encounter_summary
+    in_combat = enc_proj.in_combat
+    in_chase = enc_proj.in_chase
+    in_encounter = enc_proj.in_encounter
     all_defs = sd.genre_pack.rules.confrontations if sd.genre_pack.rules else []
     available_confrontations: list[tuple[str, str, str]] = [
         (
@@ -675,13 +767,6 @@ def _build_turn_context(
         )
         for cd in all_defs
     ]
-    if encounter is not None and not encounter.resolved:
-        in_encounter = True
-        confrontation_def = find_confrontation_def(all_defs, encounter.encounter_type)
-        if confrontation_def is not None:
-            in_combat = confrontation_def.category == "combat"
-            in_chase = confrontation_def.category == "movement"
-        encounter_summary = render_encounter_summary(encounter)
 
     # Group C — LethalityArbiter inputs. PCs mapped to owning player_id
     # via the room seat table; the acting socket's PC also lands under
@@ -1145,7 +1230,7 @@ def _build_turn_context(
         in_combat=in_combat,
         in_chase=in_chase,
         in_encounter=in_encounter,
-        encounter=encounter if in_encounter else None,
+        encounter=encounter,
         confrontation_def=confrontation_def,
         available_confrontations=available_confrontations,
         encounter_summary=encounter_summary,

@@ -410,3 +410,195 @@ async def test_native_dial_pack_keeps_combat_tools_with_no_encounter(
         "a native dial pack must keep its combat-resolution tools; "
         f"missing={sorted(set(_COMBAT_RESOLUTION_TOOLS) - advertised)}"
     )
+
+
+# ---------------------------------------------------------------------------
+# A2 COLD-SEAT (sq-playtest 2026-06-27 — the PRIMARY lie-detector crash) — the
+# dispatch bank seats the WN combat encounter on the snapshot AFTER
+# ``_build_turn_context`` already computed the encounter projection
+# (in_combat / encounter / confrontation_def / encounter_summary) as
+# False/None. ``refresh_turn_context_post_dispatch`` refreshed npcs + region but
+# NOT the encounter fields, so on the COLD-SEAT turn ``context.in_combat`` stayed
+# False — the A2 de-nativized prompt zone (orchestrator.py:2225 gate) never
+# fired AND the "AVAILABLE ENCOUNTER TYPES" start-a-confrontation menu DID. The
+# narrator, denied the resolution tools (A1, binding-keyed) but told to START a
+# fresh confrontation rather than narrate the seated one, ground its SDK tool
+# loop past max_turns=8 and crashed the websocket. The fix: the post-dispatch
+# refresh recomputes the encounter projection from the just-seated snapshot.
+# ---------------------------------------------------------------------------
+
+
+class _FakeRefreshSessionData:
+    """Duck-typed ``_SessionData`` for ``refresh_turn_context_post_dispatch``: it
+    reads ``snapshot.npcs`` (npc refresh), ``_project_current_region`` (genre /
+    world / pack — returns None on a non-procedural-dungeon world), and the
+    encounter-field refresh reads ``genre_pack.rules.confrontations``."""
+
+    def __init__(self, snapshot: GameSnapshot, pack: GenrePack) -> None:
+        self.snapshot = snapshot
+        self.genre_pack = pack
+        # A non-beneath_sunden world so _project_current_region returns None
+        # cleanly (the encounter refresh is what these tests pin).
+        self.genre_slug = "caverns_and_claudes"
+        self.world_slug = "test_nondungeon"
+        self.player_id = "p1"
+        self.dungeon_repository = None
+
+
+def _nondungeon_snapshot() -> GameSnapshot:
+    return GameSnapshot(
+        genre_slug="caverns_and_claudes",
+        world_slug="test_nondungeon",
+        turn_manager=TurnManager(interaction=3),
+    )
+
+
+def test_refresh_post_dispatch_reflects_a_freshly_seated_wn_combat() -> None:
+    """The cold-seat root cause: the dispatch bank seats the encounter AFTER the
+    pre-dispatch context build, so ``refresh_turn_context_post_dispatch`` must
+    recompute the encounter projection. Otherwise ``context.in_combat`` stays
+    False, the A2 de-nativized zone never fires, and the narrator grinds the SDK
+    loop past max_turns on the seat turn."""
+    from sidequest.agents.orchestrator import TurnContext
+    from sidequest.server.session_helpers import refresh_turn_context_post_dispatch
+
+    snap = _nondungeon_snapshot()
+    sd = _FakeRefreshSessionData(snap, _wn_pack())
+
+    # Pre-dispatch context: _build_turn_context saw NO encounter (the attack has
+    # not seated yet), so every encounter flag is False/None.
+    ctx = TurnContext(character_name="Groucho", genre="caverns_and_claudes", turn_number=3)
+    assert ctx.in_combat is False and ctx.encounter is None
+
+    # The dispatch bank seats the WN combat on the snapshot mid-turn.
+    snap.encounter = _wn_combat_encounter()
+
+    refresh_turn_context_post_dispatch(ctx, sd=sd, snapshot=snap)
+
+    assert ctx.in_combat is True, (
+        "post-dispatch refresh did not pick up the freshly-seated WN combat — "
+        "context.in_combat stayed False, so the A2 de-nativized prompt zone "
+        "(orchestrator.py:2225 gate) never fires and the narrator grinds the "
+        "SDK tool loop past max_turns on the cold-seat turn"
+    )
+    assert ctx.in_encounter is True
+    assert ctx.encounter is snap.encounter
+    assert ctx.confrontation_def is not None and ctx.confrontation_def.confrontation_type == "combat"
+    assert ctx.encounter_summary is not None
+    # The refreshed context satisfies the EXACT predicate that gates all three
+    # de-nativization arms (orchestrator.py:2251 suppress_native_combat) — the
+    # wiring assertion that the refresh actually un-sticks the A2 zone.
+    assert is_live_wn_combat(ctx.encounter, "wwn") is True
+
+
+def test_refresh_post_dispatch_no_encounter_leaves_combat_flags_false() -> None:
+    """A turn whose dispatch seats NO confrontation (movement, look, talk) must
+    leave the encounter flags False — the refresh must never invent combat."""
+    from sidequest.agents.orchestrator import TurnContext
+    from sidequest.server.session_helpers import refresh_turn_context_post_dispatch
+
+    snap = _nondungeon_snapshot()  # snapshot.encounter is None
+    sd = _FakeRefreshSessionData(snap, _wn_pack())
+    ctx = TurnContext(character_name="Groucho", genre="caverns_and_claudes", turn_number=3)
+
+    refresh_turn_context_post_dispatch(ctx, sd=sd, snapshot=snap)
+
+    assert ctx.in_combat is False
+    assert ctx.in_encounter is False
+    assert ctx.encounter is None
+    assert ctx.confrontation_def is None
+    assert ctx.encounter_summary is None
+
+
+def test_refresh_post_dispatch_resolved_encounter_does_not_reseat_combat() -> None:
+    """A RESOLVED encounter (combat just ended this turn) must NOT flip in_combat
+    back on — mirrors ``_build_turn_context``'s ``not encounter.resolved`` guard
+    so a closed combat doesn't keep re-seating the live zone."""
+    from sidequest.agents.orchestrator import TurnContext
+    from sidequest.server.session_helpers import refresh_turn_context_post_dispatch
+
+    snap = _nondungeon_snapshot()
+    sd = _FakeRefreshSessionData(snap, _wn_pack())
+    ctx = TurnContext(character_name="Groucho", genre="caverns_and_claudes", turn_number=3)
+
+    snap.encounter = _wn_combat_encounter(resolved=True)
+    refresh_turn_context_post_dispatch(ctx, sd=sd, snapshot=snap)
+
+    assert ctx.in_combat is False
+    assert ctx.in_encounter is False
+    assert ctx.encounter is None
+
+
+def test_refresh_cold_seat_emits_gm_panel_watcher_event(monkeypatch: pytest.MonkeyPatch) -> None:
+    """OTEL lie-detector (CLAUDE.md): the cold-seat refresh emits a
+    ``state_transition`` op=cold_seat_context_refreshed watcher event so the GM
+    panel can verify the seat-turn narration was handed the live-encounter zone.
+    A turn that seats NO encounter emits nothing (no false positive)."""
+    from sidequest.agents.orchestrator import TurnContext
+    from sidequest.server.session_helpers import refresh_turn_context_post_dispatch
+
+    events: list[dict] = []
+
+    def _spy(event_type, fields, *, component=None, severity="info"):
+        events.append({"event_type": event_type, "fields": fields, "component": component})
+
+    monkeypatch.setattr("sidequest.telemetry.watcher_hub.publish_event", _spy)
+
+    # A turn whose dispatch seats nothing: no cold-seat event.
+    snap = _nondungeon_snapshot()
+    sd = _FakeRefreshSessionData(snap, _wn_pack())
+    ctx = TurnContext(character_name="Groucho", genre="caverns_and_claudes", turn_number=3)
+    refresh_turn_context_post_dispatch(ctx, sd=sd, snapshot=snap)
+    assert not [e for e in events if e["fields"].get("op") == "cold_seat_context_refreshed"]
+
+    # The cold-seat: a confrontation dispatch seated combat this turn.
+    snap.encounter = _wn_combat_encounter()
+    refresh_turn_context_post_dispatch(ctx, sd=sd, snapshot=snap)
+    cold = [e for e in events if e["fields"].get("op") == "cold_seat_context_refreshed"]
+    assert len(cold) == 1, "the cold-seat refresh must surface exactly one GM-panel event"
+    assert cold[0]["fields"]["encounter_type"] == "combat"
+    assert cold[0]["fields"]["in_combat"] is True
+    assert cold[0]["component"] == "encounter"
+
+
+@pytest.mark.asyncio
+async def test_refreshed_cold_seat_context_fires_denativized_zone_not_start_menu() -> None:
+    """Wiring (CLAUDE.md "Every Test Suite Needs a Wiring Test") — the cold-seat
+    chain end to end. A pre-dispatch context (in_combat False) plus a snapshot the
+    dispatch bank just seated a WN combat on, AFTER the refresh, builds a narrator
+    prompt that (a) carries the A2 de-nativized "player throws to resolve, do NOT
+    call dice/beat tools" directive and (b) does NOT carry the "AVAILABLE
+    ENCOUNTER TYPES" start-a-confrontation menu. Pre-fix the cold-seat got the
+    exact opposite of both — the menu told it to START a fight while the
+    resolution tools were withheld — and it ground the loop to a crash."""
+    from sidequest.agents.orchestrator import Orchestrator, TurnContext
+    from sidequest.server.session_helpers import refresh_turn_context_post_dispatch
+
+    snap = _nondungeon_snapshot()
+    pack = _wn_pack()
+    sd = _FakeRefreshSessionData(snap, pack)
+
+    ctx = TurnContext(
+        character_name="Groucho",
+        genre="caverns_and_claudes",
+        turn_number=3,
+        pack=pack,
+        available_confrontations=[("combat", "Dungeon Combat", "combat")],
+    )
+    assert ctx.in_combat is False  # pre-dispatch
+
+    snap.encounter = _wn_combat_encounter()
+    refresh_turn_context_post_dispatch(ctx, sd=sd, snapshot=snap)
+    assert ctx.in_combat is True  # post-refresh
+
+    orch = Orchestrator(client=FakeAnthropicSdkClient(responses=[]))
+    prompt_text, _registry = await orch.build_narrator_prompt(
+        "I level my spear and charge the nearest tender.", ctx
+    )
+
+    # A2 de-nativized directive present — narrate the seat, the player throws to
+    # resolve (the instruction that lets the seat turn converge).
+    assert "Do NOT emit beat_selections" in prompt_text
+    assert "player's die throw" in prompt_text
+    # The start-a-confrontation menu is suppressed now combat is live.
+    assert "AVAILABLE ENCOUNTER TYPES" not in prompt_text

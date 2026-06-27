@@ -356,6 +356,45 @@ def make_dogfight_pack(*, pack_root: Path | None = None) -> GenrePack:
     return load_genre_pack(pack_path)
 
 
+def make_frameless_dogfight_pack(*, pack_root: Path | None = None) -> GenrePack:
+    """Load ``swn_test_pack`` and strip the dogfight def's ``opponent_default_stats``.
+
+    A *frameless* sealed-letter dogfight: it still routes (the def + intent_verbs
+    are intact) but cannot seat — with no router-named opponent, no co-located
+    Other, and no default-from-frame frame, ``instantiate_encounter_from_trigger``
+    raises (``SealedLetterArityError`` — "got 0 npcs_present"). This is the
+    degrade-loud case for ADR-153 §7 / 158-29: a forced dispatch that genuinely
+    cannot seat must reject LOUD via ``dogfight.dispatch.rejected``, never wedge
+    the narrator and never silently seat a phantom.
+
+    Raises:
+        FileNotFoundError: the fixture pack is not on disk (repo defect).
+        ValueError: the loaded pack has no ``dogfight`` ConfrontationDef, or it
+            already carries no frame — the mutation would be a no-op and the test
+            built on it would silently stop testing the degraded path (fail loud
+            per CLAUDE.md No Silent Fallbacks).
+    """
+    pack = make_dogfight_pack(pack_root=pack_root)
+    cdef = find_confrontation_def(
+        pack.rules.confrontations if pack.rules else [], DOGFIGHT_TYPE
+    )
+    if cdef is None:
+        raise ValueError(
+            f"{GENRE_SLUG} fixture pack has no {DOGFIGHT_TYPE!r} ConfrontationDef — "
+            f"cannot build a frameless dogfight (fixture drift)"
+        )
+    if not cdef.opponent_default_stats:
+        raise ValueError(
+            f"{DOGFIGHT_TYPE!r} def already has no opponent_default_stats — the "
+            f"frameless mutation would be a no-op; the degraded-path test would "
+            f"stop exercising the un-seatable case (fixture drift)"
+        )
+    # extra="forbid" but not frozen / no validate_assignment — nulling the frame
+    # is a clean in-memory mutation on this freshly-loaded pack (not shared).
+    cdef.opponent_default_stats = None
+    return pack
+
+
 def make_empty_snapshot(
     *, pc_name: str = "Maverick", location: str = FALLBACK_LOCATION
 ) -> GameSnapshot:

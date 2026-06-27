@@ -1,19 +1,35 @@
-"""heavy_metal → WWN Story 2 — cast_spell end-to-end wiring proof (real pack).
+"""heavy_metal → WWN — real-chargen caster casts through the PRODUCTION seam.
 
-RED for story 87-2 (real magic, epic Story 3 folded in). Mirrors the mandated EH
-proof (tests/integration/test_wwn_elemental_harmony_dispatch.py) on the real
-heavy_metal pack: a real Mage-tradition caster casts a real damage spell into the
-real Blade-work combat through the PRODUCTION apply path
-(``_apply_narration_result_to_snapshot``), and we assert:
+Originally story 87-2's "cast a damage spell into combat through the narrator
+apply path" proof. That path was DE-NATIVIZED by #1050 (ADR-143): a live WN
+hp_depletion combat is engine-owned, so a ``cast_spell`` beat fed to
+``_apply_narration_result_to_snapshot`` is now DROPPED by the
+``is_live_wn_combat`` firewall (``encounter.wn_combat_beat_dropped_*``) — the
+cast never spends. The test went unnoticed because the heavy_metal pack-load
+error masked it until barsoom was fixed (2026-06-27); story 158-47 then surfaced
+the regression, misread as a chargen-seeding bug. It is not: chargen seeds the
+spell correctly. The cast had to MIGRATE to the door a player actually uses in a
+WN combat — the **DICE_THROW** seam (story 102-2) — which the firewall does not
+gate.
 
-  1. the cast spent one cast (casts_remaining decremented);
-  2. the opponent's HP was ablated through the HP channel;
-  3. the ``wwn.spell.cast`` span fired with refused==False (the GM-panel lie detector);
-  4. NEGATIVE — the B/X ``magic.cast_spell_*`` watcher events did NOT fire, proving
-     the wwn arm took the branch (not the B/X innate-cast path).
+This test keeps what it uniquely proves — that a caster built through the REAL
+chargen FSM walk on the real heavy_metal pack is seeded with a usable
+``SpellcastingState`` — and proves that seeded caster's spell actually resolves
+end-to-end through the production dice seam:
+
+  1. real chargen seeds ``spellcasting`` with the discovered damage spell prepared
+     and at least one cast remaining;
+  2. committing the cast via ``dispatch_dice_throw`` spends exactly one cast;
+  3. the opponent's HP is ablated through the WWN cast spine;
+  4. the ``wwn.spell.cast`` span fired with refused==False (the GM-panel lie detector).
+
+The exhaustive cast-spine contract (face-independence, economy refusals, malformed
+commits, apply_beat↔dice parity) lives in
+``tests/integration/test_dice_path_spell_cast_102_2.py`` on a hand-built caster;
+this test is the chargen-built counterpart, so they do not duplicate.
 
 The caster class + damage spell are DISCOVERED from the loaded pack (not hardcoded),
-so the proof does not couple to the specific spell ids Dev authors.
+so the proof does not couple to the specific spell ids the content authors.
 
 Skips cleanly when sidequest-content is not on disk.
 """
@@ -119,24 +135,15 @@ def _build_caster(pack, name: str, *, class_display: str):
     return builder.build(name)
 
 
-class _RecordingHub:
-    """Records every watcher event for the B/X negative assertion."""
-
-    def __init__(self) -> None:
-        self.events: list[tuple[str, dict, str]] = []
-
-    def __call__(self, event_type, payload, *, component, **_kw) -> None:
-        self.events.append((event_type, payload, component))
-
-
 @pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
 def test_wwn_cast_spell_routes_through_wwn_module_on_real_heavy_metal(otel_capture, monkeypatch):
-    from sidequest.agents.orchestrator import BeatSelection, NarrationTurnResult, NpcMention
+    from sidequest.agents.orchestrator import NpcMention
     from sidequest.game.session import GameSnapshot
     from sidequest.game.turn import TurnManager
+    from sidequest.protocol.dice import DiceThrowPayload, ThrowParams
+    from sidequest.protocol.models import InitiativeEntry
+    from sidequest.server.dispatch.dice import dispatch_dice_throw
     from sidequest.server.dispatch.encounter_lifecycle import instantiate_encounter_from_trigger
-    from sidequest.server.narration_apply import _apply_narration_result_to_snapshot
-    from tests._helpers.session_room import room_for
 
     pack = _load_heavy_metal()
     assert pack.rules.ruleset == "wwn", "heavy_metal must be bound ruleset: wwn"
@@ -177,59 +184,75 @@ def test_wwn_cast_spell_routes_through_wwn_module_on_real_heavy_metal(otel_captu
     assert enc is not None, "seating Blade-work must produce an encounter"
     snap.encounter = enc
 
+    # Pin the WN sealed-round initiative (the seam's 1d8+DEX roll is unseeded) so
+    # the caster acts first and the opponent answers — the walk order can never
+    # flip on a random roll. Mirrors test_dice_path_spell_cast_102_2._seat_combat.
+    enc.initiative = [
+        InitiativeEntry(token_id=caster_name, value=9),
+        InitiativeEntry(token_id=opponent, value=2),
+    ]
+
     opponent_core = snap.find_creature_core(opponent)
     assert opponent_core is not None, "opponent core must be reachable to ablate"
     assert opponent_core.armor_class == _OPPONENT_AC, "opponent AC from opponent_default_stats"
     assert opponent_core.hp.current == _OPPONENT_HP, "opponent HP from opponent_default_stats"
     hp_before = opponent_core.hp.current
 
-    # Pin rng MAX → defender save made (damage halved but still > 0, below kill).
-    monkeypatch.setattr("sidequest.server.narration_apply.random.randint", lambda a, b: b)
-    hub = _RecordingHub()
-    monkeypatch.setattr("sidequest.server.narration_apply._watcher_publish", hub)
+    # ── Cast through the PRODUCTION dice seam, NOT a narrator beat selection ──
+    # A live WN hp_depletion combat is engine-owned (ADR-143): the narrator is
+    # de-nativized and a stray ``cast_spell`` beat fed to the narration-apply
+    # path is dropped by the is_live_wn_combat firewall. Combat casting reaches
+    # the WWN cast spine the way a player does it — throwing the die with a
+    # ``spell_id`` sidecar (story 102-2). rng pinned low: defender save d20=1
+    # (fails → full damage), wracking_bolt 1d6 pinned to 1 → exactly 1 HP
+    # ablated, well below the 10-HP kill; the server reprisal rolls min and misses.
+    monkeypatch.setattr("random.randint", lambda a, b: a)
 
-    result = NarrationTurnResult(
-        narration=f"{caster_name} looses the working.",
-        beat_selections=[BeatSelection(actor=caster_name, beat_id="cast_spell", spell_id=spell_id)],
-    )
-    room = room_for(snap)
-    _apply_narration_result_to_snapshot(
-        snap,
-        result,
-        player_name=caster_name,
+    dispatch_dice_throw(
+        payload=DiceThrowPayload(
+            request_id="req-158-47",
+            throw_params=ThrowParams(
+                velocity=(0.0, 5.0, -2.0),
+                angular=(1.0, 1.0, 1.0),
+                position=(0.5, 0.5),
+            ),
+            face=[1],
+            beat_id="cast_spell",
+            spell_id=spell_id,
+        ),
+        rolling_player_id="player-sael",
+        character_name=caster_name,
+        character_stats=dict(caster.stats),
+        encounter=enc,
         pack=pack,
-        from_explicit_action=True,
-        room=room,
-        acting_character_name=caster_name,
+        genre_slug="heavy_metal",
+        session_id="hm-158-47-session",
+        round_number=1,
+        room_broadcast=[].append,
+        snapshot=snap,
     )
 
-    # 1. one cast spent
+    # 1. one cast spent — the chargen-seeded caster's cast routed through the
+    #    production dice spine and spent exactly one cast.
     caster_after = snap.find_creature_core(caster_name)
     assert caster_after is not None and caster_after.spellcasting is not None
     assert caster_after.spellcasting.casts_remaining == casts_before - 1, (
-        f"casting {spell_id!r} must spend exactly one cast through the real apply path; "
-        f"before={casts_before} after={caster_after.spellcasting.casts_remaining}"
+        f"casting {spell_id!r} must spend exactly one cast through the production dice "
+        f"seam; before={casts_before} after={caster_after.spellcasting.casts_remaining}"
     )
 
-    # 2. opponent HP ablated
+    # 2. opponent HP ablated through the WWN cast spine
     assert opponent_core.hp.current < hp_before, (
         f"{spell_id!r} damage must ablate the opponent's HP through the WWN cast spine; "
         f"before={hp_before} after={opponent_core.hp.current}"
     )
 
-    # 3. wwn.spell.cast span fired (lie detector)
+    # 3. wwn.spell.cast span fired with refused=False (the GM-panel lie detector)
     spans = [s for s in otel_capture.get_finished_spans() if s.name == "wwn.spell.cast"]
     assert len(spans) >= 1, (
-        f"the WWN cast spine must emit a wwn.spell.cast span on the real apply path; got "
+        f"the WWN cast spine must emit a wwn.spell.cast span on the dice path; got "
         f"{[s.name for s in otel_capture.get_finished_spans()]}"
     )
     assert spans[-1].attributes.get("refused") is False, (
         "a valid cast (prepared + a cast remaining) must record refused=False"
-    )
-
-    # 4. NEGATIVE — the B/X cast arm did not fire
-    bx_events = [e for e in hub.events if e[0].startswith("magic.cast_spell")]
-    assert not bx_events, (
-        f"the B/X cast path (magic.cast_spell_*) must NOT fire on a ruleset: wwn pack; "
-        f"got {bx_events!r}"
     )

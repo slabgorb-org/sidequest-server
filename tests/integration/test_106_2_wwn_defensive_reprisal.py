@@ -519,7 +519,7 @@ def test_swn_sibling_without_initiative_keeps_legacy_reprisal_no_raise():
         ),
         rolling_player_id="player-nova",
         character_name="Nova",
-        character_stats={"Physique": 10},
+        character_stats={"STR": 10},
         encounter=enc,
         pack=pack,
         genre_slug="space_opera",

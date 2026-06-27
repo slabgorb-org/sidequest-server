@@ -49,10 +49,10 @@ def _has_real_content() -> bool:
 
 _HAS_CONTENT = _has_real_content()
 
-# Attacker stat block. The combat beats' stat_check is "Reflex" (the DEXTERITY
-# flavor in the neon attribute_map); 14 is comfortably enough that a nat-20 d20
-# beats the street-mook AC and the strike-damage path fires.
-_STATS = {"Brawn": 14, "Reflex": 14, "Body": 14, "Tech": 12, "Instinct": 12, "Cool": 12}
+# Attacker stat block (canonical Without Number codes). The combat beats'
+# stat_check is "DEX"; 14 is comfortably enough that a nat-20 d20 beats the
+# street-mook AC and the strike-damage path fires.
+_STATS = {"STR": 14, "DEX": 14, "CON": 14, "INT": 12, "WIS": 12, "CHA": 12}
 
 
 # ---------------------------------------------------------------------------

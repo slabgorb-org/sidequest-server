@@ -147,7 +147,7 @@ def _drive_player_shoot(snap, enc, pack, *, broadcasts):
         ),
         rolling_player_id="player-grix",
         character_name=PLAYER,
-        character_stats={"Physique": 10},
+        character_stats={"STR": 10},
         encounter=enc,
         pack=pack,
         genre_slug="space_opera",

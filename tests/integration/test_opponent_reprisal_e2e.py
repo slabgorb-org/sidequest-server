@@ -19,7 +19,7 @@ These tests drive the **REAL space_opera pack** through ``dispatch_dice_throw``
 reprises mechanically against the player.
 
 DETERMINISM WITHOUT TOUCHING THE ROLL SEAM: the opponent's to-hit modifier is
-fixed by content (shoot beat: attack_bonus 1 + combat_skill 1 + Physique-10 mod 0
+fixed by content (shoot beat: attack_bonus 1 + combat_skill 1 + STR-10 mod 0
 = +2, so attack_total ∈ [3, 22]). We force a guaranteed HIT by setting the
 **player's** AC = 2 (every roll clears it) and a guaranteed MISS by setting it to
 30 (no roll clears it). Wide margins keep the tests robust even if Dev sources the
@@ -29,7 +29,7 @@ seam choice.
 OPPONENT STAT SOURCE (Dev guidance): the opponent's ability scores for the attack
 come from ``cdef.opponent_ability_scores()`` (content ``opponent_default_stats``
 with hp/armor_class/dexterity stripped) — the real personal-combat cdef carries
-``Physique: 10``, which is the shoot/overload beats' ``stat_check``. The opponent's
+``STR: 10``, which is the shoot/overload beats' ``stat_check``. The opponent's
 strike beat is the first eligible ``damage_channel: strike`` beat (``shoot``).
 Scope is ``beat_selection`` + ``hp_depletion`` ONLY — the ``opposed_check`` path
 already applies an opponent beat (do not double-drive it).
@@ -171,7 +171,7 @@ def _make_encounter():
 def _drive_player_shoot(snap, enc, pack, *, broadcasts):
     """Run one player ``shoot`` turn through dispatch_dice_throw.
 
-    face=18, Physique 10 (+0 mod), shoot base=2 → DC 14 → Success (damage fires).
+    face=18, STR 10 (+0 mod), shoot base=2 → DC 14 → Success (damage fires).
     The opponent reprisal must occur as part of resolving this same dispatch.
     """
     from sidequest.protocol.dice import DiceThrowPayload, ThrowParams
@@ -190,7 +190,7 @@ def _drive_player_shoot(snap, enc, pack, *, broadcasts):
         ),
         rolling_player_id="player-nova",
         character_name=PLAYER,
-        character_stats={"Physique": 10},
+        character_stats={"STR": 10},
         encounter=enc,
         pack=pack,
         genre_slug="space_opera",

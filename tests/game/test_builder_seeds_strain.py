@@ -331,7 +331,7 @@ def test_real_neon_character_gets_strain_pool() -> None:
 
     character = builder.build("Zara Kade")
 
-    body_score = character.stats.get("Body", 0)
+    body_score = character.stats.get("CON", 0)
     assert character.core.system_strain is not None, (
         "neon_dystopia (cwn) character must have a SystemStrainPool"
     )

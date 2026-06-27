@@ -48,15 +48,15 @@ PLAYER = "Sable"
 OPPONENT = "Pela"
 RETREAT_BEAT = "retreat"
 
-# space_opera SWN attribute flavor names (classes.yaml: Physique/Reflex/Intellect/
-# Cunning/Resolve/Influence). The ✦ retreat beat's ``stat_check`` is Reflex.
+# space_opera SWN attribute codes (canonical Without Number: STR/DEX/CON/INT/
+# WIS/CHA). The ✦ retreat beat's ``stat_check`` is DEX.
 SWN_STATS = {
-    "Physique": 10,
-    "Reflex": 12,
-    "Intellect": 10,
-    "Cunning": 10,
-    "Resolve": 10,
-    "Influence": 10,
+    "STR": 10,
+    "DEX": 12,
+    "INT": 10,
+    "WIS": 10,
+    "CON": 10,
+    "CHA": 10,
 }
 
 # d20 faces with tier guaranteed regardless of the beat DC (game/dice.py): nat 20 →

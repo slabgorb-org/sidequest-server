@@ -63,7 +63,7 @@ def _snap() -> GameSnapshot:
     )
     snap.character_locations[_PC] = _LOCATION
     # SWN P4 initiative spine resolves the PC's DEX from a real Character in
-    # snapshot.characters (space_opera maps DEXTERITY -> "Reflex"). Seat the PC
+    # snapshot.characters (space_opera maps DEXTERITY -> "DEX"). Seat the PC
     # so _roll_and_persist_initiative can roll 1d8+DEX without a silent fallback.
     snap.characters.append(
         Character(
@@ -76,7 +76,7 @@ def _snap() -> GameSnapshot:
             char_class="Soldier",
             race="Coreworlder",
             backstory="Ex-Hegemonic infantry.",
-            stats={"Reflex": 12},
+            stats={"DEX": 12},
         )
     )
     return snap

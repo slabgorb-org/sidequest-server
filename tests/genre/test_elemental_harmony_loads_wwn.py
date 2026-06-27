@@ -52,13 +52,14 @@ def test_elemental_harmony_loads_clean_under_wwn() -> None:
     assert set(amap.keys()) == _WWN_CANONICAL_KEYS, (
         f"attribute_map keys mismatch: got {sorted(amap.keys())}"
     )
-    # Spot-check known flavor mappings
-    assert amap["STRENGTH"] == "Strength"
-    assert amap["DEXTERITY"] == "Agility"
-    assert amap["CONSTITUTION"] == "Endurance"
-    assert amap["INTELLIGENCE"] == "Insight"
-    assert amap["WISDOM"] == "Spirit"
-    assert amap["CHARISMA"] == "Harmony"
+    # Canonical WN stat keys — the WN family shares one attribute block; the pack
+    # uses the standard STR/DEX/CON/INT/WIS/CHA, not flavor-renamed stats.
+    assert amap["STRENGTH"] == "STR"
+    assert amap["DEXTERITY"] == "DEX"
+    assert amap["CONSTITUTION"] == "CON"
+    assert amap["INTELLIGENCE"] == "INT"
+    assert amap["WISDOM"] == "WIS"
+    assert amap["CHARISMA"] == "CHA"
     # Every mapped flavor stat must be a declared ability score
     declared = set(pack.rules.ability_score_names)
     assert set(amap.values()) <= declared

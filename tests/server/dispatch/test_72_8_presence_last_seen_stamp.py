@@ -353,15 +353,15 @@ def test_present_and_prose_mentioned_same_turn_one_consistent_stamp() -> None:
 # ``tests/server/test_space_opera_swn_combat_e2e.py``): the point is proving the
 # real seating + dispatch path, not a synthetic fixture.
 
-# Full SWN-flavor stat block (mirrors test_space_opera_swn_combat_e2e) so the
+# Full SWN canonical stat block (mirrors test_space_opera_swn_combat_e2e) so the
 # instantiation seam can roll 1d8+DEX initiative without KeyError after seeding.
 _SWN_STATS = {
-    "Physique": 12,
-    "Reflex": 12,
-    "Will": 10,
-    "Intellect": 12,
-    "Resolve": 12,
-    "Cunning": 12,
+    "STR": 12,
+    "DEX": 12,
+    "CON": 12,
+    "INT": 12,
+    "WIS": 12,
+    "CHA": 12,
 }
 
 

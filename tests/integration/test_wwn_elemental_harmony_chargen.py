@@ -14,14 +14,13 @@ Five archetype groups tested:
   5. Scholar / Wanderer (Experts) — effort={}, spellcasting=None
 
 Effort-max formula (mirrored from seed_wwn_magic in builder.py):
-  pool_max = effort_base + starting_skill_level + swn_attribute_modifier(spirit_score)
+  pool_max = effort_base + starting_skill_level + swn_attribute_modifier(wis_score)
   (Partial class: pool_max -= 1, min 1)
 
-The governing stat is WISDOM → Spirit (pack's attribute_map). With point_buy
-budget=30 and 6 stats all landing at 13 (5 pts each × 6 = 30), the modifier
-is 0. So pool_max = 1 + 1 + 0 = 2 for all magic classes in this pack.
-The test computes this from the BUILT character's actual Spirit score (not
-hardcoded), so a future stat-generation change will catch any drift.
+The governing stat is WISDOM → WIS (pack's attribute_map; the WN family uses the
+canonical STR/DEX/CON/INT/WIS/CHA block). The test computes pool_max from the
+BUILT character's actual WIS score (not hardcoded), so a stat-generation or
+arrangement change will catch any drift.
 
 Round-trip: serialize the Channeler character's snapshot via
 ``GameSnapshot.model_dump_json()`` + ``GameSnapshot.model_validate_json()``
@@ -156,19 +155,19 @@ def test_channeler_seeds_effort_and_spellcasting():
     )
     pool = char.core.effort["channeler"]
 
-    # Compute expected max from the BUILT char's actual Spirit score.
-    # WISDOM → Spirit in this pack (attribute_map in rules.yaml).
-    spirit_score = char.stats.get("Spirit", 10)
+    # Compute expected max from the BUILT char's actual WIS score (the governing
+    # stat for WWN-magic classes; attribute_map WISDOM → WIS in rules.yaml).
+    wis_score = char.stats.get("WIS", 10)
     effort_base = pack.rules.wwn.magic.effort_base  # == 1 per rules.yaml
     starting_skill_level = 1  # classes.yaml: effort_sources[0].starting_skill_level
-    expected_max = effort_base + starting_skill_level + swn_attribute_modifier(spirit_score)
+    expected_max = effort_base + starting_skill_level + swn_attribute_modifier(wis_score)
     # partial=false → no -1 adjustment; floor 1 anyway
     expected_max = max(1, expected_max)
 
     assert pool.max == expected_max, (
         f"Channeler effort max mismatch: expected {expected_max} "
         f"(effort_base={effort_base} + skill={starting_skill_level} + "
-        f"modifier={swn_attribute_modifier(spirit_score)} for Spirit={spirit_score}), "
+        f"modifier={swn_attribute_modifier(wis_score)} for WIS={wis_score}), "
         f"got {pool.max}"
     )
 
@@ -215,13 +214,13 @@ def test_spirit_medium_seeds_effort_and_spellcasting():
     )
     pool = char.core.effort["spirit_medium"]
 
-    spirit_score = char.stats.get("Spirit", 10)
+    wis_score = char.stats.get("WIS", 10)
     effort_base = pack.rules.wwn.magic.effort_base
     starting_skill_level = 1
-    expected_max = max(1, effort_base + starting_skill_level + swn_attribute_modifier(spirit_score))
+    expected_max = max(1, effort_base + starting_skill_level + swn_attribute_modifier(wis_score))
     assert pool.max == expected_max, (
         f"Spirit Medium effort max {pool.max} != expected {expected_max} "
-        f"(Spirit={spirit_score}, modifier={swn_attribute_modifier(spirit_score)})"
+        f"(WIS={wis_score}, modifier={swn_attribute_modifier(wis_score)})"
     )
 
     sc = char.core.spellcasting
@@ -259,10 +258,10 @@ def test_martial_artist_seeds_effort_only_no_spellcasting():
     )
     pool = char.core.effort["vowed"]
 
-    spirit_score = char.stats.get("Spirit", 10)
+    wis_score = char.stats.get("WIS", 10)
     effort_base = pack.rules.wwn.magic.effort_base
     starting_skill_level = 1
-    expected_max = max(1, effort_base + starting_skill_level + swn_attribute_modifier(spirit_score))
+    expected_max = max(1, effort_base + starting_skill_level + swn_attribute_modifier(wis_score))
     assert pool.max == expected_max, (
         f"Martial Artist vowed effort max {pool.max} != expected {expected_max}"
     )

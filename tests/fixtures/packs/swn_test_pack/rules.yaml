@@ -562,7 +562,9 @@ confrontations:
     # SWN statline (Task 5): opponent seeded with SWN-calibrated pilot stats.
     # Geometry modifiers feed the sealed-letter lookup — aspect/range bonuses
     # adjust attack_bonus at resolution time.
-    win_condition: dial_threshold
+    # ADR-153 §2 firewall (158-31): resolves via SWN hp_depletion, no native
+    # dial — mirrors the live space_opera dogfight def.
+    win_condition: hp_depletion
     opponent_weapon: multifocal_laser
     player_weapon: multifocal_laser
     opponent_default_stats:
@@ -596,43 +598,9 @@ confrontations:
         close: 0
         medium: -2
         far: -4
-    player_metric:
-      name: energy
-      starting: 0
-      threshold: 30
-    opponent_metric:
-      name: energy
-      starting: 0
-      threshold: 30
-    beats:
-      # straight/throttle_up: hold vector, recover energy — push (sustain/distance goal)
-      - id: straight
-        label: Throttle Up
-        kind: push
-        base: 5
-        stat_check: Reflex
-        narrator_hint: Hold vector. Engines at full burn. Recover energy.
-      # bank/break_right: defensive break to avoid incoming fire — brace
-      - id: bank
-        label: Break Right
-        kind: brace
-        base: 5
-        stat_check: Reflex
-        narrator_hint: Hard starboard break. Costs energy, breaks the merge geometry.
-      # loop/vertical_reversal: repositioning maneuver to get behind opponent — angle
-      - id: loop
-        label: Vertical Reversal
-        kind: angle
-        target_tag: "Positional Advantage"
-        stat_check: Reflex
-        narrator_hint: Full vertical loop — catch them from behind on the exit.
-      # kill_rotation: flip 180 on attitude jets for a rear-shot opportunity — angle (attack setup)
-      - id: kill_rotation
-        label: Kill Rotation
-        kind: angle
-        target_tag: "Rear Arc"
-        stat_check: Reflex
-        narrator_hint: Flip 180 on attitude jets. Back-shot on inertia.
+    # ADR-153 §2 (158-31): native energy dial + beats REMOVED — resolves via
+    # SWN hp_depletion. Mirrors the live space_opera dogfight def so a
+    # content-only change there never diverges from this fixture.
     interaction_table:
       _from: dogfight/interactions_mvp.yaml
     mood: tense

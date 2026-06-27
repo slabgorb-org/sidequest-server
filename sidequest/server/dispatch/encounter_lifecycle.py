@@ -1716,7 +1716,18 @@ def instantiate_encounter_from_trigger(
         else:
             seating_source = "materialized"
         npcs_present = [materialized_threat]
-    elif not npcs_present and cdef.confrontation_type not in _SHIP_SCALE_CONFRONTATION_TYPES:
+    elif (
+        not npcs_present
+        and cdef.confrontation_type not in _SHIP_SCALE_CONFRONTATION_TYPES
+        # ADR-153 §6: a sealed-letter dogfight is ship-scale — its Other is a
+        # ship/chassis from the def frame (the frame_default branch below) or a
+        # router-named contact, NEVER the personal-scale location fallback
+        # (158-34: a co-located ground creature was conscripted as the enemy
+        # vessel). Story 59-17 had enabled this fallback for sealed-letter so a
+        # dogfight could seat at all; the frame_default branch replaces it with
+        # the correct ship-scale source.
+        and cdef.resolution_mode != ResolutionMode.sealed_letter_lookup
+    ):
         seating_source = "location_fallback"
         npcs_present, location_available = _npc_fallback_at_location(
             snapshot,
@@ -1726,11 +1737,38 @@ def instantiate_encounter_from_trigger(
             # categories (playtest 59-8).
             adversarial=_requires_opponent(cdef),
             acting_character_name=player_name,
-            adversary_only=cdef.resolution_mode == ResolutionMode.sealed_letter_lookup,
+            # Sealed-letter no longer reaches this branch (ADR-153 §6), so the
+            # adversary-only narrowing it used to request is gone — a
+            # beat_selection combat seats any co-located adversary per the
+            # ``adversarial`` filter.
+            adversary_only=False,
         )
-    # else (ship-scale + no materialized threat): leave npcs_present empty so the
-    # No-Opponent guard below fails loud — a ship fight needs an enemy ship, and
-    # the player's own crew (who share the bridge) are never it.
+    elif (
+        not npcs_present
+        and cdef.resolution_mode == ResolutionMode.sealed_letter_lookup
+        and cdef.opponent_default_stats
+    ):
+        # ADR-153 §6: a sealed-letter dogfight with no router-named contact and
+        # no located Other still requires an enemy ship (ADR-116). Source it from
+        # the def frame — a generic enemy fighter whose hull/AC come from
+        # opponent_default_stats via _seed_combat_hp_depletion_to_npcs downstream.
+        # This is the ship-scale replacement for Story 59-17's personal location
+        # fallback (removed for sealed-letter above). ``seating_source`` rides the
+        # participant.joined span so the GM panel sees a frame-default seat.
+        from sidequest.agents.orchestrator import NpcMention as _NpcMention
+
+        seating_source = "frame_default"
+        npcs_present = [
+            _NpcMention(
+                name=cdef.label or "Enemy Fighter",
+                role="hostile",
+                side="opponent",
+            )
+        ]
+    # else (ship-scale + no materialized threat, OR a sealed-letter def lacking an
+    # opponent_default_stats frame): leave npcs_present empty so the No-Opponent /
+    # arity guard below fails loud — a ship fight needs an enemy ship, and the
+    # player's own crew (who share the bridge) are never it.
 
     # Story 45-33 / ADR-116: adversarial empty+empty guard (CLAUDE.md "No
     # Silent Fallbacks"). If narrator's ``npcs_present`` was empty AND
@@ -2187,13 +2225,22 @@ def instantiate_encounter_from_trigger(
                     acting_character_name=player_name,
                     ruleset=get_ruleset_module(ruleset_slug),
                 )
-                _roll_and_persist_initiative(
-                    snapshot=snapshot,
-                    enc=enc,
-                    actors=actors,
-                    cdef=cdef,
-                    pack=pack,
-                )
+                # ADR-153: a sealed-letter dogfight is a SIMULTANEOUS-COMMIT duel
+                # resolved by the geometry-based shot path (resolve_dogfight_shots),
+                # not the WN beat-loop round — it has no 1d8+DEX turn order and never
+                # consumes a persisted initiative. It still needs the opponent core
+                # seeded above (hp_depletion resolution), but WN initiative would
+                # require a PC ability-score lookup the dogfight does not use, so skip
+                # it. (Before 158-31 the dogfight was win_condition=dial_threshold and
+                # never reached this hp_depletion block at all.)
+                if cdef.resolution_mode != ResolutionMode.sealed_letter_lookup:
+                    _roll_and_persist_initiative(
+                        snapshot=snapshot,
+                        enc=enc,
+                        actors=actors,
+                        cdef=cdef,
+                        pack=pack,
+                    )
             else:
                 _publish_combat_edge_to_npcs(
                     snapshot=snapshot,

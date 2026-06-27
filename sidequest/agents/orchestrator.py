@@ -3210,6 +3210,35 @@ class Orchestrator:
                     f"{action}\n"
                     "</already-shown-invitation>"
                 )
+            elif action.startswith("[DOGFIGHT_SHOT_RESOLVED]"):
+                # Story 158-35 / ADR-153 §7 (lifecycle — narrate the resolved
+                # beat). The dogfight dice-replay re-entry arrives as a terse
+                # mechanical marker (the resolved gun pass + hull readout), NOT
+                # player speech. Framed as "<PC> says: [DOGFIGHT_SHOT_RESOLVED]
+                # ..." the narrator cannot narrate a mechanical tag as dialogue,
+                # so it falls back to the strongest narrative signal — the prior
+                # turn's scene in the Recency zone (recent_narrative_context,
+                # load-bearing for continuity per 49-1) — and re-emits it,
+                # leaving the dogfight unnarrated (coyote_star 2026-06-25: a
+                # sensor-sweep re-described in place of the gun pass). Reframe it
+                # as an explicit resolved-beat directive: the maneuver setup is
+                # in recent_narrative_context above; narrate THIS gun pass and
+                # its outcome now, never the prior scene. Mirrors the
+                # opening_seed_shown branch's "do not restate" framing.
+                player_action_text = (
+                    "DOGFIGHT GUN PASS RESOLVED. The line below is the "
+                    "MECHANICAL OUTCOME of the maneuver and gun pass the pilots "
+                    "just committed — it is NOT player dialogue. The maneuver "
+                    "that set it up is in the recent narration above. Narrate "
+                    "THIS gun pass and its outcome now: the lasers, the hits and "
+                    "misses, the hull damage, the opponent's ship breaking or "
+                    "holding. Do NOT restate, continue, or re-describe any "
+                    "earlier scene (a sensor sweep, a scan, an approach, "
+                    "drifting debris) — this turn IS the shot.\n"
+                    "<dogfight-shot-resolved>\n"
+                    f"{action}\n"
+                    "</dogfight-shot-resolved>"
+                )
             else:
                 player_action_text = f"{context.character_name} says: {action}"
             registry.register_section(

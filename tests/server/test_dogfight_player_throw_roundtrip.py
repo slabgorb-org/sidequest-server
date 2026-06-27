@@ -337,6 +337,7 @@ async def test_session_handler_emits_dice_request_and_stashes_on_sd(
 
 async def test_dice_throw_completes_pending_shot(
     snap_with_pilot: tuple[GameSnapshot, GenrePack],
+    otel_capture: InMemorySpanExporter,
 ) -> None:
     """Given a stashed PendingDogfightShot, DICE_THROW with a high face must:
 
@@ -509,6 +510,26 @@ async def test_dice_throw_completes_pending_shot(
         f"encounter.narrator_hints must carry the factual shot line; "
         f"got {enc_after.narrator_hints!r}"
     )
+
+    # (e) Story 158-35 / ADR-153 §7 — the dice-replay re-entry must fire the
+    # dogfight.shot_narration_replay span (the GM-panel lie-detector, a Keith/dev
+    # tool): proof that THIS turn's resolved gun pass — not the prior turn's
+    # prose — was handed to the narrator. A dark span here is the "dogfight
+    # unnarrated" regression (coyote_star 2026-06-25).
+    replay_spans = [
+        s for s in otel_capture.get_finished_spans() if s.name == "dogfight.shot_narration_replay"
+    ]
+    assert len(replay_spans) == 1, (
+        f"exactly one dogfight.shot_narration_replay span expected on the "
+        f"dice-replay re-entry; got {[s.name for s in otel_capture.get_finished_spans()]}"
+    )
+    attrs = dict(replay_spans[0].attributes or {})
+    assert attrs.get("opponent") == OPPONENT, (
+        f"span must name the opponent the shot resolved against; got {attrs.get('opponent')!r}"
+    )
+    assert attrs.get("player_hit") is True, "player rolled 15 vs TN 10 — a hit"
+    assert attrs.get("shots_total") == 1
+    assert "HIT" in str(attrs.get("shot_summary", ""))
 
 
 # ---------------------------------------------------------------------------

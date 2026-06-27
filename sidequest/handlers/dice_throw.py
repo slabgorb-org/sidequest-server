@@ -295,6 +295,34 @@ class DiceThrowHandler:
                     sd, lore_context=lore_context, room=session._room
                 )
             turn_context.phase_timings = timings
+            # Story 158-35 / ADR-153 §7 (lifecycle — narrate the resolved beat).
+            # OTEL lie-detector: prove the dice-replay re-entry hands THIS turn's
+            # resolved gun pass to the narrator, not the prior turn's prose
+            # (coyote_star 2026-06-25). Pairs with the resolved-beat directive
+            # framing in build_narrator_prompt; a dark span here means the
+            # dogfight re-entry never carried its shot into narration.
+            from sidequest.telemetry.spans.dogfight import (  # noqa: PLC0415
+                dogfight_shot_narration_replay_span,
+            )
+
+            _opponent_name = next(
+                (s.target_name if s.source == "player" else s.shooter_name for s in shot_res.shots),
+                "",
+            )
+            with dogfight_shot_narration_replay_span(
+                opponent=_opponent_name,
+                shots_total=len(shot_res.shots),
+                player_hit=_df_outcome == RollOutcome.Success,
+                shot_summary=_shot_summary,
+            ):
+                logger.info(
+                    "dogfight.shot_narration_replay opponent=%s shots=%d "
+                    "player_hit=%s — dice-replay re-entry narrates THIS resolved "
+                    "gun pass (story 158-35)",
+                    _opponent_name,
+                    len(shot_res.shots),
+                    _df_outcome == RollOutcome.Success,
+                )
             # Story 91-2: the replay carries a mechanical outcome already
             # applied above — no new player intent to classify. Suppress the
             # pre-narrator router pass (the [COST-1] 8x/turn driver).

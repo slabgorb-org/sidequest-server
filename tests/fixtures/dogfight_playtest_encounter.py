@@ -35,6 +35,7 @@ the existing production wiring.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from sidequest.agents.orchestrator import (
@@ -43,8 +44,13 @@ from sidequest.agents.orchestrator import (
     NpcMention,
 )
 from sidequest.game.character import Character
-from sidequest.game.creature_core import CreatureCore
-from sidequest.game.session import GameSnapshot
+from sidequest.game.creature_core import CreatureCore, Inventory, hp_pool_from_hp
+from sidequest.game.encounter import (
+    EncounterActor,
+    EncounterMetric,
+    StructuredEncounter,
+)
+from sidequest.game.session import GameSnapshot, Npc
 from sidequest.genre.loader import load_genre_pack
 from sidequest.genre.models.pack import GenrePack
 from sidequest.genre.models.rules import ConfrontationDef
@@ -308,3 +314,155 @@ def drive_dogfight_turn(
             f"was not active. Encounter type: {enc.encounter_type!r}"
         )
     return sl_outcome
+
+
+# ---------------------------------------------------------------------------
+# ADR-153 Plan 1 (firewall + opponent seating) — seating & resolution factories
+#
+# These build the SYNTHETIC ``swn_test_pack`` fixture (NOT the live
+# space_opera pack) so a content-only change to sidequest-content can never
+# turn these server tests red (project rule ``feedback_no_content_in_unit_tests``;
+# the live pack's dogfight-def shape is a content invariant guarded by the
+# pack validator, not pytest). They cover the §6 opponent-sourcing contract
+# (no co-located creature; default-from-frame ship) and the §2 firewall
+# (resolve via SWN ``hp_depletion``).
+# ---------------------------------------------------------------------------
+
+# Arbitrary shared scene location for the seating fixtures. The location
+# fallback resolves the opponent from the acting PC's per-character location
+# (story 45-48), so the PC and any co-located NPC must agree on this value.
+FALLBACK_LOCATION = "asteroid_belt"
+
+
+def make_dogfight_pack(*, pack_root: Path | None = None) -> GenrePack:
+    """Load the synthetic ``swn_test_pack`` fixture and return the GenrePack.
+
+    A thin accessor over the same loader ``make_dogfight_playtest_state`` uses,
+    for tests that only need the pack (its ``dogfight`` ConfrontationDef carries
+    ``resolution_mode: sealed_letter_lookup`` and ``opponent_default_stats.hp == 8``).
+
+    Raises:
+        FileNotFoundError: the fixture pack is not on disk — a repo defect
+            (fixtures ship with the suite), NOT a skippable environment gap.
+    """
+    root = pack_root if pack_root is not None else DEFAULT_CONTENT_ROOT
+    pack_path = root / GENRE_SLUG
+    if not pack_path.is_dir():
+        raise FileNotFoundError(
+            f"{GENRE_SLUG} fixture pack not found at {pack_path} — "
+            f"the fixture ships with the test suite, so this is a repo "
+            f"defect, not an environment gap"
+        )
+    return load_genre_pack(pack_path)
+
+
+def make_empty_snapshot(
+    *, pc_name: str = "Maverick", location: str = FALLBACK_LOCATION
+) -> GameSnapshot:
+    """Snapshot with the PC located in a scene that contains NO NPCs.
+
+    Drives the ADR-153 §6 "no co-located Other anywhere" case: the dogfight must
+    still seat an enemy ship from the def frame (default-from-frame), never refuse.
+    """
+    snap = GameSnapshot(genre=GENRE_SLUG)
+    snap.genre_slug = GENRE_SLUG
+    snap.world_slug = WORLD_SLUG
+    # Per-PC location is the source of truth (story 45-48); the location
+    # fallback resolves the opponent via this perspective.
+    snap.character_locations[pc_name] = location
+    return snap
+
+
+def make_snapshot_with_npc(
+    *,
+    npcs: list[tuple[str, dict]],
+    pc_name: str = "Maverick",
+    location: str = FALLBACK_LOCATION,
+) -> GameSnapshot:
+    """Snapshot with the PC located and the given NPCs co-located in the scene.
+
+    Each ``npcs`` entry is ``(name, attrs)``. Recognized ``attrs`` keys:
+
+    - ``role`` (str): the NPC's ``npc_role_id`` (default ``"hostile"`` — a
+      co-located hostile is what the pre-ADR-153 location fallback would have
+      conscripted as the dogfight opponent; the 158-34 bug).
+    - ``is_creature`` (bool): marks it a Monster-Manual *ground* creature by
+      assigning a ``creature_id`` — the personal-scale stand-in ADR-153 §6
+      forbids as the enemy vessel.
+
+    Mirrors ``test_dogfight_instantiation_production_path.py::_seat_opponent``:
+    an ``Npc`` whose ``last_seen_location`` matches the PC's location.
+    """
+    snap = make_empty_snapshot(pc_name=pc_name, location=location)
+    for name, attrs in npcs:
+        npc = Npc(
+            core=CreatureCore(
+                name=name,
+                description=str(attrs.get("description", "A hostile in the scene.")),
+                personality="ruthless",
+            )
+        )
+        npc.last_seen_location = location
+        npc.npc_role_id = str(attrs.get("role", "hostile"))
+        if attrs.get("is_creature"):
+            # A genuine bestiary (ground) creature — personal scale, never a ship.
+            npc.creature_id = name.lower().replace(" ", "_")
+        snap.npcs.append(npc)
+    return snap
+
+
+def make_seated_dogfight(
+    *,
+    pc_hp: int = 8,
+    npc_hp: int = 8,
+    pc_name: str = "Maverick",
+    opponent_name: str = "Vulture",
+) -> tuple[StructuredEncounter, Callable[[str], CreatureCore | None]]:
+    """Build a minimal already-seated dogfight + its edge_resolver.
+
+    Seats one PC (``role="red"``, ``side="player"``) and one opponent
+    (``role="blue"``, ``side="opponent"``), each backed by a ``CreatureCore``
+    at the given HP. Returns ``(encounter, edge_resolver)`` where
+    ``edge_resolver`` maps actor name -> core — the exact shape
+    ``resolve_dogfight_shots`` and ``check_hp_depletion`` consume (mirrors
+    ``tests/game/test_resolve_dogfight_shots.py``). ``win_condition`` is
+    ``hp_depletion`` (the §2 firewall): the duel resolves off frame HP, never a
+    native dial.
+    """
+    cores: dict[str, CreatureCore] = {
+        pc_name: CreatureCore(
+            name=pc_name,
+            description="player strike fighter",
+            personality="bold",
+            inventory=Inventory(),
+            hp=hp_pool_from_hp(pc_hp),
+            armor_class=16,
+        ),
+        opponent_name: CreatureCore(
+            name=opponent_name,
+            description="enemy strike fighter",
+            personality="ruthless",
+            inventory=Inventory(),
+            hp=hp_pool_from_hp(npc_hp),
+            armor_class=16,
+        ),
+    }
+    enc = StructuredEncounter(
+        encounter_type=DOGFIGHT_TYPE,
+        win_condition="hp_depletion",
+        player_metric=EncounterMetric(
+            name="momentum", current=0, starting=0, threshold=1_000_000
+        ),
+        opponent_metric=EncounterMetric(
+            name="momentum", current=0, starting=0, threshold=1_000_000
+        ),
+        actors=[
+            EncounterActor(name=pc_name, role="red", side="player"),
+            EncounterActor(name=opponent_name, role="blue", side="opponent"),
+        ],
+    )
+
+    def _resolver(name: str) -> CreatureCore | None:
+        return cores.get(name)
+
+    return enc, _resolver

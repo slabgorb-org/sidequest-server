@@ -13,7 +13,7 @@ This module pins the contract for a distinct ``melee`` confrontation type:
   AC1  A ``melee`` ConfrontationDef exists, is ``category: combat`` /
        ``resolution_mode: beat_selection`` / ``win_condition: hp_depletion``,
        seeds ``opponent_default_stats`` (hp/armor_class/dexterity), and surfaces
-       a melee beat bank (strike + brace kinds, Physique stat-check, strike
+       a melee beat bank (strike + brace kinds, STR stat-check, strike
        damage_channel) whose ids are DISJOINT from the Firefight / ship_combat /
        dogfight banks — proving it is a distinct bank, not a copy.
 
@@ -246,14 +246,14 @@ def test_melee_def_is_combat_hp_depletion_with_distinct_beats():
     assert "strike" in kinds, "melee needs at least one strike beat (the swing/thrust)"
     assert "brace" in kinds, "melee needs a brace beat (parry/guard)"
 
-    # The strike beat ablates HP through the SWN strike damage_channel + Physique.
+    # The strike beat ablates HP through the SWN strike damage_channel + STR.
     strike_beats = [b for b in melee.beats if _enum_val(b.kind) == "strike"]
     assert any(_enum_val(b.damage_channel) == "strike" for b in strike_beats), (
         "a melee strike beat must use damage_channel: strike so a hit ablates HP "
         "via the ADR-114 ablative path (not an inert dial nudge)"
     )
-    assert any(_enum_val(b.stat_check) == "Physique" for b in strike_beats), (
-        "a melee strike beat must stat_check Physique (a melee swing), not a ranged stat"
+    assert any(_enum_val(b.stat_check) == "STR" for b in strike_beats), (
+        "a melee strike beat must stat_check STR (a melee swing), not a ranged stat"
     )
 
     # DISTINCT bank: no melee beat reuses a Firefight/ship/dogfight id.

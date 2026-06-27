@@ -86,7 +86,7 @@ def test_neon_chargen_seed_and_engine_otel() -> None:
 
     character = builder.build("Nia Vex")
 
-    body_score = character.stats.get("Body", 0)
+    body_score = character.stats.get("CON", 0)
     assert character.core.system_strain is not None, (
         "neon_dystopia cwn character must have a SystemStrainPool after build()"
     )

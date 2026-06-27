@@ -103,9 +103,9 @@ def _make_encounter(
     )
 
 
-# character_stats: Tech=14 → INT mod +1 (SWN curve); run_program combat_skill=1
+# character_stats: INT=14 → INT mod +1 (SWN curve); run_program combat_skill=1
 # → modifier = +1 + 1 = +2.
-_STATS = {"Tech": 14}
+_STATS = {"INT": 14}
 
 
 def _drive_beat(

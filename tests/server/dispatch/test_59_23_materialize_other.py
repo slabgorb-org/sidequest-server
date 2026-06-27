@@ -67,15 +67,16 @@ pytestmark = pytest.mark.asyncio
 _SHIP_HP = 30
 _SHIP_AC = 14
 
-# Full SWN stat block so the player's initiative roll + attack params never
-# KeyError on a missing stat (the SWN module fails loud on absent stats).
+# Full SWN stat block (canonical Without Number codes) so the player's initiative
+# roll + attack params never KeyError on a missing stat (the SWN module fails loud
+# on absent stats).
 _STATS = {
-    "Physique": 12,
-    "Reflex": 12,
-    "Will": 10,
-    "Intellect": 12,
-    "Resolve": 12,
-    "Cunning": 12,
+    "STR": 12,
+    "DEX": 12,
+    "CON": 12,
+    "INT": 12,
+    "WIS": 12,
+    "CHA": 12,
 }
 
 _PC = "Vela"

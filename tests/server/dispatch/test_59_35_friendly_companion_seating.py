@@ -465,15 +465,15 @@ def _space_opera_pack():
         pytest.skip("sidequest-content not on disk in this checkout")
 
 
-# Full SWN-flavor stat block (mirrors test_72_8_presence_last_seen_stamp) so the
+# Full SWN canonical stat block (mirrors test_72_8_presence_last_seen_stamp) so the
 # hp_depletion instantiation seam can roll 1d8+DEX initiative without KeyError.
 _SWN_STATS = {
-    "Physique": 12,
-    "Reflex": 12,
-    "Will": 10,
-    "Intellect": 12,
-    "Resolve": 12,
-    "Cunning": 12,
+    "STR": 12,
+    "DEX": 12,
+    "CON": 12,
+    "INT": 12,
+    "WIS": 12,
+    "CHA": 12,
 }
 
 

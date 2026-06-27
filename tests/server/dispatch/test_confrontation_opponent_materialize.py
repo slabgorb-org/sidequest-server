@@ -37,15 +37,15 @@ pytestmark = pytest.mark.asyncio
 # opponent_default_stats — "Wuxia mook: AC 12, HP 8").
 _MOOK_HP = 8
 
-# Full elemental_harmony flavor stat block so the player's initiative roll +
+# Full elemental_harmony canonical WN stat block so the player's initiative roll +
 # attack params never KeyError (the WWN module fails loud on a missing stat).
 _STATS = {
-    "Strength": 12,
-    "Agility": 12,
-    "Endurance": 12,
-    "Insight": 12,
-    "Spirit": 12,
-    "Harmony": 12,
+    "STR": 12,
+    "DEX": 12,
+    "CON": 12,
+    "INT": 12,
+    "WIS": 12,
+    "CHA": 12,
 }
 
 _PC = "Sora Tidewalker"

@@ -28,12 +28,12 @@ def test_space_opera_binds_swn_with_attribute_map() -> None:
     assert pack.rules.ruleset == "swn"
     assert pack.rules.swn is not None
     amap = pack.rules.swn.attribute_map
-    assert amap["CHARISMA"] == "Influence"
-    assert amap["STRENGTH"] == "Physique"
-    assert amap["CONSTITUTION"] == "Resolve"
-    assert amap["DEXTERITY"] == "Reflex"
-    assert amap["INTELLIGENCE"] == "Intellect"
-    assert amap["WISDOM"] == "Cunning"
-    # Every mapped flavor stat must be a declared ability score.
+    assert amap["CHARISMA"] == "CHA"
+    assert amap["STRENGTH"] == "STR"
+    assert amap["CONSTITUTION"] == "CON"
+    assert amap["DEXTERITY"] == "DEX"
+    assert amap["INTELLIGENCE"] == "INT"
+    assert amap["WISDOM"] == "WIS"
+    # Every mapped stat must be a declared ability score.
     declared = set(pack.rules.ability_score_names)
     assert set(amap.values()) <= declared

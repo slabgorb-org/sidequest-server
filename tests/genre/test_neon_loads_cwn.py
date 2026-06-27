@@ -32,10 +32,10 @@ def test_neon_binds_cwn_with_attribute_map() -> None:
     assert isinstance(pack.rules.cwn, CwnConfig)
 
     amap = pack.rules.cwn.attribute_map
-    assert amap["INTELLIGENCE"] == "Tech"
-    assert amap["CONSTITUTION"] == "Body"
+    assert amap["INTELLIGENCE"] == "INT"
+    assert amap["CONSTITUTION"] == "CON"
 
-    # Every mapped flavor stat must be a declared ability score (validator contract).
+    # Every mapped stat must be a declared ability score (validator contract).
     declared = set(pack.rules.ability_score_names)
     assert set(amap.values()) <= declared
 

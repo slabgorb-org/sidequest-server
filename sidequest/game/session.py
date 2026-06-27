@@ -877,6 +877,17 @@ class GameSnapshot(BaseModel):
     # StructuredEncounter (ADR-033 confrontation engine) — typed in story 42-1.
     encounter: StructuredEncounter | None = None
 
+    # ADR-153 §7 (158-30): the ``(encounter_type, turn)`` of a husk reaped THIS
+    # turn. ``reap_resolved_encounter_husk`` stamps it at the clear site so the
+    # seater can refuse to re-seat a duel that was just reaped — a reaped duel
+    # stays reaped (no Resolution→Setup resurrection that soft-locks the player
+    # into ship maneuvers on foot, coyote_star 2026-06-25). Keyed by turn so a
+    # stale marker from a PRIOR turn is inert (the created_turn exemption).
+    # ``exclude=True`` keeps it out of ``model_dump_json`` — it is per-turn
+    # transient state, never durable canon: ``encounter`` is the durable state,
+    # this is a within-turn gate that re-initializes None on load.
+    husk_reaped_this_turn: tuple[str, int] | None = Field(default=None, exclude=True)
+
     # Spec 2026-05-20 confrontation-intent-validator — directive queue
     # populated by the soft_suggest dispatch branch; consumed and cleared
     # by orchestrator prompt assembly at the start of the next turn.

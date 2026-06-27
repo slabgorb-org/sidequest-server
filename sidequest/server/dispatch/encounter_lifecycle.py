@@ -202,6 +202,12 @@ def reap_resolved_encounter_husk(
                 turn,
             )
 
+    # ADR-153 §7 (158-30): stamp the reaped (type, turn) BEFORE clearing so the
+    # seater can refuse a same-turn re-seat (``instantiate_encounter_from_trigger``
+    # guard) — the husk_reaped clear must win over a same-turn re-dispatch / drift
+    # keep-alive, else a resolved dogfight resurrects in Setup and soft-locks the
+    # player into ship maneuvers on foot. Keyed by turn so a later turn still seats.
+    snapshot.husk_reaped_this_turn = (enc.encounter_type, turn)
     snapshot.encounter = None
     _watcher_publish(
         "state_transition",
@@ -1558,6 +1564,33 @@ def instantiate_encounter_from_trigger(
     # when it is a DIFFERENT ``encounter_type`` (a resolved fight replaced by a
     # distinct confrontation) — both still fire the span below.
     if current is not None and current.resolved and current.encounter_type == encounter_type:
+        return None
+
+    # ADR-153 §7 (158-30): a duel husk-reaped THIS turn stays reaped — refuse to
+    # re-seat it the same turn. The husk_reaped clear (``reap_resolved_encounter_husk``,
+    # turn start) must win over a same-turn re-dispatch / drift keep-alive, else a
+    # resolved dogfight resurrects in Setup and soft-locks the player into ship
+    # maneuvers on foot (coyote_star 2026-06-25). Keyed by (type, turn): a
+    # genuinely-fresh dogfight on a LATER turn still seats (created_turn exemption),
+    # because the stamped turn no longer matches the current interaction. The
+    # refusal is observable (CLAUDE.md: OTEL is the lie detector), never silent.
+    reaped = snapshot.husk_reaped_this_turn
+    if (
+        reaped is not None
+        and reaped[0] == encounter_type
+        and reaped[1] == snapshot.turn_manager.interaction
+    ):
+        _watcher_publish(
+            "state_transition",
+            {
+                "field": "encounter",
+                "op": "reseat_refused_husk_reaped",
+                "encounter_type": encounter_type,
+                "turn": str(snapshot.turn_manager.interaction),
+                "source": "seater",
+            },
+            component="encounter",
+        )
         return None
 
     defs = pack.rules.confrontations if pack.rules else []

@@ -370,3 +370,49 @@ def dogfight_forced_dispatch_span(
         tracer_override=_tracer,
     ) as span:
         yield span
+
+
+SPAN_DOGFIGHT_SHOT_NARRATION_REPLAY = "dogfight.shot_narration_replay"
+SPAN_ROUTES[SPAN_DOGFIGHT_SHOT_NARRATION_REPLAY] = SpanRoute(
+    event_type="state_transition",
+    component="dogfight",
+    extract=lambda span: {
+        "field": "dogfight",
+        "op": "shot_narration_replay",
+        "opponent": (span.attributes or {}).get("opponent", ""),
+        "shots_total": (span.attributes or {}).get("shots_total", 0),
+        "player_hit": (span.attributes or {}).get("player_hit", False),
+        "shot_summary": (span.attributes or {}).get("shot_summary", ""),
+    },
+)
+
+
+@contextmanager
+def dogfight_shot_narration_replay_span(
+    *,
+    opponent: str,
+    shots_total: int,
+    player_hit: bool,
+    shot_summary: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """The dogfight dice-replay re-entry handed the RESOLVED beat (this turn's
+    gun pass and its outcome) to the narrator (Story 158-35, ADR-153 §7). The
+    GM-panel proof that the re-entry narration is driven by THIS turn's resolved
+    shot — not the prior turn's prose re-emitted (coyote_star 2026-06-25). Pairs
+    with the resolved-beat directive framing in ``build_narrator_prompt``: the
+    span fires where the resolved beat enters the narration path, so a dark span
+    means the dogfight re-entry never carried its shot into narration."""
+    with Span.open(
+        SPAN_DOGFIGHT_SHOT_NARRATION_REPLAY,
+        {
+            "opponent": opponent,
+            "shots_total": shots_total,
+            "player_hit": player_hit,
+            "shot_summary": shot_summary,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span

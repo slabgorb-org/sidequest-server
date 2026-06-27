@@ -1974,14 +1974,40 @@ def _emit_player_beat_resolution_close(
             snapshot.find_creature_core(_anchor_target) if _anchor_target is not None else None
         )
         if _anchor_core is not None and _anchor_core.hp.current > 0:
-            snapshot.next_turn_directives.append(
-                f"MECHANICAL TRUTH (weave into the narration): {character_name}'s "
-                f"{beat.label} dealt {strike_hp_removed + shock_hp_removed} damage "
-                f"to {_anchor_target} — {_anchor_target} is at "
-                f"{_anchor_core.hp.current}/{_anchor_core.hp.max} HP and STILL "
-                "STANDING; the fight continues. Narrate a wound, not a kill — do "
-                "NOT describe their death, collapse, or incapacitation."
+            _missed_shock_only = (
+                strike_hp_removed == 0
+                and shock_hp_removed > 0
+                and outcome_tier in (RollOutcome.Fail, RollOutcome.CritFail)
             )
+            if _missed_shock_only:
+                # WWN Shock on a MISSED to-hit (sq-playtest 2026-06-27, story
+                # 158-44): the swing went wide but the weapon's Shock still
+                # chipped HP. The player-side twin of the opponent-reprisal shock
+                # directive (the "missed … but its Shock still chipped" hint in
+                # _resolve_opponent_reprisal) — without it the narrator sees
+                # Roll=Fail + a silent HP tick and renders a clean "miss" over
+                # real damage, invisible to mechanics-first players. Reconcile the
+                # miss explicitly so the "dealt damage" and "missed" signals do not
+                # contradict and default the prose back to a clean whiff.
+                snapshot.next_turn_directives.append(
+                    f"MECHANICAL TRUTH (weave into the narration): {character_name}'s "
+                    f"{beat.label} MISSED the to-hit, but its Shock still chipped "
+                    f"{shock_hp_removed} damage — {_anchor_target} is now at "
+                    f"{_anchor_core.hp.current}/{_anchor_core.hp.max} HP and STILL "
+                    "STANDING; the fight continues. Narrate the graze that drew "
+                    "blood as the swing went wide (the blade's edge/pressure caught "
+                    "them) — do NOT narrate a clean miss, and do NOT describe their "
+                    "death, collapse, or incapacitation."
+                )
+            else:
+                snapshot.next_turn_directives.append(
+                    f"MECHANICAL TRUTH (weave into the narration): {character_name}'s "
+                    f"{beat.label} dealt {strike_hp_removed + shock_hp_removed} damage "
+                    f"to {_anchor_target} — {_anchor_target} is at "
+                    f"{_anchor_core.hp.current}/{_anchor_core.hp.max} HP and STILL "
+                    "STANDING; the fight continues. Narrate a wound, not a kill — do "
+                    "NOT describe their death, collapse, or incapacitation."
+                )
     elif win_condition == "hp_depletion":
         # Failed-strike anchor (sq-playtest 2026-06-13, beneath_sunden round 8):
         # a 0-damage player beat that does NOT resolve the fight (Fail/CritFail,

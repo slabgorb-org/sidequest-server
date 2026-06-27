@@ -452,6 +452,131 @@ def test_failed_strike_anchor_gated_to_hp_combat():
     )
 
 
+def _seat_combat_inline(opponent_hp_current: int, opponent_hp_max: int):
+    """Content-independent seated WN combat — a minimal snapshot + encounter +
+    opponent core, so the shared resolution close can be unit-driven WITHOUT
+    loading a genre pack (immune to unrelated content-load breakage)."""
+    from sidequest.game.creature_core import CreatureCore
+    from sidequest.game.encounter import (
+        EncounterActor,
+        EncounterMetric,
+        StructuredEncounter,
+    )
+    from sidequest.game.session import GameSnapshot, Npc
+    from sidequest.game.turn import TurnManager
+
+    snap = GameSnapshot(
+        genre_slug="caverns_and_claudes",
+        world_slug="beneath_sunden",
+        turn_manager=TurnManager(interaction=5),
+    )
+    snap.npcs.append(
+        Npc(
+            core=CreatureCore(
+                name=_OPPONENT,
+                description="a spore-necked tender",
+                personality="mindless",
+                hp={"current": opponent_hp_current, "max": opponent_hp_max,
+                    "base_max": opponent_hp_max},
+            )
+        )
+    )
+    enc = StructuredEncounter(
+        encounter_type="combat",
+        category="combat",
+        win_condition="hp_depletion",
+        resolved=False,
+        player_metric=EncounterMetric(name="hp", current=0, starting=0, threshold=10),
+        opponent_metric=EncounterMetric(
+            name="hp", current=0, starting=0, threshold=opponent_hp_max
+        ),
+        actors=[
+            EncounterActor(name=_ATTACKER, role="combatant", side="player"),
+            EncounterActor(name=_OPPONENT, role="combatant", side="opponent"),
+        ],
+    )
+    snap.encounter = enc
+    return snap, enc
+
+
+def test_player_missed_to_hit_that_still_shocks_narrates_the_graze():
+    """sq-playtest 2026-06-27 / story 158-44: a WWN attack whose to-hit FAILS but
+    whose Shock still chips HP must get a MECHANICAL TRUTH directive that names
+    the Shock graze AND reconciles the missed to-hit — the player-side twin of
+    the opponent-reprisal shock directive. Without it the narrator sees Roll=Fail
+    plus a silent HP tick and narrates a clean 'miss' over real damage (invisible
+    to mechanics-first players). Content-independent: drives the shared close."""
+    from sidequest.game.beat_kinds import BeatKind
+    from sidequest.genre.models.rules import BeatDef
+    from sidequest.protocol.dice import RollOutcome
+    from sidequest.server.dispatch.dice import _emit_player_beat_resolution_close
+
+    # The board repro: opponent ablated 4/4 -> 1/4 by Shock on a Fail to-hit.
+    snap, enc = _seat_combat_inline(opponent_hp_current=1, opponent_hp_max=4)
+    beat = BeatDef(id="attack", label="Attack", kind=BeatKind.strike, stat_check="STR")
+
+    _emit_player_beat_resolution_close(
+        encounter=enc,
+        snapshot=snap,
+        character_name=_ATTACKER,
+        beat=beat,
+        actor_side="player",
+        outcome_tier=RollOutcome.Fail,
+        strike_hp_removed=0,
+        shock_hp_removed=3,
+        encounter_resolved=False,
+        win_condition="hp_depletion",
+    )
+
+    truth = [d for d in snap.next_turn_directives if "MECHANICAL TRUTH" in d]
+    assert truth, "a missed-but-shock attack must emit a MECHANICAL TRUTH directive"
+    d = truth[0]
+    # Names the Shock mechanism + the chip amount + the anchored survivor HP.
+    assert "Shock" in d or "shock" in d, f"directive must name the Shock mechanism; got {d!r}"
+    assert "3" in d, f"directive must carry the chip amount (3); got {d!r}"
+    assert "1/4" in d, f"directive must anchor the opponent's surviving HP; got {d!r}"
+    # Reconciles the missed to-hit so the narrator doesn't render a clean miss.
+    assert "MISSED" in d or "missed" in d, f"directive must acknowledge the missed to-hit; got {d!r}"
+    assert "graze" in d.lower() or "drew blood" in d.lower(), (
+        f"directive must instruct narrating the graze, not a clean miss; got {d!r}"
+    )
+    # And it must NOT call the opponent unharmed (the failed-strike anchor wording).
+    assert "UNHARMED" not in d, f"a Shock chip drew blood — opponent is not unharmed; got {d!r}"
+
+
+def test_player_clean_hit_keeps_the_generic_wound_directive_not_the_shock_rider():
+    """Regression: a normal damaging HIT (to-hit succeeded, strike damage, no
+    missed-shock) keeps the generic 'dealt N damage / still standing / narrate a
+    wound' directive — the shock-on-miss rider is gated to the missed-to-hit case
+    and must NOT hijack an ordinary hit."""
+    from sidequest.game.beat_kinds import BeatKind
+    from sidequest.genre.models.rules import BeatDef
+    from sidequest.protocol.dice import RollOutcome
+    from sidequest.server.dispatch.dice import _emit_player_beat_resolution_close
+
+    snap, enc = _seat_combat_inline(opponent_hp_current=6, opponent_hp_max=10)
+    beat = BeatDef(id="attack", label="Attack", kind=BeatKind.strike, stat_check="STR")
+
+    _emit_player_beat_resolution_close(
+        encounter=enc,
+        snapshot=snap,
+        character_name=_ATTACKER,
+        beat=beat,
+        actor_side="player",
+        outcome_tier=RollOutcome.Success,
+        strike_hp_removed=4,
+        shock_hp_removed=0,
+        encounter_resolved=False,
+        win_condition="hp_depletion",
+    )
+
+    truth = [d for d in snap.next_turn_directives if "MECHANICAL TRUTH" in d]
+    assert truth, "a damaging hit must still anchor the survivor"
+    d = truth[0]
+    assert "dealt 4 damage" in d, f"a clean hit keeps the generic damage directive; got {d!r}"
+    assert "MISSED" not in d, f"a successful hit must not be framed as a miss; got {d!r}"
+
+
 @pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
 def test_no_shock_no_fabrication_on_plain_miss(monkeypatch):
     """Guard rail: a missed strike with a shock-less weapon fabricates nothing —

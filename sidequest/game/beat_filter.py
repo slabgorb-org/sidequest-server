@@ -145,6 +145,16 @@ _WN_ACTION_BEAT_IDS = frozenset(
         WN_RUN_BEAT_ID,
     }
 )
+# The player-facing ORDER of the synthesized WN action selection menu
+# (``beats_available_for``): attack leads (the primary action), then the defensive
+# / move actions. The frozenset above is membership-only; this tuple fixes the
+# menu order so Attack is never buried.
+_WN_ACTION_BEAT_ORDER = (
+    WN_ATTACK_BEAT_ID,
+    WN_TOTAL_DEFENSE_BEAT_ID,
+    WN_FIGHTING_WITHDRAWAL_BEAT_ID,
+    WN_RUN_BEAT_ID,
+)
 # Story 152-2 (ADR-143, WWN SRD §4.2) — the synthesized WWN cast action. 108-3
 # stripped ``cast_spell`` from every WWN hp_depletion combat def (cdef.beats == []);
 # the WWN engine OWNS the action set, so cast is a synthesized transient beat, not an
@@ -275,8 +285,16 @@ def beats_available_for(
     prepared_spells: dict[int, list[str]] | None = None,
     spellcasting: SpellcastingState | None = None,
     inventory_items: list[dict[str, Any]] | None = None,
+    is_wn_binding: bool = False,
 ) -> list[BeatDef]:
     """Return the BeatDefs the given class can select this turn.
+
+    ``is_wn_binding`` (sq-playtest 2026-06-27, ADR-143 / epic 108): True when the
+    pack binds a Without-Number ruleset. 108-3 strips ``cdef.beats`` to ``[]`` for a
+    WWN ``hp_depletion`` combat (the WN engine owns the round), so this flag drives
+    the SELECTION-MENU synthesis of the core WN action set — the twin of the
+    resolution-side synthesis in ``wn_round.py`` / ``dice.py``. Default False keeps
+    every native pack byte-for-byte unchanged.
 
     ``prepared_spells`` (story 47-10 addition) is optional for backward
     compatibility — when omitted (or None), the prepared-list gate is
@@ -336,6 +354,22 @@ def beats_available_for(
             if prepared_spells is not None and not _has_any_prepared(prepared_spells):
                 continue
         pool.append(beat)
+    # WN action menu synthesis (sq-playtest 2026-06-27, ADR-143 / epic 108): the
+    # SELECTION-MENU twin of the resolution-side WN action synthesis (wn_round.py /
+    # dice.py, stories 108-8 / 152-1). 108-3 strips cdef.beats to [] for a WWN
+    # hp_depletion combat — the WN engine OWNS the round (SOUL "Bind the Ruleset,
+    # Don't Balance It") — so the loop above surfaces NO offensive beat. Without this
+    # twin a non-caster Warrior saw only inventory "Drink <potion>" beats and could
+    # never commit an attack (the combat soft-lock). Offer the core WWN SRD §2.4.4
+    # action set — Attack + Total Defense + Fighting Withdrawal + Run — synthesized
+    # exactly as the resolution path synthesizes them on commit; attack leads the
+    # menu. Cast is offered separately below (caster-gated); item-use is appended
+    # after, so Attack is never buried under inventory.
+    if is_wn_binding and confrontation.win_condition == "hp_depletion":
+        existing_ids = {b.id for b in pool}
+        for beat_id in _WN_ACTION_BEAT_ORDER:
+            if beat_id not in existing_ids:
+                pool.append(wn_action_beat(beat_id))
     # WWN cast synthesis (story 152-2 / 89-5, ADR-143): 108-3 stripped cast_spell
     # from WWN combat cdefs (cdef.beats == []), so the loop above can never
     # surface it — the WWN engine OWNS the action set, so cast is a synthesized

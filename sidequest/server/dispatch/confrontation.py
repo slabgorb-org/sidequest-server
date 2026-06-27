@@ -219,7 +219,19 @@ def build_confrontation_payload(
             beats_available_for,
             cast_spell_rejection_reason,
         )
+        from sidequest.game.ruleset import get_ruleset_module
+        from sidequest.game.ruleset.without_number import WithoutNumberRulesetModule
         from sidequest.telemetry.spans import confrontation_beat_filter_span
+
+        # WN-binding signal (sq-playtest 2026-06-27, ADR-143 / epic 108): under a
+        # Without-Number binding the WN engine owns the round and 108-3 strips
+        # cdef.beats to [], so beats_available_for must SYNTHESIZE the player action
+        # menu (attack + defensive/move actions) — the twin of the resolution-side
+        # synthesis. Native/Fate packs (or legacy callers with rules=None) pass
+        # False and keep the authored-beat menu unchanged.
+        is_wn_binding = rules is not None and isinstance(
+            get_ruleset_module(rules.ruleset), WithoutNumberRulesetModule
+        )
 
         class_def, spell_slots, prepared_spells = recipient_pc
         # WWN arm (Task 5): centralize SpellcastingState derivation so EVERY
@@ -249,6 +261,7 @@ def build_confrontation_payload(
             prepared_spells=prepared_spells,
             spellcasting=effective_spellcasting,
             inventory_items=recipient_inventory_items,
+            is_wn_binding=is_wn_binding,
         )
         rejection_reason = cast_spell_rejection_reason(
             cdef,

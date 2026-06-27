@@ -512,10 +512,10 @@ async def test_dice_throw_completes_pending_shot(
     )
 
     # (e) Story 158-35 / ADR-153 §7 — the dice-replay re-entry must fire the
-    # dogfight.shot_narration_replay span (Sebastien's GM-panel lie-detector):
-    # proof that THIS turn's resolved gun pass — not the prior turn's prose —
-    # was handed to the narrator. A dark span here is the "dogfight unnarrated"
-    # regression (coyote_star 2026-06-25).
+    # dogfight.shot_narration_replay span (the GM-panel lie-detector, a Keith/dev
+    # tool): proof that THIS turn's resolved gun pass — not the prior turn's
+    # prose — was handed to the narrator. A dark span here is the "dogfight
+    # unnarrated" regression (coyote_star 2026-06-25).
     replay_spans = [
         s for s in otel_capture.get_finished_spans() if s.name == "dogfight.shot_narration_replay"
     ]

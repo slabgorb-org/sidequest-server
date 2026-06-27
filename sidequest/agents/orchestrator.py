@@ -47,6 +47,7 @@ if TYPE_CHECKING:
 # path does not depend on the registry.
 import sidequest.agents.tools  # noqa: F401  (registration side effect)
 from sidequest.agents.anthropic_cost import cost_band
+from sidequest.agents.anthropic_sdk_client import AnthropicSdkLoopExceeded
 from sidequest.agents.aside_resolver import AsidePromptStash
 from sidequest.agents.claude_client import (
     ClaudeClient,
@@ -1505,6 +1506,17 @@ _NTR_DEFAULTS = NarrationTurnResult(narration="")
 # ``_degraded_result`` stall so an empty-prose turn reads like every other
 # unrecoverable-narrator turn rather than a blank successful one.
 _EMPTY_NARRATION_STALL = "The world holds its breath."
+
+# Story 158-41 — the player-facing line for a narrator tool-loop that did NOT
+# converge within max_turns (``AnthropicSdkLoopExceeded``). Distinct from the
+# empty-prose stall above and the budget-refuse "[narrator-overload — operator
+# paged]" line so session-recording grep can tell the three degrade causes apart
+# (the 61-3 distinguishability doctrine). It tells the player to rephrase —
+# re-articulating the action is what unsticks a non-converging tool loop.
+_MAX_TURNS_DEGRADE_NARRATION = (
+    "The moment tangles and slips away — the engine could not resolve that. "
+    "Try to rephrase what you do."
+)
 
 # System prompt for the empty-prose recovery reprompt (sq-playtest 2026-06-27 region
 # seam): the SDK narrator fired WRITE tools but wrote no player-facing prose. This
@@ -3339,7 +3351,22 @@ class Orchestrator:
         # (playtest 2026-06-07, operator-directed): narration is delivered
         # complete-only — no partial-narration chunks ride the WebSocket.
         if isinstance(self._client, ToolingLlmClient):
-            result = await self._run_narration_turn_sdk(action, context)
+            # Story 158-41 — the agent-SDK tool loop raises ``AnthropicSdkLoopExceeded``
+            # when it cannot converge within max_turns (anthropic_sdk_client.py:518
+            # transport-boundary OR :676 terminal error_max_turns — both the SAME type).
+            # Pre-158-41 this propagated raw out of the turn → the websocket handler had
+            # no catch → session.disconnect_save → room teardown → forced reconnect: one
+            # unresolvable turn kicked the whole table. Per ADR-006 (graceful degradation)
+            # and SOUL "the room doesn't pause," catch the SPECIFIC type (never
+            # ``except Exception`` — a parser/transport bug must still propagate raw; No
+            # Silent Fallbacks) and degrade LOUDLY: OTEL span + GM-panel event + a
+            # player-facing "try rephrasing" degraded result, so the handler renders a card
+            # and the room continues. The downstream guards below are no-ops on this
+            # (non-empty prose, no roll numbers).
+            try:
+                result = await self._run_narration_turn_sdk(action, context)
+            except AnthropicSdkLoopExceeded as exc:
+                result = self._degrade_on_max_turns(action=action, context=context, exc=exc)
         else:
             result = await self._run_narration_turn_synchronous(action, context)
         # sq-playtest 2026-06-19 BLOCKER — empty player-facing prose must never
@@ -3740,6 +3767,60 @@ class Orchestrator:
             narration=narration,
             is_degraded=True,
             agent_name=self._narrator.name(),
+        )
+
+    def _degrade_on_max_turns(
+        self,
+        *,
+        action: str,
+        context: TurnContext,
+        exc: AnthropicSdkLoopExceeded,
+    ) -> NarrationTurnResult:
+        """Graceful degrade when the narrator tool loop did not converge (Story 158-41).
+
+        ``AnthropicSdkLoopExceeded`` means the agent-SDK tool loop hit its ``max_turns``
+        ceiling without producing a turn. Pre-158-41 this propagated out of
+        :meth:`run_narration_turn` and crashed the session (disconnect_save → room
+        teardown). Per ADR-006 the turn must degrade LOUDLY while keeping the room alive:
+
+        * an OTEL span ``narrator.max_turns_degraded`` + a GM-panel watcher event
+          ``narrator_max_turns_degraded`` (component ``orchestrator``, severity ``error`` —
+          a turn the engine could not resolve is a server-side fault, formerly a hard
+          crash) so the lie detector shows the engine bailed rather than the operator
+          inferring it from silence (CLAUDE.md OTEL Observability Principle); and
+        * a player-facing degraded result (:meth:`_degraded_result`) telling the player to
+          rephrase — re-articulating the action is what unsticks a non-converging loop.
+
+        Mirrors :meth:`_emit_empty_prose_upstream_signal`'s span+event shape. The caller
+        returns this in place of raising, so the websocket handler's existing
+        degraded-result path renders a card and the room continues.
+        """
+        from sidequest.telemetry.spans.span import Span
+        from sidequest.telemetry.watcher_hub import publish_event
+
+        fields = {
+            "turn_number": context.turn_number,
+            "detail": str(exc),
+        }
+        with Span.open("narrator.max_turns_degraded", fields):
+            pass
+        logger.error(
+            "narrator.max_turns_degraded turn=%s — the agent-SDK tool loop did not "
+            "converge within max_turns; degrading the turn (ADR-006) and keeping the "
+            "room alive instead of crashing. cause=%s",
+            context.turn_number,
+            exc,
+        )
+        publish_event(
+            "narrator_max_turns_degraded",
+            fields,
+            component="orchestrator",
+            severity="error",
+        )
+        return self._degraded_result(
+            action=action,
+            context=context,
+            narration=_MAX_TURNS_DEGRADE_NARRATION,
         )
 
     def _assemble_turn_result(

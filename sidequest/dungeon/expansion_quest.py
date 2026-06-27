@@ -15,7 +15,11 @@ from sidequest.dungeon.themes import ExpansionQuestTemplate
 from sidequest.game.cookbook.models import RegionContentManifest
 from sidequest.game.session import GameSnapshot, QuestEntry
 from sidequest.genre.names.generator import sanitize_display_name
-from sidequest.telemetry.spans.dungeon_quest import quest_bound_span, quest_resolved_span
+from sidequest.telemetry.spans.dungeon_quest import (
+    quest_bound_span,
+    quest_minted_span,
+    quest_resolved_span,
+)
 
 
 class ThreadLedger(Protocol):
@@ -271,14 +275,22 @@ def reconcile_dungeon_quests_into_log(
         objective = thread.payload.get("objective", "")
         anchor = thread.payload.get("anchor_region")
         if existing is None:
-            snapshot.quest_log[qid] = QuestEntry(
-                title=title,
-                objective=objective,
-                status="active",
-                anchor_id=anchor,
-            )
-            if anchor and anchor not in snapshot.quest_anchors:
-                snapshot.quest_anchors.append(anchor)
+            # Emit the mint span around the projection so the GM panel sees the
+            # quest become player-visible — bound (seed) and resolved (complete)
+            # already emit; this closes the silent-mint gap (158-42).
+            with quest_minted_span(
+                expansion_id=exp_id,
+                quest_id=qid,
+                signature_kind=thread.payload.get("signature_kind", ""),
+            ):
+                snapshot.quest_log[qid] = QuestEntry(
+                    title=title,
+                    objective=objective,
+                    status="active",
+                    anchor_id=anchor,
+                )
+                if anchor and anchor not in snapshot.quest_anchors:
+                    snapshot.quest_anchors.append(anchor)
             projected += 1
         elif existing.status != "active":
             # Entry was externally resolved (e.g. "completed", "failed") — preserve it.
@@ -317,14 +329,31 @@ def resolve_expansion_quests(
     reached_region_ids: set[str],
     resolved_trope_ids: list[str],
     defeated_npc_names: set[str],
+    skip_expansion_ids: set[int] | None = None,
 ) -> int:
     """For each open expansion-quest thread whose signature beat has fired,
     resolve the ledger thread, flip the projected QuestEntry to "completed",
     and emit a quest_resolved_span.  Returns the count of quests resolved.
+
+    ``skip_expansion_ids`` names expansions whose quest was *minted this same
+    transition* — NO beat may resolve a quest on the step that first projects it
+    into the log; the guard skips the whole thread regardless of signature kind.
+    This fixes 158-42: a region-anchor ``reach_deep`` quest whose anchor is the
+    entry region (a single-region expansion, or one where the entry scored
+    deepest) otherwise mints-and-completes in one move, with its "way down past
+    it" objective unmet. In practice only ``reach_deep`` is affected —
+    ``big_bad``/``set_piece`` cannot resolve on the mint transition anyway (the
+    antagonist isn't dead yet and the observer passes no resolved tropes) — but
+    the skip is unconditional for safety. The player must descend to the anchor
+    on a later transition. Defaults to an empty set, so the per-turn handshake
+    and direct callers are unaffected.
     """
+    skip = skip_expansion_ids or set()
     resolved = 0
     for thread in store.open_threads():
         if thread.kind != "quest" or thread.payload.get("scope") != "expansion":
+            continue
+        if thread.payload.get("expansion_id") in skip:
             continue
         event = _beat_fired(
             thread.payload,
@@ -374,9 +403,7 @@ def collect_defeated_npc_names(snapshot: GameSnapshot) -> set[str]:
     resolve the quest.
     """
     return {
-        sanitize_display_name(npc.core.name)
-        for npc in snapshot.npcs
-        if npc.core.hp.current == 0
+        sanitize_display_name(npc.core.name) for npc in snapshot.npcs if npc.core.hp.current == 0
     }
 
 
@@ -444,17 +471,34 @@ def make_expansion_quest_observer(store: ThreadLedger) -> _FrontierObserver:
                 reached_exps = set(range(lo, hi + 1))
             else:
                 reached_exps = {to_exp}
+        before_ids = set(snapshot.quest_log.keys())
         reconcile_dungeon_quests_into_log(
             snapshot=snapshot,
             store=store,
             reached_expansion_ids=reached_exps,
         )
+        # 158-42: a reach_deep quest minted THIS transition must not also resolve
+        # on it — entering the anchor region is what made the quest visible, not
+        # "the way down past it". Defer its completion to a later descent.
+        newly_minted_exp_ids: set[int] = set()
+        for qid in snapshot.quest_log.keys() - before_ids:
+            if qid.startswith(_DUNGEON_QUEST_PREFIX):
+                # Defensive parse-guard: dungeon: keys are produced ONLY by
+                # reconcile_dungeon_quests_into_log as f"{_DUNGEON_QUEST_PREFIX}{exp_id}"
+                # with an int exp_id, so the suffix always parses — the except is
+                # structurally unreachable today and exists purely so a future
+                # composite-id key shape can't crash the observer.
+                try:
+                    newly_minted_exp_ids.add(int(qid[len(_DUNGEON_QUEST_PREFIX) :]))
+                except ValueError:
+                    continue
         resolve_expansion_quests(
             snapshot=snapshot,
             store=store,
             reached_region_ids={to_region},
             resolved_trope_ids=[],
             defeated_npc_names=collect_defeated_npc_names(snapshot),
+            skip_expansion_ids=newly_minted_exp_ids,
         )
 
     return _observer

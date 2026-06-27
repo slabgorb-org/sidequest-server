@@ -336,13 +336,17 @@ def resolve_expansion_quests(
     and emit a quest_resolved_span.  Returns the count of quests resolved.
 
     ``skip_expansion_ids`` names expansions whose quest was *minted this same
-    transition* — a ``reach_deep`` beat must NOT fire on the step that first
-    projects the quest into the log (158-42: a region-anchor quest whose anchor
-    is the entry region — a single-region expansion, or one where the entry
-    scored deepest — otherwise mints-and-completes in one move, with its "way
-    down past it" objective unmet). The player must descend to the anchor on a
-    later transition. Defaults to an empty set, so the per-turn handshake and
-    direct callers are unaffected.
+    transition* — NO beat may resolve a quest on the step that first projects it
+    into the log; the guard skips the whole thread regardless of signature kind.
+    This fixes 158-42: a region-anchor ``reach_deep`` quest whose anchor is the
+    entry region (a single-region expansion, or one where the entry scored
+    deepest) otherwise mints-and-completes in one move, with its "way down past
+    it" objective unmet. In practice only ``reach_deep`` is affected —
+    ``big_bad``/``set_piece`` cannot resolve on the mint transition anyway (the
+    antagonist isn't dead yet and the observer passes no resolved tropes) — but
+    the skip is unconditional for safety. The player must descend to the anchor
+    on a later transition. Defaults to an empty set, so the per-turn handshake
+    and direct callers are unaffected.
     """
     skip = skip_expansion_ids or set()
     resolved = 0
@@ -479,6 +483,11 @@ def make_expansion_quest_observer(store: ThreadLedger) -> _FrontierObserver:
         newly_minted_exp_ids: set[int] = set()
         for qid in snapshot.quest_log.keys() - before_ids:
             if qid.startswith(_DUNGEON_QUEST_PREFIX):
+                # Defensive parse-guard: dungeon: keys are produced ONLY by
+                # reconcile_dungeon_quests_into_log as f"{_DUNGEON_QUEST_PREFIX}{exp_id}"
+                # with an int exp_id, so the suffix always parses — the except is
+                # structurally unreachable today and exists purely so a future
+                # composite-id key shape can't crash the observer.
                 try:
                     newly_minted_exp_ids.add(int(qid[len(_DUNGEON_QUEST_PREFIX) :]))
                 except ValueError:

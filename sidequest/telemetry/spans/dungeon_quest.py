@@ -1,12 +1,14 @@
-"""dungeon.quest.* spans — per-expansion quest bind + resolve (ADR-137 × ADR-106).
+"""dungeon.quest.* spans — per-expansion quest bind + mint + resolve (ADR-137 × ADR-106).
 
-Two spans:
+Three spans:
 - ``dungeon.quest.bound`` — emitted when a quest is bound to an expansion
   (the per-expansion quest has a signature_kind assigned and a ref_id resolved).
+- ``dungeon.quest.minted`` — emitted when a bound quest is first projected into
+  ``snapshot.quest_log`` (the moment it becomes player-visible in the Quests tab).
 - ``dungeon.quest.resolved`` — emitted when the bound quest resolves via a
   game event (win condition, encounter outcome, etc.).
 
-Both register into SPAN_ROUTES so the GM panel can verify the quest engine
+All register into SPAN_ROUTES so the GM panel can verify the quest engine
 engaged rather than the narrator improvising quest outcomes.
 """
 

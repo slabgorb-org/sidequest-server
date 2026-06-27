@@ -295,7 +295,9 @@ def test_quest_mint_span_fires_once_not_on_idempotent_reprojection() -> None:
         # not re-mint (the QuestEntry already exists and is active → projected 0).
         notify_region_transition(snap, pc_name="Rux", from_region=None, to_region="exp003.r0")
         conn.commit()
-        notify_region_transition(snap, pc_name="Rux", from_region="exp003.r0", to_region="exp003.r0")
+        notify_region_transition(
+            snap, pc_name="Rux", from_region="exp003.r0", to_region="exp003.r0"
+        )
         conn.commit()
 
         minted = [s for s in exporter.get_finished_spans() if s.name == SPAN_QUEST_MINTED]
@@ -366,7 +368,9 @@ def test_reach_deep_completes_on_genuine_descent_and_emits_resolved_span() -> No
         )
 
         # Descend to the deeper anchor — legitimate completion.
-        notify_region_transition(snap, pc_name="Rux", from_region="exp004.r0", to_region="exp004.r1")
+        notify_region_transition(
+            snap, pc_name="Rux", from_region="exp004.r0", to_region="exp004.r1"
+        )
         conn.commit()
         assert snap.quest_log[qid].status == "completed", (
             "reach_deep quest should complete when the PC reaches the genuinely deeper "
@@ -375,7 +379,8 @@ def test_reach_deep_completes_on_genuine_descent_and_emits_resolved_span() -> No
 
         # Ledger thread closed.
         open_expansion_quests = [
-            t for t in store.open_threads()
+            t
+            for t in store.open_threads()
             if t.kind == "quest" and t.payload.get("scope") == "expansion"
         ]
         assert open_expansion_quests == [], (

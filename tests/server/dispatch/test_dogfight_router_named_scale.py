@@ -149,22 +149,19 @@ def test_router_named_ground_creature_is_not_seated_as_dogfight_opponent(
     opponent_joins = [
         span
         for span in span_capture.get_finished_spans()
-        if span.name == "participant.joined"
-        and (span.attributes or {}).get("side") == "opponent"
+        if span.name == "participant.joined" and (span.attributes or {}).get("side") == "opponent"
     ]
     assert opponent_joins, (
         "an opponent participant.joined span must fire so the GM panel can audit "
         "where the dogfight Other came from (ADR-116 observability)"
     )
     assert all(
-        (span.attributes or {}).get("source") == "frame_default"
-        for span in opponent_joins
+        (span.attributes or {}).get("source") == "frame_default" for span in opponent_joins
     ), (
         "the opponent seat must record source='frame_default' (the engine sourced "
         "the frame ship after rejecting the personal-scale router mention), got "
         f"{[(span.attributes or {}).get('source') for span in opponent_joins]!r}"
     )
-    assert all(
-        (span.attributes or {}).get("name") != GROUND_CREATURE
-        for span in opponent_joins
-    ), "no participant.joined span may name the ground creature as a seated actor"
+    assert all((span.attributes or {}).get("name") != GROUND_CREATURE for span in opponent_joins), (
+        "no participant.joined span may name the ground creature as a seated actor"
+    )

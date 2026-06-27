@@ -1705,6 +1705,33 @@ def instantiate_encounter_from_trigger(
     # conflict resolves on FateSheet stress, not bound hp), and the Fate-seating
     # de-nativization branch downstream (126-30) reuses the same flag.
     is_fate = bool(pack and pack.rules and pack.rules.ruleset == "fate")
+    # ADR-153 §6 (158-34): the ship-scale firewall must cover EVERY seating door,
+    # not only the location fallback. The intent router (ADR-113) can name a
+    # co-located personal-scale creature (``is_creature``) as the dogfight
+    # contact; it arrives in ``npcs_present`` and — being non-empty — would skip
+    # both ship-scale branches below (each gated on ``not npcs_present``) and seat
+    # as the enemy ship (the "Gengineered Killer" symptom, via the router door
+    # instead of the location-fallback door #1084 already closed). A sealed-letter
+    # confrontation is ship-scale: its Other is a ship/chassis, never a ground
+    # creature. Drop personal-scale mentions here so an empty list flows into the
+    # frame_default branch and seats a ship Other (ADR-116). NOT silent (CLAUDE.md
+    # No Silent Fallbacks): the drop is logged, and the seat flips to
+    # ``source="frame_default"`` on the participant.joined span — the GM-panel
+    # lie-detector for where the Other came from.
+    if cdef.resolution_mode == ResolutionMode.sealed_letter_lookup and npcs_present:
+        _ship_scale_present = [m for m in npcs_present if not getattr(m, "is_creature", False)]
+        if len(_ship_scale_present) != len(npcs_present):
+            _rejected = [
+                getattr(m, "name", "?") for m in npcs_present if getattr(m, "is_creature", False)
+            ]
+            _log.warning(
+                "dogfight.ship_scale_firewall rejected personal-scale "
+                "router-named opponent(s) %s for sealed-letter %r — sourcing a "
+                "ship Other from the def frame instead (ADR-153 §6 / 158-34)",
+                _rejected,
+                encounter_type,
+            )
+            npcs_present = _ship_scale_present
     if materialized_threat is not None:
         # Story 59-23 (#C3 / ADR-116): the narrator/router named a threat that is
         # not an existing NPC entity. Seat THAT as the Other — never the location

@@ -196,3 +196,81 @@ async def test_assembler_scrubs_leaked_preamble_from_narration(
     assert result.narration == _BARSOOM_REAL
     spans = [s for s in otel_capture.get_finished_spans() if s.name == META_PREAMBLE_STRIPPED_SPAN]
     assert any(s.attributes["stripped"] is True for s in spans)
+
+
+# ---------------------------------------------------------------------------
+# GM-NOTE / chain-of-thought leak (sq-playtest 2026-06-27, beneath_sunden Harpo).
+# A second leak FORM: the model emits its raw scratchpad as a leading block, a
+# Markdown horizontal rule (``---``), then the prose. The scratchpad named the
+# internal "GM-NOTE", an internal tool name (``wn_attack``), and "I just need to
+# narrate it" — none of which the marker-anchored strip caught, so the whole
+# reasoning block was persisted + displayed.
+# ---------------------------------------------------------------------------
+
+_GMNOTE_LEAK = (
+    "The GM-NOTE tells me the attack already resolved: it was a Miss "
+    "(your attack) and The One That Knows Which Lamps Tire's attack also "
+    "missed you. I don't need to call `wn_attack` again — the engine already "
+    "gave me the outcome. I just need to narrate it.\n\n"
+    "---\n\n"
+    "The spear skids off a shelf of fused cap-meat, throwing a fan of "
+    "spore-dust into the torchlight as the tender lurches past your guard."
+)
+_GMNOTE_REAL = (
+    "The spear skids off a shelf of fused cap-meat, throwing a fan of "
+    "spore-dust into the torchlight as the tender lurches past your guard."
+)
+
+
+def test_strips_gmnote_reasoning_block_before_horizontal_rule():
+    scrub = scrub_meta_preamble(_GMNOTE_LEAK)
+    assert scrub.stripped is True
+    assert scrub.cleaned == _GMNOTE_REAL
+    # No machinery survives into player prose.
+    assert "GM-NOTE" not in scrub.cleaned
+    assert "wn_attack" not in scrub.cleaned
+    assert "need to narrate" not in scrub.cleaned
+    # The separator rule itself is gone too (not left dangling at the top).
+    assert not scrub.cleaned.lstrip().startswith("---")
+    # Preserved on the fragment for GM-panel forensics.
+    assert "GM-NOTE" in scrub.fragment
+    assert "wn_attack" in scrub.fragment
+
+
+def test_horizontal_rule_scene_break_without_meta_tell_is_untouched():
+    # A legitimate scene break — prose, a rule, more prose — has NO out-of-fiction
+    # tell before the rule, so the hygiene pass must NOT strip it (don't nuke a
+    # real ``---`` transition).
+    prose = (
+        "The tunnel narrows and the torch gutters against the damp.\n\n"
+        "---\n\n"
+        "Beyond, a wider gallery opens, its floor pale with old bloom."
+    )
+    scrub = scrub_meta_preamble(prose)
+    assert scrub.stripped is False
+    assert scrub.cleaned == prose
+
+
+def test_strips_need_to_narrate_marker_without_a_rule():
+    # The closing-phrase variant with no ``---`` separator: the extended marker
+    # catches "I just need to narrate it."
+    leak = (
+        "The engine already resolved this as a miss. I just need to narrate it. "
+        "The spear glances off the husk's shoulder."
+    )
+    scrub = scrub_meta_preamble(leak)
+    assert scrub.stripped is True
+    assert scrub.cleaned == "The spear glances off the husk's shoulder."
+
+
+async def test_assembler_scrubs_gmnote_reasoning_leak(
+    monkeypatch: pytest.MonkeyPatch, otel_capture
+):
+    # Wiring: the new leak form is scrubbed inside the real run_narration_turn
+    # assembler, not just in the pure helper.
+    result = await _run_sdk_turn_with_prose(monkeypatch, _GMNOTE_LEAK)
+    assert "GM-NOTE" not in result.narration
+    assert "wn_attack" not in result.narration
+    assert result.narration == _GMNOTE_REAL
+    spans = [s for s in otel_capture.get_finished_spans() if s.name == META_PREAMBLE_STRIPPED_SPAN]
+    assert any(s.attributes["stripped"] is True for s in spans)

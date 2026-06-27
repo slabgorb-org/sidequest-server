@@ -61,10 +61,41 @@ _META_NARRATION_MARKER = re.compile(
     r"(?i)\b(?:"
     r"now,?\s+i(?:['’]?ll|\s+will|\s+shall)?\s+narrate"
     r"|(?:let me|let['’]?s|time to|i['’]?m\s+going\s+to|i\s+shall|i['’]?ll|i\s+will)\s+narrate"
+    # sq-playtest 2026-06-27 (GM-NOTE leak): the model signed off its scratchpad
+    # with "I just need to narrate it" / "I need to narrate" — a first-person
+    # reference to the act of narrating that the earlier alternatives missed.
+    r"|i\s+(?:just\s+)?need\s+to\s+narrate"
     r"|i\s+(?:cannot|can['’]?t|won['’]?t|will\s+not|must\s+not)\s+narrate"
     r"|narrating\s+now"
     r")\b"
 )
+
+# sq-playtest 2026-06-27 (beneath_sunden Harpo) [GM-NOTE-LEAK]: a SECOND leak
+# form — the model emits its raw chain-of-thought as a leading block, a Markdown
+# horizontal rule, then the prose. The scratchpad always carries an unmistakable
+# out-of-fiction tell: the internal "GM-NOTE", an internal tool name (``wn_attack``
+# and the other WRITE/resolution tools), or a first-person "I (don't) need to
+# call/narrate". These NEVER appear in genre-true fiction, so they safely gate the
+# rule-based strip below (a bare scene-break ``---`` with no tell stays untouched).
+_META_REASONING_TELL = re.compile(
+    r"(?i)(?:"
+    r"\bGM-?NOTE\b"
+    r"|`?\bwn_[a-z_]+\b`?"  # internal WN tool names: wn_attack, wn_round, ...
+    r"|\b(?:apply_damage|apply_status|advance_confrontation|advance_encounter_beat"
+    r"|roll_dice|begin_confrontation|beat_selections?)\b"
+    r"|\bI\s+(?:don['’]?t\s+|do\s+not\s+)?need\s+to\s+(?:call|narrate)\b"
+    r")"
+)
+
+# A Markdown horizontal rule on its own line — the separator the model puts
+# between its scratchpad and the prose. ``-{3,}`` is ASCII hyphens only, so a
+# unicode em-dash inside the prose never matches.
+_HORIZONTAL_RULE = re.compile(r"(?m)^[ \t]*-{3,}[ \t]*$")
+
+# The reasoning block can be verbose, so the rule-form window is more generous
+# than the marker-form window — the strong out-of-fiction tell (not the window)
+# is what prevents a false positive.
+_REASONING_BLOCK_WINDOW = 800
 
 
 @dataclass(frozen=True)
@@ -88,6 +119,22 @@ def _strip(prose: str) -> tuple[str, bool, str, bool]:
     """Pure strip core. Returns (cleaned, stripped, fragment, marker_found)."""
     if not prose:
         return prose, False, "", False
+
+    # Form 1 (sq-playtest 2026-06-27): scratchpad ``---`` prose. A horizontal
+    # rule whose preceding block carries an out-of-fiction tell (GM-NOTE /
+    # internal tool name / "I need to call|narrate"). Checked first because it is
+    # the more specific, structural signature; the marker form is the fallback.
+    rule = _HORIZONTAL_RULE.search(prose)
+    if rule is not None and rule.start() <= _REASONING_BLOCK_WINDOW:
+        head = prose[: rule.start()]
+        if _META_REASONING_TELL.search(head):
+            remainder = prose[rule.end() :].lstrip()
+            if remainder:
+                # Whatever scratchpad preceded the rule (GM-NOTE, tool names,
+                # the engine's pre-resolution) goes with it.
+                return remainder, True, prose[: rule.end()].strip(), True
+            # Nothing real follows the rule — failsafe, never blank the card.
+            return prose, False, "", True
 
     match = _META_NARRATION_MARKER.search(prose)
     if match is None:

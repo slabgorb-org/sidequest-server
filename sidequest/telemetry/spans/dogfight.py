@@ -335,3 +335,38 @@ def dogfight_dispatch_rejected_span(
         tracer_override=_tracer,
     ) as span:
         yield span
+
+
+SPAN_DOGFIGHT_FORCED_DISPATCH = "dogfight.forced_dispatch"
+SPAN_ROUTES[SPAN_DOGFIGHT_FORCED_DISPATCH] = SpanRoute(
+    event_type="state_transition",
+    component="dogfight",
+    extract=lambda span: {
+        "field": "dogfight",
+        "op": "forced_dispatch",
+        "encounter_type": (span.attributes or {}).get("encounter_type", ""),
+        "verb_hits": (span.attributes or {}).get("verb_hits", ""),
+    },
+)
+
+
+@contextmanager
+def dogfight_forced_dispatch_span(
+    *,
+    encounter_type: str,
+    verb_hits: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Router force-dispatched the dogfight seater on a dogfight-verb miss
+    (ADR-153 §7 / 158-29): dogfight verbs hit, the LLM router emitted no
+    confrontation dispatch, no fight was live — so the engine is seated FIRST
+    rather than leaving the narrator a raw ship-combat action to grind into a
+    max_turns crash. The GM-panel proof that the router force-seated the engine
+    instead of dead-ending on the unrouted log."""
+    with Span.open(
+        SPAN_DOGFIGHT_FORCED_DISPATCH,
+        {"encounter_type": encounter_type, "verb_hits": verb_hits, **attrs},
+        tracer_override=_tracer,
+    ) as span:
+        yield span

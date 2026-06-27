@@ -20,8 +20,12 @@ observably** and KEEP THE SESSION ALIVE:
         watcher event, never a source-grep (CLAUDE.md "No Source-Text Wiring
         Tests" + OTEL Observability Principle).
 
-These tests drive the REAL production method ``_execute_narration_turn`` (the
-same entrypoint a live PLAYER_ACTION hits), so they double as the wiring test.
+These tests drive the REAL production method ``_execute_narration_turn`` — the
+same method body a live PLAYER_ACTION reaches (``handle_message`` → the
+PLAYER_ACTION handler → ``_execute_narration_turn``, ``player_action.py:299``/
+``:901``). They confirm the degrade catch is present and exercised in that
+method; they call it directly, so they are NOT a full end-to-end wiring test of
+the dispatch chain above it.
 
 Contract names TEA pins for Dev (logged as deviations / delivery findings):
   * the watcher event MUST be published via the handler's ``_watcher_publish``
@@ -106,7 +110,11 @@ async def test_sdk_loop_exhaustion_does_not_crash_the_turn(session_fixture, monk
     the room down (``disconnect_save`` → forced reconnect). The fix must catch
     it inside ``_execute_narration_turn`` and RETURN outbound messages — the
     propagation is the teardown trigger, so removing it is what keeps the
-    session alive. RED today: the call raises.
+    session alive. Without the catch this fails — the call raises.
+
+    "Session stays alive" also means the turn is ACCOUNTED FOR, not silently
+    dropped: the method-level ``finally`` must still file the degraded
+    ``TurnRecord`` to the validator.
     """
     sd, handler = session_fixture
     _bypass_pre_narrator_seams(monkeypatch)
@@ -120,6 +128,9 @@ async def test_sdk_loop_exhaustion_does_not_crash_the_turn(session_fixture, monk
     assert isinstance(outbound, list) and len(outbound) >= 1, (
         "degraded turn must surface at least one outbound message to the player"
     )
+    # The degraded turn must still be recorded (the finally files a degraded
+    # TurnRecord) — a dropped record is a partial failure of "session alive".
+    handler._validator.submit.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -150,7 +161,12 @@ async def test_sdk_loop_exhaustion_surfaces_player_rephrase_message_without_reco
         "degrade must keep the session alive — no message may demand a reconnect"
     )
     assert "anthropicsdkloopexceeded" not in serialized, (
-        "the raw SDK exception must never be surfaced to the player"
+        "the raw SDK exception class must never be surfaced to the player"
+    )
+    # Not just the class name — the raw exception *message* (which carries the
+    # internal "max_turns=8" transport detail) must not leak into player text.
+    assert "max_turns" not in serialized, (
+        "the raw SDK exception message must never be surfaced to the player"
     )
 
 
@@ -163,13 +179,26 @@ async def test_sdk_loop_exhaustion_emits_watcher_degrade_event(
 
     Per the OTEL Observability Principle every subsystem decision emits a
     watcher event. Captured by patching the handler's ``_watcher_publish``
-    (the same channel ``session.cost_ceiling_exceeded`` uses). RED today: the
-    exhaustion propagates before any degrade event is published.
+    (the same channel ``session.cost_ceiling_exceeded`` uses). Without the
+    catch this fails — the exhaustion propagates before any degrade event is
+    published.
+
+    A non-empty payload is NOT enough: the GM panel needs specific keys and the
+    ``warning`` severity, or the lie-detector shows nothing useful. The
+    assertions below lock the keys, the reason/recovery values, the severity,
+    and the component.
     """
     captured: list[dict[str, Any]] = []
 
     def _capture(event_type, fields, *, component="sidequest-server", severity="info") -> None:
-        captured.append({"event_type": event_type, "fields": fields, "component": component})
+        captured.append(
+            {
+                "event_type": event_type,
+                "fields": fields,
+                "component": component,
+                "severity": severity,
+            }
+        )
 
     sd, handler = session_fixture
     _bypass_pre_narrator_seams(monkeypatch)
@@ -184,6 +213,26 @@ async def test_sdk_loop_exhaustion_emits_watcher_degrade_event(
         f"expected a {_DEGRADE_EVENT!r} watcher event on the SDK-loop degrade "
         f"path; captured event types were {[e['event_type'] for e in captured]}"
     )
-    assert isinstance(degrade_events[0]["fields"], dict) and degrade_events[0]["fields"], (
-        "the degrade event must carry a non-empty fields payload for the GM panel"
+    event = degrade_events[0]
+    fields = event["fields"]
+    assert isinstance(fields, dict), f"degrade event fields must be a dict, got {type(fields)}"
+    # Lock the GM-panel keys — a placeholder payload like {"x": 1} must NOT pass,
+    # or the observability AC is unverified (Reviewer 158-41).
+    required_keys = {
+        "genre_slug",
+        "world_slug",
+        "player_id",
+        "action_len",
+        "turn",
+        "reason",
+        "recovery",
+    }
+    assert required_keys.issubset(fields), (
+        f"degrade event must carry the GM-panel keys {sorted(required_keys)}; got {sorted(fields)}"
     )
+    assert fields["reason"] == "max_turns_exhausted", fields["reason"]
+    assert fields["recovery"] == "degraded_continue", fields["recovery"]
+    # Severity is load-bearing: the GM panel routes warnings to the operator's
+    # attention; a silent drop to "info" would dim the degraded-path signal.
+    assert event["severity"] == "warning", event["severity"]
+    assert event["component"] == "narrator", event["component"]

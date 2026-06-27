@@ -1506,6 +1506,37 @@ _NTR_DEFAULTS = NarrationTurnResult(narration="")
 # unrecoverable-narrator turn rather than a blank successful one.
 _EMPTY_NARRATION_STALL = "The world holds its breath."
 
+# System prompt for the empty-prose recovery reprompt (sq-playtest 2026-06-27 region
+# seam): the SDK narrator fired WRITE tools but wrote no player-facing prose. This
+# toolless reprompt asks it to narrate the moment it just acted on, so the player gets
+# real arrival prose instead of the generic degraded stall above.
+_EMPTY_PROSE_RECOVERY_SYSTEM = (
+    "You are the game's narrator. On the previous step you called engine tools to "
+    "advance the scene — moving the character, setting the new location and its "
+    "visuals — but you wrote NO player-facing narration. Write that narration now: "
+    "2-4 vivid present-tense sentences describing what the character experiences as "
+    "the scene resolves, true to the genre and the moment. Do NOT mention dice, rolls, "
+    "tools, mechanics, HP, or numbers, and do NOT take any new action on the player's "
+    "behalf. Output ONLY the narration prose."
+)
+
+
+def _render_actions_for_reprompt(tool_calls: list[Any]) -> str:
+    """Compactly render the turn's WRITE tool calls as the scene context for the
+    empty-prose recovery reprompt: one ``- name(arg=val, …)`` line each, argument
+    values truncated so a large patch cannot blow the reprompt budget. Tolerates both
+    the dict ledger shape (``{"name", "arguments"}``) and ToolUseBlock-like objects."""
+    lines: list[str] = []
+    for tc in tool_calls:
+        name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", "")
+        args = tc.get("arguments") if isinstance(tc, dict) else getattr(tc, "arguments", {})
+        if isinstance(args, dict):
+            rendered = ", ".join(f"{k}={str(v)[:160]}" for k, v in args.items())
+        else:
+            rendered = str(args)[:160]
+        lines.append(f"- {name}({rendered})")
+    return "\n".join(lines)
+
 
 # ---------------------------------------------------------------------------
 # Prompt assembly helpers (ContextBuilder equivalent — inlined per spec)
@@ -3318,6 +3349,12 @@ class Orchestrator:
         # no recovery. Trip the degraded stall + emit the GM-panel lie detector.
         # Runs BEFORE the fabricated-roll repair: the substituted stall carries
         # no roll numbers, so that pass is a no-op on a guarded turn.
+        # sq-playtest 2026-06-27 (region seam, defect #2 recovery — the reprompt fork
+        # story 153-11 deferred). When the SDK narrator fired WRITE tools but wrote no
+        # prose (tool_only_response), reprompt ONCE (toolless) for the arrival narration
+        # BEFORE the degraded-stall guard. Real narrator prose beats the generic stall;
+        # the guard stays the fallback when the reprompt also comes back empty.
+        result = await self._maybe_recover_empty_prose(action=action, result=result)
         result = self._guard_empty_narration(action=action, result=result)
         # sq-playtest 2026-06-13 — fabricated-roll lie detector + prose-only
         # repair. The narrator never sees server-rolled dice (reprisals,
@@ -3386,6 +3423,102 @@ class Orchestrator:
         result.narration = _EMPTY_NARRATION_STALL
         result.is_degraded = True
         return result
+
+    async def _maybe_recover_empty_prose(
+        self,
+        *,
+        action: str,
+        result: NarrationTurnResult,
+    ) -> NarrationTurnResult:
+        """Reprompt once for arrival prose when the narrator acted but narrated nothing.
+
+        sq-playtest 2026-06-27 (region seam): the SDK tool loop can converge with WRITE
+        tools fired (location + visual scene set) but an empty final text block — the
+        ``tool_only_response`` story 153-11 categorizes. 153-11 DEFERRED the recovery; this
+        is it. When prose is empty AND tools fired this turn, do ONE TOOLLESS reprompt
+        (``tools=[]`` — cannot re-run WRITE tools / double-apply state) asking the narrator
+        to write the player-facing narration of the moment it just set. On success the real
+        prose replaces what would have been the generic degraded stall.
+
+        Best-effort and bounded (one reprompt): on any failure, an empty reprompt, or a
+        non-tooling client, the result is left untouched and the downstream
+        :meth:`_guard_empty_narration` substitutes the in-fiction stall (153-11 AC1 — the
+        guard remains the last resort). A no-tool empty turn (``no_output``) is NOT
+        reprompted: nothing was acted, so there is no established scene to narrate from.
+        Emits ``narrator.empty_prose_recovered`` (GM-panel lie detector) on every attempt.
+        """
+        from sidequest.telemetry.spans.span import Span
+
+        if (result.narration or "").strip():
+            return result  # real prose — no-op
+        if not isinstance(self._client, ToolingLlmClient):
+            return result  # synchronous path has no tool-loop continuation to recover
+        tool_calls = result.tool_calls or []
+        if not tool_calls:
+            return result  # no_output: nothing was acted — let the guard stall it
+
+        recovered_text: str | None = None
+        try:
+            recovered_text = await self._reprompt_for_empty_prose(
+                action=action, actions=_render_actions_for_reprompt(tool_calls)
+            )
+        except Exception:  # noqa: BLE001 — recovery is best-effort; never fail the turn
+            logger.warning("narrator.empty_prose recovery_failed", exc_info=True)
+            recovered_text = None
+
+        recovered = bool(recovered_text and recovered_text.strip())
+        with Span.open(
+            "narrator.empty_prose_recovered",
+            {
+                "recovered": recovered,
+                "tool_call_count": len(tool_calls),
+                "action": action[:120],
+            },
+        ):
+            pass
+        logger.warning(
+            "narrator.empty_prose_recovered recovered=%s tool_calls=%d action=%r — narrator "
+            "acted but wrote no prose; toolless reprompt %s",
+            recovered,
+            len(tool_calls),
+            action,
+            "produced arrival narration" if recovered else "came back empty (guard will stall)",
+        )
+        if recovered and recovered_text is not None:
+            result.narration = recovered_text.strip()
+        return result
+
+    async def _reprompt_for_empty_prose(self, *, action: str, actions: str) -> str | None:
+        """Toolless reprompt that narrates the moment the narrator already acted on.
+
+        Runs through the production tooling client with ``tools=[]`` so it is a plain
+        completion — no WRITE tools, no state mutation, no double-apply (mirrors
+        :meth:`_rewrite_prose_without_fabricated_roll`). Returns the prose, or None when
+        the model returned nothing.
+        """
+        from sidequest.agents.model_routing import CallType, resolve_model
+        from sidequest.agents.tooling_protocol import CacheableBlock, Message
+
+        if not isinstance(self._client, ToolingLlmClient):
+            return None
+        out = await self._client.complete_with_tools(
+            system_blocks=[CacheableBlock(text=_EMPTY_PROSE_RECOVERY_SYSTEM, cache=False)],
+            messages=[
+                Message(
+                    role="user",
+                    content=(
+                        f"Player action: {action}\n\n"
+                        f"What you just did (engine tool calls, already applied):\n{actions}\n\n"
+                        "Write the player-facing narration for this moment now."
+                    ),
+                )
+            ],
+            tools=[],
+            model=resolve_model(CallType.SCRATCH),
+            caller="empty_prose_recovery",
+        )
+        cleaned = (out.text or "").strip()
+        return cleaned or None
 
     async def _maybe_repair_fabricated_roll(
         self,

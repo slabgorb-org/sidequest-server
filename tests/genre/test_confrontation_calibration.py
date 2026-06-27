@@ -78,14 +78,15 @@ SHIPPED_PACKS = [
 COMBAT_PACKS: list[str] = ["road_warrior"]
 
 CALIBRATED_THRESHOLD = 7
-SEALED_LETTER_THRESHOLD = 30
 PRE_CALIBRATION_PARITY_STAT = 12
 CALIBRATED_OPPONENT_STAT_CEILING = 10
 
 # Resolution modes drive the calibration filter. opposed_check shares the
 # calibrated tie band → threshold 7. sealed_letter_lookup is a different
-# resolution algorithm → kept at its pre-calibration value (30 for the only
-# current entry, dogfight; recalibration deferred to v2).
+# resolution algorithm: under ADR-153 §2 the only sealed-letter COMBAT
+# confrontation (the space_opera dogfight) resolves via SWN hp_depletion and
+# carries NO native dial (158-31 removed it) — superseding ADR-093's v1
+# threshold-30 deferral. See test_sealed_letter_combat_has_no_native_dial.
 OPPOSED_CHECK_MODE = "opposed_check"
 SEALED_LETTER_MODE = "sealed_letter_lookup"
 
@@ -164,27 +165,35 @@ def test_opposed_check_thresholds_calibrated_to_7(pack_name: str):
 
 
 @pytest.mark.parametrize("pack_name", SHIPPED_PACKS)
-def test_sealed_letter_thresholds_unchanged(pack_name: str):
-    """ADR-093 explicitly excludes sealed-letter confrontations from v1
-    calibration. Their thresholds must stay at 30 (currently the only
-    entry is space_opera dogfight) — recalibration is deferred to v2."""
+def test_sealed_letter_combat_has_no_native_dial(pack_name: str):
+    """ADR-153 §2 firewall (supersedes ADR-093's v1 threshold-30 deferral): a
+    sealed_letter COMBAT confrontation resolves via SWN hp_depletion and carries
+    NO native energy dial. The space_opera dogfight (the only sealed-letter
+    combat) was a dial_threshold/energy-metric duel under ADR-093; 158-31 removed
+    the dial. Any sealed_letter combat that declares a non-hp_depletion
+    win_condition OR reintroduces player_metric/opponent_metric is the 158-31
+    contradiction — also caught at validate time by validate.rules
+    (SEALED_LETTER_COMBAT_NOT_HP_DEPLETION)."""
     rules = _load_rules_yaml(pack_name)
     confrontations = rules.get("confrontations", [])
 
-    offending: list[tuple[str, str, int]] = []
+    offending: list[tuple[str, str]] = []
     for cdef in confrontations:
         ctype = cdef.get("type", "<unknown>")
         if cdef.get("resolution_mode") != SEALED_LETTER_MODE:
             continue
+        if cdef.get("category") != "combat":
+            continue
+        win_condition = cdef.get("win_condition")
+        if win_condition != "hp_depletion":
+            offending.append((ctype, f"win_condition={win_condition!r} (expected hp_depletion)"))
         for side in ("player_metric", "opponent_metric"):
-            metric = cdef.get(side, {})
-            threshold = metric.get("threshold")
-            if threshold != SEALED_LETTER_THRESHOLD:
-                offending.append((ctype, side, threshold))
+            if cdef.get(side) is not None:
+                offending.append((ctype, f"{side} present — native dial must be removed"))
 
     assert not offending, (
-        f"Pack '{pack_name}' has sealed_letter_lookup thresholds != "
-        f"{SEALED_LETTER_THRESHOLD} (v2 territory): {offending}"
+        f"Pack '{pack_name}' has a sealed_letter_lookup combat with a native dial "
+        f"(ADR-153 firewall violation, 158-31): {offending}"
     )
 
 

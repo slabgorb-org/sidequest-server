@@ -208,26 +208,36 @@ def test_dogfight_instantiation_assigns_red_blue_roles(
     assert blue.side == "opponent"
 
 
-def test_dogfight_instantiation_rejects_zero_npcs(
+def test_dogfight_zero_npcs_seats_default_ship_from_frame(
     swn_snap: tuple[GameSnapshot, GenrePack],
     otel_capture: InMemorySpanExporter,
 ) -> None:
-    """Sealed-letter dogfights need exactly one opponent. Playtest
-    2026-05-08: the prior crash-on-arity behavior wedged the player on
-    turn 1 (auto-save + reconnect = sticky crash loop). Now the lifecycle
-    raises ``SealedLetterArityError`` and fires
-    ``encounter.sealed_letter_arity_rejected`` — no encounter instantiates.
-    """
-    from sidequest.server.dispatch.encounter_lifecycle import SealedLetterArityError
+    """ADR-153 §6 (supersedes the 2026-05-08 arity-reject contract): a dogfight
+    with no router-named opponent no longer raises ``SealedLetterArityError`` —
+    its def carries an ``opponent_default_stats`` frame, so the seater sources a
+    default enemy ship (a ship/chassis Other, never a co-located creature) and
+    the duel seats. ADR-116 is satisfied by the frame, not by a scene NPC.
 
+    The arity guard still fires for the genuinely-ambiguous multi-NPC case
+    (``test_dogfight_instantiation_rejects_two_npcs``), and the loud
+    reject-when-truly-unseatable path (a frameless def) is the §7 router→seater
+    contract (Plan 2 / 158-29).
+    """
     snap, pack = swn_snap
-    with pytest.raises(SealedLetterArityError):
-        trigger_encounter(snap, pack, "dogfight", "Maverick", npcs_present=[])
-    assert snap.encounter is None, "no encounter must instantiate when arity guard fires"
+    trigger_encounter(snap, pack, "dogfight", "Maverick", npcs_present=[])
+
+    assert snap.encounter is not None, (
+        "a framed dogfight must seat a default-from-frame ship, not refuse (ADR-153 §6)"
+    )
+    assert snap.encounter.encounter_type == "dogfight"
+    opponents = [a for a in snap.encounter.actors if a.side == "opponent"]
+    assert len(opponents) == 1, (
+        f"expected one frame-default opponent, got {[a.name for a in opponents]!r}"
+    )
 
     span_names = {span.name for span in otel_capture.get_finished_spans()}
-    assert "encounter.sealed_letter_arity_rejected" in span_names, (
-        "OTEL lie-detector span must fire so the GM panel sees the rejection"
+    assert "encounter.sealed_letter_arity_rejected" not in span_names, (
+        "a framed dogfight seats from the frame — it must NOT fire the arity-rejected span"
     )
 
 

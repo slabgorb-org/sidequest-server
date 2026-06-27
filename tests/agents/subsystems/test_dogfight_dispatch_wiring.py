@@ -367,31 +367,38 @@ async def test_low_confidence_dogfight_degrades_and_does_not_engage(otel_capture
 
 
 @pytest.mark.asyncio
-async def test_dogfight_no_opponent_rejects_loud(otel_capture) -> None:
-    """A dogfight dispatch with no Other to seat (no ``opponent`` param AND no NPC
-    in scene) cannot start a sealed-letter duel — ADR-116 requires an Other. It
-    must fail LOUD via a ``dogfight.dispatch.rejected`` span (a logged event with
-    a reason the GM panel can read), never silently hand control back to the
-    narrator with no indication of why the engine did not engage (No Silent
-    Fallbacks; CLAUDE.md; AC-5).
+async def test_dogfight_no_scene_opponent_seats_frame_default(otel_capture) -> None:
+    """ADR-153 §6 (supersedes the pre-§6 reject-when-no-Other contract): a
+    dogfight dispatch with no ``opponent`` param AND no NPC in scene no longer
+    rejects — the def carries an ``opponent_default_stats`` frame, so the seater
+    sources a default enemy ship (a ship/chassis Other, never a co-located
+    creature) and the dispatch ACCEPTS. ADR-116 is satisfied by the frame.
+
+    The loud reject-when-truly-unseatable path (a frameless dogfight def) is the
+    §7 router→seater contract (Plan 2 / 158-29) — out of scope for Plan 1.
     """
     from sidequest.agents.subsystems import run_dispatch_bank
 
     pack = _load_pack()
     snap = _snap_with_pilot()  # no NPCs in scene → no location-fallback opponent
-    # High confidence so the gate does NOT mask the rejection as a degrade.
     package = _package_with(_dogfight_dispatch(opponent=None, confidence=0.95))
 
     await run_dispatch_bank(package, context=_bank_context(snap, pack))
 
-    assert _spans_named(otel_capture, SPAN_DOGFIGHT_DISPATCH_REJECTED), (
-        "an un-seatable dogfight (no Other) must emit a dogfight.dispatch.rejected "
-        "span (loud failure with reason), not a silent no-op"
+    assert _spans_named(otel_capture, SPAN_DOGFIGHT_DISPATCH), (
+        "a framed dogfight must seat a default-from-frame ship and fire the "
+        "accepted dogfight.dispatch span (ADR-153 §6)"
     )
-    assert not _spans_named(otel_capture, SPAN_DOGFIGHT_DISPATCH), (
-        "a rejected dogfight must NOT also fire the accepted dogfight.dispatch span"
+    assert not _spans_named(otel_capture, SPAN_DOGFIGHT_DISPATCH_REJECTED), (
+        "a framed dogfight seats from the frame — it must NOT reject"
     )
-    assert snap.encounter is None, "a rejected dogfight must not seat a phantom encounter"
+    assert snap.encounter is not None, (
+        "a framed dogfight must seat a default-from-frame ship, not refuse"
+    )
+    opponents = [a for a in snap.encounter.actors if a.side == "opponent"]
+    assert len(opponents) == 1, (
+        f"expected one frame-default opponent, got {[a.name for a in opponents]!r}"
+    )
 
 
 # ---------------------------------------------------------------------------

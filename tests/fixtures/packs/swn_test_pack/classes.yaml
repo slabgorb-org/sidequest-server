@@ -24,7 +24,8 @@
 #   - Ship Combat:        broadside, evasive_maneuver, close_range, target_systems, disengage
 #   - Negotiation:        persuade, threaten, concede_point, walk_away
 #   - Spaceflight Pursuit (chase): burn, asteroid_thread, ecm, microjump
-#   - Dogfight:           straight, bank, loop, kill_rotation
+#   - Dogfight:           (no native beats — sealed_letter_lookup; maneuver menu
+#                          comes from the interaction table, ADR-153 §2 / 158-31)
 # Combat-capable roles lean strike/brace; social roles (Officer, Diplomat)
 # lean angle/push, mirroring the caverns_and_claudes per-class beat pattern.
 #
@@ -132,10 +133,9 @@
     - asteroid_thread
     - microjump
     - evasive_maneuver
-    - straight
-    - bank
-    - loop
-    - kill_rotation
+    # ADR-153 §2 (158-31): the dogfight beats (straight/bank/loop/kill_rotation)
+    # were removed — the dogfight is sealed_letter_lookup and its maneuver menu
+    # comes from the interaction table (maneuvers_consumed), not native beats.
   magic_access: null
   abilities:
     - name: "Threading the Needle"
@@ -145,10 +145,9 @@
         it because you have stopped asking it permission — the two of you
         decided this together a long time ago.
       mechanical_effect: >-
-        Once per chase or dogfight, re-fly a failed push or evasive beat at
-        advantage (asteroid_thread, burn, evasive_maneuver, bank). On the
-        re-fly, the usual crit-fail hull penalty is suppressed — the line
-        was always there.
+        Once per chase, re-fly a failed push or evasive beat at advantage
+        (asteroid_thread, burn, evasive_maneuver). On the re-fly, the usual
+        crit-fail hull penalty is suppressed — the line was always there.
       involuntary: false
 
 - id: engineer

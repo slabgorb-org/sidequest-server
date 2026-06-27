@@ -22,12 +22,25 @@ from ._core import SPAN_ROUTES, SpanRoute
 from .span import Span
 
 SPAN_QUEST_BOUND = "dungeon.quest.bound"
+SPAN_QUEST_MINTED = "dungeon.quest.minted"
 SPAN_QUEST_RESOLVED = "dungeon.quest.resolved"
 
 
 def _attr(field: str):
     return lambda span, f=field: (span.attributes or {}).get(f)
 
+
+SPAN_ROUTES[SPAN_QUEST_MINTED] = SpanRoute(
+    event_type="state_transition",
+    component="dungeon",
+    extract=lambda s: {
+        "field": "quest_log",
+        "op": "quest_minted",
+        "expansion_id": _attr("expansion_id")(s),
+        "quest_id": _attr("quest_id")(s),
+        "signature_kind": _attr("signature_kind")(s),
+    },
+)
 
 SPAN_ROUTES[SPAN_QUEST_BOUND] = SpanRoute(
     event_type="state_transition",
@@ -89,6 +102,37 @@ def quest_bound_span(
 
 
 @contextmanager
+def quest_minted_span(
+    *,
+    expansion_id: int,
+    quest_id: str,
+    signature_kind: str = "",
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Open a dungeon.quest.minted span.
+
+    Emitted when an expansion-quest thread is first *projected* into
+    ``snapshot.quest_log`` — the moment the quest becomes player-visible in the
+    Quests tab. ``dungeon.quest.bound`` fires at seed time (when the signature
+    beat is chosen) and ``dungeon.quest.resolved`` at completion; this span
+    closes the gap between them so the GM panel sees the quest appear rather
+    than discovering it as a silent state write.
+    """
+    with Span.open(
+        SPAN_QUEST_MINTED,
+        {
+            "expansion_id": expansion_id,
+            "quest_id": quest_id,
+            "signature_kind": signature_kind,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
 def quest_resolved_span(
     *,
     expansion_id: int,
@@ -123,7 +167,9 @@ def quest_resolved_span(
 
 __all__ = [
     "SPAN_QUEST_BOUND",
+    "SPAN_QUEST_MINTED",
     "SPAN_QUEST_RESOLVED",
     "quest_bound_span",
+    "quest_minted_span",
     "quest_resolved_span",
 ]

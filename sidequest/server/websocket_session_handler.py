@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from sidequest.handlers.base import MessageHandler
     from sidequest.server.session_room import RoomRegistry, SessionRoom
 
+from sidequest.agents.anthropic_sdk_client import AnthropicSdkLoopExceeded
 from sidequest.agents.claude_client import LlmClient
 from sidequest.agents.dispatch_engagement_watcher import (
     run_dispatch_engagement_watcher,
@@ -1072,7 +1073,58 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     refresh_turn_context_post_dispatch(turn_context, sd=sd, snapshot=snapshot)
 
                 with orchestrator_process_action_span(action_len=len(action)):
-                    result = await sd.orchestrator.run_narration_turn(action, turn_context)
+                    try:
+                        result = await sd.orchestrator.run_narration_turn(action, turn_context)
+                    except AnthropicSdkLoopExceeded as exc:
+                        # Story 158-41 / ADR-006 (graceful degradation): the SDK
+                        # tool-use loop hit its max_turns cap. This is GENERAL
+                        # narrator robustness — any subsystem that fails to seat
+                        # can flail the loop to exhaustion, not just the dogfight
+                        # router-decline that surfaced it (coyote_star 2026-06-25).
+                        # Do NOT let it propagate: an escaped exception unwinds the
+                        # method-level try (whose only clause is the finally below,
+                        # which files a degraded TurnRecord) and forces
+                        # session.disconnect_save -> room teardown -> reconnect,
+                        # wedging the player mid-turn. Degrade LOUDLY instead —
+                        # emit a GM-panel watcher event (the lie-detector must see
+                        # the degraded path engaged), surface a player-facing
+                        # "try rephrasing" notice WITHOUT a forced reconnect, and
+                        # return so the room stays alive and accepts the next
+                        # action. No silent swallow; never re-route the dogfight
+                        # here (158-29/153) — the fix is generic.
+                        logger.warning(
+                            "narrator.sdk_loop_exhausted genre=%s world=%s "
+                            "player_id=%s action_len=%d turn=%d — degraded-continue "
+                            "(ADR-006), session kept alive; %s",
+                            sd.genre_slug,
+                            sd.world_slug,
+                            sd.player_id,
+                            len(action),
+                            snapshot.turn_manager.interaction,
+                            exc,
+                        )
+                        _watcher_publish(
+                            "narrator.sdk_loop_exhausted",
+                            {
+                                "genre_slug": sd.genre_slug,
+                                "world_slug": sd.world_slug,
+                                "player_id": sd.player_id,
+                                "action_len": len(action),
+                                "turn": snapshot.turn_manager.interaction,
+                                "reason": "max_turns_exhausted",
+                                "recovery": "degraded_continue",
+                            },
+                            component="narrator",
+                            severity="warning",
+                        )
+                        return [
+                            _error_msg(
+                                "The engine could not resolve that action — "
+                                "please try rephrasing it.",
+                                reconnect_required=False,
+                                code="narrator_loop_exhausted",
+                            )
+                        ]
 
                 logger.info(
                     "session.narration_complete genre=%s world=%s degraded=%s duration_ms=%s",

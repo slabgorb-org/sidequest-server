@@ -204,6 +204,68 @@ def test_dogfight_beat_menu_span_records_ruleset(swn_pack: GenrePack, otel_captu
 
 
 # ---------------------------------------------------------------------------
+# Reviewer HIGH (red rework) — a no-roll sealed-letter maneuver tile must NOT carry a
+# fabricated d20 difficulty, and the beat_dc_authored lie-detector span must not record
+# one. A maneuver resolves by interaction-table lookup, never a d20 vs AC, so it follows
+# the same no-DC contract as the auto-success item-use ("Drink <potion>") beats.
+# ---------------------------------------------------------------------------
+
+
+def test_dogfight_maneuver_tiles_carry_no_d20_difficulty(swn_pack: GenrePack) -> None:
+    """RED rework (Reviewer HIGH): the CONFRONTATION payload's sealed-letter maneuver
+    tiles must NOT carry a ``difficulty``. Today ``build_confrontation_payload``'s
+    ``_offer_dc`` loop stamps the target ship's armor class on every maneuver tile
+    (``offer_difficulty`` ignores ``stat_check`` and returns AC), so a no-roll maneuver
+    is shown with a d20 DC it never rolls. Absent ``difficulty`` is the UI's
+    'no dice tray' signal — the same contract item-use beats use."""
+    payload = build_confrontation_payload(
+        encounter=_dogfight_encounter(),
+        cdef=_dogfight_cdef(swn_pack),
+        genre_slug=SWN_TEST_PACK,
+        recipient_pc=(_pilot_class(), 0.0, None),
+        recipient_actor_name=PILOT,
+        core_resolver=lambda n: _core() if n == PILOT else None,
+        rules=swn_pack.rules,
+    )
+    tiles_with_dc = [b["id"] for b in payload["beats"] if "difficulty" in b]
+    assert not tiles_with_dc, (
+        "sealed-letter dogfight maneuver tiles must not carry a d20 'difficulty' — a "
+        f"maneuver is a no-roll table-lookup commit; tiles with a stamped DC: {tiles_with_dc}"
+    )
+
+
+def test_dogfight_beat_dc_authored_span_records_no_maneuver_dcs(
+    swn_pack: GenrePack, otel_capture
+) -> None:
+    """RED rework (Reviewer HIGH): ``confrontation.beat_dc_authored`` is the GM-panel
+    lie-detector for authored DCs. Feeding it the ship's AC as a 'maneuver DC' for a
+    no-roll sealed-letter maneuver pollutes it with numbers no resolver consults. Its
+    ``beat_difficulties`` must name NO dogfight maneuver."""
+    build_confrontation_payload(
+        encounter=_dogfight_encounter(),
+        cdef=_dogfight_cdef(swn_pack),
+        genre_slug=SWN_TEST_PACK,
+        recipient_pc=(_pilot_class(), 0.0, None),
+        recipient_actor_name=PILOT,
+        core_resolver=lambda n: _core() if n == PILOT else None,
+        rules=swn_pack.rules,
+    )
+    dc_spans = [
+        s for s in otel_capture.get_finished_spans() if s.name == "confrontation.beat_dc_authored"
+    ]
+    assert dc_spans, "building the dogfight beat menu must emit a confrontation.beat_dc_authored span"
+    maneuvers = set(_dogfight_cdef(swn_pack).interaction_table.maneuvers_consumed)
+    for span in dc_spans:
+        authored = str((span.attributes or {}).get("beat_difficulties", ""))
+        named = {pair.split("=", 1)[0] for pair in authored.split(",") if "=" in pair}
+        leaked = named & maneuvers
+        assert not leaked, (
+            "the beat_dc_authored lie-detector must not record a d20 DC for a no-roll "
+            f"sealed-letter maneuver; leaked: {sorted(leaked)} (authored={authored!r})"
+        )
+
+
+# ---------------------------------------------------------------------------
 # AC1 + AC4 — committing the offered dogfight beat through the REAL DICE_THROW seam
 # must not crash the SWN resolver or soft-lock the confrontation.
 # ---------------------------------------------------------------------------

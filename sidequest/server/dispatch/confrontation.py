@@ -282,6 +282,12 @@ def build_confrontation_payload(
         }
         if rejection_reason is not None:
             span_kwargs["cast_spell_rejection_reason"] = rejection_reason
+        # GM-panel ruleset discriminator (story 158-49): record the bound ruleset on
+        # the beat-menu span so a SWN dogfight that correctly gets SWN/sealed-letter
+        # maneuvers is distinguishable from one wrongly handed the WWN-default
+        # personal-combat pool — the lie-detector for this mismatch class.
+        if rules is not None:
+            span_kwargs["ruleset"] = rules.ruleset
         with confrontation_beat_filter_span(**span_kwargs):
             pass
         beats_for_payload = filtered

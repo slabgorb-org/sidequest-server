@@ -26,7 +26,7 @@ from sidequest.game.beat_kinds import BeatKind
 from sidequest.game.wwn_magic import SpellcastingState
 from sidequest.genre.error import PackError
 from sidequest.genre.models.character import ClassDef
-from sidequest.genre.models.rules import BeatDef, ConfrontationDef, DamageChannel
+from sidequest.genre.models.rules import BeatDef, ConfrontationDef, DamageChannel, ResolutionMode
 
 # Story 106-4 Part C — transient inventory item-use beats. The confrontation
 # beat menu scans the actor's carried inventory and offers a "Drink <potion>"
@@ -241,6 +241,20 @@ def wn_action_beat(beat_id: str) -> BeatDef:
     )
 
 
+def sealed_letter_maneuver_beat(maneuver_id: str) -> BeatDef:
+    """A display-only ``BeatDef`` for a sealed-letter dogfight maneuver (story 158-49).
+
+    A maneuver resolves by simultaneous cross-product lookup in the interaction table
+    (ADR-153 / ``resolve_sealed_letter_lookup``), NOT a personal d20 throw — so it
+    carries NO ``stat_check`` and NO ``kind`` (a display-only stub, the same shape a
+    Fate Contest beat uses). The id IS the maneuver id (content convention: the
+    maneuver namespace == the beat namespace — see
+    ``tests/genre/test_dogfight_content_loading.py``), so a committed selection
+    round-trips straight into ``maneuvers_consumed``. The label is derived from the id
+    until 158-40 surfaces the positioning-graph's authored maneuver labels."""
+    return BeatDef(id=maneuver_id, label=maneuver_id.replace("_", " ").title())
+
+
 def wn_cast_beat() -> BeatDef:
     """The transient ``BeatDef`` for the synthesized WWN cast action (story 152-2).
 
@@ -354,6 +368,32 @@ def beats_available_for(
             if prepared_spells is not None and not _has_any_prepared(prepared_spells):
                 continue
         pool.append(beat)
+    # Sealed-letter maneuver menu (sq-playtest 2026-06-27 coyote_star, story 158-49):
+    # a ``sealed_letter_lookup`` confrontation — the ADR-153 dogfight — resolves by
+    # SIMULTANEOUS maneuver commit (``resolve_sealed_letter_lookup``), NOT the personal
+    # d20 path. Its committable options are the interaction table's
+    # ``maneuvers_consumed``; 108-3 dropped the vestigial ``cdef.beats``, so synthesize
+    # a display-only beat (id + label, NO personal stat_check) per maneuver. Returning
+    # HERE is exclusive — it EXCLUDES the WN personal-combat synthesis below: handing a
+    # ship duel the WWN SRD §2.4.4 ground actions (attack/total_defense/…) routed the
+    # STR strike into ``without_number.attack_params`` and crashed the SWN resolver (the
+    # KeyError soft-lock). Fail loud if the table authors no maneuvers (No Silent
+    # Fallbacks) rather than degrade to an empty or personal-combat menu (AC3).
+    if confrontation.resolution_mode == ResolutionMode.sealed_letter_lookup:
+        table = confrontation.interaction_table
+        maneuvers = list(table.maneuvers_consumed) if table is not None else []
+        if not maneuvers:
+            raise PackError(
+                f"sealed-letter confrontation {confrontation.confrontation_type!r} "
+                "declares no interaction_table maneuvers_consumed — cannot build a "
+                "ruleset-valid maneuver menu (No Silent Fallbacks)"
+            )
+        existing_ids = {b.id for b in pool}
+        for maneuver in maneuvers:
+            if maneuver not in existing_ids:
+                pool.append(sealed_letter_maneuver_beat(maneuver))
+        return pool
+
     # WN action menu synthesis (sq-playtest 2026-06-27, ADR-143 / epic 108): the
     # SELECTION-MENU twin of the resolution-side WN action synthesis (wn_round.py /
     # dice.py, stories 108-8 / 152-1). 108-3 strips cdef.beats to [] for a WWN

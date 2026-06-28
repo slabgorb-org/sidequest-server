@@ -45,7 +45,8 @@ from sidequest.genre.models.pack import GenrePack
 from sidequest.genre.models.rules import ConfrontationDef
 from sidequest.protocol.dice import DiceThrowPayload, ThrowParams
 from sidequest.server.dispatch.confrontation import build_confrontation_payload
-from sidequest.server.dispatch.dice import dispatch_dice_throw
+from sidequest.server.dispatch.dice import DiceDispatchError, dispatch_dice_throw
+from sidequest.server.dispatch.sealed_letter import resolve_sealed_letter_lookup
 from tests._helpers.fixture_packs import SWN_TEST_PACK, TEST_WORLD, load_fixture_pack
 from tests._helpers.trigger_encounter import trigger_encounter
 
@@ -208,15 +209,21 @@ def test_dogfight_beat_menu_span_records_ruleset(swn_pack: GenrePack, otel_captu
 # ---------------------------------------------------------------------------
 
 
-def test_committing_offered_dogfight_beat_does_not_crash_swn_resolver(
+def test_seated_dogfight_offers_committable_maneuvers_no_crash(
     swn_pack: GenrePack,
 ) -> None:
-    """RED (AC1/AC4): seat a dogfight, take the beat the player is actually offered, and
-    commit it through the production ``dispatch_dice_throw`` seam. Today the menu leads
-    with ``attack`` (stat_check STR); committing it reaches
-    ``without_number.attack_params`` → ``_stat(flavor_block,'STR')`` → KeyError, which
-    tears down the websocket and leaves the confrontation soft-locked. The committed
-    beat must instead resolve with no exception."""
+    """AC1/AC4: a seated SWN dogfight hands the player a ruleset-valid, committable
+    maneuver set whose commit ADVANCES the confrontation without crashing the SWN
+    resolver.
+
+    Seam note (TEA Gap finding / Dev deviation): a sealed-letter dogfight maneuver
+    commits through the SIMULTANEOUS sealed-letter path
+    (``resolve_sealed_letter_lookup``), NOT ``dispatch_dice_throw`` — the d20 dice seam
+    only ever served the (now-suppressed) WN personal-combat beat that crashed. So the
+    AC's "drive the real DICE_THROW dispatch; assert no exception" splits into two
+    faithful checks: (a) the offered maneuver resolves through the real sealed-letter
+    engine, and (b) the OLD crash path through ``dispatch_dice_throw`` is now a LOUD,
+    caught rejection — a ``DiceDispatchError``, never the ``KeyError`` ws-teardown."""
     pack = swn_pack
     snap = GameSnapshot(genre=SWN_TEST_PACK)
     snap.genre_slug = SWN_TEST_PACK
@@ -234,40 +241,56 @@ def test_committing_offered_dogfight_beat_does_not_crash_swn_resolver(
     enc = snap.encounter
     assert enc is not None, "the dogfight must seat before the commit"
 
-    # The beat the player is actually handed (real menu surface). Today: 'attack' first.
+    dogfight = _dogfight_cdef(pack)
     offered = beats_available_for(
-        _dogfight_cdef(pack), _pilot_class(), spell_slots_remaining=0.0, is_wn_binding=True
+        dogfight, _pilot_class(), spell_slots_remaining=0.0, is_wn_binding=True
     )
-    assert offered, "a seated dogfight must offer the player at least one beat (no soft-lock)"
-    first = offered[0]
+    # AC4 (no soft-lock): a non-empty menu of REAL, legal sealed-letter maneuvers, each
+    # carrying NO personal stat_check (so nothing can route into attack_params).
+    assert offered, "a seated dogfight must offer the player at least one maneuver"
+    legal = set(dogfight.interaction_table.maneuvers_consumed)
+    offered_ids = {b.id for b in offered}
+    assert offered_ids <= legal, (
+        f"offered beats must be legal sealed-letter maneuvers; "
+        f"non-maneuvers: {sorted(offered_ids - legal)}"
+    )
+    assert not any(b.stat_check for b in offered), (
+        "a sealed-letter maneuver carries no personal stat_check (table-lookup resolution)"
+    )
 
+    # AC4 (advances): committing the offered maneuver through the REAL sealed-letter
+    # engine resolves the cell without crashing and leaves the fight live.
+    maneuver = offered[0].id
+    sl_outcome = resolve_sealed_letter_lookup(
+        enc, {"red": maneuver, "blue": maneuver}, dogfight.interaction_table
+    )
+    assert sl_outcome is not None
+    assert snap.encounter is not None and not snap.encounter.resolved
+
+    # AC1 (crash dead / fail loud): the d20 dice seam that crashed is now a LOUD, caught
+    # rejection. Driving the real dispatch_dice_throw with the beat the buggy menu used
+    # to offer ("attack", stat_check STR) must raise DiceDispatchError — NOT the
+    # KeyError that tore down the websocket. (pytest.raises(DiceDispatchError) does not
+    # catch a KeyError, so the old crash would fail this assertion.)
     payload = DiceThrowPayload(
         request_id="req-158-49",
         throw_params=ThrowParams(
             velocity=(0.0, 5.0, -2.0), angular=(1.0, 1.0, 1.0), position=(0.5, 0.5)
         ),
         face=[13],
-        beat_id=first.id,
+        beat_id="attack",
     )
-
-    # Production DICE_THROW seam. Must NOT raise (today: KeyError "stat 'STR' not in
-    # stat block [...]"). dispatch_dice_throw returning normally == the ws survived.
-    outcome = dispatch_dice_throw(
-        payload=payload,
-        rolling_player_id="p1",
-        character_name=PILOT,
-        character_stats=dict(_FLAVOR_STATS),
-        encounter=enc,
-        pack=pack,
-        genre_slug=SWN_TEST_PACK,
-        session_id="s-158-49",
-        round_number=1,
-        room_broadcast=None,
-        snapshot=snap,
-    )
-
-    assert outcome is not None
-    # AC4: the confrontation is not abandoned mid-commit by a crash — the encounter
-    # is still present and resolvable (a legitimate pending seal is fine; a torn-down
-    # ws with an unresolved encounter is the soft-lock this guards against).
-    assert snap.encounter is not None
+    with pytest.raises(DiceDispatchError):
+        dispatch_dice_throw(
+            payload=payload,
+            rolling_player_id="p1",
+            character_name=PILOT,
+            character_stats=dict(_FLAVOR_STATS),
+            encounter=enc,
+            pack=pack,
+            genre_slug=SWN_TEST_PACK,
+            session_id="s-158-49",
+            round_number=1,
+            room_broadcast=None,
+            snapshot=snap,
+        )

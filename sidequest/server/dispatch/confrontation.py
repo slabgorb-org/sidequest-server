@@ -282,6 +282,12 @@ def build_confrontation_payload(
         }
         if rejection_reason is not None:
             span_kwargs["cast_spell_rejection_reason"] = rejection_reason
+        # GM-panel ruleset discriminator (story 158-49): record the bound ruleset on
+        # the beat-menu span so a SWN dogfight that correctly gets SWN/sealed-letter
+        # maneuvers is distinguishable from one wrongly handed the WWN-default
+        # personal-combat pool — the lie-detector for this mismatch class.
+        if rules is not None:
+            span_kwargs["ruleset"] = rules.ruleset
         with confrontation_beat_filter_span(**span_kwargs):
             pass
         beats_for_payload = filtered
@@ -430,14 +436,24 @@ def build_confrontation_payload(
 
         from sidequest.game.beat_filter import is_item_use_beat
 
+        # Story 158-49: a sealed-letter dogfight maneuver resolves by interaction-table
+        # cross-product lookup (resolve_sealed_letter_lookup), NEVER a d20 vs AC — so,
+        # exactly like the item-use beats below, it carries NO to-hit difficulty. Without
+        # this skip the no-roll maneuver tiles were stamped with the target ship's AC
+        # (offer_difficulty ignores stat_check and returns AC), and the beat_dc_authored
+        # span advertised those fabricated DCs to the GM panel — a number no resolver
+        # consults. The span still fires below (with no maneuver in beat_difficulties).
+        is_sealed_letter = cdef.resolution_mode == ResolutionMode.sealed_letter_lookup
+
         for beat_def, beat_dict in zip(beats_for_payload, payload["beats"], strict=True):
             # Story 106-4 Part C: item-use beats ("Drink <potion>") are
             # auto-success, no-roll actions — they carry NO to-hit difficulty.
             # Leaving ``difficulty`` absent is the wire signal the UI reads to
             # commit them without a dice tray (the cast_spell-tile precedent of
             # a non-dice beat path). Stamping an attack DC here would make the
-            # client roll a d20 to drink a potion (wrong) — skip them.
-            if is_item_use_beat(beat_def.id):
+            # client roll a d20 to drink a potion (wrong) — skip them. Sealed-letter
+            # maneuvers (158-49) are the same no-roll category — skip them too.
+            if is_sealed_letter or is_item_use_beat(beat_def.id):
                 continue
             beat_dict["difficulty"] = _offer_dc(beat_def)
         # GM-panel lie-detector (CLAUDE.md OTEL discipline): the offered

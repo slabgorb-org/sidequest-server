@@ -388,6 +388,23 @@ def dispatch_dice_throw(
             f"(pack data bug — CLAUDE.md 'no silent fallback')"
         )
 
+    # Sealed-letter dogfight (story 158-49): a ``sealed_letter_lookup`` confrontation
+    # resolves by SIMULTANEOUS maneuver commit (``resolve_sealed_letter_lookup``), and
+    # its gun roll arrives via the pending-shot path in the DICE_THROW handler (which
+    # returns before this dispatcher) — NEVER the personal d20 resolution below. A beat
+    # reaching here for a sealed-letter cdef is the 158-49 bug: the forced-dispatch
+    # dogfight handed the player the WN personal-combat menu, and committing "attack"
+    # synthesized a STR strike that crashed ``without_number.attack_params`` on the SWN
+    # stat block (the 2026-06-27 coyote_star ws-teardown soft-lock). Reject LOUD at the
+    # seam (No Silent Fallbacks / AC3) instead of routing a ship duel through the
+    # ground-combat dice path.
+    if cdef.resolution_mode == ResolutionMode.sealed_letter_lookup:
+        raise DiceDispatchError(
+            f"beat_id {payload.beat_id!r} committed via DICE_THROW on sealed-letter "
+            f"confrontation {encounter.encounter_type!r}: dogfight maneuvers resolve "
+            "through the sealed-letter commit path, not the d20 dice path"
+        )
+
     # Story 106-4 Part C: a "Drink <potion>" item-use beat is not authored on
     # the cdef — it's a transient beat synthesized from the actor's inventory.
     # It resolves auto-success (no d20) and costs the Main Action; route it to

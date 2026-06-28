@@ -31,5 +31,12 @@ class Span:
             from sidequest.telemetry import spans as _spans
 
             tracer_override = _spans.tracer()
-        with tracer_override.start_as_current_span(name, attributes=attrs or {}) as span:
+        # Drop None-valued attributes (story 158-48): the OTEL SDK rejects a None
+        # attribute value ("Invalid type NoneType for attribute '<k>'") and logs a
+        # warning on every span that carries one — e.g. a resolution-signal span
+        # whose ``yield_side`` is None for a non-yield outcome (player_victory).
+        # The key was never actually recorded (OTEL drops it), so filtering here is
+        # pure log-noise removal with no behavior change, centralized once.
+        safe_attrs = {k: v for k, v in attrs.items() if v is not None} if attrs else {}
+        with tracer_override.start_as_current_span(name, attributes=safe_attrs) as span:
             yield span

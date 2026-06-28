@@ -40,7 +40,7 @@ field.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -260,4 +260,74 @@ async def test_end_to_end_resolution_signal_fires_denativized_zone_and_drops_sta
         "the start-a-confrontation menu must be suppressed on the resolution turn "
         "(it told the narrator to START a fresh fight and drove the max_turns "
         "crash) — it renders on develop because pending_resolution_signal is None"
+    )
+
+
+# ---------------------------------------------------------------------------
+# AC4 — one-shot lifecycle: the signal is CLEARED after the orchestrator consumes
+# it, so the resolution zone fires on the resolution turn only and a later
+# non-resolution turn does not re-render the close (ResolutionSignal docstring:
+# "reads this slot on the next turn and clears it"; the 49-5 follow-up).
+# Drives the real ``_execute_narration_turn`` with a fake orchestrator (mirrors
+# ``tests/server/test_turn_record_wiring.py``).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resolution_signal_cleared_after_consuming_turn(session_fixture) -> None:
+    """After a narration turn consumes the signal, the session handler clears
+    ``snapshot.pending_resolution_signal`` so the NEXT turn does not re-thread the
+    stale signal and re-narrate the close. Without the clear the [ENCOUNTER
+    RESOLVED] zone fires every turn forever (violates AC4)."""
+    from sidequest.agents.orchestrator import NarrationTurnResult
+    from tests.server.conftest import _build_turn_context_for_test
+
+    sd, handler = session_fixture
+    handler._validator = None
+    # The session_fixture pack is a MagicMock; pin effective_bestiary to a real
+    # empty 2-tuple so the per-turn monster_manual injection step does not crash
+    # on an unpackable auto-mock (same real-defaults pattern the fixture already
+    # applies to progression / drama_thresholds / rules).
+    sd.genre_pack.effective_bestiary = MagicMock(return_value=(None, "genre"))
+    sd.orchestrator.run_narration_turn = AsyncMock(
+        return_value=NarrationTurnResult(
+            narration="The Pale Thing folds into the black water. Silence.",
+            is_degraded=False,
+            agent_duration_ms=1,
+        )
+    )
+    sd.snapshot.pending_resolution_signal = _victory_signal()
+    turn_context = _build_turn_context_for_test(sd)
+
+    await handler._execute_narration_turn(sd, "[BEAT_RESOLVED] the kill", turn_context)
+
+    assert sd.snapshot.pending_resolution_signal is None, (
+        "the one-shot resolution signal must be cleared from the snapshot after the "
+        "orchestrator consumes it — a stale signal re-fires the [ENCOUNTER RESOLVED] "
+        "zone on every subsequent turn"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolution_signal_cleared_on_degraded_turn(session_fixture) -> None:
+    """The clear runs even when the narrator degrades (AnthropicSdkLoopExceeded):
+    a degraded turn must not leave the signal armed for the next action."""
+    from sidequest.agents.anthropic_sdk_client import AnthropicSdkLoopExceeded
+    from tests.server.conftest import _build_turn_context_for_test
+
+    sd, handler = session_fixture
+    handler._validator = None
+    sd.genre_pack.effective_bestiary = MagicMock(return_value=(None, "genre"))
+    sd.orchestrator.run_narration_turn = AsyncMock(
+        side_effect=AnthropicSdkLoopExceeded("Reached maximum number of turns (8)")
+    )
+    sd.snapshot.pending_resolution_signal = _victory_signal()
+    turn_context = _build_turn_context_for_test(sd)
+
+    # Degrades gracefully (ADR-006 / 158-41) — returns an error frame, does not raise.
+    await handler._execute_narration_turn(sd, "[BEAT_RESOLVED] the kill", turn_context)
+
+    assert sd.snapshot.pending_resolution_signal is None, (
+        "the one-shot resolution signal must be cleared even on the degraded path — "
+        "a degraded turn must not leave it armed for the next action"
     )

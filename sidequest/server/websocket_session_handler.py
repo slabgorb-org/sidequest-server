@@ -1127,6 +1127,19 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                                 code="narrator_loop_exhausted",
                             )
                         ]
+                    finally:
+                        # One-shot resolution signal (story 158-48, ADR-143): the
+                        # orchestrator has now consumed turn_context.pending_resolution_signal
+                        # (the [ENCOUNTER RESOLVED] zone was built into THIS turn's
+                        # prompt by _build_turn_context / refresh_turn_context_post_dispatch).
+                        # Clear it from the snapshot so a later non-resolution turn does
+                        # not re-thread the stale signal and re-narrate the close forever
+                        # (ResolutionSignal is read-once-then-cleared; the 49-5 follow-up
+                        # this completes). Runs on the degraded path too — a degraded turn
+                        # must not leave the signal armed for the next action. Runs BEFORE
+                        # state_apply below, which may stamp a FRESH signal (dial/yield
+                        # narrator-beat close) that correctly survives to the next turn.
+                        snapshot.pending_resolution_signal = None
 
                 logger.info(
                     "session.narration_complete genre=%s world=%s degraded=%s duration_ms=%s",

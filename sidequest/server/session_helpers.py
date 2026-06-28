@@ -624,7 +624,9 @@ class _EncounterProjection(NamedTuple):
     encounter_summary: str | None
 
 
-def _project_encounter_fields(snapshot: GameSnapshot, genre_pack: GenrePack) -> _EncounterProjection:
+def _project_encounter_fields(
+    snapshot: GameSnapshot, genre_pack: GenrePack
+) -> _EncounterProjection:
     """Derive the encounter flags + matched ConfrontationDef + summary from the
     snapshot's live encounter. Skips resolved encounters so a closed combat does
     not keep flipping ``in_combat=True`` (mirrors the original inline logic in
@@ -654,6 +656,50 @@ def _project_encounter_fields(snapshot: GameSnapshot, genre_pack: GenrePack) -> 
         confrontation_def=confrontation_def,
         encounter_summary=encounter_summary,
     )
+
+
+def _thread_resolution_signal(turn_context: TurnContext, snapshot: GameSnapshot) -> None:
+    """Thread the one-shot encounter-resolution signal from the snapshot into the
+    turn context and surface a GM-panel watcher event (story 158-48 — the
+    resolution-turn twin of #1086's cold-seat refresh).
+
+    The ``[ENCOUNTER RESOLVED]`` narrator zone is gated on
+    ``TurnContext.pending_resolution_signal`` (``orchestrator.py``); the snapshot
+    carries the signal (stamped by the resolution close — ``dispatch/dice.py``
+    ``_emit_player_beat_resolution_close`` for a WN player_victory,
+    ``narration_apply.py`` for dial/yield closes), but nothing copied it into the
+    context after the story-49-5 ``run_narration_turn`` wrapper deletion, so the
+    zone was dormant: on the victory turn the narrator got the
+    "AVAILABLE ENCOUNTER TYPES" start-a-confrontation menu (gated on
+    ``pending_resolution_signal is None``) instead of the de-nativized "narrate the
+    close; do NOT emit beat_selections" directive, and ground its SDK tool loop
+    past ``max_turns`` (AnthropicSdkLoopExceeded) so the victory NARRATION never
+    persisted.
+
+    Both context-build seams call this so the pre-dispatch (``_build_turn_context``)
+    and post-dispatch (``refresh_turn_context_post_dispatch``) paths cannot drift
+    on when a resolution is pending. The signal is one-shot: the session handler
+    clears ``snapshot.pending_resolution_signal`` after the orchestrator consumes
+    it (so the zone fires on the resolution turn only, never the turns after)."""
+    sig = snapshot.pending_resolution_signal
+    turn_context.pending_resolution_signal = sig
+    if sig is not None:
+        # GM-panel lie-detector (CLAUDE.md OTEL principle), twin of
+        # cold_seat_context_refreshed: surface that THIS turn was handed the
+        # resolution zone so the panel can confirm the close was narrated by the
+        # engine-stamped signal, not improvised.
+        from sidequest.telemetry.watcher_hub import publish_event
+
+        publish_event(
+            "state_transition",
+            {
+                "field": "encounter",
+                "op": "resolution_context_refreshed",
+                "encounter_type": getattr(sig, "encounter_type", None),
+                "outcome": getattr(sig, "outcome", None),
+            },
+            component="encounter",
+        )
 
 
 def refresh_turn_context_post_dispatch(
@@ -721,6 +767,12 @@ def refresh_turn_context_post_dispatch(
             },
             component="encounter",
         )
+    # Resolution-turn twin (story 158-48): a dispatch that RESOLVED the encounter
+    # this turn (dial/yield close) stamps snapshot.pending_resolution_signal AFTER
+    # the pre-dispatch _build_turn_context already read None — thread it now so the
+    # [ENCOUNTER RESOLVED] zone fires on the resolution turn instead of the
+    # start-a-confrontation menu.
+    _thread_resolution_signal(turn_context, snapshot)
 
 
 def _build_turn_context(
@@ -1225,7 +1277,7 @@ def _build_turn_context(
                 st for st in acting_core.statuses if st.source == DARKNESS_STATUS_SOURCE
             ]
 
-    return TurnContext(
+    turn_context = TurnContext(
         pacing_hint=pacing_hint,
         in_combat=in_combat,
         in_chase=in_chase,
@@ -1368,6 +1420,13 @@ def _build_turn_context(
         light_pool=light_pool,
         darkness_statuses=darkness_statuses,
     )
+    # Resolution-turn signal (story 158-48): on the DICE path the resolution close
+    # already stamped snapshot.pending_resolution_signal BEFORE this pre-narrator
+    # context build (dispatch_dice_throw runs in the handler first), so thread it
+    # here too — the dice handler skips the post-dispatch refresh. Reviving the
+    # dormant [ENCOUNTER RESOLVED] zone is what lets the WN victory turn converge.
+    _thread_resolution_signal(turn_context, snapshot)
+    return turn_context
 
 
 def _find_confrontation_def(pack: GenrePack, confrontation_type: str) -> object | None:

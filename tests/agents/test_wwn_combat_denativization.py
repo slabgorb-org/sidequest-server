@@ -483,7 +483,9 @@ def test_refresh_post_dispatch_reflects_a_freshly_seated_wn_combat() -> None:
     )
     assert ctx.in_encounter is True
     assert ctx.encounter is snap.encounter
-    assert ctx.confrontation_def is not None and ctx.confrontation_def.confrontation_type == "combat"
+    assert (
+        ctx.confrontation_def is not None and ctx.confrontation_def.confrontation_type == "combat"
+    )
     assert ctx.encounter_summary is not None
     # The refreshed context satisfies the EXACT predicate that gates all three
     # de-nativization arms (orchestrator.py:2251 suppress_native_combat) — the
@@ -601,4 +603,169 @@ async def test_refreshed_cold_seat_context_fires_denativized_zone_not_start_menu
     assert "Do NOT emit beat_selections" in prompt_text
     assert "player's die throw" in prompt_text
     # The start-a-confrontation menu is suppressed now combat is live.
+    assert "AVAILABLE ENCOUNTER TYPES" not in prompt_text
+
+
+# ---------------------------------------------------------------------------
+# A2 RESOLUTION-TURN (sq-playtest 2026-06-27 — the PRIMARY lie-detector crash,
+# session 16570; the resolution-turn TWIN of the cold-seat above and of #1086) —
+# on the WWN combat KILL turn the player's DICE_THROW resolves the encounter, so
+# ``in_combat`` legitimately flips False the instant it resolves AND the encounter
+# is reaped. The resolution close stamps ``snapshot.pending_resolution_signal``
+# (dispatch/dice.py ``_emit_player_beat_resolution_close`` for player_victory),
+# but ``refresh_turn_context_post_dispatch`` (and ``_build_turn_context``) never
+# copy it into ``TurnContext.pending_resolution_signal`` — the [ENCOUNTER
+# RESOLVED] zone has been DORMANT since the story-49-5 wrapper deletion (see the
+# TurnContext field docstring in orchestrator.py). So on the victory turn the
+# narrator gets NEITHER the de-nativized "throw already resolved; just narrate the
+# outcome; do NOT emit beat_selections" directive NOR a suppressed
+# start-a-confrontation menu (the menu is gated on ``pending_resolution_signal is
+# None``, always true today) → it flails its SDK tool loop past max_turns=8
+# (AnthropicSdkLoopExceeded) → the victory NARRATION is never persisted and the
+# client falls back to the opening card (ADR-133). The fix mirrors #1086: the
+# post-dispatch refresh threads the stamped signal + surfaces a GM-panel watcher
+# event (twin of cold_seat_context_refreshed). The DICE-path ``_build_turn_context``
+# seam is pinned in tests/server/test_resolution_signal_turn_context_wiring.py.
+# ---------------------------------------------------------------------------
+
+
+def _victory_resolution_signal():
+    from sidequest.game.resolution_signal import ResolutionSignal
+
+    return ResolutionSignal(
+        encounter_type="combat",
+        outcome="player_victory",
+        final_player_metric=0,
+        final_opponent_metric=0,
+    )
+
+
+# The GM-panel watcher op the resolution-turn bridge surfaces (twin of
+# cold_seat_context_refreshed). Shared contract with the _build_turn_context seam.
+_RESOLUTION_OP = "resolution_context_refreshed"
+
+
+def test_refresh_post_dispatch_threads_resolution_signal_to_context() -> None:
+    """The resolution-turn root cause: the kill resolves and stamps
+    ``snapshot.pending_resolution_signal``, so the post-dispatch refresh must copy
+    it into ``ctx.pending_resolution_signal``. Otherwise the field stays None, the
+    [ENCOUNTER RESOLVED] zone never fires, and the narrator grinds the SDK loop
+    past max_turns on the victory turn (the resolution-turn twin of the cold-seat
+    crash above)."""
+    from sidequest.agents.orchestrator import TurnContext
+    from sidequest.server.session_helpers import refresh_turn_context_post_dispatch
+
+    # Resolution turn: the encounter has resolved + been reaped (no live
+    # encounter), only the one-shot signal carries the close payload.
+    snap = _nondungeon_snapshot()
+    snap.pending_resolution_signal = _victory_resolution_signal()
+    sd = _FakeRefreshSessionData(snap, _wn_pack())
+    ctx = TurnContext(character_name="Groucho", genre="caverns_and_claudes", turn_number=4)
+    assert ctx.pending_resolution_signal is None  # pre-dispatch
+
+    refresh_turn_context_post_dispatch(ctx, sd=sd, snapshot=snap)
+
+    assert ctx.pending_resolution_signal is not None, (
+        "post-dispatch refresh did not thread snapshot.pending_resolution_signal — "
+        "ctx.pending_resolution_signal stayed None, so the [ENCOUNTER RESOLVED] "
+        "zone never fires and the narrator grinds the SDK loop past max_turns on "
+        "the victory turn (sq-playtest 2026-06-27, session 16570)"
+    )
+    assert ctx.pending_resolution_signal.outcome == "player_victory"
+
+
+def test_refresh_post_dispatch_no_resolution_signal_leaves_context_none() -> None:
+    """A turn that resolves nothing leaves ``ctx.pending_resolution_signal`` None —
+    the refresh must never invent a resolution (which would re-fire the close
+    every turn)."""
+    from sidequest.agents.orchestrator import TurnContext
+    from sidequest.server.session_helpers import refresh_turn_context_post_dispatch
+
+    snap = _nondungeon_snapshot()  # snapshot.pending_resolution_signal is None
+    sd = _FakeRefreshSessionData(snap, _wn_pack())
+    ctx = TurnContext(character_name="Groucho", genre="caverns_and_claudes", turn_number=4)
+
+    refresh_turn_context_post_dispatch(ctx, sd=sd, snapshot=snap)
+
+    assert ctx.pending_resolution_signal is None
+
+
+def test_refresh_resolution_turn_emits_gm_panel_watcher_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OTEL lie-detector (CLAUDE.md), twin of #1086's cold_seat_context_refreshed:
+    threading the signal on the resolution turn emits a ``state_transition``
+    op=resolution_context_refreshed watcher event (component="encounter") so the
+    GM panel can verify the victory turn was handed the resolution zone. A turn
+    that resolves nothing emits nothing (no false positive)."""
+    from sidequest.agents.orchestrator import TurnContext
+    from sidequest.server.session_helpers import refresh_turn_context_post_dispatch
+
+    events: list[dict] = []
+
+    def _spy(event_type, fields, *, component=None, severity="info"):
+        events.append({"event_type": event_type, "fields": fields, "component": component})
+
+    monkeypatch.setattr("sidequest.telemetry.watcher_hub.publish_event", _spy)
+
+    # No resolution: no event.
+    snap = _nondungeon_snapshot()
+    sd = _FakeRefreshSessionData(snap, _wn_pack())
+    ctx = TurnContext(character_name="Groucho", genre="caverns_and_claudes", turn_number=4)
+    refresh_turn_context_post_dispatch(ctx, sd=sd, snapshot=snap)
+    assert not [e for e in events if e["fields"].get("op") == _RESOLUTION_OP]
+
+    # The resolution turn: a stamped signal surfaces exactly one GM-panel event.
+    snap.pending_resolution_signal = _victory_resolution_signal()
+    refresh_turn_context_post_dispatch(ctx, sd=sd, snapshot=snap)
+    resolved = [e for e in events if e["fields"].get("op") == _RESOLUTION_OP]
+    assert len(resolved) == 1, (
+        "the resolution refresh must surface exactly one GM-panel event "
+        f"(twin of cold_seat_context_refreshed); got ops="
+        f"{[e['fields'].get('op') for e in events]}"
+    )
+    assert resolved[0]["fields"]["outcome"] == "player_victory"
+    assert resolved[0]["component"] == "encounter"
+
+
+@pytest.mark.asyncio
+async def test_refreshed_resolution_context_fires_denativized_zone_not_start_menu() -> None:
+    """Wiring (CLAUDE.md "Every Test Suite Needs a Wiring Test"), the AC3
+    resolution-turn analogue of the cold-seat wiring test above: a pre-dispatch
+    context (signal None) plus a snapshot the kill just stamped a resolution on,
+    AFTER the refresh, builds a narrator prompt that (a) carries the de-nativized
+    [ENCOUNTER RESOLVED] "do NOT emit beat_selections" directive and (b) does NOT
+    carry the "AVAILABLE ENCOUNTER TYPES" start-a-confrontation menu. Pre-fix the
+    victory turn got the exact opposite of both — the menu told it to START a
+    fresh fight — and it ground the loop to a crash."""
+    from sidequest.agents.orchestrator import Orchestrator, TurnContext
+    from sidequest.server.session_helpers import refresh_turn_context_post_dispatch
+
+    snap = _nondungeon_snapshot()
+    pack = _wn_pack()
+    sd = _FakeRefreshSessionData(snap, pack)
+
+    ctx = TurnContext(
+        character_name="Groucho",
+        genre="caverns_and_claudes",
+        turn_number=4,
+        pack=pack,
+        available_confrontations=[("combat", "Dungeon Combat", "combat")],
+    )
+    assert ctx.pending_resolution_signal is None  # pre-dispatch
+
+    snap.pending_resolution_signal = _victory_resolution_signal()
+    refresh_turn_context_post_dispatch(ctx, sd=sd, snapshot=snap)
+    assert ctx.pending_resolution_signal is not None  # post-refresh
+
+    orch = Orchestrator(client=FakeAnthropicSdkClient(responses=[]))
+    prompt_text, _registry = await orch.build_narrator_prompt(
+        "I wrench my axe free and let the Pale Thing fall.", ctx
+    )
+
+    # The de-nativized resolution directive present — narrate the close, do not
+    # drive beats (the instruction that lets the victory turn converge).
+    assert "[ENCOUNTER RESOLVED]" in prompt_text
+    assert "Do NOT emit beat_selections" in prompt_text
+    # The start-a-confrontation menu is suppressed now a resolution is pending.
     assert "AVAILABLE ENCOUNTER TYPES" not in prompt_text

@@ -19,6 +19,7 @@ dependencies = [
     "psycopg-pool>=3.2",
     "alembic>=1.13",
     "claude-agent-sdk>=0.2.102",
+    "boto3>=1.43.38",
 ]
 
 [project.optional-dependencies]

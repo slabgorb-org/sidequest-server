@@ -732,6 +732,7 @@ def publish_event(
     *,
     component: str = "sidequest-server",
     severity: str = "info",
+    session_slug: str | None = None,
     tx: SaveTransaction | None = None,
     event_seq: int | None = None,
 ) -> None:
@@ -756,13 +757,17 @@ def publish_event(
         component grouping. Examples: ``orchestrator``, ``npc_registry``,
         ``state.location``, ``prompt_builder``, ``rag``.
     :param severity: ``info`` | ``warning`` | ``error``.
+    :param session_slug: explicit session slug override (161-2). Beats the
+        ContextVar — used for cross-process emits (e.g. a companion in its own
+        process) whose slug is not on this process's ContextVar. ``None`` (the
+        default) preserves the ContextVar behavior for every in-process caller.
     :param tx: When set, the open turn ``SaveTransaction`` — the telemetry
         row rides it (same connection) with ``event_seq``. When ``None`` the
         write goes out-of-frame through the bound ``TelemetrySink`` with a
         NULL event_seq. EXPLICIT — no connection-state sniffing.
     :param event_seq: The turn event's seq when ``tx`` is set; NULL otherwise.
     """
-    slug = current_session_slug()
+    slug = session_slug or current_session_slug()
     event: dict[str, Any] = {
         "timestamp": datetime.now(UTC).isoformat(),
         "component": component,

@@ -151,7 +151,7 @@ def compose_body(
 
     parts.append("\n\n## Server log\n")
     if log_text is None:
-        parts.append(f"_server log not found at `{server_log_path()}`_")
+        parts.append(f"_server log not found at `{scrub(str(server_log_path()))}`_")
     else:
         parts.append(
             f"<details><summary>Server log (scrubbed, last {LOG_TAIL_LINES} lines)</summary>\n\n"

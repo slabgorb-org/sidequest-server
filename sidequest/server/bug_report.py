@@ -11,7 +11,7 @@ import logging
 from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from starlette.concurrency import run_in_threadpool
 
 from sidequest.server.bug_report_enrich import compose_body, otel_summary, scrub, tail_server_log
@@ -27,16 +27,19 @@ MAX_FILE_BYTES = MAX_FILE_MB * 1024 * 1024
 _ALLOWED_EXT = (".log", ".txt", ".json")
 
 
+def _is_image(f: UploadFile) -> bool:
+    return (f.content_type or "").startswith("image/")
+
+
 def _allowed(f: UploadFile) -> bool:
-    if (f.content_type or "").startswith("image/"):
+    if _is_image(f):
         return True
     return (f.filename or "").lower().endswith(_ALLOWED_EXT)
 
 
 def register_bug_report_routes(router: APIRouter) -> None:
     @router.post("/api/bug-report", status_code=201)
-    async def create_bug_report(  # noqa: PLR0913
-        request: Request,
+    async def create_bug_report(
         title: str = Form(...),
         description: str = Form(...),
         session_slug: str = Form(""),
@@ -48,14 +51,20 @@ def register_bug_report_routes(router: APIRouter) -> None:
         if len(files) > MAX_FILES:
             raise HTTPException(status_code=400, detail=f"at most {MAX_FILES} files")
 
+        # Validate every file BEFORE uploading any, so a later bad file never
+        # leaves an orphaned R2 object from an earlier successful upload.
+        for f in files:
+            if f.size is not None and f.size > MAX_FILE_BYTES:
+                raise HTTPException(status_code=400, detail=f"{f.filename or 'file'} exceeds {MAX_FILE_MB} MB")
+            if not _allowed(f):
+                raise HTTPException(status_code=400, detail=f"{f.filename or 'file'}: unsupported type")
+
         report_id = uuid4().hex
         attachments: list[tuple[str, str, bool]] = []
         for i, f in enumerate(files):
             data = await f.read()
-            if len(data) > MAX_FILE_BYTES:
+            if len(data) > MAX_FILE_BYTES:  # backstop when f.size was unavailable
                 raise HTTPException(status_code=400, detail=f"{f.filename or 'file'} exceeds {MAX_FILE_MB} MB")
-            if not _allowed(f):
-                raise HTTPException(status_code=400, detail=f"{f.filename or 'file'}: unsupported type")
             key = object_key(report_id, i, f.filename or "file")
             try:
                 url = await run_in_threadpool(
@@ -63,7 +72,7 @@ def register_bug_report_routes(router: APIRouter) -> None:
                 )
             except R2UploadError as exc:
                 raise HTTPException(status_code=502, detail=f"attachment upload failed: {exc}") from exc
-            attachments.append((f.filename or key, url, (f.content_type or "").startswith("image/")))
+            attachments.append((f.filename or key, url, _is_image(f)))
 
         try:
             context = json.loads(context_json) if context_json else {}
@@ -72,7 +81,7 @@ def register_bug_report_routes(router: APIRouter) -> None:
         except json.JSONDecodeError:
             context = {}
 
-        raw_log = tail_server_log()
+        raw_log = await run_in_threadpool(tail_server_log)
         log_text = scrub(raw_log) if raw_log is not None else None
         raw_otel = await otel_summary(session_slug)
         otel_text = scrub(raw_otel) if raw_otel is not None else None

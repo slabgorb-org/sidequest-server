@@ -126,6 +126,20 @@ def test_compose_body_notes_missing_enrichment() -> None:
     assert "no active session" in body
 
 
+def test_compose_body_scrubs_home_path_in_missing_log_note(monkeypatch) -> None:
+    from pathlib import Path
+
+    from sidequest.server.bug_report_enrich import compose_body
+
+    monkeypatch.delenv("SIDEQUEST_SERVER_LOG", raising=False)
+    body = compose_body(
+        description="d", context={}, attachments=[],
+        log_text=None, otel_text=None, report_id="r", session_slug="",
+    )
+    assert str(Path.home()) not in body
+    assert "server log not found" in body
+
+
 def test_compose_body_respects_github_limit() -> None:
     from sidequest.server.bug_report_enrich import GITHUB_BODY_LIMIT, compose_body
 

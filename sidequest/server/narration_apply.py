@@ -6071,6 +6071,12 @@ def _apply_narration_result_to_snapshot(
                         (n for n in snapshot.npcs if n.core.name == blue_actor.name),
                         None,
                     )
+                    if opp_npc is None:
+                        logger.warning(
+                            "dogfight opponent brain: no NPC backs seated blue actor %r — "
+                            "attitude defaulting to 'neutral' (seeding-invariant gap?)",
+                            blue_actor.name,
+                        )
                     blue_attitude = (
                         opp_npc.disposition.attitude().value if opp_npc is not None else "neutral"
                     )

@@ -182,8 +182,28 @@ async def run_dogfight_dispatch(
     # pick is goal-driven rather than improvised (mirrors npc_agency's directive
     # shape). The engine floor (the deterministic disposition fallback at the
     # sealed-letter seam) still guards a skipped or illegal narrator commit.
-    opp = next((n for n in snapshot.npcs if n.core.name == threat_name), None)
-    stance = opp.disposition.attitude().value if opp is not None else "hostile"
+    #
+    # Resolve the opponent from the SEATED actor (post-seat truth), NOT the pre-seat
+    # router ``threat_name`` — that name is empty in the frame_default and
+    # npcs_present seating paths, so a threat_name lookup would silently miss and
+    # default the stance to a constant. This mirrors the engine floor's lookup in
+    # ``narration_apply`` (by the seated opponent actor's name). If no NPC backs the
+    # seated opponent (a seeding-invariant gap), log it rather than guess silently.
+    opp_actor = next((a for a in seated.actors if a.side == "opponent"), None)
+    opp = (
+        next((n for n in snapshot.npcs if n.core.name == opp_actor.name), None)
+        if opp_actor is not None
+        else None
+    )
+    if opp is None:
+        logger.warning(
+            "dogfight.stance: no opponent NPC backs seated actor %r — stance directive "
+            "defaulting to 'neutral' (seeding-invariant gap?) type=%s player=%s",
+            opp_actor.name if opp_actor is not None else None,
+            enc_type,
+            player_name,
+        )
+    stance = opp.disposition.attitude().value if opp is not None else "neutral"
     tendency = {
         "hostile": "presses the attack — favors aggressive reversals even at an energy cost",
         "neutral": "flies a balanced fight — breaks when threatened, takes shots when offered",

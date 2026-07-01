@@ -125,3 +125,49 @@ async def test_friendly_opponent_emits_disengage_stance_directive() -> None:
         "no disengagement-stance directive for a friendly pilot — the stance is "
         f"not motivated by disposition. directives={payloads}"
     )
+
+
+@pytest.mark.asyncio
+async def test_stance_reflects_seated_opponent_when_router_did_not_name_it() -> None:
+    """F1 regression (review round-trip 1): when the router does NOT name the
+    opponent in ``params`` but a co-located NPC is seated as the Other (so the
+    pre-seat ``threat_name`` is empty), the stance must reflect the SEATED
+    opponent's disposition — not silently default to a constant "hostile".
+
+    Here a FRIENDLY opponent is seated via ``npcs_present`` with no ``opponent``
+    param. The old code looked up by the empty ``threat_name`` → missed →
+    "hostile" (aggressive directive). The fix resolves the opponent from the
+    seated ``encounter.actors`` (side="opponent"), so the directive describes
+    disengagement. Guards against the silent pre-seat-name lookup.
+    """
+    from sidequest.agents.orchestrator import NpcMention
+
+    snap = _snap_with_opponent(disposition_value=50)  # friendly "Red Baron" in snapshot.npcs
+    pack = load_fixture_pack(SWN_TEST_PACK)
+
+    # Router names NO opponent in params → threat_name == "" (the F1 trigger). A
+    # co-located NPC rides npcs_present and is seated as the blue/opponent actor.
+    dispatch = SubsystemDispatch(
+        subsystem="dogfight",
+        params={"type": "dogfight"},
+        idempotency_key="k-stance-f1",
+        confidence=0.9,
+        visibility=VisibilityTag(visible_to="all"),
+    )
+    out = await run_dogfight_dispatch(
+        dispatch,
+        snapshot=snap,
+        pack=pack,
+        player_name=_PLAYER,
+        npcs_present=[NpcMention(name=_OPPONENT, role="hostile", side="opponent")],
+    )
+
+    payloads = [d.payload.lower() for d in out.directives]
+    assert any(any(tok in p for tok in _DISENGAGE_TOKENS) for p in payloads), (
+        "stance did not reflect the seated friendly opponent — the directive was "
+        f"not motivated by the SEATED disposition. directives={payloads}"
+    )
+    assert not any("hostile" in p for p in payloads), (
+        "stance silently defaulted to 'hostile' despite a seated FRIENDLY opponent "
+        f"(F1: pre-seat threat_name lookup missed). directives={payloads}"
+    )

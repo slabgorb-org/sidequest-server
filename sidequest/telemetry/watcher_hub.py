@@ -282,6 +282,23 @@ class WatcherHub:
             sent += 1
         return sent
 
+    async def buffered_events(self, slug: str | None) -> list[dict[str, Any]]:
+        """Return buffered events for ``slug`` merged with the global infra
+        (``None``) bucket, ordered by the monotonic publish seq.
+
+        Read-only: never mutates hub state (mirrors :meth:`replay`). Used by the
+        in-app bug reporter to attach an OTEL summary scoped to the reporting
+        session.
+        """
+        async with self._lock:
+            merged: list[tuple[int, dict[str, Any]]] = []
+            for key in {None, slug}:
+                bucket = self._session_buffers.get(key)
+                if bucket is not None:
+                    merged.extend(bucket)
+        merged.sort(key=lambda pair: pair[0])
+        return [event for _seq, event in merged]
+
 
 def _json_default(obj: Any) -> Any:
     """Tolerant JSON fallback for watcher events.

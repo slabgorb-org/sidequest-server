@@ -42,3 +42,18 @@ def test_upload_bytes_wraps_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(r2_upload, "_build_client", lambda: FakeClient())
     with pytest.raises(R2UploadError):
         r2_upload.upload_bytes("k", b"d", "image/png")
+
+
+@pytest.mark.parametrize("override", ["", "local"])
+def test_cdn_base_forces_real_cdn_in_local_mode(monkeypatch: pytest.MonkeyPatch, override: str) -> None:
+    from sidequest.server.r2_upload import cdn_base
+
+    monkeypatch.setenv("SIDEQUEST_ASSET_BASE_URL", override)
+    assert cdn_base() == "https://cdn.slabgorb.com"
+
+
+def test_object_key_rejects_traversal_report_id() -> None:
+    from sidequest.server.r2_upload import object_key
+
+    with pytest.raises(ValueError):
+        object_key("../../other-prefix", 0, "shot.png")

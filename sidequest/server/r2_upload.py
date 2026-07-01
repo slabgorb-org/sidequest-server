@@ -14,6 +14,8 @@ import re
 BUCKET = "sidequest"
 BUG_REPORT_PREFIX = "bug-reports"
 _DEFAULT_CDN = "https://cdn.slabgorb.com"
+_SAFE_REPORT_ID = re.compile(r"[A-Za-z0-9_-]+")
+
 
 
 class R2UploadError(RuntimeError):
@@ -45,6 +47,15 @@ def safe_filename(name: str) -> str:
 
 
 def object_key(report_id: str, index: int, filename: str) -> str:
+    """Build the R2 object key for one attachment.
+
+    ``report_id`` must be a server-minted token (a uuid4 hex) — it is
+    interpolated into the key unsanitized, so a value with path separators
+    would escape the ``bug-reports/<id>/`` namespace. Reject anything that
+    isn't a plain token, loudly (No Silent Fallbacks).
+    """
+    if not _SAFE_REPORT_ID.fullmatch(report_id):
+        raise ValueError(f"unsafe report_id for object key: {report_id!r}")
     return f"{BUG_REPORT_PREFIX}/{report_id}/{index}-{safe_filename(filename)}"
 
 

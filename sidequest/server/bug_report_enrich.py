@@ -7,10 +7,13 @@ meaning — so applying it defensively is always safe.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 from collections import deque
 from pathlib import Path
+
+from sidequest.telemetry.watcher_hub import watcher_hub
 
 LOG_TAIL_LINES = 200
 OTEL_EVENT_LIMIT = 150
@@ -73,3 +76,27 @@ def tail_server_log(n_lines: int = LOG_TAIL_LINES) -> str | None:
     except OSError:
         return None
     return "".join(lines)
+
+
+async def otel_summary(slug: str, limit: int = OTEL_EVENT_LIMIT) -> str | None:
+    """Compact one-line-per-event OTEL summary for ``slug`` (last ``limit``
+    events), or ``None`` when there is no active session or nothing buffered."""
+    if not slug:
+        return None
+    events = await watcher_hub.buffered_events(slug)
+    if not events:
+        return None
+    lines: list[str] = []
+    for e in events[-limit:]:
+        ts = e.get("timestamp", "")
+        sev = e.get("severity", "info")
+        comp = e.get("component", "")
+        et = e.get("event_type", "")
+        try:
+            fstr = json.dumps(e.get("fields", {}), default=str)
+        except (TypeError, ValueError):
+            fstr = str(e.get("fields", {}))
+        if len(fstr) > 240:
+            fstr = fstr[:240] + "…"
+        lines.append(f"{ts} [{sev}] {comp} :: {et} {fstr}")
+    return "\n".join(lines)

@@ -55,3 +55,39 @@ def test_tail_server_log_missing_file_returns_none(tmp_path, monkeypatch: pytest
 
     monkeypatch.setenv("SIDEQUEST_SERVER_LOG", str(tmp_path / "does-not-exist.log"))
     assert tail_server_log() is None
+
+
+@pytest.mark.asyncio
+async def test_otel_summary_formats_events(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sidequest.server.bug_report_enrich as enrich
+
+    async def fake_buffered(slug):  # noqa: ARG001
+        return [
+            {"timestamp": "T1", "severity": "info", "component": "turn",
+             "event_type": "turn_complete", "fields": {"round": 3}},
+        ]
+
+    monkeypatch.setattr(enrich.watcher_hub, "buffered_events", fake_buffered)
+    out = await enrich.otel_summary("s1")
+    assert out is not None
+    assert "turn_complete" in out
+    assert "turn" in out
+    assert '"round": 3' in out or "'round': 3" in out
+
+
+@pytest.mark.asyncio
+async def test_otel_summary_empty_slug_returns_none() -> None:
+    from sidequest.server.bug_report_enrich import otel_summary
+
+    assert await otel_summary("") is None
+
+
+@pytest.mark.asyncio
+async def test_otel_summary_empty_buffer_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sidequest.server.bug_report_enrich as enrich
+
+    async def fake_buffered(slug):  # noqa: ARG001
+        return []
+
+    monkeypatch.setattr(enrich.watcher_hub, "buffered_events", fake_buffered)
+    assert await enrich.otel_summary("s1") is None

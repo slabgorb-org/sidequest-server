@@ -41,16 +41,49 @@ def test_solo_room_admits_bonded_companion() -> None:
     to ``bind_companion_bond`` / the chargen gate."""
     room = SessionRoom(slug="2026-06-27-beneath_sunden-solo", mode=GameMode.SOLO)
     room.connect("curly", socket_id="sock-human")
+    # The owner's server-resolved identity (ADR-119) must be on record before the
+    # companion connects — the exemption matches companion_of against it, never a
+    # bare client-asserted string (review 160-4 auth-bypass fix).
+    room.set_player_identity("curly", _OWNER)
 
-    # This is the crux of the 160-4 bug: today `connect` has no `companion_of`
-    # parameter and this raises SoloSlotConflict (the ERROR frame the companion
-    # socket saw). After path (b), the bonded pet is admitted.
+    # This is the crux of the 160-4 bug: before path (b), `connect` had no
+    # `companion_of` parameter and this raised SoloSlotConflict (the ERROR frame the
+    # companion socket saw). Now the bonded pet — whose companion_of matches the
+    # seated human's resolved identity — is admitted.
     room.connect("owl-pid", socket_id="sock-owl", companion_of=_OWNER)
 
     assert set(room.connected_player_ids()) == {"curly", "owl-pid"}, (
         "a bonded companion must seat alongside its human in a SOLO room, not be "
         "rejected as a second solo player"
     )
+
+
+def test_solo_room_rejects_companion_with_mismatched_owner() -> None:
+    """AC2 (auth-bypass guard, review 160-4): the exemption is a server-verified
+    fact, not a truthy client string. A connect whose ``companion_of`` names an
+    identity NOT belonging to the seated human is a stranger claiming a bond it
+    does not hold — it must still hit ``SoloSlotConflict``, or any Cf-Access
+    identity holding the slug could seat itself in someone's private SOLO game."""
+    room = SessionRoom(slug="solo-spoof", mode=GameMode.SOLO)
+    room.connect("curly", socket_id="sock-human")
+    room.set_player_identity("curly", _OWNER)  # the real owner is player1.local
+
+    with pytest.raises(SoloSlotConflict):
+        room.connect("mallory", socket_id="sock-mallory", companion_of="not-the-owner")
+
+
+def test_solo_room_rejects_companion_when_owner_identity_unresolved() -> None:
+    """AC2 (fail-closed): if the seated human has NO server-resolved identity, the
+    exemption cannot be verified, so a companion connect fails closed to the guard
+    (No Silent Fallbacks — never admit an unverifiable second seat). In real play
+    the owner's identity is always resolved (Cf-Access email / dev Host, ADR-119);
+    an unresolved room is a misconfiguration, not a bond."""
+    room = SessionRoom(slug="solo-noident", mode=GameMode.SOLO)
+    room.connect("curly", socket_id="sock-human")
+    # deliberately NOT calling set_player_identity — no resolved occupant identity
+
+    with pytest.raises(SoloSlotConflict):
+        room.connect("owl-pid", socket_id="sock-owl", companion_of=_OWNER)
 
 
 def test_solo_room_still_rejects_second_human() -> None:
@@ -89,7 +122,9 @@ def test_companion_solo_exemption_emits_otel_span() -> None:
     engaged is the absence of an ERROR frame — invisible to the panel.
 
     Contract: event name ``companion.solo_exempt``; the payload discloses the
-    pet's player_id and the owner identity it is bonded to.
+    pet's player_id and the SERVER-MINTED ``occupied_by`` owner player_id it is
+    bonded to — never the owner's Cf-Access identity (PII stays out of telemetry;
+    review 160-4 / lang-review #4).
     """
     captured: list[tuple[str, dict, str]] = []
 
@@ -103,6 +138,7 @@ def test_companion_solo_exemption_emits_otel_span() -> None:
     try:
         room = SessionRoom(slug="solo-otel", mode=GameMode.SOLO)
         room.connect("curly", socket_id="sock-human")
+        room.set_player_identity("curly", _OWNER)  # resolved owner identity (ADR-119)
 
         captured.clear()  # only inspect events from the companion connect
         room.connect("owl-pid", socket_id="sock-owl", companion_of=_OWNER)
@@ -118,9 +154,13 @@ def test_companion_solo_exemption_emits_otel_span() -> None:
         "the exemption span must name the pet's player_id so the GM panel can "
         f"correlate it to the seated companion; got {payload}"
     )
-    assert _OWNER in payload.values(), (
-        "the exemption span must disclose the owner identity the pet is bonded "
-        f"to (proves the exemption was for a real bond, not a stray connect); got {payload}"
+    assert payload.get("occupied_by") == "curly", (
+        "the exemption span must correlate the pet to its owner via the SERVER-MINTED "
+        f"occupant player_id, proving a real bond without leaking PII; got {payload}"
+    )
+    assert _OWNER not in payload.values(), (
+        "the exemption span must NOT publish the owner's Cf-Access identity (PII) — "
+        f"correlation rides the server-minted occupied_by (lang-review #4); got {payload}"
     )
     assert component == "companion", (
         f"a companion decision belongs to the 'companion' watcher component; got {component!r}"

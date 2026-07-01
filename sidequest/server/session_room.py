@@ -502,20 +502,35 @@ class SessionRoom:
             if self.mode == GameMode.SOLO:
                 other_players = [p for p in self._connected if p != player_id]
                 if other_players:
-                    # Story 160-4 (path b): a bonded companion — its connect carries
-                    # a non-blank ``companion_of`` owner identity — is NOT a competing
-                    # solo player, so it is exempt from the SOLO-slot guard and
-                    # proceeds to bind_companion_bond / the chargen gate. A blank /
-                    # whitespace ``companion_of`` is an ordinary player (mirrors
-                    # bind_companion_bond's ``(companion_of or "").strip()``) and the
-                    # 2026-04-26 "two parallel solo games on one slug" guard still
-                    # fires for it.
-                    if not (companion_of or "").strip():
+                    # Story 160-4 (path b): a bonded companion — a connect whose
+                    # ``companion_of`` names the SERVER-RESOLVED identity (ADR-119) of
+                    # a human already in this SOLO room — is NOT a competing solo
+                    # player, so it is exempt from the SOLO-slot guard and proceeds to
+                    # bind_companion_bond / the chargen gate.
+                    #
+                    # The exemption is gated on a server-verified fact, NEVER a bare
+                    # client-asserted string (review 160-4 auth-bypass): ``companion_of``
+                    # must match ``_player_identities`` for a connected occupant — the
+                    # same authenticated cross-check ``pets_of`` uses. A blank
+                    # ``companion_of`` (an ordinary player), one that matches no seated
+                    # occupant's resolved identity (a stranger claiming a bond it does
+                    # not hold), or an unresolved-identity room all fail closed to the
+                    # 2026-04-26 "two parallel solo games on one slug" guard.
+                    claimed_owner = (companion_of or "").strip()
+                    bonded_owner = next(
+                        (
+                            p
+                            for p in other_players
+                            if claimed_owner and self._player_identities.get(p) == claimed_owner
+                        ),
+                        None,
+                    )
+                    if bonded_owner is None:
                         raise SoloSlotConflict(
                             f"solo game {self.slug} already occupied by {other_players[0]}"
                         )
                     companion_exempt = True
-                    occupied_by = other_players[0]
+                    occupied_by = bonded_owner
             self._connected[player_id] = socket_id
             self._sockets[socket_id] = player_id
             self._player_sockets.setdefault(player_id, set()).add(socket_id)
@@ -530,7 +545,12 @@ class SessionRoom:
                 {
                     "slug": self.slug,
                     "player_id": player_id,
-                    "companion_of": (companion_of or "").strip(),
+                    # ``occupied_by`` is the seated owner's SERVER-MINTED player_id —
+                    # NOT the client-asserted ``companion_of`` email. The exemption
+                    # correlates the pet to its owner via server ids only, keeping the
+                    # Cf-Access identity (PII) out of the retained/exportable watcher
+                    # stream (mirrors bind_companion_bond, connect.py:303-307;
+                    # lang-review #4 / review 160-4).
                     "occupied_by": occupied_by,
                 },
                 component="companion",

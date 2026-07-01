@@ -144,6 +144,14 @@ async def test_bonded_companion_admitted_to_solo_room_through_handler(tmp_path: 
         f"the human's own connect to their SOLO room must succeed; got {human_out}"
     )
 
+    # The owner's server-resolved identity (ADR-119) — in real play the connect
+    # boundary resolves this from the Host header / Cf-Access. The companion's
+    # companion_of below must match it, or the auth-checked exemption fails closed
+    # (review 160-4). Record it the way the room store would.
+    registry.get_or_create(slug, mode=GameMode.SOLO).set_player_identity(
+        "curly-pid", "player1.local"
+    )
+
     # A bonded companion connects. Before path (b): SoloSlotConflict -> ERROR.
     companion = _handler(tmp_path, registry, "sock-owl")
     companion_out = await _connect(

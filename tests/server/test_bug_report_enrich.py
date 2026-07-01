@@ -91,3 +91,48 @@ async def test_otel_summary_empty_buffer_returns_none(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(enrich.watcher_hub, "buffered_events", fake_buffered)
     assert await enrich.otel_summary("s1") is None
+
+
+def test_compose_body_embeds_images_and_links() -> None:
+    from sidequest.server.bug_report_enrich import compose_body
+
+    body = compose_body(
+        description="It broke.",
+        context={"genre": "space_opera", "world": "perseus_cloud", "screen": "game"},
+        attachments=[("shot.png", "https://cdn.slabgorb.com/bug-reports/x/0-shot.png", True),
+                     ("log.txt", "https://cdn.slabgorb.com/bug-reports/x/1-log.txt", False)],
+        log_text="line one\nline two",
+        otel_text="T [info] turn :: turn_complete {}",
+        report_id="abc123",
+        session_slug="2026-slug",
+    )
+    assert "It broke." in body
+    assert "![shot.png](https://cdn.slabgorb.com/bug-reports/x/0-shot.png)" in body
+    assert "[log.txt](https://cdn.slabgorb.com/bug-reports/x/1-log.txt)" in body
+    assert "space_opera" in body and "perseus_cloud" in body
+    assert "<details><summary>Server log" in body
+    assert "turn_complete" in body
+    assert "abc123" in body
+
+
+def test_compose_body_notes_missing_enrichment() -> None:
+    from sidequest.server.bug_report_enrich import compose_body
+
+    body = compose_body(
+        description="d", context={}, attachments=[],
+        log_text=None, otel_text=None, report_id="r", session_slug="",
+    )
+    assert "server log not found" in body
+    assert "no active session" in body
+
+
+def test_compose_body_respects_github_limit() -> None:
+    from sidequest.server.bug_report_enrich import GITHUB_BODY_LIMIT, compose_body
+
+    body = compose_body(
+        description="d", context={}, attachments=[],
+        log_text="x" * 100_000, otel_text="y" * 100_000,
+        report_id="r", session_slug="s",
+    )
+    assert len(body) <= GITHUB_BODY_LIMIT
+    assert "…(truncated)" in body

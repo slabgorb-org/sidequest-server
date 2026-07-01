@@ -11,7 +11,9 @@ import json
 import os
 import re
 from collections import deque
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from sidequest.telemetry.watcher_hub import watcher_hub
 
@@ -100,3 +102,74 @@ async def otel_summary(slug: str, limit: int = OTEL_EVENT_LIMIT) -> str | None:
             fstr = fstr[:240] + "…"
         lines.append(f"{ts} [{sev}] {comp} :: {et} {fstr}")
     return "\n".join(lines)
+
+
+def _truncate(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    return text[: max(0, max_chars - len(_TRUNC))] + _TRUNC
+
+
+def _context_table(session_slug: str, context: dict[str, Any]) -> str:
+    rows = [
+        ("Session", session_slug or "—"),
+        ("Genre", context.get("genre") or "—"),
+        ("World", context.get("world") or "—"),
+        ("Screen", context.get("screen") or "—"),
+        ("Build", context.get("appBuild") or context.get("build") or "—"),
+        ("Viewport", context.get("viewport") or "—"),
+        ("Path", context.get("pathname") or "—"),
+        ("User agent", context.get("userAgent") or "—"),
+        ("Filed at", datetime.now(UTC).isoformat()),
+    ]
+    out = "| Field | Value |\n| --- | --- |\n"
+    for key, val in rows:
+        safe = str(val).replace("|", "\\|")
+        out += f"| {key} | {safe} |\n"
+    return out
+
+
+def compose_body(
+    *,
+    description: str,
+    context: dict[str, Any],
+    attachments: list[tuple[str, str, bool]],
+    log_text: str | None,
+    otel_text: str | None,
+    report_id: str,
+    session_slug: str,
+) -> str:
+    """Assemble the Markdown issue body. Enrichment absence is written
+    explicitly; the whole body is bounded to ``GITHUB_BODY_LIMIT`` with a loud
+    truncation marker."""
+    parts: list[str] = [description.strip(), "\n\n## Context\n\n" + _context_table(session_slug, context)]
+
+    if attachments:
+        parts.append("\n## Attachments\n")
+        for name, url, is_image in attachments:
+            parts.append(f"![{name}]({url})" if is_image else f"[{name}]({url})")
+
+    parts.append("\n\n## Server log\n")
+    if log_text is None:
+        parts.append(f"_server log not found at `{server_log_path()}`_")
+    else:
+        parts.append(
+            f"<details><summary>Server log (scrubbed, last {LOG_TAIL_LINES} lines)</summary>\n\n"
+            f"```\n{_truncate(log_text, _LOG_BLOCK_MAX)}\n```\n</details>"
+        )
+
+    parts.append("\n\n## OTEL\n")
+    if otel_text is None:
+        parts.append("_no active session — no OTEL captured_")
+    else:
+        parts.append(
+            f"<details><summary>OTEL — session {session_slug} (scrubbed, last {OTEL_EVENT_LIMIT} events)</summary>\n\n"
+            f"```\n{_truncate(otel_text, _OTEL_BLOCK_MAX)}\n```\n</details>"
+        )
+
+    parts.append(f"\n\n---\n_report_id: `{report_id}` · Filed from the in-app bug reporter._")
+
+    body = "\n".join(parts)
+    if len(body) > GITHUB_BODY_LIMIT:
+        body = _truncate(body, GITHUB_BODY_LIMIT)
+    return body

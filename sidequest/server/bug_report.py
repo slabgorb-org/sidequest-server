@@ -12,6 +12,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from starlette.concurrency import run_in_threadpool
 
 from sidequest.server.bug_report_enrich import compose_body, otel_summary, scrub, tail_server_log
 from sidequest.server.github_issue import DEFAULT_LABELS, GitHubIssueError, create_issue
@@ -57,7 +58,9 @@ def register_bug_report_routes(router: APIRouter) -> None:
                 raise HTTPException(status_code=400, detail=f"{f.filename or 'file'}: unsupported type")
             key = object_key(report_id, i, f.filename or "file")
             try:
-                url = upload_bytes(key, data, f.content_type or "application/octet-stream")
+                url = await run_in_threadpool(
+                    upload_bytes, key, data, f.content_type or "application/octet-stream"
+                )
             except R2UploadError as exc:
                 raise HTTPException(status_code=502, detail=f"attachment upload failed: {exc}") from exc
             attachments.append((f.filename or key, url, (f.content_type or "").startswith("image/")))

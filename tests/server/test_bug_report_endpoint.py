@@ -108,3 +108,65 @@ def test_bug_report_too_many_files_rejected(
         files=files,
     )
     assert resp.status_code == 400
+
+
+def test_bug_report_r2_failure_aborts_502(app_client, monkeypatch):
+    import sidequest.server.bug_report as bug_report
+    from sidequest.server.r2_upload import R2UploadError
+
+    def boom_upload(key, data, content_type):
+        raise R2UploadError("r2 down")
+
+    async def must_not_run(*a, **k):
+        raise AssertionError("create_issue must not be called after an R2 failure")
+
+    monkeypatch.setattr(bug_report, "upload_bytes", boom_upload)
+    monkeypatch.setattr(bug_report, "create_issue", must_not_run)
+    resp = app_client.post(
+        "/api/bug-report",
+        data={"title": "t", "description": "d"},
+        files=[("files", ("s.png", b"x", "image/png"))],
+    )
+    assert resp.status_code == 502
+
+
+def test_bug_report_github_failure_aborts_502(app_client, monkeypatch):
+    import sidequest.server.bug_report as bug_report
+    from sidequest.server.github_issue import GitHubIssueError
+
+    def fake_upload(key, data, content_type):
+        return f"https://cdn.slabgorb.com/{key}"
+
+    async def boom_issue(*a, **k):
+        raise GitHubIssueError("gh down")
+
+    monkeypatch.setattr(bug_report, "upload_bytes", fake_upload)
+    monkeypatch.setattr(bug_report, "create_issue", boom_issue)
+    resp = app_client.post(
+        "/api/bug-report",
+        data={"title": "t", "description": "d"},
+    )
+    assert resp.status_code == 502
+
+
+def test_bug_report_oversized_file_rejected_400(app_client, monkeypatch):
+    import sidequest.server.bug_report as bug_report
+
+    _patch_backends(monkeypatch)
+    monkeypatch.setattr(bug_report, "MAX_FILE_BYTES", 10)
+    resp = app_client.post(
+        "/api/bug-report",
+        data={"title": "t", "description": "d"},
+        files=[("files", ("big.png", b"x" * 50, "image/png"))],
+    )
+    assert resp.status_code == 400
+
+
+def test_bug_report_wrong_type_rejected_400(app_client, monkeypatch):
+    _patch_backends(monkeypatch)
+    resp = app_client.post(
+        "/api/bug-report",
+        data={"title": "t", "description": "d"},
+        files=[("files", ("evil.exe", b"x", "application/octet-stream"))],
+    )
+    assert resp.status_code == 400

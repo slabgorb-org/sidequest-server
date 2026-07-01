@@ -6056,6 +6056,48 @@ def _apply_narration_result_to_snapshot(
                         )
                     commits[actor.role] = sel.beat_id
 
+                # ADR-153 §4 opponent brain: the narrator is the primary chooser,
+                # but the engine GUARANTEES the opponent (blue) always commits a
+                # LEGAL maneuver. When the narrator omitted blue or picked one not
+                # in the legal set, substitute a deterministic disposition-weighted
+                # pick — loud via the maneuver_committed span's ``source``, never a
+                # silent default (ADR-006 floor). The positioning firewall holds:
+                # the brain returns only a maneuver id; SWN still resolves the shot.
+                commit_sources: dict[str, str] = {}
+                blue_attitude = ""
+                blue_actor = next((a for a in enc.actors if a.role == "blue"), None)
+                if blue_actor is not None:
+                    opp_npc = next(
+                        (n for n in snapshot.npcs if n.core.name == blue_actor.name),
+                        None,
+                    )
+                    if opp_npc is None:
+                        logger.warning(
+                            "dogfight opponent brain: no NPC backs seated blue actor %r — "
+                            "attitude defaulting to 'neutral' (seeding-invariant gap?)",
+                            blue_actor.name,
+                        )
+                    blue_attitude = (
+                        opp_npc.disposition.attitude().value if opp_npc is not None else "neutral"
+                    )
+                    legal_ids = set(cdef.interaction_table.maneuvers_consumed)
+                    blue_commit = commits.get("blue")
+                    narrator_legal = blue_commit is not None and blue_commit in legal_ids
+                    if narrator_legal:
+                        commit_sources["blue"] = "narrator"
+                    elif cdef.maneuvers:
+                        from sidequest.game.dogfight_brain import select_opponent_maneuver
+
+                        commit_sources["blue"] = (
+                            "substituted" if blue_commit is not None else "fallback"
+                        )
+                        commits["blue"] = select_opponent_maneuver(
+                            attitude=blue_attitude,
+                            maneuvers=[m for m in cdef.maneuvers if m.id in legal_ids],
+                            energy=int(blue_actor.per_actor_state.get("viewer_energy", 60)),
+                            turn_seed=snapshot.turn_manager.interaction,
+                        )
+
                 if pack is None:
                     raise ValueError(
                         f"sealed-letter dogfight {enc.encounter_type!r} requires a pack "
@@ -6099,6 +6141,8 @@ def _apply_narration_result_to_snapshot(
                     geometry_modifiers=geo_mods,
                     shot_inputs=shot_inputs,
                     swn_cfg=pack.rules.swn,
+                    commit_sources=commit_sources,
+                    blue_attitude=blue_attitude,
                 )
                 outcome.sealed_letter = sl_outcome
                 # Replace, do not append: only the most recent cell's hint

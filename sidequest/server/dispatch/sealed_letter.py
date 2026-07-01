@@ -95,6 +95,8 @@ def resolve_sealed_letter_lookup(
     geometry_modifiers: GeometryModifiers | None = None,
     shot_inputs: dict[str, dict[str, Any]] | None = None,
     swn_cfg: SwnConfig | None = None,
+    commit_sources: dict[str, str] | None = None,
+    blue_attitude: str = "",
 ) -> SealedLetterOutcome:
     """Resolve a sealed-letter lookup turn.
 
@@ -197,16 +199,25 @@ def resolve_sealed_letter_lookup(
     ):
         pass
 
+    # ADR-153 §4: stamp the opponent-brain stance source (narrator | fallback |
+    # substituted) so the GM panel can tell whether the narrator or the engine
+    # chose each maneuver; the blue commit also carries the motivating attitude.
+    _sources = commit_sources or {}
     with dogfight_maneuver_committed_span(
         actor=red_actor.name,
         maneuver=red_maneuver,
         role=ROLE_RED,
+        source=_sources.get(ROLE_RED, "narrator"),
     ):
         pass
+    _blue_attrs: dict[str, Any] = {"source": _sources.get(ROLE_BLUE, "narrator")}
+    if blue_attitude:
+        _blue_attrs["attitude"] = blue_attitude
     with dogfight_maneuver_committed_span(
         actor=blue_actor.name,
         maneuver=blue_maneuver,
         role=ROLE_BLUE,
+        **_blue_attrs,
     ):
         pass
 

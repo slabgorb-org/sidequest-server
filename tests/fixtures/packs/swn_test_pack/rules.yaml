@@ -603,4 +603,8 @@ confrontations:
     # content-only change there never diverges from this fixture.
     interaction_table:
       _from: dogfight/interactions_mvp.yaml
+    # ADR-153 §4 opponent brain: mirrors the live space_opera dogfight def so a
+    # content-only change never diverges from this fixture (158-39).
+    maneuvers:
+      _from: dogfight/maneuvers_mvp.yaml
     mood: tense

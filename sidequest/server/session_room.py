@@ -484,7 +484,7 @@ class SessionRoom:
                             exc,
                         )
 
-    def connect(self, player_id: str, *, socket_id: str) -> None:
+    def connect(self, player_id: str, *, socket_id: str, companion_of: str | None = None) -> None:
         # Multi-socket bookkeeping: each WS for a player_id is tracked in
         # `_player_sockets[player_id]`. Re-connect from the same player on
         # a new socket (HMR, tab reload, transient drop + Playwright tab-
@@ -496,17 +496,45 @@ class SessionRoom:
         # ``_sockets[second]`` (the latest) and cleared
         # ``_connected[player_id]`` even though the first socket was
         # still alive.
+        companion_exempt = False
+        occupied_by: str | None = None
         with self._lock:
             if self.mode == GameMode.SOLO:
                 other_players = [p for p in self._connected if p != player_id]
                 if other_players:
-                    raise SoloSlotConflict(
-                        f"solo game {self.slug} already occupied by {other_players[0]}"
-                    )
+                    # Story 160-4 (path b): a bonded companion — its connect carries
+                    # a non-blank ``companion_of`` owner identity — is NOT a competing
+                    # solo player, so it is exempt from the SOLO-slot guard and
+                    # proceeds to bind_companion_bond / the chargen gate. A blank /
+                    # whitespace ``companion_of`` is an ordinary player (mirrors
+                    # bind_companion_bond's ``(companion_of or "").strip()``) and the
+                    # 2026-04-26 "two parallel solo games on one slug" guard still
+                    # fires for it.
+                    if not (companion_of or "").strip():
+                        raise SoloSlotConflict(
+                            f"solo game {self.slug} already occupied by {other_players[0]}"
+                        )
+                    companion_exempt = True
+                    occupied_by = other_players[0]
             self._connected[player_id] = socket_id
             self._sockets[socket_id] = player_id
             self._player_sockets.setdefault(player_id, set()).add(socket_id)
             live_socket_count = len(self._player_sockets[player_id])
+
+        # Story 160-4 OTEL lie-detector: a bonded pet admitted into a SOLO room
+        # emits its exemption so the GM panel can confirm the seat was granted
+        # deliberately (a companion bond), not a SoloSlotConflict guard regression.
+        if companion_exempt:
+            _hub.publish_event(
+                "companion.solo_exempt",
+                {
+                    "slug": self.slug,
+                    "player_id": player_id,
+                    "companion_of": (companion_of or "").strip(),
+                    "occupied_by": occupied_by,
+                },
+                component="companion",
+            )
 
         # Story 45-2: emit state-transition (CONNECTED is implicit / not
         # stored, but the GM panel still wants to see the edge fire).

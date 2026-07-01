@@ -511,7 +511,14 @@ class ConnectHandler:
                 # case this is a same-player reconnect on a new socket.
                 peers_to_backfill = [pid for pid in room.connected_player_ids() if pid != player_id]
                 try:
-                    room.connect(player_id, socket_id=session._socket_id)
+                    # Story 160-4 (path b): forward the handshake's companion_of so
+                    # a bonded pet is exempted from the SOLO-slot guard rather than
+                    # rejected as a second solo player.
+                    room.connect(
+                        player_id,
+                        socket_id=session._socket_id,
+                        companion_of=payload.companion_of,
+                    )
                 except SoloSlotConflict as exc:
                     _mp_span.set_attribute("solo_slot_conflict", True)
                     return [_error_msg(str(exc))]

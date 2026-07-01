@@ -46,5 +46,8 @@ async def create_issue(
 
     if resp.status_code not in (200, 201):
         raise GitHubIssueError(f"{resp.status_code}: {resp.text[:500]}")
-    data = resp.json()
-    return {"url": data["html_url"], "number": data["number"]}
+    try:
+        data = resp.json()
+        return {"url": data["html_url"], "number": data["number"]}
+    except (KeyError, ValueError) as exc:
+        raise GitHubIssueError(f"unexpected GitHub response shape: {exc}") from exc

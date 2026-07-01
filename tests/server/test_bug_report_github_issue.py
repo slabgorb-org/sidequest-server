@@ -39,3 +39,14 @@ async def test_create_issue_missing_token_raises(monkeypatch: pytest.MonkeyPatch
     monkeypatch.delenv("SIDEQUEST_CI_TOKEN", raising=False)
     with pytest.raises(GitHubIssueError):
         await create_issue("T", "B")
+
+
+@pytest.mark.asyncio
+async def test_create_issue_malformed_2xx_body_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SIDEQUEST_CI_TOKEN", "tok")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(201, json={"unexpected": "shape"})
+
+    with pytest.raises(GitHubIssueError):
+        await create_issue("T", "B", transport=httpx.MockTransport(handler))

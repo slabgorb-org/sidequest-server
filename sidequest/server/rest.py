@@ -904,6 +904,10 @@ def create_rest_router() -> APIRouter:
         )
         return Response(content=svg, media_type="image/svg+xml")
 
+    from sidequest.server.bug_report import register_bug_report_routes
+
+    register_bug_report_routes(router)
+
     return router
 
 

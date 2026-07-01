@@ -7,13 +7,9 @@ meaning — so applying it defensively is always safe.
 """
 from __future__ import annotations
 
-import json
 import os
 import re
-from collections import deque
-from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 LOG_TAIL_LINES = 200
 OTEL_EVENT_LIMIT = 150

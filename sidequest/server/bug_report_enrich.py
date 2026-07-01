@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections import deque
 from pathlib import Path
 
 LOG_TAIL_LINES = 200
@@ -51,3 +52,24 @@ def scrub(text: str) -> str:
     if home and home != "/":
         out = out.replace(home, "~")
     return out
+
+
+def server_log_path() -> Path:
+    override = os.environ.get("SIDEQUEST_SERVER_LOG")
+    if override:
+        return Path(override)
+    return Path.home() / ".sidequest" / "logs" / "sidequest-server.log"
+
+
+def tail_server_log(n_lines: int = LOG_TAIL_LINES) -> str | None:
+    """Last ``n_lines`` of the server log, or ``None`` when the file is absent
+    or unreadable. Absence is recorded loudly by the caller — never faked."""
+    path = server_log_path()
+    if not path.exists():
+        return None
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            lines = deque(fh, maxlen=n_lines)
+    except OSError:
+        return None
+    return "".join(lines)

@@ -33,3 +33,25 @@ def test_scrub_rewrites_home_path() -> None:
     out = scrub(f"reading {home}/.sidequest/logs/x.log")
     assert home not in out
     assert "~/.sidequest/logs/x.log" in out
+
+
+def test_tail_server_log_returns_last_n_lines(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from sidequest.server.bug_report_enrich import tail_server_log
+
+    log = tmp_path / "server.log"
+    log.write_text("".join(f"line {i}\n" for i in range(500)), encoding="utf-8")
+    monkeypatch.setenv("SIDEQUEST_SERVER_LOG", str(log))
+
+    out = tail_server_log(n_lines=10)
+    assert out is not None
+    lines = out.splitlines()
+    assert len(lines) == 10
+    assert lines[-1] == "line 499"
+    assert lines[0] == "line 490"
+
+
+def test_tail_server_log_missing_file_returns_none(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from sidequest.server.bug_report_enrich import tail_server_log
+
+    monkeypatch.setenv("SIDEQUEST_SERVER_LOG", str(tmp_path / "does-not-exist.log"))
+    assert tail_server_log() is None

@@ -484,7 +484,7 @@ class SessionRoom:
                             exc,
                         )
 
-    def connect(self, player_id: str, *, socket_id: str) -> None:
+    def connect(self, player_id: str, *, socket_id: str, companion_of: str | None = None) -> None:
         # Multi-socket bookkeeping: each WS for a player_id is tracked in
         # `_player_sockets[player_id]`. Re-connect from the same player on
         # a new socket (HMR, tab reload, transient drop + Playwright tab-
@@ -496,17 +496,65 @@ class SessionRoom:
         # ``_sockets[second]`` (the latest) and cleared
         # ``_connected[player_id]`` even though the first socket was
         # still alive.
+        companion_exempt = False
+        occupied_by: str | None = None
         with self._lock:
             if self.mode == GameMode.SOLO:
                 other_players = [p for p in self._connected if p != player_id]
                 if other_players:
-                    raise SoloSlotConflict(
-                        f"solo game {self.slug} already occupied by {other_players[0]}"
+                    # Story 160-4 (path b): a bonded companion — a connect whose
+                    # ``companion_of`` names the SERVER-RESOLVED identity (ADR-119) of
+                    # a human already in this SOLO room — is NOT a competing solo
+                    # player, so it is exempt from the SOLO-slot guard and proceeds to
+                    # bind_companion_bond / the chargen gate.
+                    #
+                    # The exemption is gated on a server-verified fact, NEVER a bare
+                    # client-asserted string (review 160-4 auth-bypass): ``companion_of``
+                    # must match ``_player_identities`` for a connected occupant — the
+                    # same authenticated cross-check ``pets_of`` uses. A blank
+                    # ``companion_of`` (an ordinary player), one that matches no seated
+                    # occupant's resolved identity (a stranger claiming a bond it does
+                    # not hold), or an unresolved-identity room all fail closed to the
+                    # 2026-04-26 "two parallel solo games on one slug" guard.
+                    claimed_owner = (companion_of or "").strip()
+                    bonded_owner = next(
+                        (
+                            p
+                            for p in other_players
+                            if claimed_owner and self._player_identities.get(p) == claimed_owner
+                        ),
+                        None,
                     )
+                    if bonded_owner is None:
+                        raise SoloSlotConflict(
+                            f"solo game {self.slug} already occupied by {other_players[0]}"
+                        )
+                    companion_exempt = True
+                    occupied_by = bonded_owner
             self._connected[player_id] = socket_id
             self._sockets[socket_id] = player_id
             self._player_sockets.setdefault(player_id, set()).add(socket_id)
             live_socket_count = len(self._player_sockets[player_id])
+
+        # Story 160-4 OTEL lie-detector: a bonded pet admitted into a SOLO room
+        # emits its exemption so the GM panel can confirm the seat was granted
+        # deliberately (a companion bond), not a SoloSlotConflict guard regression.
+        if companion_exempt:
+            _hub.publish_event(
+                "companion.solo_exempt",
+                {
+                    "slug": self.slug,
+                    "player_id": player_id,
+                    # ``occupied_by`` is the seated owner's SERVER-MINTED player_id —
+                    # NOT the client-asserted ``companion_of`` email. The exemption
+                    # correlates the pet to its owner via server ids only, keeping the
+                    # Cf-Access identity (PII) out of the retained/exportable watcher
+                    # stream (mirrors bind_companion_bond, connect.py:303-307;
+                    # lang-review #4 / review 160-4).
+                    "occupied_by": occupied_by,
+                },
+                component="companion",
+            )
 
         # Story 45-2: emit state-transition (CONNECTED is implicit / not
         # stored, but the GM panel still wants to see the edge fire).

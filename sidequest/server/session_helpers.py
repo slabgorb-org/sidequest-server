@@ -141,6 +141,11 @@ _EXCLUDED_FROM_DUMP: tuple[str, ...] = (
     # narration turn.
     "pending_magic_auto_fires",
     "pending_magic_confrontation_outcome",
+    # session.py — transient per-turn husk-reap signal (``exclude=True``). Set in
+    # encounter_lifecycle when an ablative husk is reaped and read back within the
+    # same turn; never persisted (it re-derives from encounter state next turn),
+    # same transient-exclude shape as the pending_magic_* queues above.
+    "husk_reaped_this_turn",
 )
 
 # Story 61-5 / ADR-110 architecture gate — fields whose growth is

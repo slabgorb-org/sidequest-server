@@ -511,7 +511,14 @@ class ConnectHandler:
                 # case this is a same-player reconnect on a new socket.
                 peers_to_backfill = [pid for pid in room.connected_player_ids() if pid != player_id]
                 try:
-                    room.connect(player_id, socket_id=session._socket_id)
+                    # Story 160-4 (path b): forward the handshake's companion_of so
+                    # a bonded pet is exempted from the SOLO-slot guard rather than
+                    # rejected as a second solo player.
+                    room.connect(
+                        player_id,
+                        socket_id=session._socket_id,
+                        companion_of=payload.companion_of,
+                    )
                 except SoloSlotConflict as exc:
                     _mp_span.set_attribute("solo_slot_conflict", True)
                     return [_error_msg(str(exc))]
@@ -736,9 +743,16 @@ class ConnectHandler:
                 # Three branches:
                 #   1. ``player_seats`` populated  → authoritative per-player
                 #      binding; resume only if our player_id is seated.
-                #   2. ``player_seats`` empty + SOLO → legacy single-PC resume;
-                #      SoloSlotConflict already guarded the second connect, so
-                #      ``has_character = bool(characters)`` is safe.
+                #   2. ``player_seats`` empty + SOLO → legacy single-PC resume.
+                #      Only the original solo human resumes the lone PC here. A
+                #      Story-160-4 companion connect (``companion_of`` set) that was
+                #      exempted into the SOLO room must NOT auto-claim the human's PC —
+                #      it routes to chargen to build its own seat (which populates
+                #      ``player_seats`` at confirmation, moving future connects to
+                #      branch 1). Pre-160-4 the SoloSlotConflict guard made any second
+                #      connect here impossible; the exemption reopened it, so the
+                #      companion is discriminated explicitly rather than relying on
+                #      that now-removed invariant.
                 #   3. ``player_seats`` empty + MP → playtest 2026-04-25 bug:
                 #      Laverne's chargen completed on a pre-binding server,
                 #      so the save has characters=[Laverne] but seats={}. The
@@ -755,8 +769,15 @@ class ConnectHandler:
                     has_character = player_id in snapshot.player_seats
                     gate_branch = "player_seats"
                 elif not _is_mp:
-                    has_character = bool(snapshot.characters)
-                    gate_branch = "legacy_solo_any_character"
+                    # Story 160-4: an exempted companion never resumes the human's
+                    # lone PC on a legacy save — it routes to chargen for its own seat.
+                    _is_companion = bool((payload.companion_of or "").strip())
+                    has_character = bool(snapshot.characters) and not _is_companion
+                    gate_branch = (
+                        "legacy_solo_companion_chargen"
+                        if _is_companion
+                        else "legacy_solo_any_character"
+                    )
                 elif display_name in _existing_char_names:
                     # MP back-fill: original player resuming a pre-binding
                     # save. Seat them now so subsequent joiners see the

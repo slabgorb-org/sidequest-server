@@ -467,6 +467,21 @@ class OpponentAttackDef(BaseModel):
     damage: DamageSpec
 
 
+class ManeuverDef(BaseModel):
+    """A dogfight maneuver's positioning metadata (ADR-153 §4). ``maneuver_class``
+    drives the opponent brain's attitude preference; ``energy_cost`` gates
+    affordability (negative = energy recovery). The maneuver's GEOMETRY effect
+    lives in the interaction table, not here (firewall — ADR-153 §2)."""
+
+    # maneuvers_mvp.yaml carries flavor fields (display_name, description, intent,
+    # genre_note, defensive/offensive) the brain does not consume — ignore them.
+    model_config = {"extra": "ignore", "populate_by_name": True}
+
+    id: str
+    maneuver_class: str = Field(alias="class", serialization_alias="class")
+    energy_cost: int = 0
+
+
 class ConfrontationDef(BaseModel):
     """A confrontation type declared by a genre pack in rules.yaml."""
 
@@ -484,6 +499,12 @@ class ConfrontationDef(BaseModel):
     escalates_to: str | None = None
     mood: str | None = None
     interaction_table: InteractionTable | None = None
+    # ADR-153 §4 opponent brain: per-maneuver class + energy cost, loaded from
+    # the dogfight ``maneuvers_mvp.yaml`` via a ``maneuvers: {_from: ...}`` pointer
+    # (resolved in loader.py). Empty for non-dogfight confrontations. The legal
+    # maneuver ids still come from ``interaction_table.maneuvers_consumed``; this
+    # carries the metadata the brain needs to gate + motivate its pick.
+    maneuvers: list[ManeuverDef] = Field(default_factory=list)
     # Genre-level opponent stat fallback. Used by opposed_check resolution
     # when an EncounterActor lacks a per_actor_state.stats entry for the
     # beat's stat_check. Maps stat name → raw ability score (the same

@@ -41,7 +41,7 @@ from sidequest.agents.subsystems import SubsystemOutput
 from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.pack import GenrePack
 from sidequest.genre.models.rules import ResolutionMode
-from sidequest.protocol.dispatch import SubsystemDispatch
+from sidequest.protocol.dispatch import NarratorDirective, SubsystemDispatch
 from sidequest.server.dispatch.encounter_lifecycle import (
     NoOpponentAvailableError,
     SealedLetterArityError,
@@ -177,9 +177,30 @@ async def run_dogfight_dispatch(
             pass
         return SubsystemOutput(data={"error": "dogfight_not_seated"})
 
+    # ADR-153 §4: surface the seated opponent ace's stance — derived from its
+    # disposition — as a narrator directive, so the narrator's PRIMARY maneuver
+    # pick is goal-driven rather than improvised (mirrors npc_agency's directive
+    # shape). The engine floor (the deterministic disposition fallback at the
+    # sealed-letter seam) still guards a skipped or illegal narrator commit.
+    opp = next((n for n in snapshot.npcs if n.core.name == threat_name), None)
+    stance = opp.disposition.attitude().value if opp is not None else "hostile"
+    tendency = {
+        "hostile": "presses the attack — favors aggressive reversals even at an energy cost",
+        "neutral": "flies a balanced fight — breaks when threatened, takes shots when offered",
+        "friendly": "is trying to disengage — favors evasive breaks and energy recovery",
+    }.get(stance, "flies to its disposition")
+    stance_directive = NarratorDirective(
+        kind="must_narrate",
+        payload=(
+            f"The enemy ace's stance (disposition toward the player: {stance}) {tendency}. "
+            "Choose its maneuver consistent with that stance from the legal maneuver menu."
+        ),
+        visibility=dispatch.visibility,
+    )
+
     with dogfight_dispatch_span(encounter_type=enc_type, opponent=threat_name):
         pass
-    return SubsystemOutput()
+    return SubsystemOutput(directives=[stance_directive])
 
 
 __all__ = ["run_dogfight_dispatch"]

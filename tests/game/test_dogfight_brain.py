@@ -50,9 +50,7 @@ _OFFENSIVE = {"loop", "kill_rotation"}  # the two attack-class ids
 def test_hostile_presses_offensive_when_affordable() -> None:
     """A hostile ace out for blood presses the attack: at full energy it commits
     an offensive-class maneuver (loop or kill_rotation), not a passive hold."""
-    pick = select_opponent_maneuver(
-        attitude="hostile", maneuvers=MANEUVERS, energy=60, turn_seed=1
-    )
+    pick = select_opponent_maneuver(attitude="hostile", maneuvers=MANEUVERS, energy=60, turn_seed=1)
     assert pick in _OFFENSIVE, f"hostile ace at full energy should attack, picked {pick!r}"
 
 
@@ -89,9 +87,7 @@ def test_attitude_changes_the_pick_all_else_equal() -> None:
 def test_hostile_takes_cheaper_offensive_when_loop_unaffordable() -> None:
     """Energy 10 can't afford loop (30) but can afford kill_rotation (5): the
     hostile ace still attacks, with the affordable offensive move."""
-    pick = select_opponent_maneuver(
-        attitude="hostile", maneuvers=MANEUVERS, energy=10, turn_seed=1
-    )
+    pick = select_opponent_maneuver(attitude="hostile", maneuvers=MANEUVERS, energy=10, turn_seed=1)
     assert pick == "kill_rotation"
 
 
@@ -111,9 +107,7 @@ def test_no_affordable_spend_falls_back_to_recovery() -> None:
     """At energy 0 only the recovery move (straight, cost -5) is affordable —
     bank/loop/kill_rotation all cost energy the ace doesn't have — so even a
     hostile ace holds and recovers rather than committing an illegal spend."""
-    pick = select_opponent_maneuver(
-        attitude="hostile", maneuvers=MANEUVERS, energy=0, turn_seed=1
-    )
+    pick = select_opponent_maneuver(attitude="hostile", maneuvers=MANEUVERS, energy=0, turn_seed=1)
     assert pick == "straight"
 
 
@@ -126,9 +120,7 @@ def test_nothing_affordable_at_all_returns_cheapest_legal() -> None:
         ManeuverDef(id="b", **{"class": "evasive"}, energy_cost=15),
         ManeuverDef(id="c", **{"class": "offensive_space_only"}, energy_cost=25),
     ]
-    pick = select_opponent_maneuver(
-        attitude="hostile", maneuvers=all_costly, energy=0, turn_seed=1
-    )
+    pick = select_opponent_maneuver(attitude="hostile", maneuvers=all_costly, energy=0, turn_seed=1)
     assert pick == "b", "with nothing affordable, the cheapest legal maneuver wins"
 
 
@@ -154,9 +146,10 @@ def test_seed_is_the_only_nondeterminism_source() -> None:
     b = select_opponent_maneuver(attitude="hostile", maneuvers=MANEUVERS, energy=60, turn_seed=1)
     assert a in _IDS and b in _IDS
     # Re-running with seed 0 still yields `a` (seed 1's call did not perturb it).
-    assert select_opponent_maneuver(
-        attitude="hostile", maneuvers=MANEUVERS, energy=60, turn_seed=0
-    ) == a
+    assert (
+        select_opponent_maneuver(attitude="hostile", maneuvers=MANEUVERS, energy=60, turn_seed=0)
+        == a
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -180,9 +173,7 @@ def test_firewall_output_is_only_a_maneuver_id() -> None:
     """ADR-153 §2 firewall at the brain layer: the entire return is a maneuver id
     string — the brain composes no geometry and resolves no damage. Its output is
     a plain id, nothing more."""
-    pick = select_opponent_maneuver(
-        attitude="hostile", maneuvers=MANEUVERS, energy=60, turn_seed=1
-    )
+    pick = select_opponent_maneuver(attitude="hostile", maneuvers=MANEUVERS, energy=60, turn_seed=1)
     assert isinstance(pick, str)
     assert pick in _IDS
 
@@ -213,4 +204,4 @@ def test_does_not_mutate_the_input_menu() -> None:
     caller's maneuver list (it is the shared ConfrontationDef.maneuvers)."""
     snapshot = list(MANEUVERS)
     select_opponent_maneuver(attitude="hostile", maneuvers=MANEUVERS, energy=60, turn_seed=1)
-    assert MANEUVERS == snapshot
+    assert snapshot == MANEUVERS

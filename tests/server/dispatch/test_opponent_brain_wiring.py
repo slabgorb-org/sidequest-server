@@ -105,8 +105,7 @@ def _blue_committed_spans(exporter: InMemorySpanExporter) -> list:
     return [
         s
         for s in exporter.get_finished_spans()
-        if s.name.endswith("maneuver_committed")
-        and (s.attributes or {}).get("role") == "blue"
+        if s.name.endswith("maneuver_committed") and (s.attributes or {}).get("role") == "blue"
     ]
 
 
@@ -179,9 +178,11 @@ def test_opponent_never_wedges_across_blue_omitted_turns(
         assert outcome.sealed_letter is not None, f"turn {turns_driven + 1} did not resolve"
         turns_driven += 1
 
-        blue = next(
-            (a for a in snap.encounter.actors if a.role == "blue"), None
-        ) if snap.encounter else None
+        blue = (
+            next((a for a in snap.encounter.actors if a.role == "blue"), None)
+            if snap.encounter
+            else None
+        )
         if blue is not None:
             for key, val in blue.per_actor_state.items():
                 if "energy" in key and isinstance(val, (int, float)):
@@ -189,7 +190,8 @@ def test_opponent_never_wedges_across_blue_omitted_turns(
 
     assert turns_driven >= 1, "no blue-omitted turn resolved — the duel wedged immediately"
     blue_fallbacks = [
-        s for s in _blue_committed_spans(span_exporter)
+        s
+        for s in _blue_committed_spans(span_exporter)
         if (s.attributes or {}).get("source") == "fallback"
     ]
     assert len(blue_fallbacks) >= turns_driven, (

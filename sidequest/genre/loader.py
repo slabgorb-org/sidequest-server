@@ -305,20 +305,33 @@ def _load_rules_config(rules_path: Path, pack_dir: Path) -> RulesConfig:
 
 def _resolve_confrontation_from_pointers(conf: Any, pack_dir: Path) -> None:
     """Walk a single confrontation dict and resolve any _from pointers on its
-    interaction_table field. Mutates conf in place.
+    interaction_table and maneuvers fields. Mutates conf in place.
 
     Port of Rust resolve_confrontation_from_pointers().
     """
     if not isinstance(conf, dict):
         return
     it_value = conf.get("interaction_table")
-    if it_value is None:
-        return
-    from_rel = _extract_from_pointer(it_value)
-    if from_rel is None:
-        return
-    resolved = _resolve_from_pointer(from_rel, pack_dir)
-    conf["interaction_table"] = resolved
+    if it_value is not None:
+        from_rel = _extract_from_pointer(it_value)
+        if from_rel is not None:
+            conf["interaction_table"] = _resolve_from_pointer(from_rel, pack_dir)
+
+    # ADR-153 §4: maneuvers point at dogfight/maneuvers_mvp.yaml, whose top level
+    # is a ``maneuvers:`` list (plus flavor keys). Resolve the pointer and lift
+    # the inner list onto the confrontation so ConfrontationDef.maneuvers gets a
+    # list[ManeuverDef], not the whole sub-file dict.
+    man_value = conf.get("maneuvers")
+    if man_value is not None:
+        man_rel = _extract_from_pointer(man_value)
+        if man_rel is not None:
+            resolved = _resolve_from_pointer(man_rel, pack_dir)
+            if not isinstance(resolved, dict) or "maneuvers" not in resolved:
+                raise GenreLoadError(
+                    path=man_rel,
+                    detail="maneuvers _from: sub-file must carry a top-level 'maneuvers' list",
+                )
+            conf["maneuvers"] = resolved["maneuvers"]
 
 
 def _extract_from_pointer(value: Any) -> str | None:

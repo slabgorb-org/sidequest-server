@@ -62,9 +62,7 @@ def _snap_with_opponent(*, disposition_value: int) -> GameSnapshot:
     snap.world_slug = TEST_WORLD
     snap.characters = [
         Character(
-            core=CreatureCore(
-                name=_PLAYER, description="Playtest pilot.", personality="Calm."
-            ),
+            core=CreatureCore(name=_PLAYER, description="Playtest pilot.", personality="Calm."),
             backstory="A pilot.",
             char_class="Pilot",
             race="Human",

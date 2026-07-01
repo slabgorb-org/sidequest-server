@@ -76,9 +76,7 @@ def test_loader_resolves_maneuvers_onto_dogfight_def() -> None:
     energy_cost the brain needs — proving the ``maneuvers: {_from:}`` pointer is
     resolved by the real loader, not just modelled."""
     pack = make_dogfight_pack()
-    cdef = find_confrontation_def(
-        pack.rules.confrontations if pack.rules else [], _DOGFIGHT_TYPE
-    )
+    cdef = find_confrontation_def(pack.rules.confrontations if pack.rules else [], _DOGFIGHT_TYPE)
     assert cdef is not None, "fixture pack has no dogfight ConfrontationDef"
 
     by_id = {m.id: m for m in cdef.maneuvers}
@@ -95,9 +93,7 @@ def test_loaded_maneuvers_cover_the_legal_menu() -> None:
     """Every legal maneuver (``interaction_table.maneuvers_consumed``) has loaded
     metadata — otherwise the brain would gate a legal maneuver it can't price."""
     pack = make_dogfight_pack()
-    cdef = find_confrontation_def(
-        pack.rules.confrontations if pack.rules else [], _DOGFIGHT_TYPE
-    )
+    cdef = find_confrontation_def(pack.rules.confrontations if pack.rules else [], _DOGFIGHT_TYPE)
     assert cdef is not None and cdef.interaction_table is not None
     legal = set(cdef.interaction_table.maneuvers_consumed)
     have = {m.id for m in cdef.maneuvers}

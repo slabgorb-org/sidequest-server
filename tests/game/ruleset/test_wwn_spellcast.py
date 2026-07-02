@@ -331,6 +331,57 @@ def test_no_save_damage_spell_full_damage_and_span_unresolved_save():
 
 
 # ---------------------------------------------------------------------------
+# 158-53 — the span proves the spend DELTA: before AND after charges.
+# AC #2: "the cast-spend emits an OTEL watcher span with before/after remaining
+# so the GM panel verifies the decrement fired." The span records casts_remaining
+# (AFTER) only; adding casts_before makes the spend self-evident on ONE span.
+# Locked on BOTH branches so a refusal can never be misread as a spend.
+# ---------------------------------------------------------------------------
+
+
+def test_span_records_casts_before_on_a_spend():
+    """A successful cast must record BOTH the before AND after charge count on
+    wwn.spell.cast, so the GM panel proves the spend delta (before=2 after=1)
+    from ONE span. The before is captured PRE-decrement. RED until casts_before
+    is wired onto the span."""
+    caster = _caster(prepared=["mend"], casts_remaining=2)
+    spell = CastInput(id="mend", level=1, save=None, damage_die=None, damage_per_level=False)
+    exporter, tracer = _exporter()
+    r = _MOD.resolve_spellcast(
+        caster_core=caster, spell=spell, cfg=_CFG, rng=_fixed_rng(10), _tracer=tracer
+    )
+    assert r.cast is True
+    attrs = dict(exporter.get_finished_spans()[0].attributes or {})
+    assert attrs["refused"] is False
+    assert attrs["casts_remaining"] == 1, "the AFTER (post-spend) count"
+    assert attrs.get("casts_before") == 2, (
+        "the wwn.spell.cast span must record the BEFORE (pre-spend) charge count "
+        "so the spend delta 2->1 is self-evident to the GM panel — AC #2; "
+        f"got casts_before={attrs.get('casts_before')!r}"
+    )
+
+
+def test_span_records_casts_before_on_a_refusal_no_phantom_spend():
+    """A REFUSED cast must ALSO carry casts_before, EQUAL to casts_remaining
+    (before==after), proving NO phantom spend occurred. Locks casts_before on the
+    refuse branch too, so the panel can never mistake a refusal for a spend."""
+    caster = _caster(prepared=["firebolt"], casts_remaining=0)
+    exporter, tracer = _exporter()
+    r = _MOD.resolve_spellcast(
+        caster_core=caster, spell=_firebolt(), cfg=_CFG, rng=_fixed_rng(10), _tracer=tracer
+    )
+    assert r.cast is False
+    attrs = dict(exporter.get_finished_spans()[0].attributes or {})
+    assert attrs["refused"] is True
+    assert attrs["casts_remaining"] == 0
+    assert attrs.get("casts_before") == 0, (
+        "a refused cast must record casts_before == casts_remaining (0 == 0, no "
+        "spend) so the GM panel sees before==after — AC #2 on the refuse branch; "
+        f"got casts_before={attrs.get('casts_before')!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # cfg-type guard — fail loud (raise), consistent with Plan 1 methods.
 # ---------------------------------------------------------------------------
 

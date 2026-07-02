@@ -125,20 +125,35 @@ def _write_wwn_combat_fixture(fixtures_dir: Path, name: str) -> None:
 @pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
 def test_hydrated_wwn_fixture_drives_cast_spell_and_ablates_hp(otel_capture, monkeypatch, tmp_path):
     """A scene-harness fixture seeds spellcasting + an hp_depletion combat; the
-    REAL apply path then fires wwn.spell.cast and ablates the opponent's HP.
+    REAL player cast path (DICE_THROW -> run_wn_round -> WWN cast spine) then
+    spends a cast and ablates the opponent's HP.
 
-    Asserts (all on the real pack, through the real apply path):
+    158-53 RESCOPE: this proof used to drive the cast through a narrator
+    ``BeatSelection`` on ``_apply_narration_result_to_snapshot``. That path is
+    DEAD for a live WN hp_depletion combat — ADR-143 (#1050,
+    ``wn_combat_beat_dropped_engine_owns_round``) de-nativizes the narrator and
+    DROPS stray beat selections; a WN combat resolves ONLY on the player's
+    DICE_THROW via ``run_wn_round``. Driving the cast the old way spent no cast
+    (before=2 after=2) because the beat was dropped before it reached the spine —
+    not because the counter fails to decrement (it does: wwn.py resolve_spellcast,
+    proven green by tests/integration/test_dice_path_spell_cast_102_2.py). So this
+    proof now drives the ADR-143-correct path the real player uses.
+
+    Asserts (all on the real pack, through the real DICE_THROW cast seam):
       1. the fixture seeded core.spellcasting (prepared + 2 casts);
       2. the cast spent exactly one cast (2 -> 1);
       3. the opponent's HP was ablated through the HP channel;
       4. the wwn.spell.cast span fired with refused=False (the lie detector);
-      5. the state_patch.hp span fired (ablative-HP combat, the GM-panel proof).
+      5. the state_patch.hp span fired (ablative-HP combat, the GM-panel proof);
+      6. (158-53 RED) the wwn.spell.cast span records BOTH the before AND after
+         charge count, so the GM panel proves the spend delta (before=2 after=1)
+         on one span — AC #2. The span carries no ``casts_before`` today.
     """
-    from sidequest.agents.orchestrator import BeatSelection, NarrationTurnResult
     from sidequest.game.scene_harness import hydrate_fixture
-    from sidequest.server.narration_apply import _apply_narration_result_to_snapshot
+    from sidequest.protocol.dice import DiceThrowPayload, ThrowParams
+    from sidequest.protocol.models import InitiativeEntry
+    from sidequest.server.dispatch.dice import dispatch_dice_throw
     from sidequest.telemetry.spans.state_patch import SPAN_STATE_PATCH_HP
-    from tests._helpers.session_room import room_for
 
     pack = _load_elemental_harmony()
     assert pack.rules is not None and pack.rules.ruleset == "wwn", (
@@ -165,37 +180,62 @@ def test_hydrated_wwn_fixture_drives_cast_spell_and_ablates_hp(otel_capture, mon
         "a defender HP pool the cast has nothing to ablate"
     )
 
-    # Pin rng to max so the save (if rolled) is made and damage is halved but
-    # still > 0 and below the kill threshold — deterministic, never trips the
-    # downed seam.
-    monkeypatch.setattr("sidequest.server.narration_apply.random.randint", lambda a, b: b)
+    # Story 106-2 (Option A): a WWN hp_depletion combat dispatched through
+    # dispatch_dice_throw resolves via the sealed initiative walk and fails loud
+    # without a persisted order (the production seating seam always rolls one).
+    # Seat a deterministic order so the cast spine drives the real walk: the
+    # caster acts first, the opponent answers at its slot.
+    enc = snapshot.encounter
+    assert enc is not None, "fixture declares an encounter — it must hydrate"
+    enc.initiative = [
+        InitiativeEntry(token_id=_CASTER, value=9),
+        InitiativeEntry(token_id=_OPPONENT, value=2),
+    ]
+
+    # Pin every rng call on the cast path (defender save d20, damage dice, the
+    # opponent reprisal) to MIN via the shared stdlib random module: the defender
+    # save fails (full damage), cinder_lance 1d6 -> 1 HP ablated, and the reprisal
+    # is weak — deterministic, opponent survives, downed seam untripped.
+    monkeypatch.setattr("random.randint", lambda a, b: a)
 
     casts_before = sc.casts_remaining
     hp_before = opponent_core.hp.current
 
-    result = NarrationTurnResult(
-        narration="Mei Lin looses a lance of fire.",
-        beat_selections=[
-            BeatSelection(actor=_CASTER, beat_id="cast_spell", spell_id=_DAMAGE_SPELL),
-        ],
-    )
-    room = room_for(snapshot)
-    _apply_narration_result_to_snapshot(
-        snapshot,
-        result,
-        player_name=_CASTER,
+    broadcasts: list[object] = []
+    dispatch_dice_throw(
+        payload=DiceThrowPayload(
+            request_id="wwn-fixture-cast-1",
+            throw_params=ThrowParams(
+                velocity=(0.0, 5.0, -2.0),
+                angular=(1.0, 1.0, 1.0),
+                position=(0.5, 0.5),
+            ),
+            face=[1],  # WWN High Magic casting is automatic (defender saves) —
+            # a low d20 still casts; the face never gates the spell.
+            beat_id="cast_spell",
+            spell_id=_DAMAGE_SPELL,
+        ),
+        rolling_player_id="player-mei-lin",
+        character_name=_CASTER,
+        # The caster's canonical stats (elemental_harmony flavor names are
+        # display-only via attribute_map); the defender save target is derived
+        # by dispatch the same way _physical_save_target_for does.
+        character_stats={"STR": 12, "DEX": 12, "CON": 10, "INT": 12, "WIS": 10, "CHA": 10},
+        encounter=enc,
         pack=pack,
-        from_explicit_action=True,
-        room=room,
-        acting_character_name=_CASTER,
+        genre_slug=_GENRE,
+        session_id="wwn-fixture-cast-session",
+        round_number=1,
+        room_broadcast=broadcasts.append,
+        snapshot=snapshot,
     )
 
     # ── Assertion 2: the cast spent one cast (2 -> 1) ──────────────────────
     sc_after = snapshot.find_creature_core(_CASTER).spellcasting  # type: ignore[union-attr]
     assert sc_after is not None
     assert sc_after.casts_remaining == casts_before - 1, (
-        f"casting {_DAMAGE_SPELL} from a hydrated fixture must spend exactly one "
-        f"cast; before={casts_before} after={sc_after.casts_remaining}"
+        f"casting {_DAMAGE_SPELL} through the real WWN DICE_THROW cast spine must "
+        f"spend exactly one cast; before={casts_before} after={sc_after.casts_remaining}"
     )
 
     # ── Assertion 3: opponent HP ablated through the HP channel ─────────────
@@ -207,8 +247,8 @@ def test_hydrated_wwn_fixture_drives_cast_spell_and_ablates_hp(otel_capture, mon
     # ── Assertion 4: wwn.spell.cast span fired, refused=False ──────────────
     cast_spans = [s for s in otel_capture.get_finished_spans() if s.name == "wwn.spell.cast"]
     assert len(cast_spans) >= 1, (
-        "a hydrated WWN fixture must fire a wwn.spell.cast span on the real apply "
-        f"path (GM-panel lie detector); got "
+        "a hydrated WWN fixture must fire a wwn.spell.cast span on the real "
+        f"DICE_THROW cast path (GM-panel lie detector); got "
         f"{[s.name for s in otel_capture.get_finished_spans()]}"
     )
     assert cast_spans[-1].attributes.get("refused") is False, (
@@ -222,6 +262,25 @@ def test_hydrated_wwn_fixture_drives_cast_spell_and_ablates_hp(otel_capture, mon
     assert SPAN_STATE_PATCH_HP in finished, (
         f"the WWN cast spine must emit a state_patch.hp span when it ablates the "
         f"defender (deterministic wwn.* combat proof); got spans: {finished}"
+    )
+
+    # ── Assertion 6 (158-53 RED): the span proves the spend delta ──────────
+    # AC #2: "the cast-spend emits an OTEL watcher span with before/after
+    # remaining so the GM panel verifies the decrement fired." The span records
+    # casts_remaining (the AFTER value) but carries NO before value today — so
+    # the panel sees "1 cast left" but cannot prove the spend was 2->1 (a real
+    # decrement) versus 1->1 (a no-op) from this span alone. Record the before
+    # count ON the span so the delta is self-evident to the lie detector.
+    cast_attrs = cast_spans[-1].attributes or {}
+    assert cast_attrs.get("casts_remaining") == casts_before - 1, (
+        "the wwn.spell.cast span must record the AFTER (post-spend) charge count; "
+        f"got casts_remaining={cast_attrs.get('casts_remaining')!r}"
+    )
+    assert cast_attrs.get("casts_before") == casts_before, (
+        "the wwn.spell.cast span must ALSO record the BEFORE charge count so the "
+        "GM panel sees the spend delta on one span (before=2 after=1) — AC #2. "
+        f"got casts_before={cast_attrs.get('casts_before')!r} (None = attribute "
+        "absent: the span carries no before value today — this is 158-53's RED)"
     )
 
 

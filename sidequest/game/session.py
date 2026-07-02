@@ -1561,8 +1561,10 @@ class GameSnapshot(BaseModel):
             # the frontier seam scoped to THAT pc_name — one applier, one
             # transition, one materialize, per PC (the split-party primitive).
             # Lazy import — sidequest.dungeon depends on game models, so a
-            # top-level import would invert the dependency.
+            # top-level import would invert the dependency. Same for
+            # quest_offer (it imports this module's models at top level).
             from sidequest.dungeon.frontier_hook import notify_region_transition
+            from sidequest.game.quest_offer import mint_on_anchor_crossing
 
             for pc_name, to_region in patch.pc_region.items():
                 prev = self.pc_regions.get(pc_name)
@@ -1583,6 +1585,20 @@ class GameSnapshot(BaseModel):
                         )
                     )
                     notify_region_transition(
+                        self,
+                        pc_name=pc_name,
+                        from_region=prev or None,
+                        to_region=to_region,
+                    )
+                    # Story 158-43 (ADR-146 addendum): a genuine crossing INTO
+                    # a pending seed's anchor region IS acceptance for
+                    # anchor-bearing offers — mint deterministically, no LLM.
+                    # Inside the genuine-change gate so first placement
+                    # (prev falsy → from_region None) and no-op re-patches
+                    # never mint; the current_region spawn-anchor branch below
+                    # deliberately does NOT call this (spawning into the
+                    # anchor at turn 0 is not acceptance).
+                    mint_on_anchor_crossing(
                         self,
                         pc_name=pc_name,
                         from_region=prev or None,

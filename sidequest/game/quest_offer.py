@@ -44,7 +44,12 @@ def stash_quest_offers(snapshot: GameSnapshot, opening: Opening) -> None:
 
 
 def mint_quest_offer(
-    snapshot: GameSnapshot, quest_id: str, *, confidence: float
+    snapshot: GameSnapshot,
+    quest_id: str,
+    *,
+    confidence: float,
+    source: str = "authored_seed",
+    pc_name: str = "",
 ) -> QuestEntry | None:
     """Mint a ``QuestEntry`` from a stashed authored offer on acceptance.
 
@@ -118,14 +123,71 @@ def mint_quest_offer(
     # leaves the pending pool (ADR-014).
     snapshot.pending_quest_offers.pop(quest_id, None)
 
+    # ``source`` distinguishes the mint trigger on the GM panel:
+    # ``authored_seed`` (router verbal accept) vs ``anchor_crossed`` (the
+    # deterministic crossing watch below). ``pc_name`` names whose crossing
+    # minted on the anchor path; empty on the router path (not plumbed).
     quest_seeded_span(
         quest_id=quest_id,
         title=seed.title,
-        source="authored_seed",
+        source=source,
         anchor_count=anchor_count,
         confidence=confidence,
+        pc_name=pc_name,
     )
     return snapshot.quest_log[quest_id]
 
 
-__all__ = ["mint_quest_offer", "stash_quest_offers"]
+def mint_on_anchor_crossing(
+    snapshot: GameSnapshot,
+    *,
+    pc_name: str,
+    from_region: str | None,
+    to_region: str,
+) -> list[QuestEntry]:
+    """Mint pending anchor-bearing offers when a PC genuinely crosses into
+    the seed's ``anchor`` region (Story 158-43, ADR-146 addendum).
+
+    The deterministic second mint trigger for offers the router's verbal path
+    cannot see: self-directed / giver-less seeds ("acceptance is the descent,
+    not a yes to anyone") — though the scope is ANY anchor-bearing seed, giver
+    or not. Undertaking the objective IS acceptance; no LLM in the loop.
+
+    Requires a GENUINE transition: a falsy ``from_region`` (spawn / turn-0
+    first placement) never mints — the offer stays live for a later real
+    crossing. A falsy ``to_region`` never matches (an authored ``anchor: ""``
+    must not mint on garbage input). Declined/consumed offers are naturally
+    immune: the decline path pops them from ``pending_quest_offers``, and this
+    function only scans what is still pending — a dead job stays dead.
+
+    Every matching pending seed mints (all-of-them, not first-match): two
+    seeds anchored on the same region are both accepted by the crossing —
+    leaving the second stranded would re-create the exact stuck-offer bug
+    this trigger exists to fix. Each mint flows through the idempotent
+    :func:`mint_quest_offer` (first-writer-wins vs the router / narrator
+    ``record_quest``; cardinality cap stays loud) with
+    ``source="anchor_crossed"``, ``confidence=1.0`` — a state watch is
+    certainty, not a classifier score. Returns the minted entries.
+    """
+    if not from_region or not to_region:
+        return []
+    matching = [
+        quest_id
+        for quest_id, seed in snapshot.pending_quest_offers.items()
+        if seed.anchor and seed.anchor == to_region
+    ]
+    minted: list[QuestEntry] = []
+    for quest_id in matching:
+        entry = mint_quest_offer(
+            snapshot,
+            quest_id,
+            confidence=1.0,
+            source="anchor_crossed",
+            pc_name=pc_name,
+        )
+        if entry is not None:
+            minted.append(entry)
+    return minted
+
+
+__all__ = ["mint_on_anchor_crossing", "mint_quest_offer", "stash_quest_offers"]

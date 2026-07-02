@@ -289,11 +289,15 @@ def quest_seeded_span(
 ) -> None:
     """Emit the Story 117-3 ``quest.seeded`` span (point event, opens+closes).
 
-    Fired when the ``quest_offer`` subsystem mints a QuestEntry from an authored
-    ``QuestSeed`` on acceptance (ADR-146 §4). ``source`` is ``authored_seed``
-    (vs ``narrator`` for record_quest, ``drive`` for the creation spine);
-    ``anchor_count`` is the number of anchors written by this mint (0 or 1 in
-    v1); ``confidence`` is the router score that crossed the engagement gate.
+    Fired when an authored ``QuestSeed`` mints a QuestEntry on acceptance
+    (ADR-146 §4). ``source`` names the mint trigger: ``authored_seed`` (the
+    router classified a verbal accept; ``confidence`` is the router score
+    that crossed the engagement gate) or ``anchor_crossed`` (Story 158-43,
+    ADR-146 addendum: the engine watched a genuine PC transition into the
+    seed's anchor region; always ``confidence=1.0``, and ``pc_name`` rides
+    the attrs) — vs ``narrator`` for record_quest, ``drive`` for the creation
+    spine. ``anchor_count`` is the number of anchors written by this mint
+    (0 or 1 in v1).
     """
     attributes: dict[str, Any] = {
         "quest_id": quest_id,

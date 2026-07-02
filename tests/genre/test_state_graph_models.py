@@ -67,9 +67,15 @@ def test_confrontation_def_registry_defaults_empty() -> None:
     dict — every existing non-dogfight ConfrontationDef construction must
     keep validating unchanged."""
     d = ConfrontationDef(
-        type="parley",
-        label="Parley",
-        category="social",
+        type="melee",
+        label="Close Quarters",
+        category="combat",
+        resolution_mode="beat_selection",
+        win_condition="hp_depletion",
+        # hp_depletion combat requires the reserved combat-seed keys
+        # (ConfrontationDef validators: hp + armor_class for the HP pool,
+        # dexterity for SWN 1d8+DEX initiative) — mirror the live melee def.
+        opponent_default_stats={"hp": 7, "armor_class": 12, "dexterity": 12},
     )
     assert d.interaction_tables == {}
 

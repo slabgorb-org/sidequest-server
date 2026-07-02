@@ -84,7 +84,11 @@ def test_duplicate_starting_state_fails_loud(tmp_path: Path) -> None:
         "      - _from: dogfight/interactions_mvp.yaml\n"
         "      - _from: dogfight/interactions_mvp.yaml",
     )
-    with pytest.raises(GenreLoadError, match="duplicate"):
+    # NOTE the space-containing pattern: GenreLoadError embeds the pack PATH
+    # in its message, and pytest's tmp_path contains this TEST'S NAME — a
+    # bare match="duplicate" is satisfied by the path itself and passes
+    # spuriously in RED. Spaces cannot appear in the tmp_path.
+    with pytest.raises(GenreLoadError, match="duplicate interaction_tables starting_state"):
         load_genre_pack(pack_dir)
 
 
@@ -105,7 +109,10 @@ def test_missing_starting_state_fails_loud(tmp_path: Path) -> None:
         "    blue_view: {}\n",
         encoding="utf-8",
     )
-    with pytest.raises(GenreLoadError, match="starting_state"):
+    # Space-containing pattern for the same reason as the duplicate test:
+    # the tmp_path embeds this test's name ("...missing_starting_state0..."),
+    # so a bare match="starting_state" matches the path, not the error.
+    with pytest.raises(GenreLoadError, match="missing starting_state"):
         load_genre_pack(pack_dir)
 
 

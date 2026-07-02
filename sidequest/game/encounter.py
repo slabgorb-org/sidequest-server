@@ -309,6 +309,13 @@ class StructuredEncounter(BaseModel):
     # reads table_state, not the metrics. See
     # docs/superpowers/specs/2026-05-29-free-for-all-n-seat-table-design.md.
     table_state: TableState | None = None
+    # ADR-153 §3 state graph: current relative-position state id of a
+    # sealed-letter dogfight (merge / tail_chase / beam / ...). Stamped with
+    # the entry state at instantiation, advanced each turn by the resolved
+    # cell's next_state (extend-and-return resets to merge). None for every
+    # non-dogfight encounter and for legacy saves predating the graph.
+    # Serialized so a mid-duel reload resumes in the correct state.
+    dogfight_state: str | None = None
     player_metric: EncounterMetric
     opponent_metric: EncounterMetric
     beat: int = 0

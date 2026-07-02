@@ -6037,12 +6037,31 @@ def _apply_narration_result_to_snapshot(
             # because maneuver IDs collide with beat IDs by content design,
             # falling through to apply_beat would double-apply mechanics.
             elif cdef.resolution_mode == ResolutionMode.sealed_letter_lookup:
-                if cdef.interaction_table is None:
+                if not cdef.interaction_tables:
+                    # A legacy single interaction_table auto-registers into the
+                    # registry at model validation (ADR-153 §3) — an empty
+                    # registry means no table of either shape was authored.
                     raise ValueError(
                         f"confrontation {enc.encounter_type!r} declares "
                         f"resolution_mode=sealed_letter_lookup but has no "
-                        f"interaction_table — cannot dispatch sealed-letter "
+                        f"interaction table — cannot dispatch sealed-letter "
                         f"resolution"
+                    )
+                # ADR-153 §3 state graph: resolve against the CURRENT state's
+                # table. A pre-graph save (dogfight_state=None) falls back to
+                # the entry state; a state with no registered table fails loud
+                # — never a silent stay in a stale table.
+                current_state = enc.dogfight_state or (
+                    cdef.interaction_table.starting_state
+                    if cdef.interaction_table is not None
+                    else next(iter(cdef.interaction_tables))
+                )
+                active_table = cdef.interaction_tables.get(current_state)
+                if active_table is None:
+                    raise ValueError(
+                        f"dogfight {enc.encounter_type!r}: no interaction table "
+                        f"for state {current_state!r} "
+                        f"(registry: {sorted(cdef.interaction_tables)})"
                     )
 
                 commits: dict[str, str] = {}
@@ -6080,7 +6099,7 @@ def _apply_narration_result_to_snapshot(
                     blue_attitude = (
                         opp_npc.disposition.attitude().value if opp_npc is not None else "neutral"
                     )
-                    legal_ids = set(cdef.interaction_table.maneuvers_consumed)
+                    legal_ids = set(active_table.maneuvers_consumed)
                     blue_commit = commits.get("blue")
                     narrator_legal = blue_commit is not None and blue_commit in legal_ids
                     if narrator_legal:
@@ -6137,7 +6156,7 @@ def _apply_narration_result_to_snapshot(
                 sl_outcome = resolve_sealed_letter_lookup(
                     enc,
                     commits,
-                    cdef.interaction_table,
+                    active_table,
                     geometry_modifiers=geo_mods,
                     shot_inputs=shot_inputs,
                     swn_cfg=pack.rules.swn,
@@ -6145,6 +6164,28 @@ def _apply_narration_result_to_snapshot(
                     blue_attitude=blue_attitude,
                 )
                 outcome.sealed_letter = sl_outcome
+
+                # ADR-153 §3: advance the graph for the next turn. A cell
+                # transitioning to an unregistered state is a content bug —
+                # fail loud, never silently stay (the GM panel must be able
+                # to trust dogfight_state).
+                if sl_outcome.next_state and sl_outcome.next_state != current_state:
+                    if sl_outcome.next_state not in cdef.interaction_tables:
+                        raise ValueError(
+                            f"dogfight cell transitions to unknown state "
+                            f"{sl_outcome.next_state!r} "
+                            f"(registry: {sorted(cdef.interaction_tables)})"
+                        )
+                    from sidequest.telemetry.spans.dogfight import (
+                        dogfight_state_transition_span,
+                    )
+
+                    with dogfight_state_transition_span(
+                        from_state=current_state,
+                        to_state=sl_outcome.next_state,
+                    ):
+                        pass
+                    enc.dogfight_state = sl_outcome.next_state
                 # Replace, do not append: only the most recent cell's hint
                 # is relevant context for the next narrator turn.
                 # ``narrator_hints`` is consumed by

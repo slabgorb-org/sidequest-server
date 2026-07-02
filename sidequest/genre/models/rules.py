@@ -387,6 +387,10 @@ class InteractionCell(BaseModel):
     red_view: Any = None
     blue_view: Any = None
     narration_hint: str = ""
+    # ADR-153 §3: relative-position state the duel transitions INTO next turn
+    # (None = stay in the current state). Geometry + gun_solution + next_state
+    # is the complete cell payload — damage stays with the bound ruleset (§2).
+    next_state: str | None = None
     tags: list[str] = Field(default_factory=list)
     calibration_notes: str | None = None
 
@@ -499,6 +503,13 @@ class ConfrontationDef(BaseModel):
     escalates_to: str | None = None
     mood: str | None = None
     interaction_table: InteractionTable | None = None
+    # ADR-153 §3 state graph: per-state interaction tables keyed by each
+    # table's ``starting_state``. Loaded from a content-side
+    # ``interaction_tables:`` list of ``_from:`` pointers (loader.py); a def
+    # with only the legacy single ``interaction_table`` auto-registers
+    # ``{starting_state: table}`` below so the state-machine apply seam has
+    # ONE lookup shape for old and new content.
+    interaction_tables: dict[str, InteractionTable] = Field(default_factory=dict)
     # ADR-153 §4 opponent brain: per-maneuver class + energy cost, loaded from
     # the dogfight ``maneuvers_mvp.yaml`` via a ``maneuvers: {_from: ...}`` pointer
     # (resolved in loader.py). Empty for non-dogfight confrontations. The legal
@@ -562,6 +573,17 @@ class ConfrontationDef(BaseModel):
                 "docs/superpowers/specs/2026-04-25-dual-track-momentum-design.md"
             )
         return data
+
+    @model_validator(mode="after")
+    def _autoregister_single_table(self) -> ConfrontationDef:
+        """ADR-153 §3 back-compat: a legacy single-table def registers itself
+        in the state-graph registry (same object, not a copy) so every
+        consumer can read ``interaction_tables`` unconditionally."""
+        if self.interaction_table is not None and not self.interaction_tables:
+            self.interaction_tables = {
+                self.interaction_table.starting_state: self.interaction_table
+            }
+        return self
 
     @model_validator(mode="after")
     def _validate(self) -> ConfrontationDef:

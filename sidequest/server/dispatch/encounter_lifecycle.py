@@ -1913,12 +1913,17 @@ def instantiate_encounter_from_trigger(
             #     downstream resolver has no cells to look up
             #   - exactly one opponent NPC must be supplied — the player is
             #     red, the opponent is blue, and there is no third role
-            if cdef.interaction_table is None:
+            if not cdef.interaction_tables:
+                # ADR-153 §3: the registry is the single lookup surface — a
+                # legacy single interaction_table auto-registers into it at
+                # model validation, so an empty registry means NO table of
+                # either shape was authored.
                 raise ValueError(
                     f"confrontation {encounter_type!r} declares "
                     f"resolution_mode=sealed_letter_lookup but has no "
-                    f"interaction_table — sealed-letter resolution requires a "
-                    f"populated table (loaded via the `_from:` pointer)"
+                    f"interaction table — sealed-letter resolution requires a "
+                    f"populated table (interaction_table or interaction_tables, "
+                    f"loaded via `_from:` pointers)"
                 )
             if len(npcs_present) != 1:
                 with encounter_sealed_letter_arity_rejected_span(
@@ -2161,6 +2166,16 @@ def instantiate_encounter_from_trigger(
             narrator_hints=[],
             security_tier=stamped_security_tier,
         )
+        # ADR-153 §3: a sealed-letter duel starts in its entry state — the
+        # legacy single table's starting_state, else the first registered
+        # state (registry preserves the content list order). Resume-safe:
+        # the field serializes with the encounter.
+        if cdef.resolution_mode == ResolutionMode.sealed_letter_lookup:
+            enc.dogfight_state = (
+                cdef.interaction_table.starting_state
+                if cdef.interaction_table is not None
+                else next(iter(cdef.interaction_tables), None)
+            )
         # spec 2026-06-17 §2: a Fate Contest cdef stamps a first-to-N victory tally
         # onto the encounter. dispatch_fate_action reads encounter.contest to select
         # the Contest engine over the Conflict engine. target comes from the authored

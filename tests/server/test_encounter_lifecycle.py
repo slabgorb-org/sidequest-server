@@ -779,22 +779,24 @@ def test_sealed_letter_does_not_consume_registry_fallback(sealed_letter_pack):
         processor.shutdown()
 
 
-def test_sealed_letter_empty_npcs_present_raises_without_consuming_fallback(
+def test_sealed_letter_empty_npcs_seats_frame_default_never_location_fallback(
     sealed_letter_pack,
 ):
-    """Story 45-33 AC1 (defensive).
+    """Story 45-33 AC1, realigned to the ADR-153 §6 seater contract (158-40;
+    per the standing 2026-06-27 ruling that Plan-1 §6 realignments update
+    stale seating tests rather than preserve the pre-§6 refusal).
 
-    When the narrator's ``npcs_present`` is EMPTY for a sealed-letter
-    encounter AND a same-location NPC sits in ``snapshot.npcs``, the
-    sealed-letter validator must raise "got 0 npcs_present". The
-    location-scoped fallback must NOT be consulted — even in this
-    degenerate empty path the bystander is not promoted into the duel
-    as a substitute opponent.
+    Pre-§6 this test expected "got 0 npcs_present" to raise. §6 (158-31/34)
+    replaced the refusal: a sealed-letter def carrying an
+    ``opponent_default_stats`` frame SEATS a frame-default ship Other when
+    ``npcs_present`` is empty (proven by
+    ``test_dogfight_zero_npcs_seats_default_ship_from_frame`` — the two
+    contracts cannot both hold, and §6 won).
 
-    Regression catch: dropping the resolution_mode guard while keeping
-    the validator length check would silently fall back, then pass the
-    validator with the wrong NPC — the test above would catch the
-    wrong-NPC path; this test catches the "fallback ran at all" path.
+    What this test still guards — its original point: the co-located
+    bystander in ``snapshot.npcs`` is NEVER promoted into the duel as a
+    substitute opponent. The Other comes from the def frame, not the
+    location fallback.
     """
     from sidequest.game.creature_core import (
         CreatureCore,
@@ -826,22 +828,29 @@ def test_sealed_letter_empty_npcs_present_raises_without_consuming_fallback(
         )
     )
 
-    with pytest.raises(ValueError, match="got 0 npcs_present"):
-        instantiate_encounter_from_trigger(
-            snapshot=snap,
-            pack=sealed_letter_pack,
-            encounter_type="duel",
-            player_name="Maverick",
-            npcs_present=[],
-            genre_slug="test_pack",
-        )
+    instantiate_encounter_from_trigger(
+        snapshot=snap,
+        pack=sealed_letter_pack,
+        encounter_type="duel",
+        player_name="Maverick",
+        npcs_present=[],
+        genre_slug="test_pack",
+    )
 
-    # No encounter must have been written. If the guard regressed and the
-    # fallback was consumed, the encounter would have been instantiated
-    # with the bystander as the blue actor before any later rollback.
-    assert snap.encounter is None, (
-        f"snapshot.encounter must remain None when sealed-letter validator "
-        f"rejects empty npcs_present; got {snap.encounter!r}"
+    # §6: the duel seats, with the Other sourced from the def frame — the
+    # cdef.label-named generic enemy — NEVER the co-located bystander. If the
+    # location fallback regressed back into the sealed-letter path, the blue
+    # actor would be "Deck Crew Chief".
+    enc = snap.encounter
+    assert enc is not None, "a framed sealed-letter duel must seat from the frame (ADR-153 §6)"
+    blue = next(a for a in enc.actors if a.role == "blue")
+    assert blue.name == "Sealed-Letter Duel", (
+        f"frame-default Other must be the cdef.label-named generic enemy, got {blue.name!r}"
+    )
+    assert blue.name != "Deck Crew Chief"
+    seated = {a.name for a in enc.actors}
+    assert "Deck Crew Chief" not in seated, (
+        f"the co-located bystander must never be promoted into the duel; seated: {seated!r}"
     )
 
 

@@ -333,6 +333,39 @@ def _resolve_confrontation_from_pointers(conf: Any, pack_dir: Path) -> None:
                 )
             conf["maneuvers"] = resolved["maneuvers"]
 
+    # ADR-153 §3 state graph: a sealed-letter def may declare a LIST of
+    # per-state tables, each entry inline or a {_from: ...} pointer. Resolve
+    # pointers and key the registry by each table's starting_state. Duplicate
+    # or missing starting_state is a load error, never a silent
+    # last-one-wins/drop (No Silent Fallbacks).
+    tables_value = conf.get("interaction_tables")
+    if tables_value is not None:
+        if not isinstance(tables_value, list):
+            raise GenreLoadError(
+                path=pack_dir / "rules.yaml",
+                detail=(
+                    "interaction_tables must be a list of per-state table "
+                    f"entries (inline or _from: pointers), got {type(tables_value).__name__}"
+                ),
+            )
+        resolved_tables: dict[str, Any] = {}
+        for entry in tables_value:
+            entry_rel = _extract_from_pointer(entry)
+            table = _resolve_from_pointer(entry_rel, pack_dir) if entry_rel is not None else entry
+            state = table.get("starting_state") if isinstance(table, dict) else None
+            if not state:
+                raise GenreLoadError(
+                    path=pack_dir / "rules.yaml",
+                    detail=f"interaction_tables entry missing starting_state: {entry!r}",
+                )
+            if state in resolved_tables:
+                raise GenreLoadError(
+                    path=pack_dir / "rules.yaml",
+                    detail=f"duplicate interaction_tables starting_state: {state!r}",
+                )
+            resolved_tables[state] = table
+        conf["interaction_tables"] = resolved_tables
+
 
 def _extract_from_pointer(value: Any) -> str | None:
     """If value is a mapping of shape { _from: "relpath" } (single key), return the string.

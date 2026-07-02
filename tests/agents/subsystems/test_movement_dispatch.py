@@ -869,11 +869,13 @@ def test_wiring_intent_router_pass_threads_context(capture_spans, monkeypatch):
     monkeypatch.setattr(
         intent_router_pass,
         "_build_state_summary",
-        # acting_player was added to the real _build_state_summary signature
-        # (intent_router_pass.py); the stub must accept it or the production
-        # call raises TypeError. (153-22 baseline-restore — unrelated to the
-        # movement resolver; see Dev Delivery Findings.)
-        lambda snapshot, *, pack, dungeon_store=None, palette=None, acting_player=None: "summary",
+        # Accept arbitrary keyword args: the real _build_state_summary signature
+        # keeps growing (acting_player at 153-22, then orbital_content/
+        # orbital_scope/recent_body_mentions at 158-50). This stub only bypasses
+        # the pack-touching logic and returns a placeholder, so **kwargs keeps it
+        # in sync with the production call site without re-breaking on every
+        # added param.
+        lambda snapshot, **kwargs: "summary",
     )
 
     _run(

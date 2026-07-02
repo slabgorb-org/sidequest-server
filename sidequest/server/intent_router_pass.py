@@ -269,9 +269,7 @@ def force_dispatch_dogfight_on_verb_miss(
         return False  # the router already routed a confrontation — not a miss.
 
     # Dogfight-verb hits only (``type:verb`` where type == the dogfight type).
-    hits = [
-        h for h in _confrontation_verb_hits(action, pack) if h.startswith(f"{dogfight_type}:")
-    ]
+    hits = [h for h in _confrontation_verb_hits(action, pack) if h.startswith(f"{dogfight_type}:")]
     verbs = {h.split(":", 1)[1] for h in hits}
     strong = bool(verbs & _STRONG_DOGFIGHT_VERBS) or len(verbs) >= 2
     if not strong:
@@ -365,6 +363,9 @@ def _build_state_summary(
     dungeon_store: Any | None = None,
     palette: Any | None = None,
     acting_player: str | None = None,
+    orbital_content: OrbitalContent | None = None,
+    orbital_scope: Any | None = None,
+    recent_body_mentions: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build the slimmed JSON-able state summary the router consumes.
 
@@ -698,6 +699,51 @@ def _build_state_summary(
                         snapshot.turn_manager.interaction,
                     )
 
+    # Orbital course/clock vocabulary (Story 158-50, ADR-130). When the world
+    # has an orbital tier, surface the SAME <courses> block the narrator builds
+    # (orchestrator.py — Don't Reinvent) so the IntentRouter can classify a
+    # "burn for the Red Prospect" as travel and emit a `course` dispatch. Its
+    # own gate (intent_router.py: "emit course ONLY when a <courses> block is
+    # present in game_state") could never fire before this — the block was
+    # assembled only for the narrator, so the router never saw one, never
+    # classified travel, and the already-registered course/clock engine stayed
+    # inert in play (SWN-ORBITAL-COURSE-INERT). Double-gated exactly like the
+    # narrator: an orbital tier (orbital_content) AND a party body anchor.
+    # orbital_content/orbital_scope/recent_body_mentions live on the Session —
+    # threaded in by the pre-pass caller; None on worlds with no orbital tier,
+    # which keeps every non-orbital router prompt free of this block.
+    if orbital_content is not None and snapshot.party_body_id:
+        from sidequest.orbital.course import (
+            _bodies_in_scope,
+            compute_courses,
+            format_courses_block,
+        )
+        from sidequest.orbital.render import Scope
+        from sidequest.telemetry.spans.course import emit_course_compute
+
+        _scope = orbital_scope if orbital_scope is not None else Scope.system_root()
+        _in_scope = _bodies_in_scope(orbital_content.orbits, _scope)
+        _course_rows = compute_courses(
+            orbits=orbital_content.orbits,
+            party_at=snapshot.party_body_id,
+            in_scope_body_ids=_in_scope,
+            recent_body_mentions=list(recent_body_mentions or []),
+            quest_anchors=list(snapshot.quest_anchors or []),
+        )
+        # GM-panel evidence the router actually saw the block this turn (OTEL
+        # Observability Principle): a course.compute span with zero rows on an
+        # orbital world is the loud signal the router had no travel vocabulary.
+        emit_course_compute(
+            course_count=len(_course_rows),
+            in_scope=sum(1 for r in _course_rows.values() if r.source.value == "in_scope"),
+            recent=sum(1 for r in _course_rows.values() if r.source.value == "recent_mention"),
+            quest=sum(1 for r in _course_rows.values() if r.source.value == "quest_objective"),
+            dropped_by_cap=0,
+        )
+        _courses_block = format_courses_block(_course_rows)
+        if _courses_block:
+            summary["courses"] = _courses_block
+
     # 82-10 before/after evidence — fires once per pass, AFTER the
     # router-specific additions so bytes_after is what actually ships to
     # the model (the ADR-110 amendment's mandated GM-panel contract).
@@ -880,6 +926,8 @@ async def execute_intent_router_pre_narrator_pass(
     palette: Any | None = None,
     lookahead_handle: Any | None = None,
     orbital_content: OrbitalContent | None = None,
+    orbital_scope: Any | None = None,
+    recent_body_mentions: list[str] | None = None,
     phase_timings: PhaseTimings | None = None,
     turn_number: int = 0,
 ) -> tuple[DispatchPackage, BankResult]:
@@ -920,6 +968,9 @@ async def execute_intent_router_pre_narrator_pass(
             dungeon_store=dungeon_store,
             palette=palette,
             acting_player=player_name,
+            orbital_content=orbital_content,
+            orbital_scope=orbital_scope,
+            recent_body_mentions=recent_body_mentions,
         )
         package = await intent_router.decompose(
             action=action,

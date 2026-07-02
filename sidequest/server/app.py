@@ -44,6 +44,11 @@ class WatcherEmitPayload(BaseModel):
     event_type: str
     fields: dict[str, Any]
     component: str = "daemon"
+    # Optional cross-process overrides (161-2). The daemon omits both (its slug is
+    # on the server ContextVar). The companion — running in its own process — sends
+    # its own session_slug and an explicit severity for degraded/timed-out decisions.
+    session_slug: str | None = None
+    severity: str | None = None
 
 
 def _install_uvicorn_log_bridge() -> None:
@@ -312,10 +317,20 @@ def create_app(
     # (cross-process boundary). It POSTs here and we forward to publish_event.
     @app.post("/internal/watcher/emit", status_code=204)
     async def watcher_emit(payload: WatcherEmitPayload) -> None:
+        # Only forward the optional overrides when supplied, so the daemon path
+        # (neither field present) calls publish_event with its exact prior
+        # signature — session_slug falls back to the ContextVar and severity to
+        # its "info" default, both unchanged.
+        extra: dict[str, Any] = {}
+        if payload.session_slug is not None:
+            extra["session_slug"] = payload.session_slug
+        if payload.severity is not None:
+            extra["severity"] = payload.severity
         publish_event(
             event_type=payload.event_type,
             fields=payload.fields,
             component=payload.component,
+            **extra,
         )
 
     # --- /ws WebSocket endpoint ---

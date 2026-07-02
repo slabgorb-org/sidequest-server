@@ -1002,9 +1002,18 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                         # the world's orbits config lives on the Session, not the
                         # snapshot. Thread it so the course handler can resolve a
                         # travel intent; None for worlds with no orbital tier.
+                        # Story 158-50: also thread the Session's orbital scope +
+                        # recent body mentions so the router's <courses> block
+                        # matches the narrator's (Don't Reinvent) — without them
+                        # the IntentRouter never sees a <courses> block and can
+                        # never classify travel (SWN-ORBITAL-COURSE-INERT).
                         _session = sd._room.session if sd._room is not None else None
                         _orbital_content = (
                             _session.orbital_content if _session is not None else None
+                        )
+                        _orbital_scope = _session.orbital_scope if _session is not None else None
+                        _recent_body_mentions = (
+                            list(_session.recent_body_mentions) if _session is not None else None
                         )
                         (
                             _dispatch_package,
@@ -1020,6 +1029,8 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                             palette=_dungeon_palette,
                             lookahead_handle=_lookahead_handle,
                             orbital_content=_orbital_content,
+                            orbital_scope=_orbital_scope,
+                            recent_body_mentions=_recent_body_mentions,
                             phase_timings=timings,
                             turn_number=_dispatch_turn_number,
                         )

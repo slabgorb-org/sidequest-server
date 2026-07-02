@@ -380,7 +380,13 @@ def beats_available_for(
     # KeyError soft-lock). Fail loud if the table authors no maneuvers (No Silent
     # Fallbacks) rather than degrade to an empty or personal-combat menu (AC3).
     if confrontation.resolution_mode == ResolutionMode.sealed_letter_lookup:
+        # ADR-153 §3: a registry-only def has no single interaction_table —
+        # the menu reads the ENTRY table (first registered state). Per-state
+        # maneuver sets are identical in authored content; if that ever
+        # diverges this menu must become state-aware (no encounter handle here).
         table = confrontation.interaction_table
+        if table is None and confrontation.interaction_tables:
+            table = next(iter(confrontation.interaction_tables.values()))
         maneuvers = list(table.maneuvers_consumed) if table is not None else []
         if not maneuvers:
             raise PackError(

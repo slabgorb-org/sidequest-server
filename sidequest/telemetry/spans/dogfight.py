@@ -45,6 +45,17 @@ SPAN_ROUTES[SPAN_DOGFIGHT_MANEUVER_COMMITTED] = SpanRoute(
         "role": (span.attributes or {}).get("role", ""),
     },
 )
+SPAN_DOGFIGHT_STATE_TRANSITION = "dogfight.state_transition"
+SPAN_ROUTES[SPAN_DOGFIGHT_STATE_TRANSITION] = SpanRoute(
+    event_type="state_transition",
+    component="dogfight",
+    extract=lambda span: {
+        "field": "dogfight",
+        "op": "state_transition",
+        "from_state": (span.attributes or {}).get("from_state", ""),
+        "to_state": (span.attributes or {}).get("to_state", ""),
+    },
+)
 SPAN_DOGFIGHT_CELL_RESOLVED = "dogfight.cell_resolved"
 SPAN_ROUTES[SPAN_DOGFIGHT_CELL_RESOLVED] = SpanRoute(
     event_type="state_transition",
@@ -169,6 +180,24 @@ def dogfight_cell_resolved_span(
             "extend_and_return_triggered": extend_and_return_triggered,
             **attrs,
         },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def dogfight_state_transition_span(
+    *,
+    from_state: str,
+    to_state: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """ADR-153 §3: the relative-position graph moved — the GM panel sees the
+    duel walk merge → tail_chase → ... rather than inferring it from prose."""
+    with Span.open(
+        SPAN_DOGFIGHT_STATE_TRANSITION,
+        {"from_state": from_state, "to_state": to_state, **attrs},
         tracer_override=_tracer,
     ) as span:
         yield span

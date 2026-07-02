@@ -42,7 +42,9 @@ def _copy_pack_with_registry_block(tmp_path: Path, registry_block: str) -> Path:
     """Copy swn_test_pack and swap the dogfight's single-table pointer for an
     arbitrary ``interaction_tables:`` block (for the fail-loud shapes the
     graph builder itself refuses to produce)."""
-    pack_dir = tmp_path / "swn_registry_pack"
+    # Keep the fixture's dir name — lethality_policy.yaml pins genre_key ==
+    # pack dir name (tmp_path isolation makes the same name collision-free).
+    pack_dir = tmp_path / SWN_TEST_PACK
     shutil.copytree(fixture_pack_path(SWN_TEST_PACK), pack_dir)
     rules_path = pack_dir / "rules.yaml"
     text = rules_path.read_text(encoding="utf-8")

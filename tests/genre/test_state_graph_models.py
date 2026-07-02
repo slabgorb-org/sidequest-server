@@ -54,6 +54,9 @@ def test_confrontation_def_holds_table_registry() -> None:
         category="combat",
         resolution_mode="sealed_letter_lookup",
         win_condition="hp_depletion",
+        # hp_depletion combat validators require the reserved combat-seed
+        # keys (hp + armor_class + dexterity) — mirror the live dogfight def.
+        opponent_default_stats={"hp": 8, "armor_class": 16, "dexterity": 12},
         interaction_tables={"merge": merge},
     )
     assert set(d.interaction_tables) == {"merge"}

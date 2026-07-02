@@ -84,11 +84,20 @@ def dogfight_conf(space_opera_pack: GenrePack) -> ConfrontationDef:
 
 @pytest.fixture(scope="module")
 def dogfight_table(dogfight_conf: ConfrontationDef) -> InteractionTable:
-    table = dogfight_conf.interaction_table
+    # ADR-153 §3: the state graph loads into interaction_tables (dict).
+    # The entry state is the FIRST declared table's starting_state.
+    # Per rules.yaml comment: "FIRST entry is the duel's entry state (merge)".
+    if not dogfight_conf.interaction_tables:
+        raise AssertionError(
+            "space_opera dogfight has no interaction_tables — "
+            "rules.yaml is missing the `interaction_tables:` list of `_from:` pointers "
+            "or the loader did not resolve it"
+        )
+    # Get the "merge" entry state table
+    table = dogfight_conf.interaction_tables.get("merge")
     assert table is not None, (
-        "space_opera dogfight confrontation has no interaction_table — "
-        "rules.yaml is missing the `_from: dogfight/interactions_mvp.yaml` "
-        "pointer or the loader did not resolve it"
+        f"space_opera dogfight interaction_tables missing 'merge' entry state. "
+        f"Available states: {sorted(dogfight_conf.interaction_tables.keys())}"
     )
     return table
 

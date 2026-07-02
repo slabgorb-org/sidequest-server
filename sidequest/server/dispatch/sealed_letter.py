@@ -85,6 +85,11 @@ class SealedLetterOutcome:
     narration_hint: str
     extend_and_return_triggered: bool = False
     gun_solutions: list[GunSolution] = field(default_factory=list)
+    # ADR-153 §3: relative-position state to transition into next turn.
+    # None = stay. When extend-and-return fires it is forced to "merge" —
+    # the geometry reset IS the transition, and it wins over the cell's
+    # authored target.
+    next_state: str | None = None
 
 
 def resolve_sealed_letter_lookup(
@@ -319,6 +324,9 @@ def resolve_sealed_letter_lookup(
         narration_hint=cell.narration_hint,
         extend_and_return_triggered=extend_triggered,
         gun_solutions=gun_solutions,
+        # The reset target matches _MERGE_STARTING_GEOMETRY above — if the
+        # reset ever becomes schema-driven, this literal moves with it.
+        next_state="merge" if extend_triggered else cell.next_state,
     )
 
 

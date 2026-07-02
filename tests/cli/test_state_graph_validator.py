@@ -48,7 +48,10 @@ def _inline_table(state: str, *, next_state: str | None = None, view_extra: str 
     list item). The single-cell shape keeps the closure/reachability logic
     under test without 16-cell noise — cross-product completeness is a
     separate rule."""
-    ns = f"\n            next_state: {next_state}" if next_state else ""
+    # 16-space indent: next_state must sit INSIDE the cell mapping (a
+    # 12-space indent lands it at table level and the graph checks see no
+    # transition at all — the closed-graph test then trips reachability).
+    ns = f"\n                next_state: {next_state}" if next_state else ""
     return f"""\
           - version: "1"
             starting_state: {state}

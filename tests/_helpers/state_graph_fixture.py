@@ -67,7 +67,10 @@ def make_state_graph_pack(tmp_path: Path, *, transition_target: str = "tail_chas
 
     Returns the pack directory (pass to ``load_genre_pack``).
     """
-    pack_dir = tmp_path / "swn_state_graph_pack"
+    # The copy MUST keep the fixture's directory name: lethality_policy.yaml
+    # pins genre_key == pack dir name and the loader fails loud on a mismatch.
+    # tmp_path isolation makes the same name collision-free.
+    pack_dir = tmp_path / SWN_TEST_PACK
     shutil.copytree(fixture_pack_path(SWN_TEST_PACK), pack_dir)
 
     # 1. rules.yaml: single table pointer -> registry list

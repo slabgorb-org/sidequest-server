@@ -108,14 +108,15 @@ def test_dogfight_confrontation_uses_sealed_letter_lookup(
     assert dogfight_conf.label  # non-empty
 
 
-def test_dogfight_has_dual_track_metrics(dogfight_conf: ConfrontationDef) -> None:
-    """Dual-track momentum: independent ascending dials, threshold > starting.
-
-    Pydantic already enforces threshold > starting in MetricDef._validate, so
-    this test mostly proves the fields survive the pack load round-trip.
-    """
-    assert dogfight_conf.player_metric.threshold > dogfight_conf.player_metric.starting
-    assert dogfight_conf.opponent_metric.threshold > dogfight_conf.opponent_metric.starting
+def test_dogfight_carries_no_native_dial(dogfight_conf: ConfrontationDef) -> None:
+    """ADR-153 §2 firewall (158-31): the native energy dial was DELETED from
+    the dogfight — the duel resolves via SWN hp_depletion. Replaces the old
+    ``test_dogfight_has_dual_track_metrics``, which asserted the pre-firewall
+    dial shape and had been failing against live content since content #508
+    merged (2026-06-27) — 158-40 removes it as stale doctrine."""
+    assert dogfight_conf.player_metric is None
+    assert dogfight_conf.opponent_metric is None
+    assert dogfight_conf.win_condition.value == "hp_depletion"
 
 
 # --- InteractionTable shape -------------------------------------------------
@@ -190,18 +191,26 @@ def test_every_cell_has_populated_narration_metadata(
         assert cell.blue_view, f"cell {pair!r} has empty blue_view"
 
 
-def test_dogfight_beats_cover_every_consumed_maneuver(
+def test_dogfight_maneuvers_metadata_covers_every_consumed_maneuver(
     dogfight_conf: ConfrontationDef,
     dogfight_table: InteractionTable,
 ) -> None:
-    """The legacy beat list still holds the prose-side definitions for each
-    maneuver. If the table consumes a maneuver but the beats list doesn't
-    define it, the GM panel can't render the choice — fail loudly."""
-    beat_ids = {b.id for b in dogfight_conf.beats}
-    missing = set(dogfight_table.maneuvers_consumed) - beat_ids
+    """ADR-153 §2/§4: the ``beats:`` list was DELETED with the native dial
+    (158-31) — the maneuver menu comes from ``maneuvers_consumed`` and the
+    opponent brain's metadata from ``maneuvers`` (158-39, content #511).
+    Replaces the old ``test_dogfight_beats_cover_every_consumed_maneuver``
+    (stale since content #508; asserted the deleted beats shape). Every
+    consumed maneuver must carry brain metadata or the ace can't be gated
+    or motivated for it — fail loudly."""
+    assert dogfight_conf.beats == [], (
+        "the dogfight beats list was deleted by the ADR-153 firewall — its "
+        f"reappearance is a doctrine regression, got {len(dogfight_conf.beats)} beats"
+    )
+    maneuver_ids = {m.id for m in dogfight_conf.maneuvers}
+    missing = set(dogfight_table.maneuvers_consumed) - maneuver_ids
     assert not missing, (
-        f"maneuvers_consumed {sorted(missing)} have no matching beat in "
-        f"the dogfight confrontation (have: {sorted(beat_ids)})"
+        f"maneuvers_consumed {sorted(missing)} have no ManeuverDef metadata in "
+        f"the dogfight confrontation (have: {sorted(maneuver_ids)})"
     )
 
 

@@ -103,6 +103,8 @@ class WwnRulesetModule(WithoutNumberRulesetModule):
                 spell_id=spell.id,
                 level=spell.level,
                 refused=True,
+                # A refusal spends nothing — before == after (no phantom spend).
+                casts_before=state.casts_remaining,
                 casts_remaining=state.casts_remaining,
                 save=save_category if spell.save is not None else "",
                 save_made=None,  # refusal: no save resolved (refused=True disambiguates)
@@ -125,7 +127,9 @@ class WwnRulesetModule(WithoutNumberRulesetModule):
                 f"spell level {spell.level} exceeds max castable level {state.max_spell_level}"
             )
 
-        # Spend exactly one cast.
+        # Spend exactly one cast (capture the pre-spend count so the span carries
+        # the before/after delta — 158-53 AC #2).
+        casts_before = state.casts_remaining
         state.casts_remaining -= 1
 
         # Force the defender's own save (only when the spell offers one and a
@@ -161,6 +165,7 @@ class WwnRulesetModule(WithoutNumberRulesetModule):
             spell_id=spell.id,
             level=spell.level,
             refused=False,
+            casts_before=casts_before,
             casts_remaining=state.casts_remaining,
             save=save_category if spell.save is not None else "",
             # save_made stays bool | None: None = save NOT resolved (no defender/

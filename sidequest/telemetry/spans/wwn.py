@@ -41,6 +41,7 @@ SPAN_ROUTES[SPAN_WWN_SPELL_CAST] = SpanRoute(
         "spell_id": (span.attributes or {}).get("spell_id", ""),
         "level": (span.attributes or {}).get("level", 0),
         "refused": (span.attributes or {}).get("refused", False),
+        "casts_before": (span.attributes or {}).get("casts_before", 0),
         "casts_remaining": (span.attributes or {}).get("casts_remaining", 0),
         "save": (span.attributes or {}).get("save", ""),
         # save_made is OMITTED from the span attributes when no save was resolved
@@ -112,6 +113,7 @@ def wwn_spell_cast_span(
     spell_id: str,
     level: int,
     refused: bool,
+    casts_before: int,
     casts_remaining: int,
     save: str,
     save_made: bool | None,
@@ -120,6 +122,11 @@ def wwn_spell_cast_span(
     **attrs: Any,
 ) -> None:
     """Emit a wwn.spell.cast span (lie-detector for WWN spell casting).
+
+    ``casts_before`` / ``casts_remaining`` are the charge counts BEFORE and AFTER
+    the cast — the GM panel reads the spend delta off one span (a real 2->1 spend
+    vs a refused 2->2 no-op). On a refusal they are equal (no cast spent); on a
+    successful cast ``casts_before == casts_remaining + 1`` (story 158-53, AC #2).
 
     ``save_made`` is ``None`` when NO save was resolved (no-save spell, or a save
     spell with no defender/stats). In that case the attribute is OMITTED entirely
@@ -132,6 +139,7 @@ def wwn_spell_cast_span(
         "spell_id": spell_id,
         "level": level,
         "refused": refused,
+        "casts_before": casts_before,
         "casts_remaining": casts_remaining,
         "save": save,
         "damage": damage,

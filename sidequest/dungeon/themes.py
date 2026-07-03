@@ -221,7 +221,7 @@ class ExpansionQuestTemplate(BaseModel):
     set_piece_id: str | None = None  # required iff signature == "set_piece"
 
     @model_validator(mode="after")
-    def _v_set_piece_id(self) -> "ExpansionQuestTemplate":
+    def _v_set_piece_id(self) -> ExpansionQuestTemplate:
         if self.signature == "set_piece" and not (self.set_piece_id or "").strip():
             raise ValueError("signature 'set_piece' requires a non-blank set_piece_id")
         return self

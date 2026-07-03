@@ -69,6 +69,7 @@ def seal_wn_commit(
     beat: BeatDef,
     outcome: RollOutcome,
     spell_id: str | None,
+    mutation_id: str | None = None,
 ) -> None:
     """Seal one player's Main Action onto the encounter's commit ledger.
 
@@ -96,6 +97,7 @@ def seal_wn_commit(
             outcome=outcome.value,
             target=target,
             spell_id=spell_id,
+            mutation_id=mutation_id,
         )
     )
     _watcher_publish(
@@ -483,6 +485,7 @@ def run_wn_round(
         application = _apply_committed_player_beat(
             beat_id=commit.beat_id,
             spell_id=commit.spell_id,
+            mutation_id=commit.mutation_id,
             character_name=token,
             rolling_player_id=rolling_player_id,
             beat=beat,

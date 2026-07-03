@@ -191,6 +191,15 @@ class DiceThrowPayload(ProtocolBase):
     on every non-cast beat — the pre-102-2 wire shape is unchanged. The
     narrator apply_beat path carries the same value on its BeatSelection
     sidecar; this field is the dice path's carrier.
+
+    ``mutation_id`` — story 158-54: when the committed beat carries the AWN
+    ``mutation_resolution`` marker, the overlay's mutation picker names WHICH
+    owned mutation manifests so dispatch can route the mutation use spine
+    (``awn.mutation.used`` + Strain/usage economy via use_ops) instead of
+    resolving a generic stat throw — the ``spell_id`` pattern, retold for
+    mutations. ``None`` on every non-mutation beat. The narrator apply_beat
+    path carries the same value on its BeatSelection sidecar; this field is
+    the dice path's carrier.
     """
 
     request_id: str
@@ -199,6 +208,7 @@ class DiceThrowPayload(ProtocolBase):
     beat_id: str | None = None
     player_action: str | None = None
     spell_id: str | None = None
+    mutation_id: str | None = None
 
 
 class DiceResultPayload(ProtocolBase):

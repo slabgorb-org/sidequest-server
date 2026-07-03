@@ -405,20 +405,17 @@ async def test_saint_marked_drawback_lives_through_confrontation_and_save(
     This is test_102_7's cast-spine + test_mutation_wiring's save proof, fused
     onto a real Saint-Marked sheet — the epic's single end-to-end proof.
     """
-    from sidequest.agents.orchestrator import (
-        BeatSelection,
-        NarrationTurnResult,
-        NpcMention,
-    )
+    from sidequest.agents.orchestrator import NpcMention
     from sidequest.game.session import GameSnapshot
     from sidequest.game.turn import TurnManager
     from sidequest.mutation.context_builder import build_mutation_static_block
+    from sidequest.protocol.dice import DiceThrowPayload, ThrowParams
+    from sidequest.protocol.models import InitiativeEntry
+    from sidequest.server.dispatch.dice import dispatch_dice_throw
     from sidequest.server.dispatch.encounter_lifecycle import (
         instantiate_encounter_from_trigger,
     )
     from sidequest.server.mutation_init import init_mutation_state_for_session
-    from sidequest.server.narration_apply import _apply_narration_result_to_snapshot
-    from tests._helpers.session_room import room_for
 
     pack = _load_pack()
     catalog = _catalog_or_skip(pack)
@@ -480,6 +477,11 @@ async def test_saint_marked_drawback_lives_through_confrontation_and_save(
     )
     assert enc is not None, "seating the real combat confrontation must succeed"
     snap.encounter = enc
+    # 102-4: the WN walk resolves in PERSISTED initiative order — pin it.
+    enc.initiative = [
+        InitiativeEntry(token_id=pc_name, value=9),
+        InitiativeEntry(token_id=opponent, value=2),
+    ]
 
     combat = next(c for c in pack.rules.confrontations if c.category == "combat")
     mutation_beat = next(
@@ -487,30 +489,40 @@ async def test_saint_marked_drawback_lives_through_confrontation_and_save(
     )
     assert mutation_beat is not None, "the combat confrontation needs a mutation beat"
 
-    monkeypatch.setattr("sidequest.server.narration_apply.random.randint", lambda a, b: b)
+    # SEAM REWIRED for story 158-54: a live AWN combat resolves ONLY on the
+    # player's DICE_THROW (ADR-143 drops stray narrator beats —
+    # wn_combat_beat_dropped_engine_owns_round). Drive the production dice
+    # seam, the 102-2 cast-spine shape retold for a Saint-Marked PC.
+    monkeypatch.setattr("random.randint", lambda a, b: a)
     strain_before = pc.core.system_strain.current
-    result = NarrationTurnResult(
-        narration="Ishmael lets Saint Herman's gift answer the Inquisitor.",
-        beat_selections=[
-            BeatSelection(
-                actor=pc_name, beat_id=mutation_beat.id, target=opponent, mutation_id=costed.id
-            )
-        ],
-    )
-    _apply_narration_result_to_snapshot(
-        snap,
-        result,
-        player_name=pc_name,
+    dispatch_dice_throw(
+        payload=DiceThrowPayload(
+            request_id="req-103-10-capstone",
+            throw_params=ThrowParams(
+                velocity=(0.0, 5.0, -2.0),
+                angular=(1.0, 1.0, 1.0),
+                position=(0.5, 0.5),
+            ),
+            face=[20],
+            beat_id=mutation_beat.id,
+            mutation_id=costed.id,  # type: ignore[call-arg]
+        ),
+        rolling_player_id="player:Keith",
+        character_name=pc_name,
+        character_stats=dict(pc.stats),
+        encounter=enc,
         pack=pack,
-        from_explicit_action=True,
-        room=room_for(snap),
-        acting_character_name=pc_name,
+        genre_slug=_GENRE,
+        session_id="seaboard-103-10",
+        round_number=1,
+        room_broadcast=lambda _msg: None,
+        snapshot=snap,
     )
 
     used = _spans_named(otel_capture, "awn.mutation.used")
     assert len(used) == 1, (
-        "a Saint-Marked PC's mutation, driven through the real apply path in a "
-        f"real confrontation, must fire awn.mutation.used; got {len(used)}"
+        "a Saint-Marked PC's mutation, driven through the production dice seam "
+        f"in a real confrontation, must fire awn.mutation.used; got {len(used)}"
     )
     assert pc.core.system_strain.current == strain_before + costed.strain_cost, (
         "the Strain cost must land on the PC's pool through the live path"

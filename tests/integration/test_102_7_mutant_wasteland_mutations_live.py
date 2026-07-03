@@ -222,22 +222,31 @@ def test_chargen_seam_skips_non_mutant_class(otel_capture) -> None:
 def test_production_path_mutation_use_fires_spans_and_strain(otel_capture, monkeypatch) -> None:
     """THE LIVE PROOF (story title: 'prove AWN combat + lethality fire live'):
     seat the real combat confrontation, give a real-catalog mutant a
-    Strain-costed mutation, drive the mutation beat through the REAL
-    ``_apply_narration_result_to_snapshot`` apply path, and assert
-    ``awn.mutation.used`` + a moved Strain pool. This is the
-    elemental_harmony cast-spine proof, retold for the wastes."""
-    from sidequest.agents.orchestrator import BeatSelection, NarrationTurnResult
+    Strain-costed mutation, drive the mutation beat through the production
+    DICE seam, and assert ``awn.mutation.used`` + a moved Strain pool.
+
+    SEAM REWIRED for story 158-54: the original drive
+    (``_apply_narration_result_to_snapshot`` with a narrator BeatSelection)
+    is doctrine-dead in a live AWN combat — ADR-143 de-nativization drops all
+    stray narrator beats (``wn_combat_beat_dropped_engine_owns_round``,
+    measured 2026-07-03; ``awn`` is WN-family). A live WN round resolves ONLY
+    on the player's DICE_THROW, so the live proof drives
+    ``dispatch_dice_throw`` with the mutation-marked beat + ``mutation_id`` —
+    the 102-2 cast-spine seam, retold for the wastes. Do NOT re-point this at
+    the narrator apply path; do NOT exempt mutation beats from the drop
+    (bind the ruleset, don't balance it)."""
     from sidequest.game.character import Character
     from sidequest.game.creature_core import CreatureCore, Inventory
     from sidequest.game.session import GameSnapshot
     from sidequest.game.system_strain import SystemStrainPool
     from sidequest.game.turn import TurnManager
     from sidequest.mutation.state import CharacterMutationState, MutationState
+    from sidequest.protocol.dice import DiceThrowPayload, ThrowParams
+    from sidequest.protocol.models import InitiativeEntry
+    from sidequest.server.dispatch.dice import dispatch_dice_throw
     from sidequest.server.dispatch.encounter_lifecycle import (
         instantiate_encounter_from_trigger,
     )
-    from sidequest.server.narration_apply import _apply_narration_result_to_snapshot
-    from tests._helpers.session_room import room_for
 
     pack = _load_pack()
     assert pack.rules.ruleset == "awn", "mutant_wasteland must stay bound ruleset: awn"
@@ -296,6 +305,12 @@ def test_production_path_mutation_use_fires_spans_and_strain(otel_capture, monke
     )
     assert enc is not None, "seating the real combat confrontation must succeed"
     snap.encounter = enc
+    # 102-4: the WN walk resolves in PERSISTED initiative order — pin it so
+    # the seam's unseeded 1d8+DEX roll can never flip the choreography.
+    enc.initiative = [
+        InitiativeEntry(token_id=pc_name, value=9),
+        InitiativeEntry(token_id=opponent, value=2),
+    ]
 
     combat = next(c for c in pack.rules.confrontations if c.category == "combat")
     mutation_beat = next(
@@ -303,34 +318,39 @@ def test_production_path_mutation_use_fires_spans_and_strain(otel_capture, monke
     )
     assert mutation_beat is not None, "needs the marked beat (see test 3)"
 
-    monkeypatch.setattr("sidequest.server.narration_apply.random.randint", lambda a, b: b)
+    # Pin every rng call on the round path (saves, damage dice, reprisal)
+    # through the shared stdlib random module object.
+    monkeypatch.setattr("random.randint", lambda a, b: a)
 
     strain_before = pc_core.system_strain.current
-    result = NarrationTurnResult(
-        narration="Rux lets the change answer the raider.",
-        beat_selections=[
-            BeatSelection(
-                actor=pc_name,
-                beat_id=mutation_beat.id,
-                target=opponent,
-                mutation_id=costed.id,
-            )
-        ],
-    )
-    _apply_narration_result_to_snapshot(
-        snap,
-        result,
-        player_name=pc_name,
+    dispatch_dice_throw(
+        payload=DiceThrowPayload(
+            request_id="req-102-7-live",
+            throw_params=ThrowParams(
+                velocity=(0.0, 5.0, -2.0),
+                angular=(1.0, 1.0, 1.0),
+                position=(0.5, 0.5),
+            ),
+            face=[20],
+            beat_id=mutation_beat.id,
+            mutation_id=costed.id,  # type: ignore[call-arg]
+        ),
+        rolling_player_id="player:Keith",
+        character_name=pc_name,
+        character_stats=dict(stats),
+        encounter=enc,
         pack=pack,
-        from_explicit_action=True,
-        room=room_for(snap),
-        acting_character_name=pc_name,
+        genre_slug=_GENRE,
+        session_id="test-102-7-live",
+        round_number=1,
+        room_broadcast=lambda _msg: None,
+        snapshot=snap,
     )
 
     used = _spans_named(otel_capture, "awn.mutation.used")
     assert len(used) == 1, (
-        "a mutation beat on the REAL pack driven through the REAL apply path "
-        f"must emit awn.mutation.used; got {len(used)} — mutant_wasteland's "
+        "a mutation beat on the REAL pack driven through the production dice "
+        f"seam must emit awn.mutation.used; got {len(used)} — mutant_wasteland's "
         "marquee mechanic is still improv"
     )
     assert used[0].attributes["mutation_id"] == costed.id

@@ -120,7 +120,7 @@ def _make_mutant(pack, name: str, *, positive_ids: list[str]):
     dispatch seam, which reads snapshot.mutation_state + core.system_strain.
     """
     from sidequest.game.character import Character
-    from sidequest.game.creature_core import CreatureCore, Inventory
+    from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
     from sidequest.game.system_strain import SystemStrainPool
 
     stats = {n: 10 for n in pack.rules.ability_score_names}
@@ -129,7 +129,7 @@ def _make_mutant(pack, name: str, *, positive_ids: list[str]):
         description="A mutant of the flickering wastes.",
         personality="watchful",
         inventory=Inventory(),
-        hp={"current": 10, "max": 10, "base_max": 10},
+        hp=HpPool(current=10, max=10, base_max=10),
         armor_class=12,
         system_strain=SystemStrainPool(current=0, max=10),
     )
@@ -238,6 +238,13 @@ def _spans(otel_capture, name: str) -> list[Any]:
     return [s for s in otel_capture.get_finished_spans() if s.name == name]
 
 
+def _strain_current(pc) -> int:
+    """Fail-loud Strain read — the fixture always seeds a SystemStrainPool."""
+    pool = pc.core.system_strain
+    assert pool is not None, "fixture premise: the PC carries a SystemStrainPool"
+    return pool.current
+
+
 def _hydrate_mutation_state(snap, pc_name: str, positive_ids: list[str]) -> None:
     from sidequest.mutation.state import CharacterMutationState, MutationState
 
@@ -265,7 +272,7 @@ def test_mutation_beat_with_mutation_id_fires_use_spine(otel_capture, monkeypatc
     pc, stats = _make_mutant(pack, "Rux", positive_ids=[costed.id])
     snap, enc = _seat_combat(pack, pc, "Rux", "Raider Scav")
     _hydrate_mutation_state(snap, "Rux", [costed.id])
-    strain_before = pc.core.system_strain.current
+    strain_before = _strain_current(pc)
 
     _dispatch(
         pack=pack,
@@ -290,10 +297,10 @@ def test_mutation_beat_with_mutation_id_fires_use_spine(otel_capture, monkeypatc
     assert not _spans(otel_capture, _SPAN_REFUSED), (
         "an owned, affordable mutation must not also record a refusal"
     )
-    assert pc.core.system_strain.current == strain_before + costed.strain_cost, (
+    assert _strain_current(pc) == strain_before + costed.strain_cost, (
         "the Strain cost must land on the PC's pool through the dice path; "
         f"before={strain_before} cost={costed.strain_cost} "
-        f"after={pc.core.system_strain.current}"
+        f"after={_strain_current(pc)}"
     )
 
 
@@ -310,7 +317,7 @@ def test_mutation_use_is_not_gated_on_the_d20_face(otel_capture, monkeypatch):
     pc, stats = _make_mutant(pack, "Rux", positive_ids=[costed.id])
     snap, enc = _seat_combat(pack, pc, "Rux", "Raider Scav")
     _hydrate_mutation_state(snap, "Rux", [costed.id])
-    strain_before = pc.core.system_strain.current
+    strain_before = _strain_current(pc)
 
     _dispatch(
         pack=pack,
@@ -329,7 +336,7 @@ def test_mutation_use_is_not_gated_on_the_d20_face(otel_capture, monkeypatch):
         f"target saves); got {len(used)} — a face-gated use is a generic "
         "stat throw, not a mutation"
     )
-    assert pc.core.system_strain.current == strain_before + costed.strain_cost, (
+    assert _strain_current(pc) == strain_before + costed.strain_cost, (
         "the Strain cost is paid on use, not on a winning face"
     )
 
@@ -355,7 +362,7 @@ def test_mutation_beat_commit_without_mutation_id_is_loud(otel_capture, monkeypa
     pc, stats = _make_mutant(pack, "Rux", positive_ids=[costed.id])
     snap, enc = _seat_combat(pack, pc, "Rux", "Raider Scav")
     _hydrate_mutation_state(snap, "Rux", [costed.id])
-    strain_before = pc.core.system_strain.current
+    strain_before = _strain_current(pc)
 
     with pytest.raises(DiceDispatchError, match="mutation_id"):
         _dispatch(
@@ -368,7 +375,7 @@ def test_mutation_beat_commit_without_mutation_id_is_loud(otel_capture, monkeypa
             mutation_id=None,
         )
 
-    assert pc.core.system_strain.current == strain_before, (
+    assert _strain_current(pc) == strain_before, (
         "a rejected commit must change no state (validation precedes mutation)"
     )
     assert not _spans(otel_capture, _SPAN_USED), "a rejected commit must not record a use"
@@ -412,7 +419,7 @@ def test_mutation_id_on_non_awn_ruleset_is_loud(monkeypatch):
     assert hm.rules.ruleset == "wwn", "fixture premise: heavy_metal binds wwn"
 
     from sidequest.game.character import Character
-    from sidequest.game.creature_core import CreatureCore, Inventory
+    from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 
     stats = {n: 10 for n in hm.rules.ability_score_names}
     core = CreatureCore(
@@ -420,7 +427,7 @@ def test_mutation_id_on_non_awn_ruleset_is_loud(monkeypatch):
         description="A blade of the reliquary roads.",
         personality="cold",
         inventory=Inventory(),
-        hp={"current": 12, "max": 12, "base_max": 12},
+        hp=HpPool(current=12, max=12, base_max=12),
     )
     pc = Character(core=core, char_class="Warrior", race="Human", backstory="—", stats=stats)
     snap, enc = _seat_combat(hm, pc, "Vesska", "Furnace Thrall", genre="heavy_metal")
@@ -459,7 +466,7 @@ def test_unowned_mutation_refuses_and_pays_no_strain(otel_capture, monkeypatch):
     snap, enc = _seat_combat(pack, pc, "Rux", "Raider Scav")
     _hydrate_mutation_state(snap, "Rux", [costed.id])
     beat = _mutation_beat(pack)
-    strain_before = pc.core.system_strain.current
+    strain_before = _strain_current(pc)
 
     _dispatch(
         pack=pack,
@@ -481,6 +488,6 @@ def test_unowned_mutation_refuses_and_pays_no_strain(otel_capture, monkeypatch):
         f"the refusal must carry the not_owned reason; got {attrs.get('reason')!r}"
     )
     assert not _spans(otel_capture, _SPAN_USED), "a refused use must not also record a use"
-    assert pc.core.system_strain.current == strain_before, (
+    assert _strain_current(pc) == strain_before, (
         "a refused use must pay no Strain (refusal precedes cost)"
     )

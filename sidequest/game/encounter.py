@@ -147,6 +147,7 @@ class WnSealedCommit(BaseModel):
     outcome: str
     target: str | None = None
     spell_id: str | None = None
+    mutation_id: str | None = None
 
 
 FateAction = Literal["overcome", "create_advantage", "attack"]

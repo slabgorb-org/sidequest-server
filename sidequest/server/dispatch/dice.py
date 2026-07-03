@@ -525,6 +525,38 @@ def dispatch_dice_throw(
                 f"available: [{available_spells}]"
             ) from exc
 
+    # AWN mutation routing (story 158-54): a mutation_resolution-marked beat
+    # commit names WHICH owned mutation via ``payload.mutation_id`` so the
+    # dice path can reach the same use_ops spine the freeplay/narrator paths
+    # use — the 102-2 cast-guard contract, retold for mutations. Validate the
+    # request shape HERE, before any state mutation (No Silent Fallbacks):
+    #   - mutation_id on an unmarked beat or a non-AWN ruleset is a client
+    #     bug — silently ignoring a mechanical request field is the exact
+    #     silent-fallback failure mode;
+    #   - a mutation-beat commit with no mutation_id is the pre-158-54 bug
+    #     (the silent bare-strike resolution) — the picker always sends one.
+    # Economy refusals (not owned, limit exhausted, strain over max) are NOT
+    # validated here: those are valid requests the spine refuses-but-records
+    # on ``awn.mutation.refused``, in parity with the freeplay refusals.
+    is_awn_mutation_beat = bool(
+        getattr(beat, "mutation_resolution", False)
+        and pack
+        and pack.rules
+        and pack.rules.ruleset == "awn"
+    )
+    if payload.mutation_id is not None and not is_awn_mutation_beat:
+        raise DiceDispatchError(
+            f"mutation_id {payload.mutation_id!r} is only valid on an awn "
+            f"mutation_resolution beat commit; got beat_id {payload.beat_id!r} "
+            f"on ruleset {pack.rules.ruleset if pack and pack.rules else None!r}"
+        )
+    if is_awn_mutation_beat and payload.mutation_id is None:
+        raise DiceDispatchError(
+            "mutation beat commit missing mutation_id — the mutation picker "
+            "must name WHICH owned mutation manifests (story 158-54); a "
+            "generic stat throw is not a valid mutation resolution"
+        )
+
     # Ability-invocation decline evidence (sq-playtest 2026-06-07 Reroute
     # Power): in-confrontation actions ride ``payload.player_action`` straight
     # into a router-SUPPRESSED replay turn (story 91-2) — the intent-router
@@ -816,6 +848,7 @@ def dispatch_dice_throw(
             beat=beat,
             outcome=resolved.outcome,
             spell_id=payload.spell_id,
+            mutation_id=payload.mutation_id,
         )
         wn_waiting = wn_waiting_actors(encounter=encounter, snapshot=snapshot)
         if wn_barrier_closed(encounter=encounter, snapshot=snapshot):
@@ -838,6 +871,7 @@ def dispatch_dice_throw(
         _application = _apply_committed_player_beat(
             beat_id=payload.beat_id,
             spell_id=payload.spell_id,
+            mutation_id=payload.mutation_id,
             character_name=character_name,
             rolling_player_id=rolling_player_id,
             beat=beat,
@@ -1205,6 +1239,7 @@ def _dispatch_item_use(
             beat=item_beat,
             outcome=RollOutcome.Success,
             spell_id=None,
+            mutation_id=None,
         )
         wn_waiting = wn_waiting_actors(encounter=encounter, snapshot=snapshot)
         if wn_barrier_closed(encounter=encounter, snapshot=snapshot):
@@ -1467,6 +1502,7 @@ def _apply_committed_player_beat(
     *,
     beat_id: str,
     spell_id: str | None,
+    mutation_id: str | None = None,
     character_name: str,
     rolling_player_id: str,
     beat: BeatDef,
@@ -1825,6 +1861,38 @@ def _apply_committed_player_beat(
             pack=pack,
             encounter=encounter,
             cdef=cdef,
+        )
+
+    # AWN mutation spine (story 158-54): route the committed mutation beat
+    # through the SAME use_ops resolution the freeplay/narrator paths use —
+    # one mutation implementation, three entry points (the 102-2 cast-spine
+    # doctrine, retold). The d20 throw that produced ``outcome_tier`` is NOT
+    # a to-hit gate: an AWN mutation power fires and the TARGET saves
+    # (use_ops — cost paid, then save resolved), so the spine runs regardless
+    # of the face. Ownership/limit/strain refusals are recorded on
+    # ``awn.mutation.refused`` by the spine itself — engagement, never
+    # silence. Function-level import: narration_apply is a heavy module and
+    # dispatch must not pull it at import time.
+    is_awn_mutation = bool(
+        getattr(beat, "mutation_resolution", False)
+        and pack
+        and pack.rules
+        and pack.rules.ruleset == "awn"
+    )
+    if is_awn_mutation:
+        from sidequest.agents.orchestrator import BeatSelection
+        from sidequest.server.narration_apply import _resolve_mutation_for_beat
+
+        _resolve_mutation_for_beat(
+            sel=BeatSelection(
+                actor=actor.name,
+                beat_id=beat_id,
+                target=_opposite_side_first_actor(encounter, actor.side),
+                mutation_id=mutation_id,
+            ),
+            actor=actor,
+            snapshot=snapshot,
+            pack=pack,
         )
 
     own_delta = apply_result.deltas.own if apply_result.deltas else 0

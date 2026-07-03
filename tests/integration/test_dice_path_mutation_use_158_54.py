@@ -408,6 +408,59 @@ def test_mutation_id_on_unmarked_beat_is_loud(monkeypatch):
         )
 
 
+def test_mutation_beat_on_opposed_check_confrontation_is_loud(otel_capture, monkeypatch):
+    """Review rework (158-54 round 1): the cast guard's opposed_check clause
+    (dice.py ~500, added in 102-2's own review round) must have a mutation
+    twin. The mutation spine runs only on the non-opposed branches — an
+    opposed_check cdef sets ``opposed_pending`` and defers beat application
+    to narration_apply's opposed branch (plain apply_beat, both sides), so a
+    VALID owned-mutation commit would be SILENTLY skipped: no
+    awn.mutation.used/.refused span, no Strain, bare stat throw — the exact
+    pre-158-54 disease reopened for one gate combination. Probed 2026-07-03:
+    dispatch returns opposed_pending=True, strain unchanged, no raise.
+
+    No shipped content authors opposed_check on the AWN pack (rules.yaml
+    declares "zero opposed_check now") — but content authors add
+    confrontations without touching engine code, so content-unreachability
+    is not a guard. Reject loudly until a story defines opposed-mutation
+    semantics (the 102-2 precedent, verbatim)."""
+    from sidequest.genre.models.rules import ResolutionMode
+    from sidequest.server.dispatch.dice import DiceDispatchError
+
+    monkeypatch.setattr("random.randint", lambda a, b: a)
+    pack = _load_pack()
+    costed = _costed_mutation(pack)
+    beat = _mutation_beat(pack)
+
+    pc, stats = _make_mutant(pack, "Rux", positive_ids=[costed.id])
+    snap, enc = _seat_combat(pack, pc, "Rux", "Raider Scav")
+    _hydrate_mutation_state(snap, "Rux", [costed.id])
+
+    # The misconfigured-homebrew scenario: flip the seated cdef to
+    # opposed_check AFTER seating (ConfrontationDef is not frozen; dispatch
+    # re-resolves this same freshly-loaded, unshared object — load_genre_pack
+    # is uncached, so the mutation cannot leak into sibling tests).
+    combat = next(c for c in pack.rules.confrontations if c.category == "combat")
+    combat.resolution_mode = ResolutionMode.opposed_check
+
+    strain_before = _strain_current(pc)
+    with pytest.raises(DiceDispatchError, match="opposed_check"):
+        _dispatch(
+            pack=pack,
+            snap=snap,
+            enc=enc,
+            pc_name="Rux",
+            stats=stats,
+            beat_id=beat.id,
+            mutation_id=costed.id,
+        )
+
+    assert _strain_current(pc) == strain_before, (
+        "a rejected opposed-mutation commit must change no state (validation precedes mutation)"
+    )
+    assert not _spans(otel_capture, _SPAN_USED), "a rejected commit must not record a use"
+
+
 def test_mutation_id_on_non_awn_ruleset_is_loud(monkeypatch):
     """A mutation_id on a WWN pack's commit must be rejected loudly — the
     mutation route is AWN-gated exactly as the cast route is WWN-gated. No

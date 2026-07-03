@@ -319,6 +319,21 @@ def _format_commit_replay_action(
     return summary
 
 
+def _is_awn_mutation_beat(beat: BeatDef, pack: GenrePack | None) -> bool:
+    """Single derivation of the AWN mutation-beat gate (story 158-54).
+
+    Used by BOTH the dispatch-time guards in ``dispatch_dice_throw`` and the
+    spine route in ``_apply_committed_player_beat`` — one helper so the two
+    sites cannot drift (review 158-54 round 1: hand-duplicated gates are how
+    the opposed_check clause got dropped)."""
+    return bool(
+        getattr(beat, "mutation_resolution", False)
+        and pack
+        and pack.rules
+        and pack.rules.ruleset == "awn"
+    )
+
+
 def dispatch_dice_throw(
     *,
     payload: DiceThrowPayload,
@@ -535,27 +550,36 @@ def dispatch_dice_throw(
     #     silent-fallback failure mode;
     #   - a mutation-beat commit with no mutation_id is the pre-158-54 bug
     #     (the silent bare-strike resolution) — the picker always sends one.
+    #   - a mutation beat on an opposed_check cdef would pass validation and
+    #     then SILENTLY skip the spine (opposed_pending defers beat
+    #     application to the opposed branch, which never routes mutations) —
+    #     reject loudly until a story defines opposed-mutation semantics
+    #     (the cast guard's clause above, retold; review 158-54 round 1).
     # Economy refusals (not owned, limit exhausted, strain over max) are NOT
     # validated here: those are valid requests the spine refuses-but-records
     # on ``awn.mutation.refused``, in parity with the freeplay refusals.
-    is_awn_mutation_beat = bool(
-        getattr(beat, "mutation_resolution", False)
-        and pack
-        and pack.rules
-        and pack.rules.ruleset == "awn"
-    )
+    is_awn_mutation_beat = _is_awn_mutation_beat(beat, pack)
     if payload.mutation_id is not None and not is_awn_mutation_beat:
         raise DiceDispatchError(
             f"mutation_id {payload.mutation_id!r} is only valid on an awn "
             f"mutation_resolution beat commit; got beat_id {payload.beat_id!r} "
             f"on ruleset {pack.rules.ruleset if pack and pack.rules else None!r}"
         )
-    if is_awn_mutation_beat and payload.mutation_id is None:
-        raise DiceDispatchError(
-            "mutation beat commit missing mutation_id — the mutation picker "
-            "must name WHICH owned mutation manifests (story 158-54); a "
-            "generic stat throw is not a valid mutation resolution"
-        )
+    if is_awn_mutation_beat:
+        if payload.mutation_id is None:
+            raise DiceDispatchError(
+                "mutation beat commit missing mutation_id — the mutation picker "
+                "must name WHICH owned mutation manifests (story 158-54); a "
+                "generic stat throw is not a valid mutation resolution"
+            )
+        if cdef.resolution_mode == ResolutionMode.opposed_check:
+            raise DiceDispatchError(
+                f"mutation beat {payload.beat_id!r} with mutation_id "
+                f"{payload.mutation_id!r} on an opposed_check confrontation "
+                f"{cdef.confrontation_type!r} — the AWN mutation spine has no "
+                "opposed-check arm; author the mutation beat on a "
+                "beat_selection/hp_depletion confrontation (No Silent Fallbacks)"
+            )
 
     # Ability-invocation decline evidence (sq-playtest 2026-06-07 Reroute
     # Power): in-confrontation actions ride ``payload.player_action`` straight
@@ -1873,13 +1897,7 @@ def _apply_committed_player_beat(
     # ``awn.mutation.refused`` by the spine itself — engagement, never
     # silence. Function-level import: narration_apply is a heavy module and
     # dispatch must not pull it at import time.
-    is_awn_mutation = bool(
-        getattr(beat, "mutation_resolution", False)
-        and pack
-        and pack.rules
-        and pack.rules.ruleset == "awn"
-    )
-    if is_awn_mutation:
+    if _is_awn_mutation_beat(beat, pack):
         from sidequest.agents.orchestrator import BeatSelection
         from sidequest.server.narration_apply import _resolve_mutation_for_beat
 

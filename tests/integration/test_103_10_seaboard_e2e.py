@@ -474,6 +474,7 @@ async def test_saint_marked_drawback_lives_through_confrontation_and_save(
         player_name=pc_name,
         npcs_present=[NpcMention(name=opponent, side="opponent")],
         genre_slug=_GENRE,
+        allow_synthetic_opponent=True,
     )
     assert enc is not None, "seating the real combat confrontation must succeed"
     snap.encounter = enc

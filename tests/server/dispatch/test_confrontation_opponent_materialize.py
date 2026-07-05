@@ -174,13 +174,22 @@ async def test_named_opponent_is_materialized_and_seated_as_other(otel_capture):
         f"got opponents={_opponent_names(enc)}"
     )
 
-    # The materialized Other carries a real backing core seeded from
-    # opponent_default_stats (hp_depletion needs an HpPool to deplete).
+    # The materialized Other carries a real backing core. Story 162-3: an
+    # unbacked router-named opponent now seats from the world's authored
+    # bestiary ``generics:`` rows (the sanctioned last resort) — the row's
+    # authored stats win over the confrontation frame's ``_MOOK_HP`` default,
+    # the same rule as the 108-2 bound-creature HP preserve. Read the pinned
+    # value from the pack itself so content re-authoring can't desync the pin.
     core = snap.find_creature_core(_OPPONENT)
     assert core is not None, "materialized opponent must have a backing CreatureCore"
-    assert core.hp.max == _MOOK_HP, (
-        f"opponent hull must seed from opponent_default_stats (hp {_MOOK_HP}); "
-        f"got max={core.hp.max}"
+    bestiary, _tier = pack.effective_bestiary("burning_peace")
+    assert bestiary is not None and bestiary.generics, (
+        "precondition: burning_peace must author bestiary generics (162-3)"
+    )
+    generic_row = bestiary.generics[0]
+    assert core.hp.max == generic_row.hp, (
+        f"unbacked materialized Other must seat from the authored generics row "
+        f"{generic_row.id!r} (hp {generic_row.hp}); got max={core.hp.max}"
     )
 
     # GM-panel observability: the Other joined via materialization, not a

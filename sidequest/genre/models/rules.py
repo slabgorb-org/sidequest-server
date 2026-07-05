@@ -550,6 +550,15 @@ class ConfrontationDef(BaseModel):
     # reprisal reads this BEFORE the beat/inventory resolution, so it never caps
     # the player's own weapon. None ⇒ fall back to beat damage_override / weapon.
     opponent_damage: DamageSpec | None = None
+    # Story 162-3: where the seater sources a LAST-RESORT Other when a named
+    # opponent has no roster/pool backing. "bestiary" (default) = the world's
+    # authored ``generics:`` rows seat the Other (no generics ⇒ loud failure —
+    # never a fabricated stub). "frame" = the Other is a VEHICLE-scale frame
+    # whose stats live on THIS def's ``opponent_default_stats`` (an enemy
+    # ship's hull/AC — e.g. space_opera ship_combat); a humanoid bestiary
+    # generic must never wear a hull. Sealed-letter defs are frame-sourced
+    # implicitly (ADR-153 §6) regardless of this key.
+    opponent_source: Literal["bestiary", "frame"] = "bestiary"
     geometry_modifiers: GeometryModifiers | None = None
     # Free-for-all N-seat table (table_resolution mode). ``table_game`` is the
     # resolver discriminator ("poker" | "auction"); ``max_decision_points``

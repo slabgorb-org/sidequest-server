@@ -173,6 +173,7 @@ def _seat_combat(pack, pc, pc_name: str, opponent: str, *, genre: str = _GENRE):
         player_name=pc_name,
         npcs_present=[NpcMention(name=opponent, side="opponent")],
         genre_slug=genre,
+        allow_synthetic_opponent=True,
     )
     assert enc is not None, "seating the real combat confrontation must succeed"
     snap.encounter = enc

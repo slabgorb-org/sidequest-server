@@ -202,6 +202,12 @@ class TestSeederSeatsByAlias:
 
         _seed(snap, "The Pale King")
 
+        # Guard the scenario first: RED today because the alias leg doesn't
+        # exist and a stub is minted (ghast untouched would pass vacuously).
+        assert len(snap.npcs) == 1, (
+            f"alias did not seat the canonical creature: "
+            f"{[n.core.name for n in snap.npcs]!r}"
+        )
         assert ghast.core.hp.max == 24
         assert ghast.core.hp.current == 24
         assert ghast.core.armor_class == 15

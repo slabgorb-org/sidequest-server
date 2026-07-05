@@ -172,10 +172,7 @@ class TestNormalizeName:
     def test_casefold_strip_and_whitespace_collapse(self) -> None:
         from sidequest.game.origin import normalize_name
 
-        assert (
-            normalize_name("  Molgrath   the EYELESS ")
-            == normalize_name("molgrath the eyeless")
-        )
+        assert normalize_name("  Molgrath   the EYELESS ") == normalize_name("molgrath the eyeless")
 
     def test_distinct_names_stay_distinct(self) -> None:
         """Normalization is for spelling variance, not fuzzy matching — two
@@ -218,9 +215,7 @@ class TestIdentityKey:
         authored id — authored content dominates (§8 D1 ordering)."""
         from sidequest.game.origin import Origin, OriginKind, identity_key
 
-        both = Origin(
-            kind=OriginKind.AUTHORED, authored_id="prefect_vaskov", creature_id="thief"
-        )
+        both = Origin(kind=OriginKind.AUTHORED, authored_id="prefect_vaskov", creature_id="thief")
         authored_only = Origin(kind=OriginKind.AUTHORED, authored_id="prefect_vaskov")
         creature_only = Origin(kind=OriginKind.MANUAL_POOL, creature_id="thief")
         assert identity_key(both, "Ilara") == identity_key(authored_only, "Ilara")
@@ -230,9 +225,7 @@ class TestIdentityKey:
         from sidequest.game.origin import Origin, OriginKind, identity_key
 
         invented = Origin(kind=OriginKind.NARRATOR_INVENTED)
-        assert identity_key(invented, " Rifenna  Muse ") == identity_key(
-            invented, "rifenna muse"
-        )
+        assert identity_key(invented, " Rifenna  Muse ") == identity_key(invented, "rifenna muse")
 
     def test_no_ids_distinct_names_differ(self) -> None:
         from sidequest.game.origin import Origin, OriginKind, identity_key
@@ -319,9 +312,7 @@ class TestMaterializerCarriesOrigin:
                         threat_level=1,
                         hp=6,
                         manual_origin=True,
-                        origin=Origin(
-                            kind=OriginKind.ROOM_BOUND, creature_id="gnaw_swarm"
-                        ),
+                        origin=Origin(kind=OriginKind.ROOM_BOUND, creature_id="gnaw_swarm"),
                     )
                 ]
             )
@@ -345,9 +336,7 @@ class TestMaterializerCarriesOrigin:
             )
         )
         snap.apply_world_patch(
-            WorldStatePatch(
-                npcs_present=[NpcPatch(name="Gnaw-Swarm", description="Chittering.")]
-            )
+            WorldStatePatch(npcs_present=[NpcPatch(name="Gnaw-Swarm", description="Chittering.")])
         )
         assert len(snap.npcs) == 1
         assert snap.npcs[0].origin is not None

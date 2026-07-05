@@ -23,6 +23,7 @@ from sidequest.game.encounter import (
     StructuredEncounter,
 )
 from sidequest.game.lore_store import LoreStore
+from sidequest.game.origin import Origin, OriginKind, resolve_roster_npc
 from sidequest.game.resource_pool import ResourceThreshold
 from sidequest.game.ruleset.registry import get_ruleset_module
 from sidequest.game.ruleset.without_number import WithoutNumberRulesetModule
@@ -362,11 +363,16 @@ def _seed_combat_hp_depletion_to_npcs(
     # no resolved location; we then stamp only the turn, never a bogus location.
     actor_loc = snapshot.party_location(perspective=acting_character_name)
 
-    by_name = {npc.core.name: npc for npc in snapshot.npcs}
     for actor in actors:
         if actor.side != "opponent":
             continue
-        npc = by_name.get(actor.name)
+        # Story 162-2: the unified roster lookup replaces the exact-match
+        # ``by_name`` dict — an actor named by the narrator's prose alias or a
+        # case/whitespace variant resolves to the canonical entity instead of
+        # minting a twin beside it (the two-names-one-enemy fork). Resolved
+        # live per actor so a stub/promotion appended for an earlier opponent
+        # in this same seeding pass is visible to later actors.
+        npc = resolve_roster_npc(snapshot.npcs, actor.name)
         created = npc is None
         pool_origin = ""
         if created:
@@ -425,7 +431,14 @@ def _seed_combat_hp_depletion_to_npcs(
                     hp=hp_pool_from_hp(hp),
                     armor_class=ac,
                 )
-                npc = Npc(core=core, ephemeral=True)
+                # Story 162-2: stamp typed provenance so downstream consumers
+                # (arbiter, forensics) see "fabricated" without sniffing the
+                # ephemeral bool.
+                npc = Npc(
+                    core=core,
+                    ephemeral=True,
+                    origin=Origin(kind=OriginKind.EPHEMERAL_STUB),
+                )
                 snapshot.npcs.append(npc)
                 with encounter_opponent_minted_stub_span(
                     confrontation_type=str(getattr(cdef, "confrontation_type", "") or ""),
@@ -1148,9 +1161,11 @@ def _resolve_opponent_from_roster(
     ``_co_located`` helper gates region-matching on that stamp so narrator NPCs and
     non-procedural worlds keep the exact free-text behaviour.
     """
-    # An exact roster match means the router named a real NPC — seat it directly
-    # (the seater's dedup reuses it). Resolution is only for unbacked inventions.
-    if any(n.core.name == threat_name for n in snapshot.npcs):
+    # A roster match — canonical name, recorded alias, or invented_from binding
+    # (story 162-2: the unified resolver, replacing the exact-name scan) —
+    # means the router named a real NPC: seat it directly (the seater resolves
+    # the same way and reuses it). Resolution is only for unbacked inventions.
+    if resolve_roster_npc(snapshot.npcs, threat_name) is not None:
         return None
     location = snapshot.party_location(perspective=acting_character_name)
     if not location:
@@ -1244,6 +1259,18 @@ def _resolve_opponent_from_roster(
         ):
             pass
         return None
+    # Story 162-2: conscription BINDS the router/prose name to the bound
+    # creature durably — record it in the alias ledger (existing accretion
+    # path, emits ``entity.alias_accreted``) so every later reference by
+    # either name resolves to this one entity instead of re-running the
+    # guessing stack (the two-names-one-enemy fork, closed permanently).
+    from sidequest.game.alias_accretion import accrete_npc_aliases
+
+    accrete_npc_aliases(
+        candidates[0],
+        [threat_name],
+        turn=snapshot.turn_manager.interaction,
+    )
     return candidates[0]
 
 

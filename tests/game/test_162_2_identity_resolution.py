@@ -37,7 +37,7 @@ in-memory exporter by span name (the established otel_capture pattern).
 
 from __future__ import annotations
 
-from typing import Iterator
+from collections.abc import Iterator
 
 import pytest
 from opentelemetry import trace as otel_trace
@@ -174,11 +174,7 @@ class TestIdentityResolvedSpan:
         thief = _npc("Thief", creature_id="thief", aliases=["Molgrath the Eyeless"])
         resolve_roster_npc([thief], "Molgrath the Eyeless")
 
-        spans = [
-            s
-            for s in otel_capture.get_finished_spans()
-            if s.name == _IDENTITY_RESOLVED_SPAN
-        ]
+        spans = [s for s in otel_capture.get_finished_spans() if s.name == _IDENTITY_RESOLVED_SPAN]
         assert len(spans) == 1
         attrs = dict(spans[0].attributes or {})
         assert attrs["query"] == "Molgrath the Eyeless"
@@ -193,17 +189,11 @@ class TestIdentityResolvedSpan:
         muse = _npc("Rifenna Muse", invented_from="Varra")
         resolve_roster_npc([muse], "Varra")
 
-        spans = [
-            s
-            for s in otel_capture.get_finished_spans()
-            if s.name == _IDENTITY_RESOLVED_SPAN
-        ]
+        spans = [s for s in otel_capture.get_finished_spans() if s.name == _IDENTITY_RESOLVED_SPAN]
         assert len(spans) == 1
         assert dict(spans[0].attributes or {})["via"] == "invented_from"
 
-    def test_exact_canonical_hit_emits_no_span(
-        self, otel_capture: InMemorySpanExporter
-    ) -> None:
+    def test_exact_canonical_hit_emits_no_span(self, otel_capture: InMemorySpanExporter) -> None:
         """An exact-name hit derives nothing — spamming the panel on every
         roster lookup would drown the real assertions."""
         from sidequest.game.origin import resolve_roster_npc
@@ -212,9 +202,7 @@ class TestIdentityResolvedSpan:
         resolve_roster_npc([thief], "Thief")
 
         assert [
-            s
-            for s in otel_capture.get_finished_spans()
-            if s.name == _IDENTITY_RESOLVED_SPAN
+            s for s in otel_capture.get_finished_spans() if s.name == _IDENTITY_RESOLVED_SPAN
         ] == []
 
     def test_miss_emits_no_span(self, otel_capture: InMemorySpanExporter) -> None:
@@ -223,9 +211,7 @@ class TestIdentityResolvedSpan:
         resolve_roster_npc([_npc("Thief")], "Hold-Dead")
 
         assert [
-            s
-            for s in otel_capture.get_finished_spans()
-            if s.name == _IDENTITY_RESOLVED_SPAN
+            s for s in otel_capture.get_finished_spans() if s.name == _IDENTITY_RESOLVED_SPAN
         ] == []
 
 

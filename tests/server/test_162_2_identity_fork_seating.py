@@ -34,9 +34,9 @@ exact names only; conscription drops the router name; inject dedups by name.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Iterator
 
 import pytest
 from opentelemetry import trace as otel_trace
@@ -178,9 +178,7 @@ class TestSeederSeatsByAlias:
         """The actor arrives named by the prose alias. Today the exact-match
         ``by_name`` dict misses and a stub is minted beside the real creature
         — the literal two-names-one-enemy fork. The resolver leg kills it."""
-        ghast = _statted_creature(
-            "Vellum Ghast", creature_id="ghast", aliases=["The Pale King"]
-        )
+        ghast = _statted_creature("Vellum Ghast", creature_id="ghast", aliases=["The Pale King"])
         snap = _snapshot_with(ghast)
 
         _seed(snap, "The Pale King")
@@ -205,8 +203,7 @@ class TestSeederSeatsByAlias:
         # Guard the scenario first: RED today because the alias leg doesn't
         # exist and a stub is minted (ghast untouched would pass vacuously).
         assert len(snap.npcs) == 1, (
-            f"alias did not seat the canonical creature: "
-            f"{[n.core.name for n in snap.npcs]!r}"
+            f"alias did not seat the canonical creature: {[n.core.name for n in snap.npcs]!r}"
         )
         assert ghast.core.hp.max == 24
         assert ghast.core.hp.current == 24
@@ -238,9 +235,7 @@ class TestConscriptionRecordsAlias:
             player_name="Kirk",
             npcs_present=[],
             genre_slug=snap.genre_slug,
-            materialized_threat=NpcMention(
-                name=threat_name, role="hostile", side="opponent"
-            ),
+            materialized_threat=NpcMention(name=threat_name, role="hostile", side="opponent"),
         )
 
     def test_router_name_is_recorded_in_the_conscripted_creatures_ledger(
@@ -258,14 +253,9 @@ class TestConscriptionRecordsAlias:
         opponents = [a.name for a in enc.actors if a.side == "opponent"]
         assert opponents == ["Molgrath the Eyeless"]
         assert "Hold-Dead, Still at the Shift" in molgrath.aliases, (
-            "conscription dropped the router name — the fork stays open for "
-            "every later reference"
+            "conscription dropped the router name — the fork stays open for every later reference"
         )
-        accreted = [
-            s
-            for s in otel_capture.get_finished_spans()
-            if s.name == _ALIAS_ACCRETED_SPAN
-        ]
+        accreted = [s for s in otel_capture.get_finished_spans() if s.name == _ALIAS_ACCRETED_SPAN]
         assert len(accreted) >= 1
         joined = " | ".join(
             str(dict(s.attributes or {}).get("aliases_accreted", "")) for s in accreted
@@ -321,9 +311,9 @@ class TestNovelStubStampsOrigin:
         assert stub.ephemeral is True
         assert stub.origin is not None, "fabricated stub left origin unstamped"
         assert stub.origin.kind == OriginKind.EPHEMERAL_STUB
-        assert [
-            s for s in otel_capture.get_finished_spans() if s.name == _MINTED_STUB_SPAN
-        ], "the minted-stub lie-detector span must keep firing"
+        assert [s for s in otel_capture.get_finished_spans() if s.name == _MINTED_STUB_SPAN], (
+            "the minted-stub lie-detector span must keep firing"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -404,9 +394,7 @@ class TestInjectDedupsByIdentityKey:
             f"same creature_id materialized twice under drifted names: {names!r}"
         )
 
-    def test_distinct_creature_ids_both_materialize(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_distinct_creature_ids_both_materialize(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Paranoia negative: id-keying must not over-merge — a DIFFERENT
         procedural creature still lands beside the authored one."""
         snap = self._run_inject(

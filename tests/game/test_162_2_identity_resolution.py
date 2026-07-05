@@ -152,6 +152,31 @@ class TestResolveRosterNpc:
         # Order-independence paranoia: the pretender listed FIRST must still lose.
         assert resolve_roster_npc([pretender, real_king], "The Pale King") is real_king
 
+    def test_resolves_diacritic_name_from_ascii_query(self) -> None:
+        """RED (rework, review [MEDIUM]/[RULE]): the culture namer mints
+        "Veyra Solnë"; the player types "veyra solne". casefold alone leaves
+        the ë — the resolver misses and the seater mints a stub twin, the
+        exact double-mint this module exists to kill. normalize_name must
+        fold diacritics (compose foundation.slug_fold.fold_to_ascii)."""
+        from sidequest.game.origin import resolve_roster_npc
+
+        veyra = _npc("Veyra Solnë")
+        assert resolve_roster_npc([veyra], "veyra solne") is veyra
+
+    def test_shared_alias_resolves_first_in_roster_order(self) -> None:
+        """CONTRACT GUARD (rework, review [MEDIUM]) — green on arrival; pins
+        deterministic behavior. Two DIFFERENT npcs each carry the alias "the
+        Butcher": resolution is first-in-roster-order, both directions, so
+        the tiebreak is a defined contract rather than accidental — and a
+        future ambiguity-signal design change must consciously break THIS
+        test, not silently change bindings."""
+        from sidequest.game.origin import resolve_roster_npc
+
+        cultist_a = _npc("Marrow Djen", aliases=["the Butcher"])
+        cultist_b = _npc("Ilse Varn", aliases=["the Butcher"])
+        assert resolve_roster_npc([cultist_a, cultist_b], "the Butcher") is cultist_a
+        assert resolve_roster_npc([cultist_b, cultist_a], "the Butcher") is cultist_b
+
 
 # ---------------------------------------------------------------------------
 # AC5 — identity derivation is observable (the lie-detector)

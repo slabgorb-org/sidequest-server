@@ -420,3 +420,130 @@ class TestInjectDedupsByIdentityKey:
             ],
         )
         assert sorted(n.core.name for n in snap.npcs) == ["Gnaw-Swarm", "Pale Lurker"]
+
+
+# ---------------------------------------------------------------------------
+# Rework round 1 (review [HIGH]): seat-name canonicalization — an alias- or
+# case-variant-resolved seat must reference the CANONICAL core name, or the
+# opponent is unreachable downstream (find_creature_core is exact-match:
+# HP-bar filter at websocket_session_handler.py:202 drops it, WN attack
+# returns not_found). Pre-162-2 the seeder GUARANTEED reachability (exact hit
+# or stub named exactly actor.name) — its own docstring states the invariant.
+# ---------------------------------------------------------------------------
+
+
+class TestSeatNameCanonicalization:
+    def test_alias_seat_canonicalizes_actor_name_and_core_is_reachable(self) -> None:
+        """RED (rework): the seeder resolves the ghast but leaves the seat
+        named by the alias — actor.name must be rewritten to the canonical
+        core name (mirroring 108-2 conscription) so every downstream
+        ``find_creature_core(actor.name)`` consumer can reach the opponent.
+        The alias itself stays in the ledger for prose."""
+        ghast = _statted_creature(
+            "Vellum Ghast", creature_id="ghast", aliases=["The Pale King"]
+        )
+        snap = _snapshot_with(ghast)
+        actor = EncounterActor(name="The Pale King", role="combatant", side="opponent")
+
+        _seed_combat_hp_depletion_to_npcs(
+            snapshot=snap,
+            actors=[actor],
+            cdef=_combat_cdef(),
+            turn=5,
+            source="encounter_handshake",
+            acting_character_name="Kirk",
+            ruleset=get_ruleset_module("wwn"),
+        )
+
+        assert actor.name == "Vellum Ghast", (
+            f"seat kept the alias {actor.name!r} — unreachable by every "
+            f"find_creature_core consumer (HP bars, WN attack, query_encounter)"
+        )
+        core = snap.find_creature_core(actor.name)
+        assert core is not None, "seated opponent core unreachable by seat name"
+        # The exact predicate the HP-bar overlay filter applies
+        # (websocket_session_handler.py:202) — the opponent must survive it.
+        assert core.hp.max > 0
+
+    def test_case_variant_seat_canonicalizes_actor_name(self) -> None:
+        """RED (rework): same invariant through the normalization leg —
+        a case/whitespace-variant seat name is rewritten to canonical."""
+        snap = _snapshot_with(_statted_creature("Vellum Ghast", creature_id="ghast"))
+        actor = EncounterActor(name="vellum ghast", role="combatant", side="opponent")
+
+        _seed_combat_hp_depletion_to_npcs(
+            snapshot=snap,
+            actors=[actor],
+            cdef=_combat_cdef(),
+            turn=5,
+            source="encounter_handshake",
+            acting_character_name="Kirk",
+            ruleset=get_ruleset_module("wwn"),
+        )
+
+        assert actor.name == "Vellum Ghast"
+        assert snap.find_creature_core(actor.name) is not None
+
+    def test_instantiate_with_alias_threat_seats_canonical_actor_name(self) -> None:
+        """RED (rework): the head-check path. The router names a RECORDED
+        alias of a co-located bound creature. Today `_resolve_opponent_from_
+        roster` early-returns None on the alias hit ("seat directly"), so the
+        encounter actor carries the alias — REGRESSING the pre-162-2 flow
+        where conscription seated this creature canonically. Post-fix the
+        seated opponent must be the canonical name, core reachable."""
+        ghast = _statted_creature(
+            "Vellum Ghast", creature_id="ghast", aliases=["The Pale King"]
+        )
+        snap = _snapshot_with(ghast)
+
+        enc = instantiate_encounter_from_trigger(
+            snapshot=snap,
+            pack=load_genre_pack(_FIXTURE_PACK),
+            encounter_type="combat",
+            player_name="Kirk",
+            npcs_present=[],
+            genre_slug=snap.genre_slug,
+            materialized_threat=NpcMention(
+                name="The Pale King", role="hostile", side="opponent"
+            ),
+        )
+
+        opponents = [a.name for a in enc.actors if a.side == "opponent"]
+        assert opponents == ["Vellum Ghast"], (
+            f"alias threat seated under its alias {opponents!r} — encounter "
+            f"actor unresolvable by find_creature_core"
+        )
+        assert len(snap.npcs) == 1, "and it must not have minted a twin"
+        for a in enc.actors:
+            if a.side == "opponent":
+                assert snap.find_creature_core(a.name) is not None
+
+
+# ---------------------------------------------------------------------------
+# Rework round 1 (review [MEDIUM]): the id-leg dedup guard, ISOLATED — the
+# integration negative above can pass on the name leg alone (review finding:
+# its display names also differ). These unit-pin _patch_identity_key itself:
+# same display name + different creature ids MUST key apart (only the id leg
+# can produce that), and drifted names + same id MUST key together.
+# CONTRACT GUARDS: green on arrival by design — they pin the mechanism the
+# integration test cannot isolate; they must stay green.
+# ---------------------------------------------------------------------------
+
+
+class TestPatchIdentityKeyUnit:
+    def test_same_display_name_different_creature_ids_key_apart(self) -> None:
+        from sidequest.server.dispatch.monster_manual_inject import _patch_identity_key
+
+        a = NpcPatch(name="Gnaw-Swarm", creature_id="gnaw_swarm", threat_level=1, hp=6)
+        b = NpcPatch(name="Gnaw-Swarm", creature_id="swarm", threat_level=1, hp=6)
+        assert _patch_identity_key(a) != _patch_identity_key(b), (
+            "distinct bestiary ids under one display name must not collapse — "
+            "the id leg is the ONLY thing separating them"
+        )
+
+    def test_drifted_display_names_same_creature_id_share_key(self) -> None:
+        from sidequest.server.dispatch.monster_manual_inject import _patch_identity_key
+
+        a = NpcPatch(name="Gnaw-Swarm", creature_id="gnaw_swarm", threat_level=1, hp=6)
+        b = NpcPatch(name="Gnaw Swarm", creature_id="gnaw_swarm", threat_level=1, hp=6)
+        assert _patch_identity_key(a) == _patch_identity_key(b)

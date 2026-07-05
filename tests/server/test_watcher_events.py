@@ -568,6 +568,73 @@ async def test_on_end_emits_typed_event_for_npc_reinvented_span_with_warning_sev
 
 
 @pytest.mark.asyncio
+async def test_on_end_emits_typed_event_for_identity_resolved_span() -> None:
+    """``SPAN_IDENTITY_RESOLVED`` is routed (NPC bundle, story 162-2 rework
+    round 1 — review [MEDIUM][TEST]): the unified roster resolver asserting
+    "prose name X IS entity Y" must reach the GM panel as a typed
+    ``state_transition`` with ``component=npc_registry`` and
+    ``op=identity_resolved`` carrying query/canonical/via/identity_key. This
+    drives the SPAN_ROUTES extract lambda itself — a key typo there would
+    blind the lie-detector while the raw-span tests stayed green."""
+    from unittest.mock import MagicMock
+
+    from opentelemetry.sdk.trace import ReadableSpan
+    from opentelemetry.trace import StatusCode
+
+    from sidequest.server.watcher import WatcherSpanProcessor
+    from sidequest.telemetry.spans import SPAN_IDENTITY_RESOLVED
+
+    def _fake_span(
+        name: str,
+        attributes: dict | None = None,
+        status_code: StatusCode = StatusCode.OK,
+    ) -> ReadableSpan:
+        span = MagicMock(spec=ReadableSpan)
+        span.name = name
+        span.attributes = attributes or {}
+        span.start_time = 1_000_000_000
+        span.end_time = 2_000_000_000
+        span.status = MagicMock()
+        span.status.status_code = MagicMock()
+        span.status.status_code.name = "OK" if status_code == StatusCode.OK else "ERROR"
+        return span
+
+    hub = WatcherHub()
+    hub.bind_loop(asyncio.get_running_loop())
+
+    captured: list[dict] = []
+
+    class _Sub:
+        async def send_json(self, data: dict) -> None:
+            captured.append(data)
+
+    await hub.subscribe(_Sub())  # type: ignore[arg-type]
+
+    processor = WatcherSpanProcessor(hub)
+    processor.on_end(
+        _fake_span(
+            SPAN_IDENTITY_RESOLVED,
+            {
+                "query": "Molgrath the Eyeless",
+                "canonical": "Thief",
+                "via": "alias",
+                "identity_key": "creature:thief",
+            },
+        )
+    )
+    await asyncio.sleep(0.05)
+
+    typed = [e for e in captured if e["event_type"] == "state_transition"]
+    assert typed, "SPAN_IDENTITY_RESOLVED did not produce state_transition"
+    assert typed[0]["component"] == "npc_registry"
+    assert typed[0]["fields"]["op"] == "identity_resolved"
+    assert typed[0]["fields"]["query"] == "Molgrath the Eyeless"
+    assert typed[0]["fields"]["canonical"] == "Thief"
+    assert typed[0]["fields"]["via"] == "alias"
+    assert typed[0]["fields"]["identity_key"] == "creature:thief"
+
+
+@pytest.mark.asyncio
 async def test_on_end_emits_typed_event_for_inventory_narrator_extracted_span() -> None:
     """``SPAN_INVENTORY_NARRATOR_EXTRACTED`` is routed (inventory bundle) —
     translator must emit a ``state_transition`` with ``component=inventory``

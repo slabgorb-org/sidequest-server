@@ -186,6 +186,25 @@ class TestNormalizeName:
 
         assert normalize_name("   ") == ""
 
+    def test_diacritics_fold_to_ascii_base(self) -> None:
+        """RED (rework, review [MEDIUM]/[RULE]): ADR-091 culture names carry
+        diacritics ("Veyra Solnë" is the codebase's own documented example);
+        an ASCII prose reference must normalize to the same key. The shared
+        primitive already exists — ``sidequest.foundation.slug_fold.
+        fold_to_ascii``, used by alias_resolution.py for this exact bug
+        class — normalize_name must compose it, not casefold alone."""
+        from sidequest.game.origin import normalize_name
+
+        assert normalize_name("Veyra Solnë") == normalize_name("Veyra Solne")
+        assert normalize_name("Café du Monde") == normalize_name("cafe du monde")
+
+    def test_diacritic_fold_preserves_distinctness(self) -> None:
+        """Folding is for spelling variance, not fuzzy matching — genuinely
+        different names stay apart after the fold."""
+        from sidequest.game.origin import normalize_name
+
+        assert normalize_name("Veyra Solnë") != normalize_name("Veyra Talvi")
+
 
 # ---------------------------------------------------------------------------
 # AC2 — identity_key: id-keyed where an id exists, name-keyed only as floor

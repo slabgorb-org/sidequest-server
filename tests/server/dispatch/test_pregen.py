@@ -409,18 +409,20 @@ def test_seed_manual_writes_save_to_disk(monkeypatch: pytest.MonkeyPatch, tmp_pa
     )
     monkeypatch.setattr(pregen, "encountergen_main", lambda _argv: print("{}") or 0)  # type: ignore[func-returns-value]
 
-    with mock.patch.object(Path, "home", return_value=tmp_path):
-        manual = MonsterManual(genre="testgenre", world="testworld")
-        seed_manual(
-            genre_packs_path=tmp_path / "packs",
-            genre="testgenre",
-            world="testworld",
-            manual=manual,
-            rng=random.Random(0),
-        )
+    # The autouse _isolate_monster_manuals fixture (tests/conftest.py, story
+    # 162-1) points _manuals_dir at a private tmp dir — assert via _file_path
+    # instead of a hand-built Path.home()-based path.
+    manual = MonsterManual(genre="testgenre", world="testworld")
+    seed_manual(
+        genre_packs_path=tmp_path / "packs",
+        genre="testgenre",
+        world="testworld",
+        manual=manual,
+        rng=random.Random(0),
+    )
 
-        save_path = tmp_path / ".sidequest" / "manuals" / "testgenre_testworld.json"
-        assert save_path.exists()
+    save_path = MonsterManual._file_path("testgenre", "testworld")
+    assert save_path.exists()
 
 
 # ---------------------------------------------------------------------------

@@ -304,15 +304,31 @@ def _seed_authored_npcs(pack: Any, world: str, manual: MonsterManual) -> int:
             }
             if npc.appearance:
                 data["ocean_summary"] = npc.appearance
-            manual.add_npc(data, new_tags, exact=True)
+            # ``authored=True`` (story 162-1): the flag is what protects a named
+            # cast member from the accumulation cap (an authored insert at the
+            # cap evicts a generated walk-on instead of being refused) and what
+            # the pool-discard span counts for the V3 forensic.
+            manual.add_npc(data, new_tags, exact=True, authored=True)
             inserted += 1
-        elif set(existing.location_tags) != set(new_tags):
-            # Order-insensitive dirty check: a re-authored YAML with the same tags
-            # in a different order is NOT a change — comparing lists directly
-            # would fire a spurious save + OTEL backfill span every load. Assign
-            # the list so the authored order is preserved on a real change.
-            existing.location_tags = new_tags
-            refreshed += 1
+        else:
+            changed = False
+            if not existing.authored:
+                # Legacy pools predate the ``authored`` flag (162-1): an entry
+                # matching the authored cast by exact name IS authored — upsert
+                # the flag so cap-eviction protection and the V3 discard
+                # forensic cover pre-162-1 on-disk manuals too.
+                existing.authored = True
+                changed = True
+            if set(existing.location_tags) != set(new_tags):
+                # Order-insensitive dirty check: a re-authored YAML with the same
+                # tags in a different order is NOT a change — comparing lists
+                # directly would fire a spurious save + OTEL backfill span every
+                # load. Assign the list so the authored order is preserved on a
+                # real change.
+                existing.location_tags = new_tags
+                changed = True
+            if changed:
+                refreshed += 1
     logger.info(
         "pregen.authored_npcs_seeded (world=%s, inserted=%d, refreshed=%d, total_authored=%d)",
         world,

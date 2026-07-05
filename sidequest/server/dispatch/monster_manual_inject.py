@@ -31,6 +31,7 @@ at the end of ``intro_messages``).
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -41,10 +42,9 @@ from sidequest.genre.names.generator import sanitize_display_name
 from sidequest.telemetry.spans import Span
 from sidequest.telemetry.spans.monster_manual import (
     SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL,
-    SPAN_MONSTER_MANUAL_FOREIGN_PURGED,
     SPAN_MONSTER_MANUAL_INJECTED,
+    SPAN_MONSTER_MANUAL_POOL_DISCARDED,
     SPAN_MONSTER_MANUAL_REGION_POPULATION,
-    SPAN_MONSTER_MANUAL_STALE_PURGED,
 )
 from sidequest.telemetry.spans.zone_eligibility import SPAN_ZONE_ELIGIBILITY_FILTERED
 
@@ -110,6 +110,50 @@ def _sanitize_patch_names(patches: list[NpcPatch]) -> tuple[list[NpcPatch], int]
     return kept, sanitized
 
 
+def _content_sha_for(pack: Any, world: str) -> str:
+    """Content version the MM pool is derived under (story 162-1, spec D3).
+
+    A stable hash of the world's effective bestiary — the creature roster the
+    pool is seeded from, and the axis along which clones' content checkouts
+    diverge (foreign-bestiary bleed, roster churn). When the roster changes the
+    sha changes and :meth:`MonsterManual.reconcile_content` discards the
+    now-stale pool. A pack with no effective bestiary (a minimal stub, or a
+    native pack) hashes to a stable empty-roster digest — sha256 always yields a
+    64-char digest, so the key never silently collapses to an empty string (No
+    Silent Fallbacks). ``effective_bestiary`` may be absent on a stub pack; a
+    real GenrePack always exposes it.
+    """
+    entries: list[str] = []
+    # ``pack`` is duck-typed (a real GenrePack or a test stub) — keep the accessor
+    # dynamic so the (Bestiary | None, str) unpack type-checks.
+    effective_bestiary = getattr(pack, "effective_bestiary", None) if pack is not None else None
+    if callable(effective_bestiary):
+        resolved: Any = effective_bestiary(world)
+        bestiary, _source = resolved
+        if bestiary is not None:
+            for entry in bestiary.entries:
+                entries.append(f"{entry.name}:{entry.hp}:{entry.level}:{entry.armor_class}")
+    payload = "|".join(sorted(entries)).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()[:16]
+
+
+def _session_seed_for(sd: _SessionData) -> str:
+    """Per-session key so a NEW session re-derives its pool (story 162-1, D3).
+
+    The ``SessionRoom`` slug uniquely identifies the session: reconnects within a
+    session share it (pool preserved), a new session gets a new slug (its
+    reconcile sees a mismatch and re-derives). Falls back to the world slug when
+    no room is bound (pre-room construction / synthetic paths) — still a stable
+    non-empty key, never a blank that would collapse every session onto one pool.
+    The live per-turn path always has a room, so the fallback is defensive only.
+    """
+    room = getattr(sd, "_room", None)
+    slug = getattr(room, "slug", None) if room is not None else None
+    if slug:
+        return slug
+    return getattr(sd, "world_slug", "") or ""
+
+
 def ensure_loaded(sd: _SessionData) -> MonsterManual | None:
     """Lazy-load and seed ``sd.monster_manual``. Idempotent.
 
@@ -129,80 +173,58 @@ def ensure_loaded(sd: _SessionData) -> MonsterManual | None:
         return sd.monster_manual
     if not sd.genre_slug:
         return None
+    # The Manual is genre+WORLD-keyed — without a resolved world there is nothing
+    # to load. Skip cleanly (same contract as the no-genre case above) rather than
+    # keying the cache on an empty world slug — the `caverns_and_claudes_.json`
+    # bug (story 162-1). MonsterManual.load also fails loud on a blank world; this
+    # early return keeps pre-world-resolution turns from ever reaching it.
+    if not sd.world_slug:
+        return None
 
-    manual = MonsterManual.load(sd.genre_slug, sd.world_slug or "")
+    manual = MonsterManual.load(sd.genre_slug, sd.world_slug)
     pack = sd.genre_pack
 
-    # Stale-cache coherence (playtest 150-20 / CWN-OTHER-SEATING): the Manual
-    # cache is genre+world keyed and persists across sessions. A Manual seeded
-    # under the NATIVE encountergen path (player-class enemies, hp=8*level) is
-    # incoherent with a ruleset-module binding (wwn|cwn|swn|awn samples the
-    # bestiary, class="creature"). Reusing it seated a 48-HP "Wheelman" against
-    # an L1 PC. Drop the stale encounters BEFORE the needs_seeding() check so the
-    # re-seed below repopulates via the correct bestiary path. Emit a span so the
-    # GM panel sees the engine caught the stale cache (OTEL Observability).
+    # Derive-don't-cache (story 162-1, spec D3): this genre+world-keyed cache is
+    # shared across sessions and ~4 clones with divergent content checkouts — the
+    # source of the beneath_sunden purge/reseed livelock and the barsoom
+    # foreign-bestiary bleed. Key the pool on (content_sha, session_seed) and
+    # DISCARD it wholesale on a mismatch, REPLACING the two removed targeted purge
+    # tourniquets: a different content checkout (multi-clone) or a new session
+    # re-derives from scratch, so a stale pool can never be reused or livelock a
+    # purge/reseed cycle. reconcile_content adopts a legacy/unstamped pool without
+    # discarding (no nuking pre-162-1 saves). Emit the forensic span on a real
+    # discard so the GM panel sees it (OTEL Observability, spec V1-V3).
+    # Reconcile only with a pack in hand: without one the effective bestiary is
+    # unreadable, and judging staleness on evidence we don't have would discard a
+    # validly-stamped pool on a transient packless load (the empty-roster digest
+    # would masquerade as a content change). Same conservative posture as the
+    # removed purges' None-bestiary guard — no evidence, no discard.
     if pack is not None:
-        ruleset = getattr(getattr(pack, "rules", None), "ruleset", None)
-        purged = manual.purge_ruleset_incoherent_encounters(
-            is_ruleset_module=bool(ruleset) and ruleset != "dial"
-        )
-        if purged:
+        content_sha = _content_sha_for(pack, sd.world_slug)
+        session_seed = _session_seed_for(sd)
+        discard = manual.reconcile_content(content_sha=content_sha, session_seed=session_seed)
+        if discard is not None:
             manual.save()
             logger.warning(
-                "monster_manual.stale_encounter_purged genre=%s world=%s ruleset=%s purged=%d",
+                "monster_manual.pool_discarded genre=%s world=%s npcs=%d encounters=%d authored=%d",
                 sd.genre_slug,
                 sd.world_slug,
-                ruleset,
-                len(purged),
+                discard.npcs_discarded,
+                discard.encounters_discarded,
+                discard.authored_discarded,
             )
             with Span.open(
-                SPAN_MONSTER_MANUAL_STALE_PURGED,
+                SPAN_MONSTER_MANUAL_POOL_DISCARDED,
                 {
                     "genre": sd.genre_slug,
-                    "world": sd.world_slug or "",
-                    "ruleset": ruleset or "",
-                    "purged": len(purged),
-                    "remaining_encounters": len(manual.encounters),
+                    "world": sd.world_slug,
+                    "session_seed": session_seed,
+                    "npcs_discarded": discard.npcs_discarded,
+                    "encounters_discarded": discard.encounters_discarded,
+                    "authored_discarded": discard.authored_discarded,
                 },
             ):
                 pass
-
-        # Cross-world bestiary bleed (story 158-33): the same genre+world-keyed
-        # cache may carry encounter enemies authored ONLY in a SIBLING world's
-        # bestiary — a stale seed from the pre-ADR-120 genre-tier-bestiary era,
-        # never re-validated after rosters moved to per-world bestiary.yaml. They
-        # are class="creature", so the native-class purge above does NOT catch
-        # them (long_foundry's "Knight of the Ashen Banner" surfaced as the
-        # Barsoom arena champion). Drop encounters whose creatures are absent from
-        # the CURRENT world's effective bestiary so re-seeding repopulates only
-        # world-true hostiles (SOUL: Crunch in the Genre, Flavor in the World).
-        # ``effective_bestiary`` may be absent on a minimal pack stub (nothing to
-        # scope against) — skip cleanly, same defensive shape as the ``ruleset``
-        # getattr above; a real GenrePack always exposes it.
-        effective_bestiary = getattr(pack, "effective_bestiary", None)
-        if callable(effective_bestiary):
-            world_bestiary, _bestiary_source = effective_bestiary(sd.world_slug or "")
-            foreign = manual.purge_foreign_bestiary_encounters(world_bestiary)
-            if foreign:
-                manual.save()
-                logger.warning(
-                    "monster_manual.foreign_encounter_purged genre=%s world=%s ruleset=%s purged=%d",
-                    sd.genre_slug,
-                    sd.world_slug,
-                    ruleset,
-                    len(foreign),
-                )
-                with Span.open(
-                    SPAN_MONSTER_MANUAL_FOREIGN_PURGED,
-                    {
-                        "genre": sd.genre_slug,
-                        "world": sd.world_slug or "",
-                        "ruleset": ruleset or "",
-                        "purged": len(foreign),
-                        "remaining_encounters": len(manual.encounters),
-                    },
-                ):
-                    pass
 
     source_dir = getattr(pack, "source_dir", None) if pack is not None else None
     if manual.needs_seeding() and source_dir is not None:

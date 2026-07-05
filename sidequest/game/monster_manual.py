@@ -14,16 +14,39 @@ Ported from ``crates/sidequest-game/src/monster_manual.rs``.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from pydantic import BaseModel, Field
 
-if TYPE_CHECKING:
-    from sidequest.genre.models.bestiary import Bestiary
-
 logger = logging.getLogger(__name__)
+
+# Accumulation caps (story 162-1, spec D4). The shared MM cache previously grew
+# without bound — flickering_reach reached 310 NPCs and glenross 1,153 (no cap on
+# pregen re-seeding). These bound the pool so a runaway cannot recur; an add past
+# the cap is dropped LOUDLY (a warning, never a silent drop). An authored insert
+# at the NPC cap evicts a generated walk-on rather than being refused, so a named
+# cast member is never crowded out by generated walk-ons (spec V3).
+MAX_MANUAL_NPCS = 200
+MAX_MANUAL_ENCOUNTERS = 100
+
+
+@dataclass(frozen=True)
+class ContentDiscard:
+    """What a :meth:`MonsterManual.reconcile_content` discard dropped.
+
+    Returned only when a *previously-stamped* pool was dropped on a content/seed
+    mismatch (story 162-1, spec V1-V3). The counts feed the
+    ``monster_manual.pool_discarded`` OTEL span so the GM panel sees that a
+    stale, multi-clone-written pool was discarded and how many authored NPCs went
+    with it (the "what deleted beneath_sunden's authored NPCs" forensic).
+    """
+
+    npcs_discarded: int
+    encounters_discarded: int
+    authored_discarded: int
 
 
 def _tags_match_location(location_tags: list[str], loc_lower: str) -> bool:
@@ -40,61 +63,6 @@ def _tags_match_location(location_tags: list[str], loc_lower: str) -> bool:
         if not tag_lower:
             continue
         if tag_lower in loc_lower or loc_lower in tag_lower:
-            return True
-    return False
-
-
-def _encounter_has_native_class_enemy(enc: ManualEncounter) -> bool:
-    """Whether a cached encounter carries a native-path, PLAYER-class enemy.
-
-    The bestiary encountergen path stamps every enemy ``class="creature"``; the
-    native path stamps a player class. An explicit non-``"creature"`` class is
-    therefore the stale-native signal (see
-    :meth:`MonsterManual.purge_ruleset_incoherent_encounters`). A missing class
-    key or a non-list ``enemies`` is NOT treated as stale (conservative — no
-    over-purging of partial data).
-    """
-    enemies = enc.data.get("enemies") if isinstance(enc.data, dict) else None
-    if not isinstance(enemies, list):
-        return False
-    for enemy in enemies:
-        if not isinstance(enemy, dict):
-            continue
-        cls = enemy.get("class")
-        if isinstance(cls, str) and cls.strip() and cls != "creature":
-            return True
-    return False
-
-
-def _encounter_has_foreign_creature(enc: ManualEncounter, allowed_names: set[str]) -> bool:
-    """Whether a cached encounter fields a bestiary creature absent from the world.
-
-    Companion to :func:`_encounter_has_native_class_enemy` (see
-    :meth:`MonsterManual.purge_foreign_bestiary_encounters`): the encountergen
-    bestiary path stamps every enemy ``class="creature"`` and copies the source
-    :class:`~sidequest.genre.models.bestiary.BestiaryEntry` name verbatim, so the
-    name (case-insensitive) is the stable link back to the world bestiary. An
-    enemy whose name is NOT in ``allowed_names`` is a sibling-world creature that
-    bled into this world's Manual.
-
-    Conservative, mirroring its sibling: only an explicit ``class="creature"``
-    enemy WITH a name is judged. A native player-class enemy (handled by
-    :func:`_encounter_has_native_class_enemy`), a missing class/name, or a
-    non-list ``enemies`` is NOT a foreign signal — no over-purging of native or
-    partial data. ``allowed_names`` must already be lowercased.
-    """
-    enemies = enc.data.get("enemies") if isinstance(enc.data, dict) else None
-    if not isinstance(enemies, list):
-        return False
-    for enemy in enemies:
-        if not isinstance(enemy, dict):
-            continue
-        if enemy.get("class") != "creature":
-            continue
-        name = enemy.get("name")
-        if not isinstance(name, str) or not name.strip():
-            continue
-        if name.lower() not in allowed_names:
             return True
     return False
 
@@ -159,6 +127,16 @@ class ManualNpc(BaseModel):
     empty for the namegen pool until the walk-on is born in a region.
     """
 
+    authored: bool = False
+    """Whether this NPC came from a world's authored ``npcs.yaml`` cast.
+
+    Story 162-1: the accumulation cap evicts a *generated* walk-on before an
+    authored NPC (a named cast member is never crowded out), and
+    :meth:`MonsterManual.reconcile_content` reports how many authored NPCs a
+    discard dropped (spec V3 forensic). Epic-162's later stories fold this into a
+    unified typed ``Origin``; for now it is a single boolean.
+    """
+
 
 class ManualEncounter(BaseModel):
     """A pre-generated encounter block from sidequest-encountergen."""
@@ -213,6 +191,26 @@ class MonsterManual(BaseModel):
     encounters: list[ManualEncounter] = Field(default_factory=list)
     """Pre-generated encounter entries available to this world."""
 
+    content_sha: str = ""
+    """Content version the pool was derived under (story 162-1, spec D3).
+
+    A hash of the world's effective bestiary (the creature roster the pool is
+    seeded from). Empty on a legacy/never-stamped manual — :meth:`reconcile_content`
+    *adopts* an unstamped pool without discarding, and only discards a
+    *previously-stamped* pool whose ``content_sha`` changed (a different content
+    checkout = a multi-clone writer). Set by the injection seam, not authored.
+    """
+
+    session_seed: str = ""
+    """Per-session key so a NEW session re-derives its pool (derive-don't-cache).
+
+    The session's ``SessionRoom`` slug. Reconnects within a session share it
+    (pool preserved); a new session gets a new slug, so its
+    :meth:`reconcile_content` sees a mismatch and re-derives — the pool is no
+    longer a persistent cache that accumulates across sessions (the 1,153-NPC
+    runaway). Empty on a legacy/never-stamped manual (adopted, not discarded).
+    """
+
     # ── Persistence ────────────────────────────────────────────
 
     @staticmethod
@@ -222,7 +220,21 @@ class MonsterManual(BaseModel):
 
     @staticmethod
     def _file_path(genre: str, world: str) -> Path:
-        """File path for this genre/world Manual."""
+        """File path for this genre/world Manual.
+
+        Fails loud on a blank genre or world (story 162-1, spec D4). The old
+        ``or ""`` caller path minted ``caverns_and_claudes_.json`` /
+        ``heavy_metal_.json`` for sessions bound pre-world-resolution — an
+        unattributable, shared, empty-slug key. Per No Silent Fallbacks a blank
+        key never resolves to a file; the caller must supply a resolved world.
+        """
+        if not genre or not genre.strip():
+            raise ValueError("MonsterManual requires a non-empty genre slug (got blank)")
+        if not world or not world.strip():
+            raise ValueError(
+                f"MonsterManual requires a non-empty world slug for genre {genre!r} "
+                "(got blank) — refusing to key the cache on an empty world"
+            )
         return MonsterManual._manuals_dir() / f"{genre}_{world}.json"
 
     @classmethod
@@ -252,13 +264,15 @@ class MonsterManual(BaseModel):
 
     def save(self) -> None:
         """Save this Manual to disk."""
+        # Validate the key FIRST — a blank genre/world raises before we create
+        # the cache dir or write anything (story 162-1, No Silent Fallbacks).
+        path = self._file_path(self.genre, self.world)
         directory = self._manuals_dir()
         try:
             directory.mkdir(parents=True, exist_ok=True)
         except OSError as e:
             logger.warning("monster_manual.mkdir_failed (error=%s)", e)
             return
-        path = self._file_path(self.genre, self.world)
         try:
             json_text = self.model_dump_json(indent=2)
         except ValueError as e:
@@ -381,79 +395,64 @@ class MonsterManual(BaseModel):
         """Whether the Manual needs more Available entries."""
         return len(self.available_npcs()) < 4 or not self.available_encounters()
 
-    def purge_ruleset_incoherent_encounters(
-        self, *, is_ruleset_module: bool
-    ) -> list[ManualEncounter]:
-        """Drop cached encounters that are incoherent with a bound ruleset module.
+    def reconcile_content(self, *, content_sha: str, session_seed: str) -> ContentDiscard | None:
+        """Discard the whole pool when the CONTENT version changed (story 162-1, D3).
 
-        Playtest 150-20 (CWN-OTHER-SEATING): this Manual cache is keyed by
-        genre+world and persists across sessions. A Manual seeded under the
-        **native** ``encountergen.generate_enemy`` path carries encounter enemies
-        typed by a PLAYER CLASS (``class != "creature"``) with PC-scaled HP
-        (``hp = 8*level``). A ruleset-module pack (``wwn|cwn|swn|awn``) instead
-        samples its bestiary, where ``generate_enemy_from_bestiary`` always stamps
-        ``class="creature"`` — so a player-class enemy in the cache is stale,
-        pre-bestiary-binding output. Reusing it injected a 48-HP "Wheelman"
-        "Shadow" the seater grabbed as the combat Other against an L1 PC.
+        Derive-don't-cache. This genre+world-keyed cache is shared across sessions
+        and ~4 clones with divergent content checkouts — the source of the
+        beneath_sunden purge/reseed livelock and the barsoom foreign-bestiary
+        bleed. Rather than name-match and targeted-purge stale entries (the two
+        removed ``purge_*`` tourniquets), the pool carries the ``content_sha`` it
+        was derived under and is discarded *wholesale* when the content changed, so
+        staleness is impossible and a purge/reseed cycle cannot livelock.
+        ``needs_seeding`` then re-fires and the pool re-derives.
 
-        Dropping those encounters lets :meth:`needs_seeding` re-fire so the Manual
-        re-seeds via the correct bestiary path. ``is_ruleset_module`` gates the
-        purge: a native (``ruleset: "dial"``) pack legitimately has player-class
-        humanoid enemies, so it is never purged. Conservative: only an EXPLICIT
-        non-``"creature"`` class is the stale signal — a missing class key or an
-        empty enemy list is left untouched (no over-purging of partial data).
+        ``session_seed`` is *recorded* for per-world attribution (spec V1) — it is
+        refreshed on every reconcile but does NOT trigger a discard. Content is the
+        only staleness axis: a new session with the SAME content reuses the pool
+        (accumulation is bounded by the caps, not by nuking the pool every
+        session). Making session identity a discard key emptied a valid pool on
+        every new session — a regression this deliberately avoids.
 
-        Returns the purged encounters (empty when nothing was incoherent). Pure;
-        the caller persists + emits the OTEL span.
-        """
-        if not is_ruleset_module:
-            return []
-        stale = [enc for enc in self.encounters if _encounter_has_native_class_enemy(enc)]
-        if stale:
-            stale_ids = {id(enc) for enc in stale}
-            self.encounters = [enc for enc in self.encounters if id(enc) not in stale_ids]
-        return stale
+        Migration-aware (No Silent Fallbacks, without nuking legacy saves): an
+        UNSTAMPED pool (``content_sha == ""`` — a pre-162-1 on-disk Manual or a
+        freshly-loaded empty one) is *adopted*: stamped to the current content
+        version WITHOUT discarding. A never-versioned pool is not evidence of a
+        divergent-content writer. Only a *previously-stamped* pool whose
+        ``content_sha`` changed is discarded.
 
-    def purge_foreign_bestiary_encounters(self, bestiary: Bestiary | None) -> list[ManualEncounter]:
-        """Drop cached encounters whose creatures belong to a SIBLING world.
-
-        Story 158-33 (sq-playtest 2026-06-25, heavy_metal/barsoom): this
-        genre+world-keyed cache persists across sessions. barsoom's Manual carried
-        encounter enemies — "Foundry Automaton", "Grave Knight", "Knight of the
-        Ashen Banner" — authored ONLY in the sibling world long_foundry's
-        ``bestiary.yaml``. They were seeded when a *genre-tier* bestiary still
-        existed (mixing every world's creatures into one pool); ADR-120 then moved
-        rosters to per-world ``worlds/<slug>/bestiary.yaml``, but the persisted
-        Manual was never re-validated. Salensus Oll then latched the long_foundry
-        "Knight of the Ashen Banner" as the Barsoom arena champion — a
-        Genre/World-Truth break (SOUL: Crunch in the Genre, Flavor in the World).
-
-        These foreign enemies are ``class="creature"`` (bestiary-sourced), so
-        :meth:`purge_ruleset_incoherent_encounters` (the native-class signal) does
-        NOT catch them — this is the sibling, world-membership purge. Drop any
-        encounter that fields a creature absent from the CURRENT world's effective
-        ``bestiary`` so :meth:`needs_seeding` re-fires and the Manual re-seeds via
-        the correctly-scoped bestiary path.
-
-        Conservative (No Silent Fallbacks): a ``None`` bestiary means scope is
-        unresolvable (neither world nor genre tier supplies one) — purge NOTHING
-        rather than empty the pool (the 87-4 silently-empty-pool failure mode).
-        Only ``class="creature"`` enemies with a name are judged; native-class and
-        partial data are left to the other purge / untouched.
-
-        Returns the purged encounters (empty when nothing was foreign). Pure; the
+        Returns a :class:`ContentDiscard` only when a stamped, non-empty pool was
+        actually dropped (feeds the ``monster_manual.pool_discarded`` span);
+        ``None`` on unchanged content, on adoption of an unstamped pool, or when
+        the discarded pool held nothing. Pure apart from mutating ``self``; the
         caller persists + emits the OTEL span.
         """
-        if bestiary is None:
-            return []
-        allowed_names = {entry.name.lower() for entry in bestiary.entries}
-        foreign = [
-            enc for enc in self.encounters if _encounter_has_foreign_creature(enc, allowed_names)
-        ]
-        if foreign:
-            foreign_ids = {id(enc) for enc in foreign}
-            self.encounters = [enc for enc in self.encounters if id(enc) not in foreign_ids]
-        return foreign
+        # Attribution is always refreshed; only content drives staleness.
+        self.session_seed = session_seed
+        stale = bool(self.content_sha) and self.content_sha != content_sha
+        if not stale:
+            # Unchanged content, or an unstamped pool being adopted — keep the
+            # pool and stamp/refresh the content version.
+            self.content_sha = content_sha
+            return None
+
+        npcs_discarded = len(self.npcs)
+        encounters_discarded = len(self.encounters)
+        authored_discarded = sum(1 for n in self.npcs if n.authored)
+
+        # Content changed under a previously-stamped pool: a different content
+        # checkout (multi-clone writer) — discard and re-derive. Re-stamp so the
+        # next reconcile against the same content is stable (no livelock).
+        self.content_sha = content_sha
+        self.npcs = []
+        self.encounters = []
+        if npcs_discarded == 0 and encounters_discarded == 0:
+            return None
+        return ContentDiscard(
+            npcs_discarded=npcs_discarded,
+            encounters_discarded=encounters_discarded,
+            authored_discarded=authored_discarded,
+        )
 
     # ── Placement ───────────────────────────────────────────────
 
@@ -584,7 +583,12 @@ class MonsterManual(BaseModel):
     # ── Insertion ───────────────────────────────────────────────
 
     def add_npc(
-        self, data: dict[str, Any], location_tags: list[str], *, exact: bool = False
+        self,
+        data: dict[str, Any],
+        location_tags: list[str],
+        *,
+        exact: bool = False,
+        authored: bool = False,
     ) -> None:
         """Add a pre-generated NPC from namegen JSON output.
 
@@ -594,6 +598,12 @@ class MonsterManual(BaseModel):
         uses this so a canonical NPC whose name is a substring of an existing
         entry (e.g. "Lion" vs "Cowardly Lion") is still inserted instead of being
         silently swallowed by the fuzzy guard.
+
+        ``authored`` (story 162-1) marks an NPC that came from a world's authored
+        ``npcs.yaml`` cast. It governs the accumulation cap: past
+        :data:`MAX_MANUAL_NPCS`, a generated walk-on is dropped LOUDLY, but an
+        authored NPC instead *evicts* the oldest generated walk-on so a named cast
+        member is never crowded out (spec V3). A cap hit is logged, never silent.
         """
         name = str(data.get("name") or "")
         role = str(data.get("role") or "")
@@ -601,6 +611,11 @@ class MonsterManual(BaseModel):
 
         match = self.find_npc_by_exact_name(name) if exact else self.find_npc_by_name(name)
         if match is not None:
+            return
+
+        if len(self.npcs) >= MAX_MANUAL_NPCS and not self._make_room_for_npc(
+            authored=authored, incoming=name
+        ):
             return
 
         self.npcs.append(
@@ -612,8 +627,56 @@ class MonsterManual(BaseModel):
                 location_tags=location_tags,
                 state=EntryState.AVAILABLE,
                 activated_location=None,
+                authored=authored,
             )
         )
+
+    def _make_room_for_npc(self, *, authored: bool, incoming: str) -> bool:
+        """Enforce the NPC accumulation cap. Returns True if there is room to add.
+
+        A generated walk-on at the cap is refused (dropped loudly). An authored
+        NPC evicts a generated walk-on to make room, so a named cast member is
+        never crowded out; only if the pool is ALL authored is an authored insert
+        refused. Never a silent drop (story 162-1, D4).
+
+        Eviction prefers an AVAILABLE walk-on (never activated — nothing in play
+        references it) and only falls back to the oldest activated one when every
+        generated entry is in play. An ACTIVE walk-on is anchored to a location
+        and projected into narration (Diamonds and Coal — a walk-on the players
+        engaged is a diamond in the making); silently vanishing it mid-scene is
+        the bug class this Manual exists to prevent.
+        """
+        if not authored:
+            logger.warning(
+                "monster_manual.npc_cap_reached — dropping generated NPC %r (cap=%d)",
+                incoming,
+                MAX_MANUAL_NPCS,
+            )
+            return False
+        evict_at: int | None = None
+        for i, existing in enumerate(self.npcs):
+            if existing.authored:
+                continue
+            if existing.state == EntryState.AVAILABLE:
+                evict_at = i
+                break
+            if evict_at is None:
+                evict_at = i
+        if evict_at is not None:
+            logger.warning(
+                "monster_manual.npc_cap_evicted — authored %r evicts generated %r (cap=%d)",
+                incoming,
+                self.npcs[evict_at].name,
+                MAX_MANUAL_NPCS,
+            )
+            del self.npcs[evict_at]
+            return True
+        logger.warning(
+            "monster_manual.npc_cap_reached_all_authored — dropping authored NPC %r (cap=%d)",
+            incoming,
+            MAX_MANUAL_NPCS,
+        )
+        return False
 
     def add_encounter(
         self,
@@ -643,6 +706,15 @@ class MonsterManual(BaseModel):
             if not enemy_names
             else f"{', '.join(enemy_names)} (tier {tier})"
         )
+
+        if len(self.encounters) >= MAX_MANUAL_ENCOUNTERS:
+            # Accumulation cap (story 162-1, D4) — drop LOUDLY, never silently.
+            logger.warning(
+                "monster_manual.encounter_cap_reached — dropping encounter %r (cap=%d)",
+                label,
+                MAX_MANUAL_ENCOUNTERS,
+            )
+            return
 
         self.encounters.append(
             ManualEncounter(

@@ -99,15 +99,23 @@ def test_reconcile_content_discards_whole_pool_on_content_sha_mismatch():
     assert result is not None
 
 
-def test_reconcile_content_discards_on_session_seed_mismatch():
-    # derive-don't-cache: a NEW session (new seed) re-derives from scratch rather
-    # than inheriting another session's accumulated pool.
+def test_reconcile_content_does_not_discard_on_session_seed_change_alone():
+    # CONTENT is the only staleness axis: a new session (new seed) with the SAME
+    # content REUSES the pool rather than emptying it. session_seed is recorded
+    # for attribution (refreshed) but never triggers a discard — making session
+    # identity a discard key emptied valid pools on every new session (a
+    # regression the design deliberately avoids; accumulation is bounded by the
+    # caps, not by nuking the pool each session).
     m = _populated(content_sha="sha-A", session_seed="seed-1")
+    npcs_before = list(m.npcs)
+    encs_before = list(m.encounters)
+
     result = m.reconcile_content(content_sha="sha-A", session_seed="seed-2")
-    assert m.npcs == []
-    assert m.encounters == []
-    assert m.session_seed == "seed-2"
-    assert result is not None
+
+    assert m.npcs == npcs_before  # pool preserved across the session change
+    assert m.encounters == encs_before
+    assert m.session_seed == "seed-2"  # attribution refreshed
+    assert result is None  # no discard
 
 
 def test_reconcile_content_preserves_pool_on_full_match():
@@ -173,8 +181,11 @@ def test_add_npc_enforces_accumulation_cap():
     assert cap is not None, "expected a MAX_MANUAL_NPCS accumulation cap constant"
 
     m = MonsterManual(genre="g", world="w")
+    # Fixed-width names so no two are substrings of each other — the fuzzy
+    # find_npc_by_name dedup would otherwise collapse "walkon-1"/"walkon-10" and
+    # mask the cap. Distinct same-length names exercise the cap for real.
     for i in range(cap + 50):
-        m.add_npc(_npc(f"walkon-{i}"), [])
+        m.add_npc(_npc(f"walkon-{i:04d}"), [])
 
     assert len(m.npcs) <= cap
 
@@ -198,14 +209,39 @@ def test_accumulation_cap_does_not_evict_authored_npcs():
     assert cap is not None, "expected a MAX_MANUAL_NPCS accumulation cap constant"
 
     m = MonsterManual(genre="g", world="w")
+    # Fixed-width names (see test_add_npc_enforces_accumulation_cap) so the fuzzy
+    # dedup doesn't collapse them — the pool genuinely fills to the cap.
     for i in range(cap):
-        m.add_npc(_npc(f"walkon-{i}"), [])
+        m.add_npc(_npc(f"walkon-{i:04d}"), [])
     assert len(m.npcs) == cap  # pool is full of generated walk-ons
 
     m.add_npc(_npc("Named Boss"), [], authored=True)
 
     assert m.find_npc_by_exact_name("Named Boss") is not None
     assert len(m.npcs) <= cap  # still bounded — a generated walk-on was evicted
+
+
+def test_accumulation_cap_eviction_prefers_available_over_active():
+    # An ACTIVE walk-on is anchored to a location and projected into narration —
+    # evicting it mid-scene vanishes an NPC the players may be engaging (Diamonds
+    # and Coal: an engaged walk-on is a diamond in the making). The authored
+    # insert must evict an AVAILABLE (never-activated) walk-on instead, even when
+    # the ACTIVE one is oldest.
+    cap = getattr(mm_mod, "MAX_MANUAL_NPCS", None)
+    assert cap is not None, "expected a MAX_MANUAL_NPCS accumulation cap constant"
+
+    m = MonsterManual(genre="g", world="w")
+    for i in range(cap):
+        m.add_npc(_npc(f"walkon-{i:04d}"), [])
+    # The OLDEST walk-on is in play — the naive evict-oldest choice.
+    m.mark_active("walkon-0000", "The Hub")
+
+    m.add_npc(_npc("Named Boss"), [], authored=True)
+
+    assert m.find_npc_by_exact_name("Named Boss") is not None
+    assert m.find_npc_by_exact_name("walkon-0000") is not None  # in-play NPC survives
+    assert m.find_npc_by_exact_name("walkon-0001") is None  # oldest AVAILABLE evicted
+    assert len(m.npcs) <= cap
 
 
 # ── fail-loud empty world-slug keys (No Silent Fallbacks) ──────────

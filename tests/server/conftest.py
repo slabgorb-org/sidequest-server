@@ -709,15 +709,15 @@ def session_fixture():
     # ``rules.ruleset`` is ``"dial"`` (the dial tick applies — fixture
     # behavior unchanged) — same real-defaults pattern as progression above.
     #
-    # Story 158-33 wired a cross-world bestiary purge into the same turn path
-    # (``monster_manual_inject.py``): it calls
-    # ``pack.effective_bestiary(world)`` and unpacks a ``(Bestiary | None, str)``
+    # The MM injection turn path (``monster_manual_inject.py``) derives the
+    # derive-don't-cache content_sha (story 162-1) from
+    # ``pack.effective_bestiary(world)``, unpacking a ``(Bestiary | None, str)``
     # 2-tuple. A bare MagicMock's ``effective_bestiary(...)`` returns an auto-mock
     # that iterates empty, so the unpack raises ``ValueError: not enough values
     # to unpack``. Pin it to ``(None, "")`` — the realistic "this pack has no
-    # world-scoped bestiary" value, which makes ``purge_foreign_bestiary_encounters``
-    # a clean no-op (it purges nothing on a None bestiary) — same real-defaults
-    # pattern as progression/rules above.
+    # world-scoped bestiary" value, which makes ``_content_sha_for`` hash the
+    # empty roster to a stable digest — same real-defaults pattern as
+    # progression/rules above.
     from sidequest.genre.models.progression import ProgressionConfig
     from sidequest.genre.models.rules import RulesConfig
 

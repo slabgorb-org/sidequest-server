@@ -3,15 +3,21 @@
 Survey ``docs/superpowers/specs/2026-07-05-npc-generation-inventory.md`` §4
 conflict #7 / §8 D1-D2: identity was a name string at every seam (MM dedup,
 seater matching, pool promotion), each seam with its own normalization, and
-provenance was smeared across four partial fields (``invented_from`` /
-``pool_origin`` / ``manual_origin`` / ``creature_id``). This module is the
-single typed view over those fields — reuse-first: the legacy fields stay for
-JSON round-trip; ``Origin`` is derived from them for old saves and stamped by
-creation paths going forward (the 162-1 derive-don't-migrate pattern).
+provenance was smeared across partial fields. This module is the single typed
+view over the legacy provenance trio ``invented_from`` / ``manual_origin`` /
+``creature_id`` — reuse-first: the legacy fields stay for JSON round-trip;
+``Origin`` is derived from them for old saves and stamped by creation paths
+going forward (extending 162-1's derive-don't-cache doctrine to identity: no
+save-file migration, ever). ``pool_origin`` is a DELIBERATE exclusion (rework
+round 1, reviewer audit): it records *which pool member* an Npc was promoted
+from — promotion lineage, not a creation family — and stays a separate field;
+it influences derivation only by falling through to NARRATOR_INVENTED.
 
-Three seams consume this module today: the combat opponent seeder and the
-108-2 roster conscription (``encounter_lifecycle``), and the authored-vs-
-procedural dedup in ``monster_manual_inject.inject``.
+Four seams consume this module today: the combat opponent seeder and the
+108-2 roster conscription (``encounter_lifecycle``), the authored-vs-
+procedural dedup in ``monster_manual_inject.inject``, and the session-start
+authored preload (``world_materialization.preload_authored_npcs`` — the one
+place that stamps AUTHORED and carries ``authored_id``).
 """
 
 from __future__ import annotations
@@ -21,6 +27,8 @@ from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
+
+from sidequest.foundation.slug_fold import fold_to_ascii
 
 if TYPE_CHECKING:
     # ``Npc`` lives in ``sidequest.game.session``, which imports THIS module
@@ -59,14 +67,21 @@ class Origin(BaseModel):
     """The narrator's ORIGINAL invented name when the ADR-091 culture namer
     rerouted it (the perseus double-mint binding)."""
     content_version: str | None = None
-    """Content sha the stamp was minted against (162-1 reconcile keying)."""
+    """Content sha the stamp was minted against. RESERVED: no creation path
+    stamps it yet (every builder leaves it None) — it exists so a future
+    story can key staleness the way 162-1's ``reconcile_content`` does,
+    without a model change."""
 
 
 def normalize_name(name: str) -> str:
-    """THE single name normalization for every identity seam: casefold,
-    strip, collapse internal whitespace. Replaces the per-seam divergence
-    (exact / ``.lower()`` / casefold) the survey called out."""
-    return " ".join(name.split()).casefold()
+    """THE single name normalization for every identity seam: fold diacritics
+    to their ASCII base (rework round 1, review [RULE] — reuses the shared
+    :func:`sidequest.foundation.slug_fold.fold_to_ascii` primitive the
+    alias-matching seam already depends on, so "Veyra Solnë" and "veyra
+    solne" are one identity), then casefold, strip, and collapse internal
+    whitespace. Replaces the per-seam divergence (exact / ``.lower()`` /
+    casefold) the survey called out."""
+    return " ".join(fold_to_ascii(name).split()).casefold()
 
 
 def identity_key(origin: Origin | None, display_name: str) -> str:

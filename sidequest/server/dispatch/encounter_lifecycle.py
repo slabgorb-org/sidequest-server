@@ -374,6 +374,15 @@ def _seed_combat_hp_depletion_to_npcs(
         # in this same seeding pass is visible to later actors.
         npc = resolve_roster_npc(snapshot.npcs, actor.name)
         created = npc is None
+        # Rework round 1 (review [HIGH]): an alias / case-variant hit must
+        # CANONICALIZE the seat — every downstream consumer resolves the
+        # opponent core by exact ``actor.name`` (``find_creature_core``: the
+        # HP-bar filter, WN attack tools, query_encounter, payload builder),
+        # so a seat left under the prose alias is an unreachable opponent.
+        # Mirrors the 108-2 conscription, which already seats canonically;
+        # the alias itself stays in the ledger for narrator prose.
+        if npc is not None and npc.core.name != actor.name:
+            actor.name = npc.core.name
         pool_origin = ""
         if created:
             # 153-10 ([WWN-OTHER-SEATING]): before fabricating a hollow stub, check
@@ -1775,6 +1784,26 @@ def instantiate_encounter_from_trigger(
         # the router's separate call invented the placeholder name (the
         # Molgrath-vs-Hold-Dead split). When it resolves, seat the bound creature
         # — its WWN-statted HP reaches the fight instead of an HP-10 stub.
+        # Rework round 1 (review [HIGH]): the router may name the threat by a
+        # RECORDED alias / invented_from binding / case variant of a roster
+        # NPC. Seat it under the CANONICAL name — every downstream consumer
+        # resolves the opponent by exact actor name (``find_creature_core``:
+        # HP bars, WN attack, query_encounter, edge publish), and a dial-path
+        # confrontation never reaches the hp_depletion seeder that could
+        # otherwise canonicalize. The resolver's own ``identity.resolved``
+        # span makes the rebind observable; prose keeps the alias via the
+        # ledger.
+        known = resolve_roster_npc(snapshot.npcs, materialized_threat.name)
+        if known is not None and known.core.name != materialized_threat.name:
+            from sidequest.agents.orchestrator import NpcMention as _NpcMention
+
+            materialized_threat = _NpcMention(
+                name=known.core.name,
+                pronouns=materialized_threat.pronouns,
+                role=materialized_threat.role,
+                appearance=materialized_threat.appearance,
+                side=materialized_threat.side,
+            )
         resolved_opponent = _resolve_opponent_from_roster(
             snapshot,
             threat_name=materialized_threat.name,

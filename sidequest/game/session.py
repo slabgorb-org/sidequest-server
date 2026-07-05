@@ -260,10 +260,13 @@ class Npc(BaseModel):
     # Typed provenance (story 162-2). Stamped by creation paths going forward;
     # ``None`` on legacy saves (pre-162-2 JSON has no key — default keeps the
     # load lossless, and ``sidequest.game.origin.derive_origin`` resolves the
-    # legacy fields on demand: derive-don't-migrate). Rides the snapshot JSON
-    # blob like ``aliases`` (84-2) — no migration.
+    # legacy fields on demand — no save-file migration, ever). Rides the
+    # snapshot JSON blob like ``aliases`` (84-2).
     origin: Origin | None = None
-    """Typed origin stamp unifying invented_from/pool_origin/manual_origin/creature_id."""
+    """Typed origin stamp over invented_from/manual_origin/creature_id (+ ephemeral/region).
+    ``pool_origin`` is deliberately NOT part of the typed view — it records
+    promotion lineage, not a creation family (rework round 1, reviewer audit);
+    see sidequest.game.origin."""
 
     def name(self) -> str:
         return self.core.name

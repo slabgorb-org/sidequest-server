@@ -19,11 +19,13 @@ tests pin:
    statted, hostile bound creature (the production ``instantiate_*`` path).
 2. The resolved bound creature keeps its OWN statted HP — the hp_depletion
    seater must not clobber it with the confrontation's generic default.
-3. When no bound adversary is in scene, the seater still mints a stub, but marks
-   it ephemeral and emits the ``encounter.opponent_minted_stub`` lie-detector
-   span (No Silent Fallbacks).
+3. (RETIRED by 162-3) When no bound adversary is in scene, the seater no longer
+   mints a stub on the default path — the authored bestiary ``generics:``
+   section is the sanctioned last resort, and fabrication fails loud. See
+   tests/server/test_162_3_generics_last_resort_seating.py.
 4. An ephemeral fabricated stub is reaped with its resolved encounter and never
-   persists as durable roster canon (MINTING-MAJOR persist).
+   persists as durable roster canon (MINTING-MAJOR persist) — still holds for
+   legacy saves and degenerate-path mints.
 """
 
 from __future__ import annotations
@@ -392,38 +394,14 @@ def test_non_statted_existing_npc_still_seeded_from_cdef():
 
 
 # ---------------------------------------------------------------------------
-# 3. Minted stub is marked ephemeral + emits the lie-detector span
-# ---------------------------------------------------------------------------
-
-
-def test_minted_stub_marked_ephemeral_and_spanned(otel_capture):
-    """When the seater must fabricate an opponent (no backing Npc), it marks the
-    stub ``ephemeral`` and emits ``encounter.opponent_minted_stub`` so the GM
-    panel sees the fabrication (No Silent Fallbacks)."""
-    snap = _snapshot_with(None)
-    actors = [
-        EncounterActor(name="Kirk", role="combatant", side="player"),
-        EncounterActor(name="Arena Opponent", role="combatant", side="opponent"),
-    ]
-
-    _seed_combat_hp_depletion_to_npcs(
-        snapshot=snap,
-        actors=actors,
-        cdef=_fake_hp_depletion_cdef(hp=10),
-        turn=5,
-        source="test",
-        acting_character_name="Kirk",
-        ruleset=get_ruleset_module("wwn"),
-    )
-
-    stub = next(n for n in snap.npcs if n.core.name == "Arena Opponent")
-    assert stub.ephemeral is True, "fabricated combat stub must be marked ephemeral"
-    names = {s.name for s in otel_capture.get_finished_spans()}
-    assert "encounter.opponent_minted_stub" in names, (
-        f"minted-stub lie-detector span not emitted; saw {sorted(names)}"
-    )
-
-
+# 3. RETIRED by story 162-3 — the no-backing case no longer mints on the
+#    default path. ``test_minted_stub_marked_ephemeral_and_spanned`` pinned the
+#    fabrication-as-last-resort contract; 162-3 replaces it with the authored
+#    bestiary ``generics:`` section (sanctioned last-resort Other) and a loud
+#    failure when generics are absent. The successor contract lives in
+#    tests/server/test_162_3_generics_last_resort_seating.py. The reap tests
+#    below (§4) stay: legacy saves and degenerate-path mints still carry
+#    ephemeral stubs that must never persist as durable canon.
 # ---------------------------------------------------------------------------
 # 4. Ephemeral stub reaped with its resolved encounter
 # ---------------------------------------------------------------------------

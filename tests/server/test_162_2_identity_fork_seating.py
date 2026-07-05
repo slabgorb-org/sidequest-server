@@ -439,9 +439,7 @@ class TestSeatNameCanonicalization:
         core name (mirroring 108-2 conscription) so every downstream
         ``find_creature_core(actor.name)`` consumer can reach the opponent.
         The alias itself stays in the ledger for prose."""
-        ghast = _statted_creature(
-            "Vellum Ghast", creature_id="ghast", aliases=["The Pale King"]
-        )
+        ghast = _statted_creature("Vellum Ghast", creature_id="ghast", aliases=["The Pale King"])
         snap = _snapshot_with(ghast)
         actor = EncounterActor(name="The Pale King", role="combatant", side="opponent")
 
@@ -491,9 +489,7 @@ class TestSeatNameCanonicalization:
         encounter actor carries the alias — REGRESSING the pre-162-2 flow
         where conscription seated this creature canonically. Post-fix the
         seated opponent must be the canonical name, core reachable."""
-        ghast = _statted_creature(
-            "Vellum Ghast", creature_id="ghast", aliases=["The Pale King"]
-        )
+        ghast = _statted_creature("Vellum Ghast", creature_id="ghast", aliases=["The Pale King"])
         snap = _snapshot_with(ghast)
 
         enc = instantiate_encounter_from_trigger(
@@ -503,9 +499,7 @@ class TestSeatNameCanonicalization:
             player_name="Kirk",
             npcs_present=[],
             genre_slug=snap.genre_slug,
-            materialized_threat=NpcMention(
-                name="The Pale King", role="hostile", side="opponent"
-            ),
+            materialized_threat=NpcMention(name="The Pale King", role="hostile", side="opponent"),
         )
 
         opponents = [a.name for a in enc.actors if a.side == "opponent"]

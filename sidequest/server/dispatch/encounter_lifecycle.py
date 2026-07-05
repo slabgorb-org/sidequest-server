@@ -23,6 +23,7 @@ from sidequest.game.encounter import (
     StructuredEncounter,
 )
 from sidequest.game.lore_store import LoreStore
+from sidequest.game.origin import Origin, OriginKind, resolve_roster_npc
 from sidequest.game.resource_pool import ResourceThreshold
 from sidequest.game.ruleset.registry import get_ruleset_module
 from sidequest.game.ruleset.without_number import WithoutNumberRulesetModule
@@ -362,12 +363,26 @@ def _seed_combat_hp_depletion_to_npcs(
     # no resolved location; we then stamp only the turn, never a bogus location.
     actor_loc = snapshot.party_location(perspective=acting_character_name)
 
-    by_name = {npc.core.name: npc for npc in snapshot.npcs}
     for actor in actors:
         if actor.side != "opponent":
             continue
-        npc = by_name.get(actor.name)
+        # Story 162-2: the unified roster lookup replaces the exact-match
+        # ``by_name`` dict — an actor named by the narrator's prose alias or a
+        # case/whitespace variant resolves to the canonical entity instead of
+        # minting a twin beside it (the two-names-one-enemy fork). Resolved
+        # live per actor so a stub/promotion appended for an earlier opponent
+        # in this same seeding pass is visible to later actors.
+        npc = resolve_roster_npc(snapshot.npcs, actor.name)
         created = npc is None
+        # Rework round 1 (review [HIGH]): an alias / case-variant hit must
+        # CANONICALIZE the seat — every downstream consumer resolves the
+        # opponent core by exact ``actor.name`` (``find_creature_core``: the
+        # HP-bar filter, WN attack tools, query_encounter, payload builder),
+        # so a seat left under the prose alias is an unreachable opponent.
+        # Mirrors the 108-2 conscription, which already seats canonically;
+        # the alias itself stays in the ledger for narrator prose.
+        if npc is not None and npc.core.name != actor.name:
+            actor.name = npc.core.name
         pool_origin = ""
         if created:
             # 153-10 ([WWN-OTHER-SEATING]): before fabricating a hollow stub, check
@@ -425,7 +440,14 @@ def _seed_combat_hp_depletion_to_npcs(
                     hp=hp_pool_from_hp(hp),
                     armor_class=ac,
                 )
-                npc = Npc(core=core, ephemeral=True)
+                # Story 162-2: stamp typed provenance so downstream consumers
+                # (arbiter, forensics) see "fabricated" without sniffing the
+                # ephemeral bool.
+                npc = Npc(
+                    core=core,
+                    ephemeral=True,
+                    origin=Origin(kind=OriginKind.EPHEMERAL_STUB),
+                )
                 snapshot.npcs.append(npc)
                 with encounter_opponent_minted_stub_span(
                     confrontation_type=str(getattr(cdef, "confrontation_type", "") or ""),
@@ -1148,9 +1170,11 @@ def _resolve_opponent_from_roster(
     ``_co_located`` helper gates region-matching on that stamp so narrator NPCs and
     non-procedural worlds keep the exact free-text behaviour.
     """
-    # An exact roster match means the router named a real NPC — seat it directly
-    # (the seater's dedup reuses it). Resolution is only for unbacked inventions.
-    if any(n.core.name == threat_name for n in snapshot.npcs):
+    # A roster match — canonical name, recorded alias, or invented_from binding
+    # (story 162-2: the unified resolver, replacing the exact-name scan) —
+    # means the router named a real NPC: seat it directly (the seater resolves
+    # the same way and reuses it). Resolution is only for unbacked inventions.
+    if resolve_roster_npc(snapshot.npcs, threat_name) is not None:
         return None
     location = snapshot.party_location(perspective=acting_character_name)
     if not location:
@@ -1244,6 +1268,18 @@ def _resolve_opponent_from_roster(
         ):
             pass
         return None
+    # Story 162-2: conscription BINDS the router/prose name to the bound
+    # creature durably — record it in the alias ledger (existing accretion
+    # path, emits ``entity.alias_accreted``) so every later reference by
+    # either name resolves to this one entity instead of re-running the
+    # guessing stack (the two-names-one-enemy fork, closed permanently).
+    from sidequest.game.alias_accretion import accrete_npc_aliases
+
+    accrete_npc_aliases(
+        candidates[0],
+        [threat_name],
+        turn=snapshot.turn_manager.interaction,
+    )
     return candidates[0]
 
 
@@ -1748,6 +1784,26 @@ def instantiate_encounter_from_trigger(
         # the router's separate call invented the placeholder name (the
         # Molgrath-vs-Hold-Dead split). When it resolves, seat the bound creature
         # — its WWN-statted HP reaches the fight instead of an HP-10 stub.
+        # Rework round 1 (review [HIGH]): the router may name the threat by a
+        # RECORDED alias / invented_from binding / case variant of a roster
+        # NPC. Seat it under the CANONICAL name — every downstream consumer
+        # resolves the opponent by exact actor name (``find_creature_core``:
+        # HP bars, WN attack, query_encounter, edge publish), and a dial-path
+        # confrontation never reaches the hp_depletion seeder that could
+        # otherwise canonicalize. The resolver's own ``identity.resolved``
+        # span makes the rebind observable; prose keeps the alias via the
+        # ledger.
+        known = resolve_roster_npc(snapshot.npcs, materialized_threat.name)
+        if known is not None and known.core.name != materialized_threat.name:
+            from sidequest.agents.orchestrator import NpcMention as _NpcMention
+
+            materialized_threat = _NpcMention(
+                name=known.core.name,
+                pronouns=materialized_threat.pronouns,
+                role=materialized_threat.role,
+                appearance=materialized_threat.appearance,
+                side=materialized_threat.side,
+            )
         resolved_opponent = _resolve_opponent_from_roster(
             snapshot,
             threat_name=materialized_threat.name,

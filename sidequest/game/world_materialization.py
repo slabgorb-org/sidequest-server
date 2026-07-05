@@ -43,6 +43,7 @@ from sidequest.game.history_chapter import (
     HistoryChapter,
 )
 from sidequest.game.npc_pool import NpcPoolMember
+from sidequest.game.origin import Origin, OriginKind
 from sidequest.game.session import NarrativeEntry, Npc, TropeState, upsert_quest_status
 from sidequest.genre.models.authored_npc import AuthoredNpc
 from sidequest.genre.models.ocean import OceanProfile
@@ -944,6 +945,10 @@ def preload_authored_npcs(
             rpg_role_id=None,
             npc_role_id=None,
             resolved_archetype=None,
+            # Typed provenance (story 162-2): AUTHORED is not derivable from
+            # legacy fields — the session-start cast stamps it, carrying the
+            # AuthoredNpc.id the id-keyed identity surface needs.
+            origin=Origin(kind=OriginKind.AUTHORED, authored_id=authored_npc.id),
         )
         state.npcs.append(runtime)
         seen_names.add(authored_npc.name.casefold())

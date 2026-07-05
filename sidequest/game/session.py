@@ -34,6 +34,7 @@ from sidequest.game.encounter import StructuredEncounter
 from sidequest.game.history_chapter import HistoryChapter
 from sidequest.game.lore_store import LoreStore
 from sidequest.game.npc_pool import NpcPoolMember
+from sidequest.game.origin import Origin
 from sidequest.game.political_state import PoliticalState
 from sidequest.game.resolution_signal import ResolutionSignal
 from sidequest.game.resource_pool import (
@@ -256,6 +257,17 @@ class Npc(BaseModel):
     ephemeral: bool = False
     """``True`` when this NPC is a fabricated combat stub to be reaped post-encounter."""
 
+    # Typed provenance (story 162-2). Stamped by creation paths going forward;
+    # ``None`` on legacy saves (pre-162-2 JSON has no key — default keeps the
+    # load lossless, and ``sidequest.game.origin.derive_origin`` resolves the
+    # legacy fields on demand — no save-file migration, ever). Rides the
+    # snapshot JSON blob like ``aliases`` (84-2).
+    origin: Origin | None = None
+    """Typed origin stamp over invented_from/manual_origin/creature_id (+ ephemeral/region).
+    ``pool_origin`` is deliberately NOT part of the typed view — it records
+    promotion lineage, not a creation family (rework round 1, reviewer audit);
+    see sidequest.game.origin."""
+
     def name(self) -> str:
         return self.core.name
 
@@ -433,6 +445,12 @@ class NpcPatch(BaseModel):
     # a Manual *creature* from a Manual *human*).
     manual_origin: bool = False
     """``True`` if this patch originates from the Monster Manual seam."""
+
+    # Typed provenance (story 162-2): builders stamp it, the materializer
+    # carries it, the merge is monotonic (a later origin-less patch never
+    # clears a stamped origin). Narrator-emitted patches leave it ``None``.
+    origin: Origin | None = None
+    """Typed origin stamp for the materialized Npc (see sidequest.game.origin)."""
 
     @field_validator("name")
     @classmethod
@@ -1938,6 +1956,11 @@ class GameSnapshot(BaseModel):
         # and a later narrator patch (manual_origin=False) must NOT clear an
         # existing marker (E2 reverse). Logical OR satisfies both.
         npc.manual_origin = npc.manual_origin or patch.manual_origin
+        # Typed provenance (story 162-2): same monotonicity — the FIRST stamp
+        # is the creation-time ground truth; a later origin-less narrator
+        # patch never clears it.
+        if npc.origin is None and patch.origin is not None:
+            npc.origin = patch.origin
 
     def _npc_from_patch(self, patch: NpcPatch) -> Npc:
         # Creature signal: presence of any creature-shape field flags this
@@ -1980,6 +2003,8 @@ class GameSnapshot(BaseModel):
             # Provenance (story 72-3): carry the Manual-authorship marker onto
             # the fresh Npc. Narrator patches leave it False.
             manual_origin=patch.manual_origin,
+            # Typed provenance (story 162-2): carry the builder's stamp.
+            origin=patch.origin,
         )
         # Story 72-5: record the spawn-time disposition default so the GM
         # panel can verify a person spawned neutral (0) and a creature

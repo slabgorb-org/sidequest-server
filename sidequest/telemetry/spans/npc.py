@@ -49,6 +49,23 @@ SPAN_ROUTES[SPAN_NPC_PC_NAME_SKIPPED] = SpanRoute(
     },
 )
 
+# Story 162-2: the unified roster resolver asserting "prose name X is entity
+# Y" through the alias ledger or the invented_from binding. The GM-panel
+# lie-detector for identity derivation — an exact canonical hit emits nothing.
+SPAN_IDENTITY_RESOLVED = "identity.resolved"
+SPAN_ROUTES[SPAN_IDENTITY_RESOLVED] = SpanRoute(
+    event_type="state_transition",
+    component="npc_registry",
+    extract=lambda span: {
+        "field": "npc_registry",
+        "op": "identity_resolved",
+        "query": (span.attributes or {}).get("query", ""),
+        "canonical": (span.attributes or {}).get("canonical", ""),
+        "via": (span.attributes or {}).get("via", ""),
+        "identity_key": (span.attributes or {}).get("identity_key", ""),
+    },
+)
+
 SPAN_NPC_REINVENTED = "npc.reinvented"
 SPAN_ROUTES[SPAN_NPC_REINVENTED] = SpanRoute(
     event_type="state_transition",

@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING, Any
 
 from sidequest.game import zone_eligibility
 from sidequest.game.monster_manual import EntryState, MonsterManual
+from sidequest.game.origin import Origin, OriginKind, identity_key, normalize_name
 from sidequest.game.session import NpcPatch, WorldStatePatch
 from sidequest.genre.names.generator import sanitize_display_name
 from sidequest.telemetry.spans import Span
@@ -76,6 +77,16 @@ _ACTIVE_NPC_INJECT_LIMIT = 5
 # in ``snapshot.npcs``; out of combat we surface only the leading 2 so a
 # marketplace doesn't spawn eight monsters into the world state.
 _OUT_OF_COMBAT_ENCOUNTER_LIMIT = 2
+
+
+def _patch_identity_key(patch: NpcPatch) -> str:
+    """Identity key for a patch (story 162-2): the stamped origin where the
+    builder set one, else the patch's own ``creature_id`` (an unstamped
+    creature patch still keys on its bestiary id, never its display name)."""
+    origin = patch.origin
+    if origin is None and patch.creature_id:
+        origin = Origin(kind=OriginKind.MANUAL_POOL, creature_id=patch.creature_id)
+    return identity_key(origin, patch.name)
 
 
 def _sanitize_patch_names(patches: list[NpcPatch]) -> tuple[list[NpcPatch], int]:
@@ -464,6 +475,9 @@ def _human_patch(npc: Any, *, location: str | None) -> NpcPatch:
         location=location,
         # Story 72-3: Monster Manual authorship marker (ADR-059).
         manual_origin=True,
+        # Typed provenance (story 162-2): Manual pool human (namegen pregen /
+        # authored backfill).
+        origin=Origin(kind=OriginKind.MANUAL_POOL),
     )
 
 
@@ -592,6 +606,8 @@ def _creature_patch_from_enemy(enemy: Any, *, tier: int, location: str | None) -
         location=location,
         # Story 72-3: Monster Manual authorship marker (ADR-059).
         manual_origin=True,
+        # Typed provenance (story 162-2): encountergen row from the Manual pool.
+        origin=Origin(kind=OriginKind.MANUAL_POOL, creature_id=creature_id),
     )
 
 
@@ -617,6 +633,9 @@ def _creature_patch_from_bestiary_entry(entry: Any, *, location: str | None) -> 
         location=location,
         # Story 72-3: Monster Manual authorship marker (ADR-059).
         manual_origin=True,
+        # Typed provenance (story 162-2): authored per-room binding — the ONLY
+        # thing distinguishing this patch from encounter-pool filler.
+        origin=Origin(kind=OriginKind.ROOM_BOUND, creature_id=entry.id),
     )
 
 
@@ -634,6 +653,8 @@ def _creature_patch_from_region_creature(rc: Any, *, location: str | None, regio
         location=location,
         region=region,
         manual_origin=True,
+        # Typed provenance (story 162-2): frozen procedural roster (ADR-106).
+        origin=Origin(kind=OriginKind.REGION_POPULATION, creature_id=rc.creature_type or None),
     )
 
 
@@ -855,13 +876,27 @@ def inject(
         all_patches = all_patches + authored
         # Story 153-x (ADR-106 region population): inject the region's frozen
         # procedural roster, region-stamped so Task 6 can seat by region id.
-        # De-duped by name so an authored creature ALWAYS wins over its
-        # procedural counterpart (authored content dominates; No Silent Fallbacks).
-        authored_names = {p.name for p in authored}
+        # De-duped by identity_key (story 162-2: creature_id where one exists,
+        # normalized name as the floor) so an authored creature ALWAYS wins
+        # over its procedural counterpart even under display-name drift between
+        # the bestiary and the frozen roster (authored content dominates; No
+        # Silent Fallbacks).
+        authored_keys = {_patch_identity_key(p) for p in authored}
+        # Name leg alongside the id leg: two patches with the same display name
+        # but different creature ids would otherwise BOTH land and then collide
+        # at the materializer's name-keyed merge (region-pop fields clobbering
+        # the authored patch). The id leg catches name drift; the name leg
+        # keeps the pre-162-2 same-name dominance.
+        authored_names = {normalize_name(p.name) for p in authored}
         region_pop = _npc_patches_for_region_population(
             sd, room_id, current_location=current_location, in_combat=in_combat
         )
-        all_patches = all_patches + [p for p in region_pop if p.name not in authored_names]
+        all_patches = all_patches + [
+            p
+            for p in region_pop
+            if _patch_identity_key(p) not in authored_keys
+            and normalize_name(p.name) not in authored_names
+        ]
 
     if not all_patches:
         return 0

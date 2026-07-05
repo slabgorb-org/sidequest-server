@@ -27,28 +27,30 @@ SPAN_MONSTER_MANUAL_ROOM_BOUND = "monster_manual.room_bound"
 # random-minted walk-ons.
 SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL = "monster_manual.authored_backfill"
 
-# Playtest 150-20 (CWN-OTHER-SEATING, 2026-06-20): emitted when ``ensure_loaded``
-# purges a stale, native-era encounter from a ruleset-module pack's persisted
-# Manual cache. The cache is genre+world keyed and survives across sessions; one
-# seeded under the native ``generate_enemy`` path (PLAYER-class enemies,
-# ``hp=8*level``) is incoherent with a ``wwn|cwn|swn|awn`` binding (whose
-# encountergen samples the bestiary and always stamps ``class="creature"``).
-# Reusing it seated a 48-HP "Wheelman" against an L1 PC. The GM-panel
-# lie-detector that the engine caught + dropped the stale block and will re-seed
-# via the bestiary path.
-SPAN_MONSTER_MANUAL_STALE_PURGED = "monster_manual.stale_encounter_purged"
+# Story 162-1 (derive-don't-cache, spec D3/V1-V3): emitted when ``ensure_loaded``
+# DISCARDS a previously-stamped Manual pool because its (content_sha,
+# session_seed) key no longer matches — a different content checkout (a
+# multi-clone writer, spec V2) or a new session. This SUPERSEDES the two removed
+# targeted purges (native-class + foreign-bestiary): staleness is now impossible
+# because the pool is keyed by content version and discarded wholesale, so the
+# beneath_sunden purge/reseed livelock and the barsoom foreign bleed cannot
+# recur. Attributes carry the per-world discard counts incl. authored NPCs (the
+# "what deleted beneath_sunden's authored NPCs" forensic, spec V3). The GM-panel
+# lie-detector that a stale pool was dropped and will re-derive.
+SPAN_MONSTER_MANUAL_POOL_DISCARDED = "monster_manual.pool_discarded"
 
-# Story 158-33 (cross-world bestiary bleed, 2026-06-25): emitted when
-# ``ensure_loaded`` purges an encounter whose creature(s) are absent from the
-# CURRENT world's effective bestiary. The genre+world-keyed Manual was seeded
-# under the pre-ADR-120 genre-tier bestiary (which mixed every world's
-# creatures) and never re-validated after rosters moved to per-world
-# ``bestiary.yaml``. These foreign enemies are ``class="creature"``, so the
-# native-class STALE_PURGED signal above does NOT catch them; this is the
-# sibling, world-membership purge. The GM-panel lie-detector that a Barsoom
-# arena never seats a long_foundry "Knight of the Ashen Banner" (SOUL: Crunch
-# in the Genre, Flavor in the World).
-SPAN_MONSTER_MANUAL_FOREIGN_PURGED = "monster_manual.foreign_purged"
+# Story 162-1 rework (spec D4 / OTEL Observability Principle): emitted whenever
+# the accumulation cap ENFORCES — a generated NPC/encounter dropped at the cap
+# (``kind="npc_dropped"`` / ``"encounter_dropped"``), an authored insert
+# evicting a generated walk-on (``kind="npc_evicted"``, with ``evicted``), an
+# authored insert refused by an all-authored pool
+# (``kind="npc_dropped_all_authored"``), or a legacy over-cap pool bounded on
+# reconcile (``kind="trim"``, with ``npcs_trimmed``/``encounters_trimmed``).
+# These are inventory mutations the GM panel must see — a dropped or vanished
+# pool entry that only exists in a log line is invisible to the lie detector.
+# The model returns CapEvent/PoolTrim data; the call sites (pregen seeding,
+# authored backfill, ensure_loaded's reconcile) emit this span.
+SPAN_MONSTER_MANUAL_CAP_ENFORCED = "monster_manual.cap_enforced"
 
 # Story 153-x (ADR-106 region population): emitted when a generated region's
 # frozen procedural roster (Task 3) is injected into snapshot.npcs, region-
@@ -60,6 +62,6 @@ FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_INJECTED)
 FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_HP_PRESERVED)
 FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_ROOM_BOUND)
 FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL)
-FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_STALE_PURGED)
-FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_FOREIGN_PURGED)
+FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_POOL_DISCARDED)
+FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_CAP_ENFORCED)
 FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_REGION_POPULATION)

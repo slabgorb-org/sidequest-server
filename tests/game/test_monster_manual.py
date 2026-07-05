@@ -5,9 +5,6 @@ Ported from ``crates/sidequest-game/src/monster_manual.rs`` tests block.
 
 from __future__ import annotations
 
-from pathlib import Path
-from unittest import mock
-
 from sidequest.game.monster_manual import EntryState, ManualNpc, MonsterManual
 
 
@@ -133,57 +130,58 @@ def test_format_area_creatures_combat_vs_exploration() -> None:
     assert "bright light" not in output_explore
 
 
-def test_save_and_load_roundtrip(tmp_path: Path) -> None:
-    """Persistence round-trip uses ``~/.sidequest/manuals/{genre}_{world}.json``.
+def test_save_and_load_roundtrip() -> None:
+    """Persistence round-trip lands at ``{manuals_dir}/{genre}_{world}.json``.
 
-    Patch ``Path.home`` to redirect the manuals directory under tmp_path.
+    The autouse ``_isolate_monster_manuals`` fixture (tests/conftest.py, story
+    162-1) already points ``_manuals_dir`` at a private tmp dir, so no
+    ``Path.home`` patching — assert through ``_file_path`` and pin the
+    ``{genre}_{world}.json`` naming contract on its basename.
     """
-    with mock.patch.object(Path, "home", return_value=tmp_path):
-        manual = MonsterManual(genre="mutant_wasteland", world="flickering_reach")
-        manual.add_npc({"name": "Krag", "role": "mechanic", "culture": "Scrapborn"}, [])
-        manual.mark_active("Krag", "The Hub")
-        manual.add_encounter(
-            {"enemies": [{"name": "Salt Burrower", "hp": 14}]},
-            tier=2,
-            terrain_tags=["desert"],
-        )
-        manual.save()
+    manual = MonsterManual(genre="mutant_wasteland", world="flickering_reach")
+    manual.add_npc({"name": "Krag", "role": "mechanic", "culture": "Scrapborn"}, [])
+    manual.mark_active("Krag", "The Hub")
+    manual.add_encounter(
+        {"enemies": [{"name": "Salt Burrower", "hp": 14}]},
+        tier=2,
+        terrain_tags=["desert"],
+    )
+    manual.save()
 
-        file_path = tmp_path / ".sidequest" / "manuals" / "mutant_wasteland_flickering_reach.json"
-        assert file_path.exists()
+    file_path = MonsterManual._file_path("mutant_wasteland", "flickering_reach")
+    assert file_path.name == "mutant_wasteland_flickering_reach.json"
+    assert file_path.exists()
 
-        loaded = MonsterManual.load("mutant_wasteland", "flickering_reach")
-        assert loaded.genre == "mutant_wasteland"
-        assert loaded.world == "flickering_reach"
-        assert len(loaded.npcs) == 1
-        assert loaded.npcs[0].state == EntryState.ACTIVE
-        assert loaded.npcs[0].activated_location == "The Hub"
-        assert len(loaded.encounters) == 1
-        assert loaded.encounters[0].tier == 2
-        assert loaded.encounters[0].terrain_tags == ["desert"]
+    loaded = MonsterManual.load("mutant_wasteland", "flickering_reach")
+    assert loaded.genre == "mutant_wasteland"
+    assert loaded.world == "flickering_reach"
+    assert len(loaded.npcs) == 1
+    assert loaded.npcs[0].state == EntryState.ACTIVE
+    assert loaded.npcs[0].activated_location == "The Hub"
+    assert len(loaded.encounters) == 1
+    assert loaded.encounters[0].tier == 2
+    assert loaded.encounters[0].terrain_tags == ["desert"]
 
 
-def test_load_missing_file_returns_empty(tmp_path: Path) -> None:
+def test_load_missing_file_returns_empty() -> None:
     """``load`` returns an empty manual when no file exists yet."""
-    with mock.patch.object(Path, "home", return_value=tmp_path):
-        manual = MonsterManual.load("does_not_exist_genre", "does_not_exist_world")
-        assert manual.genre == "does_not_exist_genre"
-        assert manual.world == "does_not_exist_world"
-        assert manual.npcs == []
-        assert manual.encounters == []
+    manual = MonsterManual.load("does_not_exist_genre", "does_not_exist_world")
+    assert manual.genre == "does_not_exist_genre"
+    assert manual.world == "does_not_exist_world"
+    assert manual.npcs == []
+    assert manual.encounters == []
 
 
-def test_load_corrupt_file_returns_empty(tmp_path: Path, caplog) -> None:  # type: ignore[no-untyped-def]
+def test_load_corrupt_file_returns_empty(caplog) -> None:  # type: ignore[no-untyped-def]
     """Corrupt JSON on disk falls back to an empty Manual with a warning."""
-    with mock.patch.object(Path, "home", return_value=tmp_path):
-        manuals_dir = tmp_path / ".sidequest" / "manuals"
-        manuals_dir.mkdir(parents=True)
-        (manuals_dir / "g_w.json").write_text("not valid json", encoding="utf-8")
+    file_path = MonsterManual._file_path("g", "w")
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_text("not valid json", encoding="utf-8")
 
-        manual = MonsterManual.load("g", "w")
-        assert manual.npcs == []
-        assert manual.encounters == []
-        assert any("monster_manual.load_failed" in r.message for r in caplog.records)
+    manual = MonsterManual.load("g", "w")
+    assert manual.npcs == []
+    assert manual.encounters == []
+    assert any("monster_manual.load_failed" in r.message for r in caplog.records)
 
 
 def test_mark_active_preserves_first_location() -> None:

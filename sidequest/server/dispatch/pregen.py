@@ -35,14 +35,39 @@ from sidequest.cli.namegen.namegen import main as namegen_main
 from sidequest.genre import load_genre_pack
 from sidequest.genre.models.archetype_constraints import ArchetypeConstraints
 from sidequest.genre.models.character import spawnable_archetypes
+from sidequest.telemetry.spans.monster_manual import SPAN_MONSTER_MANUAL_CAP_ENFORCED
 from sidequest.telemetry.spans.pregen import SPAN_PREGEN_SEED_MANUAL
 from sidequest.telemetry.spans.span import Span
 
 if TYPE_CHECKING:
-    from sidequest.game.monster_manual import MonsterManual
+    from sidequest.game.monster_manual import CapEvent, MonsterManual
     from sidequest.genre.models.bestiary import Bestiary
 
 logger = logging.getLogger(__name__)
+
+
+def _note_cap_event(event: CapEvent | None, manual: MonsterManual) -> None:
+    """Emit ``monster_manual.cap_enforced`` for a cap decision (162-1 rework).
+
+    ``add_npc``/``add_encounter`` return a :class:`CapEvent` when the
+    accumulation cap dropped or evicted an entry — an inventory mutation the GM
+    panel must see (OTEL Observability Principle), not just the model's log
+    line. Same pure-model-returns-data / caller-emits-span pattern as
+    ``reconcile_content``. ``None`` (normal insert / dedup skip) is a no-op.
+    """
+    if event is None:
+        return
+    with Span.open(
+        SPAN_MONSTER_MANUAL_CAP_ENFORCED,
+        {
+            "genre": manual.genre,
+            "world": manual.world,
+            "kind": event.kind,
+            "incoming": event.incoming,
+            "evicted": event.evicted or "",
+        },
+    ):
+        pass
 
 
 class EncounterSeedError(RuntimeError):
@@ -304,15 +329,31 @@ def _seed_authored_npcs(pack: Any, world: str, manual: MonsterManual) -> int:
             }
             if npc.appearance:
                 data["ocean_summary"] = npc.appearance
-            manual.add_npc(data, new_tags, exact=True)
+            # ``authored=True`` (story 162-1): the flag is what protects a named
+            # cast member from the accumulation cap (an authored insert at the
+            # cap evicts a generated walk-on instead of being refused) and what
+            # the pool-discard span counts for the V3 forensic.
+            _note_cap_event(manual.add_npc(data, new_tags, exact=True, authored=True), manual)
             inserted += 1
-        elif set(existing.location_tags) != set(new_tags):
-            # Order-insensitive dirty check: a re-authored YAML with the same tags
-            # in a different order is NOT a change — comparing lists directly
-            # would fire a spurious save + OTEL backfill span every load. Assign
-            # the list so the authored order is preserved on a real change.
-            existing.location_tags = new_tags
-            refreshed += 1
+        else:
+            changed = False
+            if not existing.authored:
+                # Legacy pools predate the ``authored`` flag (162-1): an entry
+                # matching the authored cast by exact name IS authored — upsert
+                # the flag so cap-eviction protection and the V3 discard
+                # forensic cover pre-162-1 on-disk manuals too.
+                existing.authored = True
+                changed = True
+            if set(existing.location_tags) != set(new_tags):
+                # Order-insensitive dirty check: a re-authored YAML with the same
+                # tags in a different order is NOT a change — comparing lists
+                # directly would fire a spurious save + OTEL backfill span every
+                # load. Assign the list so the authored order is preserved on a
+                # real change.
+                existing.location_tags = new_tags
+                changed = True
+            if changed:
+                refreshed += 1
     logger.info(
         "pregen.authored_npcs_seeded (world=%s, inserted=%d, refreshed=%d, total_authored=%d)",
         world,
@@ -421,7 +462,7 @@ def seed_manual(
                     (axes[1] if axes else ""),
                     (axes[2] if axes else ""),
                 )
-                manual.add_npc(data, [])
+                _note_cap_event(manual.add_npc(data, []), manual)
     else:
         for ci, culture in enumerate(cultures):
             for j in range(NPCS_PER_CULTURE):
@@ -443,7 +484,7 @@ def seed_manual(
                         (axes[1] if axes else ""),
                         (axes[2] if axes else ""),
                     )
-                    manual.add_npc(data, [])
+                    _note_cap_event(manual.add_npc(data, []), manual)
 
     # ── Authored roster NPCs (placement-aware) ────────────────
     # The world's authored ``npcs.yaml`` cast (canonical companions, named
@@ -509,7 +550,7 @@ def seed_manual(
                     ruleset,
                     factions,
                 )
-                manual.add_encounter(data, tier, [], factions=factions)
+                _note_cap_event(manual.add_encounter(data, tier, [], factions=factions), manual)
             elif ruleset != "dial":
                 # Story 90-1: a ruleset-module pack seeds from its bestiary or
                 # fails LOUD — the old warning-only skip shipped silently-empty

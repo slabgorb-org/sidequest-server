@@ -285,3 +285,64 @@ def test_authored_npcs_flow_through_real_loader(tmp_path) -> None:  # type: igno
     in_city = manual.format_nearby_npcs("The Emerald City — Throne Room")
     assert "Throne Guard" in in_city
     assert "Scarecrow" not in in_city
+
+
+def test_seed_authored_npcs_marks_entries_authored() -> None:
+    # Story 162-1: the ``authored`` flag is what protects a named cast member
+    # from the accumulation cap (an authored insert at cap evicts a generated
+    # walk-on instead of being refused) and what the pool-discard span counts
+    # for the V3 forensic — a backfilled cast member must carry it.
+    scarecrow = AuthoredNpc(id="scarecrow", name="Scarecrow", role="companion")
+    pack = _Pack(_world_with_authored(scarecrow))
+    manual = MonsterManual(genre="wry_whimsy", world="oz")
+
+    _seed_authored_npcs(pack, "oz", manual)
+
+    entry = manual.find_npc_by_exact_name("Scarecrow")
+    assert entry is not None
+    assert entry.authored is True
+
+
+def test_seed_authored_npcs_upserts_authored_flag_on_legacy_entry() -> None:
+    # A pre-162-1 on-disk manual holds the cast with ``authored=False`` (the
+    # field didn't exist when it was written). The backfill must upsert the flag
+    # — counted as a refresh once, so the caller saves — and a second run must
+    # be a no-op (no spurious save / OTEL backfill span every load).
+    scarecrow = AuthoredNpc(id="scarecrow", name="Scarecrow", role="companion")
+    pack = _Pack(_world_with_authored(scarecrow))
+    manual = MonsterManual(genre="wry_whimsy", world="oz")
+    manual.add_npc({"name": "Scarecrow", "role": "companion", "culture": ""}, [], exact=True)
+    legacy = manual.find_npc_by_exact_name("Scarecrow")
+    assert legacy is not None
+    assert legacy.authored is False  # precondition: a legacy, unflagged entry
+
+    assert _seed_authored_npcs(pack, "oz", manual) == 1  # upsert counts as refresh
+    upserted = manual.find_npc_by_exact_name("Scarecrow")
+    assert upserted is not None
+    assert upserted.authored is True
+
+    assert _seed_authored_npcs(pack, "oz", manual) == 0  # idempotent second run
+
+
+def test_authored_backfill_eviction_emits_cap_enforced_span(otel_capture) -> None:
+    """Rework (162-1): an authored insert evicting a walk-on at cap is
+    GM-panel visible — the eviction vanishes a generated NPC from the pool,
+    exactly the class of silent mutation the OTEL principle exists to catch."""
+    from sidequest.game.monster_manual import MAX_MANUAL_NPCS
+
+    scarecrow = AuthoredNpc(id="scarecrow", name="Scarecrow", role="companion")
+    pack = _Pack(_world_with_authored(scarecrow))
+    manual = MonsterManual(genre="wry_whimsy", world="oz")
+    for i in range(MAX_MANUAL_NPCS):
+        manual.add_npc({"name": f"walkon-{i:04d}", "role": "r", "culture": "c"}, [])
+
+    _seed_authored_npcs(pack, "oz", manual)
+
+    assert manual.find_npc_by_exact_name("Scarecrow") is not None
+    spans = [
+        s for s in otel_capture.get_finished_spans() if s.name == "monster_manual.cap_enforced"
+    ]
+    assert spans, "authored eviction at cap must emit monster_manual.cap_enforced"
+    assert spans[0].attributes["kind"] == "npc_evicted"
+    assert spans[0].attributes["incoming"] == "Scarecrow"
+    assert spans[0].attributes["evicted"] == "walkon-0000"

@@ -18,7 +18,6 @@ import logging
 import random
 from pathlib import Path
 from typing import Any
-from unittest import mock
 
 import pytest
 
@@ -248,15 +247,16 @@ def test_seed_manual_with_cultures_generates_3_per_culture(
     monkeypatch.setattr(pregen, "namegen_main", fake_namegen)
     monkeypatch.setattr(pregen, "encountergen_main", fake_encountergen)
 
-    with mock.patch.object(Path, "home", return_value=tmp_path):
-        manual = MonsterManual(genre="mutant_wasteland", world="flickering_reach")
-        seed_manual(
-            genre_packs_path=tmp_path / "packs",
-            genre="mutant_wasteland",
-            world="flickering_reach",
-            manual=manual,
-            rng=random.Random(0),
-        )
+    # (162-1 rework) inert Path.home mock removed — the autouse
+    # _isolate_monster_manuals fixture redirects _manuals_dir directly.
+    manual = MonsterManual(genre="mutant_wasteland", world="flickering_reach")
+    seed_manual(
+        genre_packs_path=tmp_path / "packs",
+        genre="mutant_wasteland",
+        world="flickering_reach",
+        manual=manual,
+        rng=random.Random(0),
+    )
 
     # 2 cultures × 3 NPCs = 6 namegen invocations
     assert len(npc_calls) == 6
@@ -287,15 +287,16 @@ def test_seed_manual_no_cultures_falls_back(
     monkeypatch.setattr(pregen, "namegen_main", fake_namegen)
     monkeypatch.setattr(pregen, "encountergen_main", lambda _argv: print("{}") or 0)  # type: ignore[func-returns-value]
 
-    with mock.patch.object(Path, "home", return_value=tmp_path):
-        manual = MonsterManual(genre="g", world="w")
-        seed_manual(
-            genre_packs_path=tmp_path / "packs",
-            genre="g",
-            world="w",
-            manual=manual,
-            rng=random.Random(0),
-        )
+    # (162-1 rework) inert Path.home mock removed — the autouse
+    # _isolate_monster_manuals fixture redirects _manuals_dir directly.
+    manual = MonsterManual(genre="g", world="w")
+    seed_manual(
+        genre_packs_path=tmp_path / "packs",
+        genre="g",
+        world="w",
+        manual=manual,
+        rng=random.Random(0),
+    )
 
     assert len(npc_calls) == pregen.DEFAULT_NPC_FALLBACK_COUNT
     # No --culture flag in any of the invocations
@@ -322,7 +323,9 @@ def test_seed_manual_pack_load_failure_falls_back(
     monkeypatch.setattr(pregen, "namegen_main", fake_namegen)
     monkeypatch.setattr(pregen, "encountergen_main", lambda _argv: print("{}") or 0)  # type: ignore[func-returns-value]
 
-    with mock.patch.object(Path, "home", return_value=tmp_path), caplog.at_level(logging.WARNING):
+    # (162-1 rework) inert Path.home mock removed — the autouse
+    # _isolate_monster_manuals fixture redirects _manuals_dir directly.
+    with caplog.at_level(logging.WARNING):
         manual = MonsterManual(genre="g", world="w")
         seed_manual(
             genre_packs_path=tmp_path / "packs",
@@ -352,15 +355,16 @@ def test_seed_manual_dedup_keeps_unique_names(
     monkeypatch.setattr(pregen, "namegen_main", fake_namegen)
     monkeypatch.setattr(pregen, "encountergen_main", lambda _argv: print("{}") or 0)  # type: ignore[func-returns-value]
 
-    with mock.patch.object(Path, "home", return_value=tmp_path):
-        manual = MonsterManual(genre="g", world="w")
-        seed_manual(
-            genre_packs_path=tmp_path / "packs",
-            genre="g",
-            world="w",
-            manual=manual,
-            rng=random.Random(0),
-        )
+    # (162-1 rework) inert Path.home mock removed — the autouse
+    # _isolate_monster_manuals fixture redirects _manuals_dir directly.
+    manual = MonsterManual(genre="g", world="w")
+    seed_manual(
+        genre_packs_path=tmp_path / "packs",
+        genre="g",
+        world="w",
+        manual=manual,
+        rng=random.Random(0),
+    )
 
     assert len(manual.npcs) == 1
 
@@ -385,15 +389,16 @@ def test_seed_manual_partial_failure_skips_npc(
     monkeypatch.setattr(pregen, "namegen_main", fake_namegen)
     monkeypatch.setattr(pregen, "encountergen_main", lambda _argv: print("{}") or 0)  # type: ignore[func-returns-value]
 
-    with mock.patch.object(Path, "home", return_value=tmp_path):
-        manual = MonsterManual(genre="g", world="w")
-        seed_manual(
-            genre_packs_path=tmp_path / "packs",
-            genre="g",
-            world="w",
-            manual=manual,
-            rng=random.Random(0),
-        )
+    # (162-1 rework) inert Path.home mock removed — the autouse
+    # _isolate_monster_manuals fixture redirects _manuals_dir directly.
+    manual = MonsterManual(genre="g", world="w")
+    seed_manual(
+        genre_packs_path=tmp_path / "packs",
+        genre="g",
+        world="w",
+        manual=manual,
+        rng=random.Random(0),
+    )
 
     # 2 cultures × 3 NPCs = 6 attempts; 1 failed → 5 entries
     assert len(manual.npcs) == 5
@@ -436,15 +441,16 @@ def test_e2e_seed_fixture_world_populates_manual(tmp_path: Path) -> None:
     actually run). Bound to ``test_genre``/``flickering_reach`` — a fixture, not a
     live genre-pack world (story 72-15). The fixture world's cultures use
     ``word_list`` given names, so namegen needs no corpus files."""
-    with mock.patch.object(Path, "home", return_value=tmp_path):
-        manual = MonsterManual(genre="test_genre", world="flickering_reach")
-        seed_manual(
-            genre_packs_path=FIXTURE_PACKS,
-            genre="test_genre",
-            world="flickering_reach",
-            manual=manual,
-            rng=random.Random(0),
-        )
+    # (162-1 rework) inert Path.home mock removed — the autouse
+    # _isolate_monster_manuals fixture redirects _manuals_dir directly.
+    manual = MonsterManual(genre="test_genre", world="flickering_reach")
+    seed_manual(
+        genre_packs_path=FIXTURE_PACKS,
+        genre="test_genre",
+        world="flickering_reach",
+        manual=manual,
+        rng=random.Random(0),
+    )
 
     # The fixture world's cultures should have produced at least one NPC
     assert len(manual.npcs) >= 1
@@ -566,3 +572,44 @@ def test_add_encounter_defaults_factions_empty_when_omitted() -> None:
     manual = MonsterManual(genre="wry_whimsy", world="gulliver")
     manual.add_encounter(_enc_data("Field Mouse"), tier=1, terrain_tags=[])
     assert manual.encounters[0].factions == []
+
+
+def test_seed_manual_emits_cap_enforced_span_when_pool_is_full(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, otel_capture
+) -> None:
+    """Rework (162-1): a cap-dropped generated NPC is GM-panel visible.
+
+    The cap refusal is a subsystem decision (OTEL Observability Principle —
+    "inventory mutations ... with source"); the model returns the event, the
+    pregen call site emits ``monster_manual.cap_enforced``.
+    """
+    from sidequest.game.monster_manual import MAX_MANUAL_NPCS
+
+    monkeypatch.setattr(pregen, "load_genre_pack", lambda _dir: _stub_pack([]))
+    monkeypatch.setattr(
+        pregen,
+        "namegen_main",
+        lambda _argv: print(json.dumps({"name": "X", "role": "r", "culture": "c"})) or 0,  # type: ignore[func-returns-value]
+    )
+    monkeypatch.setattr(pregen, "encountergen_main", lambda _argv: print("{}") or 0)  # type: ignore[func-returns-value]
+
+    manual = MonsterManual(genre="testgenre", world="testworld")
+    for i in range(MAX_MANUAL_NPCS):
+        manual.add_npc({"name": f"walkon-{i:04d}", "role": "r", "culture": "c"}, [])
+
+    seed_manual(
+        genre_packs_path=tmp_path / "packs",
+        genre="testgenre",
+        world="testworld",
+        manual=manual,
+        rng=random.Random(0),
+    )
+
+    assert len(manual.npcs) == MAX_MANUAL_NPCS  # cap held
+    spans = [
+        s for s in otel_capture.get_finished_spans() if s.name == "monster_manual.cap_enforced"
+    ]
+    assert spans, "cap drop during seeding must emit monster_manual.cap_enforced"
+    assert spans[0].attributes["kind"] == "npc_dropped"
+    assert spans[0].attributes["incoming"] == "X"
+    assert spans[0].attributes["genre"] == "testgenre"

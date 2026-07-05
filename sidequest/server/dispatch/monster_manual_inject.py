@@ -42,6 +42,7 @@ from sidequest.genre.names.generator import sanitize_display_name
 from sidequest.telemetry.spans import Span
 from sidequest.telemetry.spans.monster_manual import (
     SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL,
+    SPAN_MONSTER_MANUAL_CAP_ENFORCED,
     SPAN_MONSTER_MANUAL_INJECTED,
     SPAN_MONSTER_MANUAL_POOL_DISCARDED,
     SPAN_MONSTER_MANUAL_REGION_POPULATION,
@@ -110,41 +111,50 @@ def _sanitize_patch_names(patches: list[NpcPatch]) -> tuple[list[NpcPatch], int]
     return kept, sanitized
 
 
-def _content_sha_for(pack: Any, world: str) -> str:
+def _content_sha_for(pack: Any, world: str) -> str | None:
     """Content version the MM pool is derived under (story 162-1, spec D3).
 
     A stable hash of the world's effective bestiary — the creature roster the
     pool is seeded from, and the axis along which clones' content checkouts
     diverge (foreign-bestiary bleed, roster churn). When the roster changes the
     sha changes and :meth:`MonsterManual.reconcile_content` discards the
-    now-stale pool. A pack with no effective bestiary (a minimal stub, or a
-    native pack) hashes to a stable empty-roster digest — sha256 always yields a
-    64-char digest, so the key never silently collapses to an empty string (No
-    Silent Fallbacks). ``effective_bestiary`` may be absent on a stub pack; a
-    real GenrePack always exposes it.
+    now-stale pool.
+
+    Returns ``None`` when the bestiary is UNRESOLVABLE — no pack, no
+    ``effective_bestiary`` accessor, or it resolves ``None`` for this world.
+    That is *no evidence*, not a content state: the caller must skip
+    reconciliation entirely rather than judge staleness on a roster it cannot
+    read (162-1 rework; the removed foreign-purge had the same None-bestiary
+    conservatism — 87-4, never silently empty the pool). A bestiary that IS
+    present but has zero entries is a real, hashable state and gets the stable
+    empty-roster digest — the two cases must never be conflated.
     """
-    entries: list[str] = []
     # ``pack`` is duck-typed (a real GenrePack or a test stub) — keep the accessor
     # dynamic so the (Bestiary | None, str) unpack type-checks.
     effective_bestiary = getattr(pack, "effective_bestiary", None) if pack is not None else None
-    if callable(effective_bestiary):
-        resolved: Any = effective_bestiary(world)
-        bestiary, _source = resolved
-        if bestiary is not None:
-            for entry in bestiary.entries:
-                entries.append(f"{entry.name}:{entry.hp}:{entry.level}:{entry.armor_class}")
+    if not callable(effective_bestiary):
+        return None
+    resolved: Any = effective_bestiary(world)
+    bestiary, _source = resolved
+    if bestiary is None:
+        return None
+    entries = [
+        f"{entry.name}:{entry.hp}:{entry.level}:{entry.armor_class}" for entry in bestiary.entries
+    ]
     payload = "|".join(sorted(entries)).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()[:16]
 
 
 def _session_seed_for(sd: _SessionData) -> str:
-    """Per-session key so a NEW session re-derives its pool (story 162-1, D3).
+    """Per-session ATTRIBUTION key (story 162-1) — never a staleness axis.
 
-    The ``SessionRoom`` slug uniquely identifies the session: reconnects within a
-    session share it (pool preserved), a new session gets a new slug (its
-    reconcile sees a mismatch and re-derives). Falls back to the world slug when
-    no room is bound (pre-room construction / synthetic paths) — still a stable
-    non-empty key, never a blank that would collapse every session onto one pool.
+    The ``SessionRoom`` slug identifies the session that last reconciled the
+    pool, carried on the ``pool_discarded`` span for the V1/V2 forensics
+    (which session/clone touched this pool). It does NOT gate discards —
+    content_sha is the only staleness axis; a new session with unchanged
+    content reuses the pool (see ``MonsterManual.reconcile_content``). Falls
+    back to the world slug when no room is bound (pre-room construction /
+    synthetic paths) — still a stable non-empty attribution, never blank.
     The live per-turn path always has a room, so the fallback is defensive only.
     """
     room = getattr(sd, "_room", None)
@@ -187,20 +197,29 @@ def ensure_loaded(sd: _SessionData) -> MonsterManual | None:
     # Derive-don't-cache (story 162-1, spec D3): this genre+world-keyed cache is
     # shared across sessions and ~4 clones with divergent content checkouts — the
     # source of the beneath_sunden purge/reseed livelock and the barsoom
-    # foreign-bestiary bleed. Key the pool on (content_sha, session_seed) and
-    # DISCARD it wholesale on a mismatch, REPLACING the two removed targeted purge
-    # tourniquets: a different content checkout (multi-clone) or a new session
-    # re-derives from scratch, so a stale pool can never be reused or livelock a
-    # purge/reseed cycle. reconcile_content adopts a legacy/unstamped pool without
-    # discarding (no nuking pre-162-1 saves). Emit the forensic span on a real
-    # discard so the GM panel sees it (OTEL Observability, spec V1-V3).
-    # Reconcile only with a pack in hand: without one the effective bestiary is
-    # unreadable, and judging staleness on evidence we don't have would discard a
-    # validly-stamped pool on a transient packless load (the empty-roster digest
-    # would masquerade as a content change). Same conservative posture as the
-    # removed purges' None-bestiary guard — no evidence, no discard.
-    if pack is not None:
-        content_sha = _content_sha_for(pack, sd.world_slug)
+    # foreign-bestiary bleed. The pool carries the content_sha it was derived
+    # under and is DISCARDED wholesale when the CONTENT changed (multi-clone
+    # divergent checkout), REPLACING the two removed targeted purge tourniquets —
+    # a stale pool can never be reused or livelock a purge/reseed cycle.
+    # session_seed is attribution only (V1/V2 forensics): a new session with
+    # unchanged content REUSES the pool. reconcile_content adopts a
+    # legacy/unstamped pool without discarding (no nuking pre-162-1 saves) and
+    # legacy over-cap pools are bounded via trim_to_caps below (spec D4). Emit
+    # the forensic spans so the GM panel sees both decisions (OTEL
+    # Observability, spec V1-V3).
+    #
+    # A None content_sha means the bestiary is UNRESOLVABLE (no pack, or a
+    # transiently-broken content state) — no evidence, no reconcile: judging
+    # staleness on a roster we cannot read would wholesale-discard a valid pool
+    # (the removed purges' 87-4 None-bestiary conservatism, kept).
+    content_sha = _content_sha_for(pack, sd.world_slug)
+    if content_sha is None:
+        logger.debug(
+            "monster_manual.reconcile_skipped_no_bestiary genre=%s world=%s",
+            sd.genre_slug,
+            sd.world_slug,
+        )
+    else:
         session_seed = _session_seed_for(sd)
         discard = manual.reconcile_content(content_sha=content_sha, session_seed=session_seed)
         if discard is not None:
@@ -222,6 +241,23 @@ def ensure_loaded(sd: _SessionData) -> MonsterManual | None:
                     "npcs_discarded": discard.npcs_discarded,
                     "encounters_discarded": discard.encounters_discarded,
                     "authored_discarded": discard.authored_discarded,
+                },
+            ):
+                pass
+        # Bound a legacy over-cap pool on adoption (spec D4: the 310/1,153-NPC
+        # runaways must not be grandfathered until a content change happens to
+        # discard them). Model trims + warns; this seam persists + spans.
+        trim = manual.trim_to_caps()
+        if trim is not None:
+            manual.save()
+            with Span.open(
+                SPAN_MONSTER_MANUAL_CAP_ENFORCED,
+                {
+                    "genre": sd.genre_slug,
+                    "world": sd.world_slug,
+                    "kind": "trim",
+                    "npcs_trimmed": trim.npcs_trimmed,
+                    "encounters_trimmed": trim.encounters_trimmed,
                 },
             ):
                 pass

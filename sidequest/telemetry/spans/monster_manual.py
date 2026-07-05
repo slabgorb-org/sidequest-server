@@ -39,6 +39,19 @@ SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL = "monster_manual.authored_backfill"
 # lie-detector that a stale pool was dropped and will re-derive.
 SPAN_MONSTER_MANUAL_POOL_DISCARDED = "monster_manual.pool_discarded"
 
+# Story 162-1 rework (spec D4 / OTEL Observability Principle): emitted whenever
+# the accumulation cap ENFORCES — a generated NPC/encounter dropped at the cap
+# (``kind="npc_dropped"`` / ``"encounter_dropped"``), an authored insert
+# evicting a generated walk-on (``kind="npc_evicted"``, with ``evicted``), an
+# authored insert refused by an all-authored pool
+# (``kind="npc_dropped_all_authored"``), or a legacy over-cap pool bounded on
+# reconcile (``kind="trim"``, with ``npcs_trimmed``/``encounters_trimmed``).
+# These are inventory mutations the GM panel must see — a dropped or vanished
+# pool entry that only exists in a log line is invisible to the lie detector.
+# The model returns CapEvent/PoolTrim data; the call sites (pregen seeding,
+# authored backfill, ensure_loaded's reconcile) emit this span.
+SPAN_MONSTER_MANUAL_CAP_ENFORCED = "monster_manual.cap_enforced"
+
 # Story 153-x (ADR-106 region population): emitted when a generated region's
 # frozen procedural roster (Task 3) is injected into snapshot.npcs, region-
 # stamped for region-keyed seating. The GM-panel lie-detector that procedural
@@ -50,4 +63,5 @@ FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_HP_PRESERVED)
 FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_ROOM_BOUND)
 FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL)
 FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_POOL_DISCARDED)
+FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_CAP_ENFORCED)
 FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_REGION_POPULATION)

@@ -49,6 +49,42 @@ class ContentDiscard:
     authored_discarded: int
 
 
+@dataclass(frozen=True)
+class CapEvent:
+    """A cap-enforcement decision on insert (story 162-1 rework, spec D4).
+
+    Returned by :meth:`MonsterManual.add_npc` / :meth:`MonsterManual.add_encounter`
+    when the accumulation cap engaged, so the CALLER can emit the
+    ``monster_manual.cap_enforced`` OTEL span — same pure-model-returns-data /
+    caller-emits-span pattern as :class:`ContentDiscard`. A log line alone is not
+    loud enough: the GM panel is the lie detector, and a dropped or evicted NPC
+    is an inventory mutation it must see (OTEL Observability Principle).
+
+    ``kind`` is one of ``"npc_dropped"`` (generated insert refused at cap),
+    ``"npc_evicted"`` (authored insert evicted the generated walk-on named in
+    ``evicted``), ``"npc_dropped_all_authored"`` (authored insert refused — the
+    pool is all authored), or ``"encounter_dropped"``.
+    """
+
+    kind: str
+    incoming: str
+    evicted: str | None = None
+
+
+@dataclass(frozen=True)
+class PoolTrim:
+    """What :meth:`MonsterManual.trim_to_caps` dropped from a legacy pool.
+
+    Spec D4 cites the 310/1,153-NPC runaway pools directly: a pre-162-1 on-disk
+    manual larger than the caps must be bounded when reconciled, not
+    grandfathered at runaway size until a content change happens to discard it.
+    Counts feed the ``monster_manual.cap_enforced`` span (``kind="trim"``).
+    """
+
+    npcs_trimmed: int
+    encounters_trimmed: int
+
+
 def _tags_match_location(location_tags: list[str], loc_lower: str) -> bool:
     """Whether any placement tag overlaps the (already lowercased) location.
 
@@ -171,10 +207,16 @@ class ManualEncounter(BaseModel):
 
 
 class MonsterManual(BaseModel):
-    """Persistent Monster Manual for a genre/world combination.
+    """Derived pre-generated content pool for a genre/world combination.
 
-    Stored as JSON at ``~/.sidequest/manuals/{genre}_{world}.json``.
-    Grows over play sessions — every generated entry persists.
+    Stored as JSON at ``~/.sidequest/manuals/{genre}_{world}.json``. Since story
+    162-1 this is a *derived pool*, not a forever-cache: it records the
+    ``content_sha`` it was derived under and :meth:`reconcile_content` discards
+    it wholesale when the content changed (content is the ONLY staleness axis —
+    a new session with unchanged content reuses the pool). Growth is bounded by
+    :data:`MAX_MANUAL_NPCS` / :data:`MAX_MANUAL_ENCOUNTERS` (loud drops, authored
+    inserts evict generated walk-ons instead), and legacy over-cap pools are
+    bounded on reconcile via :meth:`trim_to_caps`.
     """
 
     model_config = {"extra": "forbid"}
@@ -202,13 +244,15 @@ class MonsterManual(BaseModel):
     """
 
     session_seed: str = ""
-    """Per-session key so a NEW session re-derives its pool (derive-don't-cache).
+    """Per-session ATTRIBUTION key — recorded, never a staleness axis.
 
-    The session's ``SessionRoom`` slug. Reconnects within a session share it
-    (pool preserved); a new session gets a new slug, so its
-    :meth:`reconcile_content` sees a mismatch and re-derives — the pool is no
-    longer a persistent cache that accumulates across sessions (the 1,153-NPC
-    runaway). Empty on a legacy/never-stamped manual (adopted, not discarded).
+    The session's ``SessionRoom`` slug, refreshed on every
+    :meth:`reconcile_content` so the ``pool_discarded`` forensic span can
+    attribute pool state to the session that last touched it (spec V1/V2). It
+    does NOT gate discards: only ``content_sha`` does. Making session identity a
+    discard key would empty a valid pool on every new session — see
+    :meth:`reconcile_content` and
+    ``test_reconcile_content_does_not_discard_on_session_seed_change_alone``.
     """
 
     # ── Persistence ────────────────────────────────────────────
@@ -235,6 +279,16 @@ class MonsterManual(BaseModel):
                 f"MonsterManual requires a non-empty world slug for genre {genre!r} "
                 "(got blank) — refusing to key the cache on an empty world"
             )
+        # Slug SHAPE guard (162-1 rework, [SEC]): the connect path deliberately
+        # tolerates unknown world slugs (genre-tier fallback), so a slug can
+        # reach this key-builder unvalidated. A separator or dot-dot would
+        # compose a path outside the manuals dir — reject it loud.
+        for label, slug in (("genre", genre), ("world", world)):
+            if "/" in slug or "\\" in slug or ".." in slug:
+                raise ValueError(
+                    f"MonsterManual {label} slug {slug!r} contains a path separator "
+                    "or '..' — refusing to key the cache outside the manuals dir"
+                )
         return MonsterManual._manuals_dir() / f"{genre}_{world}.json"
 
     @classmethod
@@ -392,8 +446,20 @@ class MonsterManual(BaseModel):
         return [e for e in self.encounters if e.state == EntryState.AVAILABLE]
 
     def needs_seeding(self) -> bool:
-        """Whether the Manual needs more Available entries."""
-        return len(self.available_npcs()) < 4 or not self.available_encounters()
+        """Whether the Manual needs more Available entries AND has room for them.
+
+        Cap-aware (162-1 rework): each side demands seeding only while it is
+        below its accumulation cap. A saturated pool whose entries are mostly
+        promoted (ACTIVE/DORMANT) used to keep this True forever — every session
+        bind then ran the full namegen/encountergen pipeline and the cap dropped
+        the entire batch: unbounded repeated work replacing the unbounded
+        storage this story removed. No room means no reseed.
+        """
+        npcs_starved = len(self.available_npcs()) < 4 and len(self.npcs) < MAX_MANUAL_NPCS
+        encounters_starved = (
+            not self.available_encounters() and len(self.encounters) < MAX_MANUAL_ENCOUNTERS
+        )
+        return npcs_starved or encounters_starved
 
     def reconcile_content(self, *, content_sha: str, session_seed: str) -> ContentDiscard | None:
         """Discard the whole pool when the CONTENT version changed (story 162-1, D3).
@@ -427,6 +493,17 @@ class MonsterManual(BaseModel):
         the discarded pool held nothing. Pure apart from mutating ``self``; the
         caller persists + emits the OTEL span.
         """
+        # "" is the reserved never-stamped sentinel that drives the adopt
+        # branch — a caller passing it would discard a stamped pool AND revert
+        # it to looking unstamped, so the NEXT reconcile silently adopts.
+        # Reject it loud (162-1 rework; same posture as _file_path's blank-slug
+        # guards). The production deriver returns None (skip reconcile) when
+        # content is unreadable — it never passes blank.
+        if not content_sha or not content_sha.strip():
+            raise ValueError(
+                "reconcile_content requires a non-empty content_sha — '' is the "
+                "never-stamped sentinel, not a content version"
+            )
         # Attribution is always refreshed; only content drives staleness.
         self.session_seed = session_seed
         stale = bool(self.content_sha) and self.content_sha != content_sha
@@ -453,6 +530,56 @@ class MonsterManual(BaseModel):
             encounters_discarded=encounters_discarded,
             authored_discarded=authored_discarded,
         )
+
+    def trim_to_caps(self) -> PoolTrim | None:
+        """Bound a legacy over-cap pool (162-1 rework, spec D4).
+
+        The caps gate new inserts, but a pre-162-1 on-disk pool (the spec's
+        310/1,153-NPC runaways) arrives already over-cap and unchanged content
+        would grandfather it forever. Drop the OLDEST generated NPCs first —
+        authored cast members are never dropped, even if authored alone exceed
+        the cap — and the oldest encounters beyond their cap. In-play canon is
+        unaffected: promoted NPCs live in ``snapshot.npcs``; Manual entries are
+        the pregen bench.
+
+        Returns a :class:`PoolTrim` when anything was dropped (the caller
+        persists + emits the ``monster_manual.cap_enforced`` span, kind
+        ``"trim"``), else ``None``. Same caller-emits-span pattern as
+        :meth:`reconcile_content`.
+        """
+        npcs_trimmed = 0
+        if len(self.npcs) > MAX_MANUAL_NPCS:
+            excess = len(self.npcs) - MAX_MANUAL_NPCS
+            kept: list[ManualNpc] = []
+            for npc in self.npcs:
+                if npcs_trimmed < excess and not npc.authored:
+                    npcs_trimmed += 1
+                    continue
+                kept.append(npc)
+            self.npcs = kept
+            logger.warning(
+                "monster_manual.pool_trimmed — dropped %d oldest generated NPCs "
+                "(cap=%d, genre=%s, world=%s)",
+                npcs_trimmed,
+                MAX_MANUAL_NPCS,
+                self.genre,
+                self.world,
+            )
+        encounters_trimmed = 0
+        if len(self.encounters) > MAX_MANUAL_ENCOUNTERS:
+            encounters_trimmed = len(self.encounters) - MAX_MANUAL_ENCOUNTERS
+            self.encounters = self.encounters[encounters_trimmed:]
+            logger.warning(
+                "monster_manual.pool_trimmed — dropped %d oldest encounters "
+                "(cap=%d, genre=%s, world=%s)",
+                encounters_trimmed,
+                MAX_MANUAL_ENCOUNTERS,
+                self.genre,
+                self.world,
+            )
+        if npcs_trimmed == 0 and encounters_trimmed == 0:
+            return None
+        return PoolTrim(npcs_trimmed=npcs_trimmed, encounters_trimmed=encounters_trimmed)
 
     # ── Placement ───────────────────────────────────────────────
 
@@ -589,7 +716,7 @@ class MonsterManual(BaseModel):
         *,
         exact: bool = False,
         authored: bool = False,
-    ) -> None:
+    ) -> CapEvent | None:
         """Add a pre-generated NPC from namegen JSON output.
 
         Dedup defaults to the fuzzy :meth:`find_npc_by_name` (substring) — the
@@ -603,7 +730,12 @@ class MonsterManual(BaseModel):
         ``npcs.yaml`` cast. It governs the accumulation cap: past
         :data:`MAX_MANUAL_NPCS`, a generated walk-on is dropped LOUDLY, but an
         authored NPC instead *evicts* the oldest generated walk-on so a named cast
-        member is never crowded out (spec V3). A cap hit is logged, never silent.
+        member is never crowded out (spec V3).
+
+        Returns a :class:`CapEvent` when the cap engaged (drop or eviction) so
+        the caller can emit the ``monster_manual.cap_enforced`` span — a
+        dedup-skip or a normal insert returns ``None`` (162-1 rework; OTEL
+        Observability Principle).
         """
         name = str(data.get("name") or "")
         role = str(data.get("role") or "")
@@ -611,12 +743,13 @@ class MonsterManual(BaseModel):
 
         match = self.find_npc_by_exact_name(name) if exact else self.find_npc_by_name(name)
         if match is not None:
-            return
+            return None
 
-        if len(self.npcs) >= MAX_MANUAL_NPCS and not self._make_room_for_npc(
-            authored=authored, incoming=name
-        ):
-            return
+        event: CapEvent | None = None
+        if len(self.npcs) >= MAX_MANUAL_NPCS:
+            event = self._enforce_npc_cap(authored=authored, incoming=name)
+            if event.kind != "npc_evicted":
+                return event  # refused — no room was made
 
         self.npcs.append(
             ManualNpc(
@@ -630,14 +763,16 @@ class MonsterManual(BaseModel):
                 authored=authored,
             )
         )
+        return event
 
-    def _make_room_for_npc(self, *, authored: bool, incoming: str) -> bool:
-        """Enforce the NPC accumulation cap. Returns True if there is room to add.
+    def _enforce_npc_cap(self, *, authored: bool, incoming: str) -> CapEvent:
+        """Enforce the NPC accumulation cap; report the decision as a CapEvent.
 
-        A generated walk-on at the cap is refused (dropped loudly). An authored
-        NPC evicts a generated walk-on to make room, so a named cast member is
-        never crowded out; only if the pool is ALL authored is an authored insert
-        refused. Never a silent drop (story 162-1, D4).
+        A generated walk-on at the cap is refused (``npc_dropped``). An authored
+        NPC evicts a generated walk-on to make room (``npc_evicted``), so a named
+        cast member is never crowded out; only if the pool is ALL authored is an
+        authored insert refused (``npc_dropped_all_authored``). Never a silent
+        drop (story 162-1, D4) — warned here, spanned by the caller.
 
         Eviction prefers an AVAILABLE walk-on (never activated — nothing in play
         references it) and only falls back to the oldest activated one when every
@@ -652,7 +787,7 @@ class MonsterManual(BaseModel):
                 incoming,
                 MAX_MANUAL_NPCS,
             )
-            return False
+            return CapEvent(kind="npc_dropped", incoming=incoming)
         evict_at: int | None = None
         for i, existing in enumerate(self.npcs):
             if existing.authored:
@@ -663,20 +798,21 @@ class MonsterManual(BaseModel):
             if evict_at is None:
                 evict_at = i
         if evict_at is not None:
+            evicted_name = self.npcs[evict_at].name
             logger.warning(
                 "monster_manual.npc_cap_evicted — authored %r evicts generated %r (cap=%d)",
                 incoming,
-                self.npcs[evict_at].name,
+                evicted_name,
                 MAX_MANUAL_NPCS,
             )
             del self.npcs[evict_at]
-            return True
+            return CapEvent(kind="npc_evicted", incoming=incoming, evicted=evicted_name)
         logger.warning(
             "monster_manual.npc_cap_reached_all_authored — dropping authored NPC %r (cap=%d)",
             incoming,
             MAX_MANUAL_NPCS,
         )
-        return False
+        return CapEvent(kind="npc_dropped_all_authored", incoming=incoming)
 
     def add_encounter(
         self,
@@ -684,13 +820,17 @@ class MonsterManual(BaseModel):
         tier: int,
         terrain_tags: list[str],
         factions: list[str] | None = None,
-    ) -> None:
+    ) -> CapEvent | None:
         """Add a pre-generated encounter from encountergen JSON output.
 
         ``factions`` (epic-157) is the union of the source bestiary entries'
         faction tags, stamped by the seeding path so Seam 1 can scope the
         encounter to its zone. Defaults to empty (unzoned worlds / native
         packs with no bestiary) — empty means eligible everywhere at runtime.
+
+        Returns a :class:`CapEvent` (``encounter_dropped``) when the cap refused
+        the insert, so the caller can emit the ``monster_manual.cap_enforced``
+        span; ``None`` on a normal insert (162-1 rework).
         """
         enemies_raw = data.get("enemies") or []
         enemy_names: list[str] = []
@@ -714,7 +854,7 @@ class MonsterManual(BaseModel):
                 label,
                 MAX_MANUAL_ENCOUNTERS,
             )
-            return
+            return CapEvent(kind="encounter_dropped", incoming=label)
 
         self.encounters.append(
             ManualEncounter(
@@ -726,3 +866,4 @@ class MonsterManual(BaseModel):
                 state=EntryState.AVAILABLE,
             )
         )
+        return None

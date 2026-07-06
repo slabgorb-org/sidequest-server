@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 # Story 153-21: the procedural dungeon entrance anchor — the don't-clobber guard
 # re-anchors a same-turn deep_descent crossing onto this node.
 from sidequest.dungeon.seed_bootstrap import ENTRANCE_ID
+from sidequest.foundation.slug_fold import fold_to_ascii
 from sidequest.game.alias_accretion import (
     accrete_npc_aliases,
     extract_epithets_for_npc,
@@ -60,6 +61,7 @@ from sidequest.game.npc_development import (
     tier_for_interactions,
 )
 from sidequest.game.npc_pool import NpcPoolMember
+from sidequest.game.origin import normalize_name
 from sidequest.game.region_validation import (
     canonicalize_region_name,
     resolve_known_region_id,
@@ -2099,11 +2101,19 @@ def _npc_name_match_keys(name: str) -> set[str]:
     Only the *definite* article is folded. Indefinite "a"/"an" precede generic
     descriptors, not proper names; folding them would collapse "a man" onto a
     rostered "The Man". Empty/unchanged article-stripped results are not added.
+
+    Story 162-10: keys are built through the identity resolver's own
+    ``normalize_name`` (fold_to_ascii + casefold + whitespace-collapse) rather
+    than a bare ``casefold`` — so a diacritic prose variant ("Veyra Solne")
+    reconciles to the culture-minted canonical ("Veyra Solnë") at the mention
+    seam, the same one-normalization the seater's ``resolve_roster_npc`` uses
+    (sprint/archive/162-2-session.md:64 — no diacritic split-brain one seam
+    over). For ASCII single-space names this is identical to ``casefold``.
     """
-    keys = {name.casefold()}
+    keys = {normalize_name(name)}
     flipped = _comma_flip_name(name)
     if flipped is not None:
-        keys.add(flipped.casefold())
+        keys.add(normalize_name(flipped))
     for key in list(keys):
         if key.startswith(_LEADING_DEFINITE_ARTICLE):
             stripped = key[len(_LEADING_DEFINITE_ARTICLE) :].strip()
@@ -2125,6 +2135,11 @@ def _reconciliation_form(candidate: str, mention: str) -> str:
         candidate
     ) == _strip_leading_the(mention):
         return "article_normalized"
+    # Story 162-10: a diacritic-only fold ("Veyra Solnë" ⇄ "Veyra Solne") is
+    # neither an article nor a comma reconciliation — label it honestly so the
+    # GM-panel lie-detector reports the real cause, not a misattributed comma.
+    if fold_to_ascii(candidate).casefold() == fold_to_ascii(mention).casefold():
+        return "diacritic_normalized"
     return "comma_normalized"
 
 
@@ -2618,6 +2633,21 @@ def _apply_npc_mentions(
                 ):
                     npc_hit = npc
                     npc_match_form = "invented_from"
+                    break
+        if npc_hit is None:
+            # Story 162-10: recorded-alias leg. The seater's unified resolver
+            # (``resolve_roster_npc``) matches a prose name against the alias
+            # ledger; the mention seam did not, so a narrator cite by a bound
+            # creature's RECORDED alias ("Hold-Dead, Still at the Shift" for
+            # Molgrath) missed all three legs above and minted a phantom pool
+            # duplicate — the two-names-one-enemy fork, one seam over
+            # (sprint/archive/162-2-session.md:64). Same match-key folding as the
+            # other legs (case/comma/article/diacritic), so an alias cited by a
+            # variant still reconciles.
+            for npc in snapshot.npcs:
+                if any(_npc_name_match_keys(alias) & mention_keys for alias in npc.aliases):
+                    npc_hit = npc
+                    npc_match_form = "alias"
                     break
         if npc_hit is not None:
             # ``Npc`` has no string ``role`` field (only the archetype-id

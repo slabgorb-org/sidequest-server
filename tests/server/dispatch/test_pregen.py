@@ -613,3 +613,55 @@ def test_seed_manual_emits_cap_enforced_span_when_pool_is_full(
     assert spans[0].attributes["kind"] == "npc_dropped"
     assert spans[0].attributes["incoming"] == "X"
     assert spans[0].attributes["genre"] == "testgenre"
+
+
+def test_seed_manual_emits_cap_enforced_span_for_encounter_drop(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, otel_capture
+) -> None:
+    """Coverage gap (162-9): the ENCOUNTER-side cap drop through ``seed_manual``
+    was never driven — only the NPC-side (test above) and the model-level
+    ``add_encounter`` drop were. Fill the encounter pool to the cap, then let
+    ``seed_manual`` generate more, so ``add_encounter`` refuses with
+    kind="encounter_dropped" and the pregen call site emits ``cap_enforced``.
+    """
+    from sidequest.game.monster_manual import MAX_MANUAL_ENCOUNTERS
+
+    monkeypatch.setattr(pregen, "load_genre_pack", lambda _dir: _stub_pack([]))
+    # A single unique NPC name dedups to one insert — the NPC side never caps, so
+    # only encounter-side spans fire.
+    monkeypatch.setattr(
+        pregen,
+        "namegen_main",
+        lambda _argv: print(json.dumps({"name": "X", "role": "r", "culture": "c"})) or 0,  # type: ignore[func-returns-value]
+    )
+    # A non-empty encounter so ``_generate_encounter`` yields data and
+    # ``add_encounter`` is actually attempted (then refused at the cap).
+    monkeypatch.setattr(
+        pregen,
+        "encountergen_main",
+        lambda _argv: print(json.dumps({"enemies": [{"name": "Overflow Beast"}]})) or 0,  # type: ignore[func-returns-value]
+    )
+
+    manual = MonsterManual(genre="testgenre", world="testworld")
+    for i in range(MAX_MANUAL_ENCOUNTERS):
+        assert manual.add_encounter(_enc_data(f"Beast-{i:04d}"), 1, []) is None
+
+    seed_manual(
+        genre_packs_path=tmp_path / "packs",
+        genre="testgenre",
+        world="testworld",
+        manual=manual,
+        rng=random.Random(0),
+    )
+
+    assert len(manual.encounters) == MAX_MANUAL_ENCOUNTERS  # cap held
+    enc_spans = [
+        s
+        for s in otel_capture.get_finished_spans()
+        if s.name == "monster_manual.cap_enforced"
+        and s.attributes.get("kind") == "encounter_dropped"
+    ]
+    assert enc_spans, (
+        "encounter cap drop during seeding must emit cap_enforced (kind=encounter_dropped)"
+    )
+    assert enc_spans[0].attributes["genre"] == "testgenre"

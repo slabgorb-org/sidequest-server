@@ -37,8 +37,10 @@ MAX_MANUAL_ENCOUNTERS = 100
 class ContentDiscard:
     """What a :meth:`MonsterManual.reconcile_content` discard dropped.
 
-    Returned only when a *previously-stamped* pool was dropped on a content/seed
-    mismatch (story 162-1, spec V1-V3). The counts feed the
+    Returned only when a *previously-stamped* pool was dropped on a content_sha
+    mismatch (story 162-1, spec V1-V3) — content is the only staleness axis;
+    session_seed is refreshed for attribution but never triggers a discard. The
+    counts feed the
     ``monster_manual.pool_discarded`` OTEL span so the GM panel sees that a
     stale, multi-clone-written pool was discarded and how many authored NPCs went
     with it (the "what deleted beneath_sunden's authored NPCs" forensic).
@@ -216,7 +218,9 @@ class MonsterManual(BaseModel):
     a new session with unchanged content reuses the pool). Growth is bounded by
     :data:`MAX_MANUAL_NPCS` / :data:`MAX_MANUAL_ENCOUNTERS` (loud drops, authored
     inserts evict generated walk-ons instead), and legacy over-cap pools are
-    bounded on reconcile via :meth:`trim_to_caps`.
+    bounded via :meth:`trim_to_caps` — an unconditional ``ensure_loaded`` step, not
+    part of :meth:`reconcile_content` (which never trims): pool size is knowable
+    without content evidence, so trimming runs even for a bestiary-less world.
     """
 
     model_config = {"extra": "forbid"}
@@ -557,14 +561,22 @@ class MonsterManual(BaseModel):
                     continue
                 kept.append(npc)
             self.npcs = kept
-            logger.warning(
-                "monster_manual.pool_trimmed — dropped %d oldest generated NPCs "
-                "(cap=%d, genre=%s, world=%s)",
-                npcs_trimmed,
-                MAX_MANUAL_NPCS,
-                self.genre,
-                self.world,
-            )
+            # Zero-trim guard (story 162-9): warn on the ACTUAL trim count, not the
+            # over-cap condition. When authored NPCs alone exceed the cap nothing is
+            # trimmable (authored are never dropped), so npcs_trimmed stays 0 — and
+            # because the pool stays over-cap, this branch re-enters on EVERY load.
+            # The old unconditional warning then re-logged "dropped 0 oldest
+            # generated NPCs" every turn — a no-op masquerading as a trim. Only warn
+            # when a drop actually happened.
+            if npcs_trimmed:
+                logger.warning(
+                    "monster_manual.pool_trimmed — dropped %d oldest generated NPCs "
+                    "(cap=%d, genre=%s, world=%s)",
+                    npcs_trimmed,
+                    MAX_MANUAL_NPCS,
+                    self.genre,
+                    self.world,
+                )
         encounters_trimmed = 0
         if len(self.encounters) > MAX_MANUAL_ENCOUNTERS:
             encounters_trimmed = len(self.encounters) - MAX_MANUAL_ENCOUNTERS

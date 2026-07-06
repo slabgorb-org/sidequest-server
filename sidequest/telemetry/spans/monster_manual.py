@@ -28,9 +28,11 @@ SPAN_MONSTER_MANUAL_ROOM_BOUND = "monster_manual.room_bound"
 SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL = "monster_manual.authored_backfill"
 
 # Story 162-1 (derive-don't-cache, spec D3/V1-V3): emitted when ``ensure_loaded``
-# DISCARDS a previously-stamped Manual pool because its (content_sha,
-# session_seed) key no longer matches — a different content checkout (a
-# multi-clone writer, spec V2) or a new session. This SUPERSEDES the two removed
+# DISCARDS a previously-stamped Manual pool because its ``content_sha`` no longer
+# matches — a different content checkout (a multi-clone writer, spec V2).
+# content_sha is the ONLY discard axis; session_seed is refreshed for attribution
+# but never triggers a discard (a new session with the same content reuses the
+# pool). This SUPERSEDES the two removed
 # targeted purges (native-class + foreign-bestiary): staleness is now impossible
 # because the pool is keyed by content version and discarded wholesale, so the
 # beneath_sunden purge/reseed livelock and the barsoom foreign bleed cannot

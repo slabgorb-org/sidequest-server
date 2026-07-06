@@ -715,9 +715,12 @@ def session_fixture():
     # 2-tuple. A bare MagicMock's ``effective_bestiary(...)`` returns an auto-mock
     # that iterates empty, so the unpack raises ``ValueError: not enough values
     # to unpack``. Pin it to ``(None, "")`` — the realistic "this pack has no
-    # world-scoped bestiary" value, which makes ``_content_sha_for`` hash the
-    # empty roster to a stable digest — same real-defaults pattern as
-    # progression/rules above.
+    # world-scoped bestiary" value. Post-162-1-rework, a ``None`` bestiary makes
+    # ``_content_sha_for`` return ``None`` (unresolvable = no evidence), so the MM
+    # reconcile step is SKIPPED entirely — the correct no-op for a bestiary-less
+    # pack. (Only a bestiary that is present-but-empty hashes to a stable digest;
+    # ``None`` is not that case.) Same real-defaults pattern as progression/rules
+    # above.
     from sidequest.genre.models.progression import ProgressionConfig
     from sidequest.genre.models.rules import RulesConfig
 

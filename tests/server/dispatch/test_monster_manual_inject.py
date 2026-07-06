@@ -374,6 +374,62 @@ def test_ensure_loaded_world_slug_absent_from_pack_warns_and_no_backfill(
     assert fired == []
 
 
+def test_ensure_loaded_trims_over_cap_pool_without_bestiary(tmp_path: Path, otel_capture) -> None:
+    """162-9 regression: trim_to_caps must run even when the bestiary is
+    UNRESOLVABLE (content_sha None).
+
+    reconcile_content is (correctly) skipped when ``_content_sha_for`` returns
+    None — judging staleness against a roster we cannot read would nuke a valid
+    pool. But trimming is a pure size-bound op that needs no content evidence, and
+    the pre-162-9 code nested the trim call inside the ``content_sha is not None``
+    branch. Result: a bestiary-less world's legacy over-cap pool was never bounded
+    (repro'd in 162-1 review: a 220-NPC pool stayed 220). Assert the over-cap pool
+    IS trimmed to the cap and the ``cap_enforced`` span (kind="trim") fires, with
+    NO ``pool_discarded`` span (reconcile stays skipped)."""
+    from sidequest.game.monster_manual import MAX_MANUAL_NPCS
+    from sidequest.telemetry.spans.monster_manual import (
+        SPAN_MONSTER_MANUAL_CAP_ENFORCED,
+        SPAN_MONSTER_MANUAL_POOL_DISCARDED,
+    )
+
+    excess = 20
+    with mock.patch(
+        "sidequest.game.monster_manual.MonsterManual._manuals_dir", return_value=tmp_path
+    ):
+        over_cap = _manual_with(
+            npcs=[_human(f"walkon-{i:04d}") for i in range(MAX_MANUAL_NPCS + excess)]
+        )
+        over_cap.save()
+        # A pack with no ``effective_bestiary`` accessor → _content_sha_for None →
+        # reconcile skipped. Empty authored roster → the H1 backfill is a no-op. No
+        # ``source_dir`` → seeding is skipped. Only the trim path is exercised.
+        sd = _FakeSessionData(genre_pack=_pack_with_authored("flickering_reach"))
+
+        loaded = monster_manual_inject.ensure_loaded(sd)
+
+    assert loaded is not None
+    assert len(loaded.npcs) == MAX_MANUAL_NPCS, "bestiary-less over-cap pool must be trimmed"
+    # Oldest generated dropped first; the youngest survive.
+    names = {n.name for n in loaded.npcs}
+    assert "walkon-0000" not in names
+    assert f"walkon-{MAX_MANUAL_NPCS + excess - 1:04d}" in names
+
+    spans = otel_capture.get_finished_spans()
+    trim_spans = [s for s in spans if s.name == SPAN_MONSTER_MANUAL_CAP_ENFORCED]
+    assert trim_spans, "trim must emit monster_manual.cap_enforced even without a bestiary"
+    assert trim_spans[0].attributes["kind"] == "trim"
+    assert trim_spans[0].attributes["npcs_trimmed"] == excess
+    # reconcile never ran (no content evidence) → no discard span.
+    assert not [s for s in spans if s.name == SPAN_MONSTER_MANUAL_POOL_DISCARDED]
+
+    # Persisted, not just held in memory: the next process sees the bounded pool.
+    with mock.patch(
+        "sidequest.game.monster_manual.MonsterManual._manuals_dir", return_value=tmp_path
+    ):
+        reloaded = MonsterManual.load("mutant_wasteland", "flickering_reach")
+    assert len(reloaded.npcs) == MAX_MANUAL_NPCS
+
+
 # ---------------------------------------------------------------------------
 # inject — patch generation
 # ---------------------------------------------------------------------------

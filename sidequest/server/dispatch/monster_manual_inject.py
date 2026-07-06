@@ -255,23 +255,29 @@ def ensure_loaded(sd: _SessionData) -> MonsterManual | None:
                 },
             ):
                 pass
-        # Bound a legacy over-cap pool on adoption (spec D4: the 310/1,153-NPC
-        # runaways must not be grandfathered until a content change happens to
-        # discard them). Model trims + warns; this seam persists + spans.
-        trim = manual.trim_to_caps()
-        if trim is not None:
-            manual.save()
-            with Span.open(
-                SPAN_MONSTER_MANUAL_CAP_ENFORCED,
-                {
-                    "genre": sd.genre_slug,
-                    "world": sd.world_slug,
-                    "kind": "trim",
-                    "npcs_trimmed": trim.npcs_trimmed,
-                    "encounters_trimmed": trim.encounters_trimmed,
-                },
-            ):
-                pass
+    # Bound a legacy over-cap pool UNCONDITIONALLY — trimming is a pure size-bound
+    # op that needs no content evidence (story 162-9). reconcile_content above is
+    # gated on content_sha because it judges STALENESS against a roster it must be
+    # able to read (a None bestiary is no evidence → skip). trim_to_caps judges
+    # only POOL SIZE against a fixed cap — knowable without a bestiary — so it must
+    # run even when content_sha is None. Leaving it inside the else branch meant a
+    # bestiary-less over-cap pool (no pack / transiently unreadable content) was
+    # never bounded: the 310/1,153-NPC runaways grandfathered forever whenever the
+    # bestiary was unresolvable (spec D4). Model trims + warns; seam persists + spans.
+    trim = manual.trim_to_caps()
+    if trim is not None:
+        manual.save()
+        with Span.open(
+            SPAN_MONSTER_MANUAL_CAP_ENFORCED,
+            {
+                "genre": sd.genre_slug,
+                "world": sd.world_slug,
+                "kind": "trim",
+                "npcs_trimmed": trim.npcs_trimmed,
+                "encounters_trimmed": trim.encounters_trimmed,
+            },
+        ):
+            pass
 
     source_dir = getattr(pack, "source_dir", None) if pack is not None else None
     if manual.needs_seeding() and source_dir is not None:

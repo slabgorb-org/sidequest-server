@@ -262,53 +262,6 @@ def test_instantiate_active_encounter_is_noop(cac_pack) -> None:
     assert snap.encounter is active
 
 
-def test_resolve_from_trope_marks_resolved() -> None:
-    from sidequest.game.encounter import EncounterActor, EncounterMetric
-    from sidequest.server.dispatch.encounter_lifecycle import (
-        resolve_encounter_from_trope,
-    )
-
-    snap = GameSnapshot(genre_slug="cac")
-    enc = StructuredEncounter(
-        encounter_type="combat",
-        player_metric=EncounterMetric(name="momentum", current=0, starting=0, threshold=10),
-        opponent_metric=EncounterMetric(name="momentum", current=0, starting=0, threshold=10),
-        actors=[EncounterActor(name="Rux", role="combatant", side="player")],
-    )
-    snap.encounter = enc
-    result = resolve_encounter_from_trope(snapshot=snap, trope_id="last_stand")
-    assert result is enc
-    assert enc.resolved is True
-    assert "last_stand" in (enc.outcome or "")
-
-
-def test_resolve_from_trope_no_encounter_returns_none() -> None:
-    from sidequest.server.dispatch.encounter_lifecycle import (
-        resolve_encounter_from_trope,
-    )
-
-    snap = GameSnapshot(genre_slug="cac")
-    assert resolve_encounter_from_trope(snapshot=snap, trope_id="x") is None
-
-
-def test_resolve_from_trope_already_resolved_returns_none() -> None:
-    from sidequest.game.encounter import EncounterActor, EncounterMetric
-    from sidequest.server.dispatch.encounter_lifecycle import (
-        resolve_encounter_from_trope,
-    )
-
-    snap = GameSnapshot(genre_slug="cac")
-    enc = StructuredEncounter(
-        encounter_type="combat",
-        player_metric=EncounterMetric(name="momentum", current=0, starting=0, threshold=10),
-        opponent_metric=EncounterMetric(name="momentum", current=0, starting=0, threshold=10),
-        actors=[EncounterActor(name="Rux", role="combatant", side="player")],
-    )
-    enc.resolved = True
-    snap.encounter = enc
-    assert resolve_encounter_from_trope(snapshot=snap, trope_id="x") is None
-
-
 # ---------------------------------------------------------------------------
 # Task 13: Dual dials + side-from-payload + invalid-side fail-loud
 # ---------------------------------------------------------------------------

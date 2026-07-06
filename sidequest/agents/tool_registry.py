@@ -34,7 +34,6 @@ if TYPE_CHECKING:
     from sidequest.game.monster_manual import MonsterManual
     from sidequest.game.session import GameSnapshot
     from sidequest.game.weather import WeatherState
-    from sidequest.genre.names.generator import NameGenerator
 
 
 class ToolCategory(StrEnum):
@@ -120,16 +119,6 @@ class ToolContext:
     # handler; Phase E plumbs it through. Phase C tools tolerate ``None``
     # (tick_tropes records an OTEL marker and no-ops).
     genre_pack: Any | None = None
-    # Phase C Task 24 amendment: per-culture NameGenerator dict for the
-    # generate_name tool. ADR-091 culture corpora are loaded at session
-    # bootstrap (the corpus directory lives in sidequest-content, outside
-    # the server repo) via
-    # ``sidequest.genre.names.generator.build_from_culture`` — keyed by
-    # ``Culture.name``. Holding the pre-built generators here avoids
-    # per-tool disk I/O and corpus-dir guessing. Phase E wires this at the
-    # production call site; Phase C tools tolerate ``None`` (generate_name
-    # returns an empty list with ``name_generators_wired=False``).
-    name_generators: dict[str, NameGenerator] | None = None
     # Story 24-6 amendment: world-grounding data for the get_world_grounding
     # tool. Three optional plain-data fields — current WeatherState (from the
     # 24-5 generator), demographics dict (24-3 YAML), calendar dict (24-4

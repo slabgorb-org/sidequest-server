@@ -247,13 +247,18 @@ class Npc(BaseModel):
     """B/X morale descriptor. ``None`` for non-creature NPCs."""
 
     # 108-2 (MINTING-MAJOR persist): ``True`` only for a combat opponent the
-    # seater had to FABRICATE — a router-named free-string adversary with no
-    # backing roster/bestiary entry (the "Arena Opponent" / "Hold-Dead" stubs).
-    # A fabricated stub is a transient combat actor, NOT durable world canon: it
-    # is reaped together with its resolved encounter (``reap_resolved_encounter_husk``)
-    # so the narrator can never re-reference a dead nameless placeholder as a
-    # living NPC on later turns. Bound creatures (``creature_id`` set) and
-    # narrator-declared NPCs leave this ``False`` and persist normally.
+    # seater FABRICATED — the two remaining mint paths since 162-3: a
+    # frame-sourced Other (``opponent_source: frame`` / sealed-letter) and the
+    # explicit degenerate opt-in (``allow_synthetic_opponent``). A fabricated
+    # stub is a transient combat actor, NOT durable world canon: it is reaped
+    # together with its resolved encounter (``reap_resolved_encounter_husk``) so
+    # the narrator can never re-reference a dead nameless placeholder as a living
+    # NPC on later turns. NOTE (162-3): the common "router-named opponent with no
+    # roster/pool backing" case is no longer fabricated — it now seats a DURABLE
+    # ``Origin(kind=GENERIC)`` Other from the world's authored ``generics:``
+    # section with ``ephemeral`` left ``False`` (e.g. "Hold-Dead" is now a real
+    # authored generic row in beneath_sunden, not a stub). Bound creatures
+    # (``creature_id`` set) and narrator-declared NPCs also leave this ``False``.
     ephemeral: bool = False
     """``True`` when this NPC is a fabricated combat stub to be reaped post-encounter."""
 

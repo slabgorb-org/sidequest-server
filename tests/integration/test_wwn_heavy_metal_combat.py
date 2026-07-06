@@ -166,6 +166,7 @@ def test_heavy_metal_combat_is_wwn_bound_and_ablates_hp(otel_capture, monkeypatc
         player_name=attacker_name,
         npcs_present=[NpcMention(name=opponent, side="opponent")],
         genre_slug="heavy_metal",
+        allow_synthetic_opponent=True,
     )
     assert enc is not None, "seating Blade-work must produce an encounter"
     snap.encounter = enc
@@ -299,6 +300,7 @@ def test_heavy_metal_combat_seats_no_toothless_opponent(otel_capture):
         player_name=attacker_name,
         npcs_present=[NpcMention(name=opponent, side="opponent")],
         genre_slug="heavy_metal",
+        allow_synthetic_opponent=True,
     )
     assert enc is not None, "seating Blade-work must produce an encounter"
 
@@ -373,6 +375,7 @@ def test_heavy_metal_opponent_reprisal_ablates_player_hp(otel_capture, monkeypat
         player_name=attacker_name,
         npcs_present=[NpcMention(name=opponent, side="opponent")],
         genre_slug="heavy_metal",
+        allow_synthetic_opponent=True,
     )
     assert enc is not None, "seating Blade-work must produce an encounter"
     snap.encounter = enc

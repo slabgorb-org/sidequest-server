@@ -21,9 +21,11 @@ driving the REAL production seams (no source-text assertions):
    creature's alias ledger (existing ``accrete_npc_aliases`` — reuse-first),
    emitting ``entity.alias_accreted``. The fork closes permanently: the next
    reference by EITHER name resolves to the same entity.
-3. A genuinely-novel opponent still mints the loud ephemeral stub (108-2
-   preserved) — and the stub is STAMPED ``Origin(kind=EPHEMERAL_STUB)`` so the
-   arbiter epic (162-3+) can rank it.
+3. (RETIRED by 162-3) A genuinely-novel opponent no longer mints a stub on the
+   default path — the authored bestiary ``generics:`` section is the sanctioned
+   last resort and fabrication fails loud. Successor contract (including the
+   EPHEMERAL_STUB stamp on the explicit degenerate opt-in) lives in
+   tests/server/test_162_3_generics_last_resort_seating.py.
 4. ``inject``'s authored-vs-procedural dedup keys on ``identity_key`` (the
    creature_id), not the display name — name drift between a room binding and
    the frozen roster no longer double-materializes the same creature.
@@ -64,7 +66,6 @@ from sidequest.server.dispatch.encounter_lifecycle import (
 _FIXTURE_PACK = Path(__file__).resolve().parents[1] / "fixtures" / "packs" / "test_genre"
 _LOC = "the_dropmouth"
 _ALIAS_ACCRETED_SPAN = "entity.alias_accreted"
-_MINTED_STUB_SPAN = "encounter.opponent_minted_stub"
 
 
 @pytest.fixture
@@ -288,34 +289,15 @@ class TestConscriptionRecordsAlias:
 
 
 # ---------------------------------------------------------------------------
-# 3. The genuinely-novel stub survives — loud, ephemeral, and STAMPED
-# ---------------------------------------------------------------------------
-
-
-class TestNovelStubStampsOrigin:
-    def test_minted_stub_is_stamped_ephemeral_stub_origin(
-        self, otel_capture: InMemorySpanExporter
-    ) -> None:
-        """No roster, no pool, no alias — the 108-2 fabrication path is the
-        CORRECT last resort and must keep firing its lie-detector span. NEW:
-        the stub carries typed provenance so downstream consumers (arbiter,
-        forensics) see 'fabricated' without sniffing the ephemeral bool."""
-        from sidequest.game.origin import OriginKind
-
-        snap = _snapshot_with(None)
-
-        _seed(snap, "Arena Opponent")
-
-        assert len(snap.npcs) == 1
-        stub = snap.npcs[0]
-        assert stub.ephemeral is True
-        assert stub.origin is not None, "fabricated stub left origin unstamped"
-        assert stub.origin.kind == OriginKind.EPHEMERAL_STUB
-        assert [s for s in otel_capture.get_finished_spans() if s.name == _MINTED_STUB_SPAN], (
-            "the minted-stub lie-detector span must keep firing"
-        )
-
-
+# 3. RETIRED by story 162-3 — the genuinely-novel case no longer mints.
+#
+# ``TestNovelStubStampsOrigin`` pinned the 108-2 fabrication as the correct
+# last resort (ephemeral + EPHEMERAL_STUB stamp + minted-stub span). 162-3
+# replaces that last resort with the authored bestiary ``generics:`` section
+# and turns default-path fabrication into a loud failure. The successor
+# contract — generics seat, loud refusal, and the EPHEMERAL_STUB stamp
+# surviving on the explicit degenerate opt-in — is pinned in
+# tests/server/test_162_3_generics_last_resort_seating.py.
 # ---------------------------------------------------------------------------
 # 4. inject dedups authored-vs-procedural by identity_key, not display name
 # ---------------------------------------------------------------------------

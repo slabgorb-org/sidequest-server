@@ -180,6 +180,7 @@ def test_wwn_cast_spell_routes_through_wwn_module_on_real_heavy_metal(otel_captu
         player_name=caster_name,
         npcs_present=[NpcMention(name=opponent, side="opponent")],
         genre_slug="heavy_metal",
+        allow_synthetic_opponent=True,
     )
     assert enc is not None, "seating Blade-work must produce an encounter"
     snap.encounter = enc

@@ -132,6 +132,7 @@ def _seat_dungeon_combat(pack, snap, *, caster_name: str, opponent: str, locatio
         player_name=caster_name,
         npcs_present=[NpcMention(name=opponent, side="opponent")],
         genre_slug="caverns_and_claudes",
+        allow_synthetic_opponent=True,
     )
     assert enc is not None, "seating Dungeon Combat must produce an encounter"
     snap.encounter = enc

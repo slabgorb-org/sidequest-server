@@ -302,6 +302,7 @@ def test_production_path_mutation_use_fires_spans_and_strain(otel_capture, monke
         player_name=pc_name,
         npcs_present=[NpcMention(name=opponent, side="opponent")],
         genre_slug=_GENRE,
+        allow_synthetic_opponent=True,
     )
     assert enc is not None, "seating the real combat confrontation must succeed"
     snap.encounter = enc

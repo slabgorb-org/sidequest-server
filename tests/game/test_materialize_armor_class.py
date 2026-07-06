@@ -102,6 +102,9 @@ def test_router_named_opponent_with_no_backing_npc_gets_seeded_core() -> None:
         player_name=_PC,
         npcs_present=[NpcMention(name="Pirate Boarder", side="opponent")],
         genre_slug="space_opera",
+        # 162-3 degenerate opt-in: this harness pins the no-backing seeded-core
+        # path itself; without the flag the default path now refuses.
+        allow_synthetic_opponent=True,
     )
 
     enc = snap.encounter

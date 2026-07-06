@@ -358,6 +358,44 @@ SPAN_ROUTES[SPAN_ENCOUNTER_OPPONENT_MINTED_STUB] = SpanRoute(
     },
 )
 
+# 162-3: the seater drew the last-resort Other from the world bestiary's AUTHORED
+# ``generics:`` section instead of fabricating a stub — the sanctioned final rung
+# of the origin precedence (authored > room-bound > region-population > MM pool >
+# generics > error). The GM panel reads WHICH generic row seated WHOM so an
+# authored generic is distinguishable from narrator improvisation.
+SPAN_ENCOUNTER_OPPONENT_SEATED_FROM_GENERICS = "encounter.opponent_seated_from_generics"
+SPAN_ROUTES[SPAN_ENCOUNTER_OPPONENT_SEATED_FROM_GENERICS] = SpanRoute(
+    event_type="state_transition",
+    component="encounter",
+    extract=lambda span: {
+        "field": "encounter.opponent_seated_from_generics",
+        "encounter_type": (span.attributes or {}).get("confrontation_type", ""),
+        "opponent": (span.attributes or {}).get("opponent", ""),
+        "creature_id": (span.attributes or {}).get("creature_id", ""),
+        "hp": (span.attributes or {}).get("hp", 0),
+        "armor_class": (span.attributes or {}).get("armor_class", 0),
+        "reason": (span.attributes or {}).get("reason", ""),
+    },
+)
+
+# 162-3: every legitimate opponent source is exhausted — no roster entry, no
+# scene-active pool antagonist, and the world authors no bestiary generics. The
+# seater REFUSES to fabricate on the default (non-degenerate) path and raises;
+# this span is the observable refusal + the content gap (author a ``generics:``
+# section). Sibling of ``encounter.no_opponent_available`` (the empty-actor-list
+# guard); this one fires when a NAMED opponent cannot be sourced.
+SPAN_ENCOUNTER_STUB_FABRICATION_REFUSED = "encounter.stub_fabrication_refused"
+SPAN_ROUTES[SPAN_ENCOUNTER_STUB_FABRICATION_REFUSED] = SpanRoute(
+    event_type="state_transition",
+    component="encounter",
+    extract=lambda span: {
+        "field": "encounter.stub_fabrication_refused",
+        "encounter_type": (span.attributes or {}).get("confrontation_type", ""),
+        "opponent": (span.attributes or {}).get("opponent", ""),
+        "reason": (span.attributes or {}).get("reason", ""),
+    },
+)
+
 # 150-2 (Defect A): the seater DECLINED to reconcile a router-named opponent to a
 # co-located bestiary creature because the confrontation is NON-combat (a Fate
 # standoff / social duel / chase). The 108-2 reconciliation exists to preserve a
@@ -1119,7 +1157,12 @@ def encounter_opponent_minted_stub_span(
     """108-2 (MINTING-MAJOR): the seater fabricated an opponent with no backing
     roster/bestiary entry and no co-located bound creature to resolve to. Loud
     lie-detector for the content gap; the stub is marked ephemeral + reaped with
-    its encounter (No Silent Fallbacks)."""
+    its encounter (No Silent Fallbacks). Since 162-3 this fires on the two
+    remaining mint paths — the frame-sourced default (``opponent_source: frame``
+    / sealed-letter, ADR-153 §6) AND the explicit degenerate opt-in
+    (``allow_synthetic_opponent=True``) — but NEVER on the bestiary-generics
+    default path (which fires ``opponent_seated_from_generics``) or the loud
+    refusal (which fires ``stub_fabrication_refused``)."""
     with Span.open(
         SPAN_ENCOUNTER_OPPONENT_MINTED_STUB,
         {
@@ -1127,6 +1170,63 @@ def encounter_opponent_minted_stub_span(
             "opponent": opponent,
             "hp": hp,
             "armor_class": armor_class,
+            "reason": reason,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def encounter_opponent_seated_from_generics_span(
+    *,
+    confrontation_type: str,
+    opponent: str,
+    creature_id: str,
+    hp: int,
+    armor_class: int,
+    reason: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """162-3: the last-resort Other was drawn from the world bestiary's authored
+    ``generics:`` section — sanctioned provenance (``Origin(kind=GENERIC)``),
+    the row's own balanced stats, and a GM-panel record of which row seated
+    whom."""
+    with Span.open(
+        SPAN_ENCOUNTER_OPPONENT_SEATED_FROM_GENERICS,
+        {
+            "confrontation_type": confrontation_type,
+            "opponent": opponent,
+            "creature_id": creature_id,
+            "hp": hp,
+            "armor_class": armor_class,
+            "reason": reason,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+
+
+@contextmanager
+def encounter_stub_fabrication_refused_span(
+    *,
+    confrontation_type: str,
+    opponent: str,
+    reason: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """162-3: every legitimate opponent source exhausted and no generics
+    authored — the seater refuses to fabricate on the default path and raises.
+    This span IS the refusal's observability (No Silent Fallbacks)."""
+    with Span.open(
+        SPAN_ENCOUNTER_STUB_FABRICATION_REFUSED,
+        {
+            "confrontation_type": confrontation_type,
+            "opponent": opponent,
             "reason": reason,
             **attrs,
         },

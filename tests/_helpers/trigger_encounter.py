@@ -23,7 +23,13 @@ def trigger_encounter(
     npcs_present: list | None = None,
     additional_player_names: list[str] | None = None,
 ) -> None:
-    """Set up an encounter on the snapshot the same way the old narration_apply path did."""
+    """Set up an encounter on the snapshot the same way the old narration_apply path did.
+
+    Passes ``allow_synthetic_opponent=True`` — test harnesses are the story
+    162-3 degenerate carve-out: an unbacked opponent name mints the old
+    ephemeral stub (WARN + minted-stub span) instead of raising. Production
+    callers never pass this flag.
+    """
     instantiate_encounter_from_trigger(
         snapshot=snap,
         pack=pack,
@@ -32,4 +38,5 @@ def trigger_encounter(
         npcs_present=npcs_present or [],
         genre_slug=snap.genre_slug,
         additional_player_names=additional_player_names,
+        allow_synthetic_opponent=True,
     )

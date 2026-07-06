@@ -133,6 +133,7 @@ def seat_wn_combat(
         additional_player_names=list(pc_names[1:]) or None,
         npcs_present=[NpcMention(name=o, side="opponent") for o in opponents],
         genre_slug=genre_slug,
+        allow_synthetic_opponent=True,
     )
     assert enc is not None, "seating WN combat must produce an encounter"
     snap.encounter = enc

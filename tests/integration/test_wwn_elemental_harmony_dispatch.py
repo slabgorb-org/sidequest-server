@@ -129,6 +129,7 @@ def _seat_martial_exchange(pack, snap, *, caster_name: str, opponent: str, locat
         player_name=caster_name,
         npcs_present=[NpcMention(name=opponent, side="opponent")],
         genre_slug="elemental_harmony",
+        allow_synthetic_opponent=True,
     )
     assert enc is not None, "seating Martial Exchange must produce an encounter"
     snap.encounter = enc

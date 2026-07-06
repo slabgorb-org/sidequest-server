@@ -138,6 +138,7 @@ def _seat_combat(pack, caster_name: str, opponent: str, *, caster_level: int = 1
         player_name=caster_name,
         npcs_present=[NpcMention(name=opponent, side="opponent")],
         genre_slug="heavy_metal",
+        allow_synthetic_opponent=True,
     )
     assert enc is not None, "seating Blade-work must produce an encounter"
     snap.encounter = enc

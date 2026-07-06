@@ -48,10 +48,12 @@ from sidequest.telemetry.spans import (
     encounter_no_opponent_available_span,
     encounter_opponent_minted_stub_span,
     encounter_opponent_resolved_from_roster_span,
+    encounter_opponent_seated_from_generics_span,
     encounter_opponent_toothless_span,
     encounter_resolved_span,
     encounter_roster_resolution_skipped_span,
     encounter_sealed_letter_arity_rejected_span,
+    encounter_stub_fabrication_refused_span,
     npc_edge_published_span,
     participant_joined_span,
     table_dealt_span,
@@ -315,6 +317,23 @@ def _opponent_reprisal_damage_resolvable(cdef, opponent_core, ruleset) -> bool:
     return isinstance(ruleset, WithoutNumberRulesetModule)
 
 
+def _generics_for(pack, world_slug: str | None) -> list:
+    """Resolve the world's authored bestiary ``generics:`` rows (story 162-3).
+
+    Rides the same genre/world layering every bestiary consumer uses:
+    ``pack.effective_bestiary(world)`` (world tier overrides, genre tier
+    inherited). ``pack=None`` or no resolvable bestiary → ``[]`` — the caller
+    then refuses loudly (or mints under the explicit degenerate opt-in);
+    the empty list is never a silent seat.
+    """
+    if pack is None:
+        return []
+    bestiary, _source = pack.effective_bestiary(world_slug or None)
+    if bestiary is None:
+        return []
+    return list(bestiary.generics or [])
+
+
 def _seed_combat_hp_depletion_to_npcs(
     *,
     snapshot: GameSnapshot,
@@ -324,6 +343,8 @@ def _seed_combat_hp_depletion_to_npcs(
     source: str,
     acting_character_name: str,
     ruleset: RulesetModule,
+    pack=None,
+    allow_synthetic_opponent: bool = False,
 ) -> None:
     """Seed opponent ``Npc.core`` HP + AC from content for hp_depletion combats.
 
@@ -350,6 +371,27 @@ def _seed_combat_hp_depletion_to_npcs(
     ``opponent_default_stats`` for any combat hp_depletion confrontation that
     loads, so ``opponent_hp`` / ``opponent_armor_class`` are guaranteed present
     here — no runtime fail-loud needed at this seam.
+
+    Story 162-3: the fabrication last-resort is gone from the default path.
+    An opponent with no roster/pool backing seats from the world bestiary's
+    authored ``generics:`` section (resolved via ``pack.effective_bestiary``
+    against ``snapshot.world_slug``), stamped ``Origin(kind=GENERIC)`` and
+    carrying the ROW's stats (authored bestiary math outranks the frame
+    default — the 108-2 bound-creature rule). With no generics available the
+    seeder RAISES ``ValueError`` (No Silent Fallbacks); degenerate callers
+    (test fixtures, one-off scenario generation) may pass
+    ``allow_synthetic_opponent=True`` to keep the old warn-and-mint behavior.
+    ``pack=None`` means generics are unresolvable — direct-driving callers
+    that never reach the fabrication branch may omit it.
+
+    Frame-sourced carve-out: a def declaring ``opponent_source: frame``
+    (vehicle-scale hp_depletion, e.g. space_opera ship_combat's hull) or a
+    sealed-letter Other (ADR-153 §6 commit-reveal duel) skips generics ENTIRELY
+    and mints from the def's own authored ``opponent_default_stats``,
+    unconditionally — no ``allow_synthetic_opponent`` needed, no warning. The
+    load validator requires ``opponent_default_stats`` on every combat
+    hp_depletion cdef, so the frame IS an authored source; a humanoid bestiary
+    generic must never wear a hull. This is NOT the degenerate opt-in.
     """
     from sidequest.game.creature_core import CreatureCore, Inventory, hp_pool_from_hp
     from sidequest.game.session import Npc
@@ -416,51 +458,132 @@ def _seed_combat_hp_depletion_to_npcs(
                 snapshot.npcs.append(npc)
                 pool_origin = pool_member.name
             else:
-                # Item 3 wiring: no backing Npc.core for this opponent. Create
-                # one seeded with the content stats so find_creature_core can
-                # reach it and hp_depletion can resolve. The flavor fields are
-                # placeholders (the narrator owns prose); the mechanical surface
-                # (hp pool, AC) is the load-bearing part.
-                #
                 # 108-2 (MINTING-MAJOR): reaching here means the opponent name
                 # resolved to NEITHER a bound roster entry NOR a co-located statted
                 # adversary NOR a scene-active pool antagonist (the
                 # materialized-threat resolution + pool promotion upstream already
-                # tried). This is a genuine fabrication — a router-named free string
-                # with no backing (the "Arena Opponent" / "Hold-Dead" stubs). Mark
-                # it ``ephemeral`` so it is reaped with its resolved encounter and
-                # never persists as durable canon, and fire the loud lie-detector
-                # span so the GM panel sees the fabrication + the content gap (No
-                # Silent Fallbacks).
-                core = CreatureCore(
-                    name=actor.name,
-                    description="Combat opponent",
-                    personality="Adversary",
-                    inventory=Inventory(),
-                    hp=hp_pool_from_hp(hp),
-                    armor_class=ac,
+                # tried) — a router-named free string with no backing.
+                #
+                # Story 162-3: the fabrication last-resort is replaced by the
+                # world bestiary's AUTHORED ``generics:`` section — the sanctioned
+                # final rung of the origin precedence. The generic row seats
+                # under the router's name (narrator continuity) but carries the
+                # ROW's identity (creature_id) and the ROW's stats — authored
+                # bestiary math outranks the frame default, the same rule as the
+                # 108-2 bound-creature HP preserve above.
+                #
+                # Frame-sourced carve-out: a sealed-letter Other (ADR-153 §6
+                # commit-reveal duel / dogfight) and any def declaring
+                # ``opponent_source: frame`` (vehicle-scale hp_depletion, e.g.
+                # space_opera ship_combat's hull) seat FROM THE DEF FRAME by
+                # design — the load validator requires ``opponent_default_stats``
+                # on every combat hp_depletion cdef, so the frame IS an authored
+                # source, and a humanoid bestiary generic must never wear a
+                # hull. The frame-default mint is therefore NOT a 162-3
+                # fabrication: it keeps the pre-162-3 behavior (ephemeral +
+                # minted-stub span) unconditionally.
+                frame_other = (
+                    getattr(cdef, "resolution_mode", None) == ResolutionMode.sealed_letter_lookup
+                    or getattr(cdef, "opponent_source", "bestiary") == "frame"
                 )
-                # Story 162-2: stamp typed provenance so downstream consumers
-                # (arbiter, forensics) see "fabricated" without sniffing the
-                # ephemeral bool.
-                npc = Npc(
-                    core=core,
-                    ephemeral=True,
-                    origin=Origin(kind=OriginKind.EPHEMERAL_STUB),
-                )
-                snapshot.npcs.append(npc)
-                with encounter_opponent_minted_stub_span(
-                    confrontation_type=str(getattr(cdef, "confrontation_type", "") or ""),
-                    opponent=actor.name,
-                    hp=int(hp),
-                    armor_class=int(ac),
-                    reason=(
-                        "router-named opponent has no backing roster/bestiary entry "
-                        "and no co-located bound adversary to resolve to — fabricated "
-                        "an ephemeral stub (author the encounter's adversary)"
-                    ),
-                ):
-                    pass
+                generics = [] if frame_other else _generics_for(pack, snapshot.world_slug)
+                if generics:
+                    # Selection: first authored row. Deterministic and
+                    # resume-safe; the single chokepoint for any future
+                    # role/tag-matched selection.
+                    row = generics[0]
+                    core = CreatureCore(
+                        name=actor.name,
+                        description=row.description or row.role or "Combat opponent",
+                        personality="Adversary",
+                        inventory=Inventory(),
+                        hp=hp_pool_from_hp(int(row.hp)),
+                        armor_class=int(row.armor_class),
+                    )
+                    npc = Npc(
+                        core=core,
+                        creature_id=row.id,
+                        origin=Origin(kind=OriginKind.GENERIC, creature_id=row.id),
+                    )
+                    snapshot.npcs.append(npc)
+                    with encounter_opponent_seated_from_generics_span(
+                        confrontation_type=str(getattr(cdef, "confrontation_type", "") or ""),
+                        opponent=actor.name,
+                        creature_id=row.id,
+                        hp=int(row.hp),
+                        armor_class=int(row.armor_class),
+                        reason=(
+                            "router-named opponent has no roster/pool backing — "
+                            "seated from the world's authored bestiary generics"
+                        ),
+                    ):
+                        pass
+                elif frame_other or allow_synthetic_opponent:
+                    # Two sanctioned mint paths: (a) the frame-sourced seat (see
+                    # carve-out above — always allowed, the frame is authored
+                    # content, no warning), and (b) the story-context degenerate
+                    # carve-out (test fixtures, one-off scenario generation) —
+                    # tolerated but WARNED. Both stay observable: the fabrication
+                    # lie-detector span fires, the mint is stamped EPHEMERAL_STUB
+                    # (162-2 provenance) and reaped with its encounter.
+                    if not frame_other:
+                        _log.warning(
+                            "encounter.synthetic_stub_minted opponent=%r type=%r — "
+                            "degenerate opt-in fabricated an ephemeral stub "
+                            "(no roster/pool/generics source)",
+                            actor.name,
+                            str(getattr(cdef, "confrontation_type", "") or ""),
+                        )
+                    core = CreatureCore(
+                        name=actor.name,
+                        description="Combat opponent",
+                        personality="Adversary",
+                        inventory=Inventory(),
+                        hp=hp_pool_from_hp(hp),
+                        armor_class=ac,
+                    )
+                    npc = Npc(
+                        core=core,
+                        ephemeral=True,
+                        origin=Origin(kind=OriginKind.EPHEMERAL_STUB),
+                    )
+                    snapshot.npcs.append(npc)
+                    with encounter_opponent_minted_stub_span(
+                        confrontation_type=str(getattr(cdef, "confrontation_type", "") or ""),
+                        opponent=actor.name,
+                        hp=int(hp),
+                        armor_class=int(ac),
+                        reason=(
+                            "frame-sourced Other seated from the def's authored "
+                            "opponent_default_stats (ADR-153 §6 / opponent_source=frame)"
+                            if frame_other
+                            else (
+                                "degenerate opt-in (allow_synthetic_opponent) — no "
+                                "roster/bestiary backing and no generics; fabricated "
+                                "an ephemeral stub (author the encounter's adversary)"
+                            )
+                        ),
+                    ):
+                        pass
+                else:
+                    # No legitimate source left. Refuse, observably (No Silent
+                    # Fallbacks) — the caller restores any half-seated encounter.
+                    with encounter_stub_fabrication_refused_span(
+                        confrontation_type=str(getattr(cdef, "confrontation_type", "") or ""),
+                        opponent=actor.name,
+                        reason=(
+                            "no roster entry, no scene-active pool antagonist, "
+                            "and the world's bestiary authors no generics section"
+                        ),
+                    ):
+                        pass
+                    raise ValueError(
+                        f"no opponent source for {actor.name!r}: not in the roster, no "
+                        f"scene-active pool antagonist, and the world's bestiary authors "
+                        f"no generics section — author generic rows (bestiary.yaml "
+                        f"`generics:`) or pass allow_synthetic_opponent=True on "
+                        f"degenerate paths"
+                    )
         elif npc.creature_id is not None:
             # 108-2: a BOUND, statted bestiary creature (resolved upstream or
             # named directly). Its authored HP pool IS the WWN-balanced math the
@@ -575,8 +698,11 @@ def _seed_fate_opponents(
     populated:
 
     - a router-named opponent with no backing ``Npc`` is CREATED with a sheet
-      (mirrors the hp_depletion seeder's create branch — marked ``ephemeral`` so it
-      is reaped with its resolved encounter);
+      (marked ``ephemeral`` so it is reaped with its resolved encounter). NOTE
+      (162-3): this still mirrors the PRE-162-3 hp_depletion create branch — the
+      Fate seeder does NOT yet consult bestiary ``generics:`` or refuse loudly;
+      a Fate-genre generics sibling is scoped as follow-up (see 162-3 Delivery
+      Findings / TEA Fate-seeder question);
     - a seated native-stat creature (a bestiary mob with ``fate_sheet=None``) has a
       sheet ATTACHED beside its existing core (the Fate facet rides ALONGSIDE the
       d20 core — fate_sheet.py: a Fate-bound creature simply ALSO has the facet);
@@ -1156,8 +1282,9 @@ def _resolve_opponent_from_roster(
     Returns the co-located bound creature to seat in the router name's place, or
     ``None`` to leave the router name as-is — because it already matches a roster
     entry (seat it directly; the seater dedups), because no co-located bound
-    adversary exists (the truly-novel fight: the seater mints a loud, ephemeral
-    stub downstream), or because the confrontation is one where conscription is
+    adversary exists (the truly-novel fight: since 162-3 the seater seats a
+    bestiary generic, mints a frame-sourced/degenerate-opt-in stub, or RAISES —
+    downstream), or because the confrontation is one where conscription is
     never right: a NON-combat confrontation (150-2) or ANY confrontation under a
     FATE binding (153-9 — ``is_fate``; a Fate conflict resolves on FateSheet
     stress, not the bound creature's hp, so there is nothing to preserve).
@@ -1536,6 +1663,7 @@ def instantiate_encounter_from_trigger(
     additional_player_names: list[str] | None = None,
     security_tier: str | None = None,
     materialized_threat: NpcMention | None = None,
+    allow_synthetic_opponent: bool = False,
 ) -> StructuredEncounter | None:
     """Create a StructuredEncounter when the narrator emits ``confrontation=T``.
 
@@ -1545,6 +1673,19 @@ def instantiate_encounter_from_trigger(
 
     Raises ``ValueError`` when ``encounter_type`` doesn't match any
     ConfrontationDef in the pack (CLAUDE.md: no silent fallback).
+
+    Story 162-3: an hp_depletion combat opponent with no roster/pool backing
+    seats from the world bestiary's authored ``generics:`` section — the
+    sanctioned last resort. With no generics available this RAISES
+    ``ValueError``; the refusal restores ``snapshot.encounter`` AND rolls back
+    any opponent Npc the seeder appended for an earlier actor in the same pass
+    (nothing half-seated, nothing fabricated — No Silent Fallbacks, including the
+    multi-opponent case). A def declaring ``opponent_source: frame`` (or a
+    sealed-letter Other, ADR-153 §6) is exempt: it seats from the def's own
+    authored ``opponent_default_stats``, never generics.
+    ``allow_synthetic_opponent=True`` is the explicit degenerate opt-in (test
+    fixtures, one-off scenario generation): warn-and-mint the old ephemeral stub
+    instead of raising. Production callers must never pass it.
 
     Raises ``ValueError`` when any NPC's side is not in {player, opponent, neutral}
     (CLAUDE.md: no silent fallback). Emits encounter_invalid_side_span for OTEL.
@@ -2347,15 +2488,33 @@ def instantiate_encounter_from_trigger(
                     if pack and pack.rules
                     else _raise_missing_ruleset("hp_depletion_seating")
                 )
-                _seed_combat_hp_depletion_to_npcs(
-                    snapshot=snapshot,
-                    actors=actors,
-                    cdef=cdef,
-                    turn=turn_no,
-                    source="encounter_handshake",
-                    acting_character_name=player_name,
-                    ruleset=get_ruleset_module(ruleset_slug),
-                )
+                # 162-3: remember the roster length so a refusal can roll back any
+                # opponent the seeder appended for an EARLIER actor in this same
+                # pass before a LATER unbacked actor raised — a multi-opponent seat
+                # (e.g. a pool-promoted Other seated ahead of a no-source Other in a
+                # world with no generics) must leave NOTHING behind, not just the
+                # single-opponent case.
+                _npcs_before_seed = len(snapshot.npcs)
+                try:
+                    _seed_combat_hp_depletion_to_npcs(
+                        snapshot=snapshot,
+                        actors=actors,
+                        cdef=cdef,
+                        turn=turn_no,
+                        source="encounter_handshake",
+                        acting_character_name=player_name,
+                        ruleset=get_ruleset_module(ruleset_slug),
+                        pack=pack,
+                        allow_synthetic_opponent=allow_synthetic_opponent,
+                    )
+                except ValueError:
+                    # 162-3: the fabrication refusal must not half-seat — roll back
+                    # any opponent Npc appended during THIS failed pass and restore
+                    # the pre-trigger encounter slot (None, or the resolved husk this
+                    # trigger was replacing) before propagating the raise.
+                    del snapshot.npcs[_npcs_before_seed:]
+                    snapshot.encounter = current
+                    raise
                 # ADR-153: a sealed-letter dogfight is a SIMULTANEOUS-COMMIT duel
                 # resolved by the geometry-based shot path (resolve_dogfight_shots),
                 # not the WN beat-loop round — it has no 1d8+DEX turn order and never

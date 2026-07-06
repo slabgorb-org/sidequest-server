@@ -60,6 +60,7 @@ def test_instantiate_combat_creates_encounter(cac_pack) -> None:
         player_name="Rux",
         npcs_present=[NpcMention(name="Goblin", side="opponent", role="hostile")],
         genre_slug="caverns_and_claudes",
+        allow_synthetic_opponent=True,
     )
     assert enc is not None
     assert snap.encounter is enc
@@ -92,6 +93,7 @@ def test_instantiate_unknown_type_raises(cac_pack) -> None:
             player_name="Rux",
             npcs_present=[],
             genre_slug="caverns_and_claudes",
+            allow_synthetic_opponent=True,
         )
 
 
@@ -133,6 +135,7 @@ def test_instantiate_replaces_resolved_encounter(cac_pack) -> None:
         player_name="Rux",
         npcs_present=[NpcMention(name="Goblin", side="opponent", role="hostile")],
         genre_slug="caverns_and_claudes",
+        allow_synthetic_opponent=True,
     )
     assert snap.encounter is enc
     assert enc is not prior
@@ -185,6 +188,7 @@ def test_resolution_turn_same_type_suppresses_initiated_span(cac_pack) -> None:
             player_name="Rux",
             npcs_present=[NpcMention(name="Goblin", side="opponent", role="hostile")],
             genre_slug="caverns_and_claudes",
+            allow_synthetic_opponent=True,
         )
         assert enc is not None
         spans_after_init = [
@@ -208,6 +212,7 @@ def test_resolution_turn_same_type_suppresses_initiated_span(cac_pack) -> None:
             player_name="Rux",
             npcs_present=[NpcMention(name="Goblin", side="opponent", role="hostile")],
             genre_slug="caverns_and_claudes",
+            allow_synthetic_opponent=True,
         )
         assert result is None, (
             "a same-type re-dispatch on the resolution turn must no-op "
@@ -251,6 +256,7 @@ def test_instantiate_active_encounter_is_noop(cac_pack) -> None:
         player_name="Rux",
         npcs_present=[],
         genre_slug="caverns_and_claudes",
+        allow_synthetic_opponent=True,
     )
     assert result is None
     assert snap.encounter is active
@@ -322,6 +328,7 @@ def test_instantiate_two_dials_from_cdef(snapshot_with_pack):
         player_name="Sam",
         npcs_present=[NpcMention(name="Promo", side="opponent", role="hostile")],
         genre_slug="test_pack",
+        allow_synthetic_opponent=True,
     )
     assert enc is not None
     assert enc.player_metric.threshold == 10
@@ -350,6 +357,7 @@ def test_instantiate_stamps_category_from_cdef(snapshot_with_pack):
         player_name="Sam",
         npcs_present=[NpcMention(name="Promo", side="opponent", role="hostile")],
         genre_slug="test_pack",
+        allow_synthetic_opponent=True,
     )
     assert enc is not None
     assert enc.category == "combat", (
@@ -375,6 +383,7 @@ def test_instantiate_routes_actor_sides_from_payload(snapshot_with_pack):
             NpcMention(name="Host", side="neutral", role="bystander"),
         ],
         genre_slug="test_pack",
+        allow_synthetic_opponent=True,
     )
     sides = {a.name: a.side for a in enc.actors}
     assert sides["Sam"] == "player"
@@ -406,6 +415,7 @@ def test_invalid_side_raises_with_span(snapshot_with_pack):
             player_name="Sam",
             npcs_present=[bad_npc],
             genre_slug="test_pack",
+            allow_synthetic_opponent=True,
         )
 
 
@@ -436,6 +446,7 @@ def test_instantiate_seats_additional_pcs_for_mp_bundle(cac_pack) -> None:
         player_name="Scratchy",
         npcs_present=[NpcMention(name="Inspector Volkova", side="opponent", role="hostile")],
         genre_slug="caverns_and_claudes",
+        allow_synthetic_opponent=True,
         additional_player_names=["Itchy"],
     )
     assert enc is not None
@@ -464,6 +475,7 @@ def test_instantiate_additional_pcs_dedup_against_primary(cac_pack) -> None:
         player_name="Scratchy",
         npcs_present=[NpcMention(name="Goblin", side="opponent", role="hostile")],
         genre_slug="caverns_and_claudes",
+        allow_synthetic_opponent=True,
         additional_player_names=["Scratchy", "Itchy", "Itchy"],
     )
     assert enc is not None
@@ -491,6 +503,7 @@ def test_instantiate_additional_pcs_default_none_keeps_solo_behavior(cac_pack) -
         player_name="Rux",
         npcs_present=[NpcMention(name="Goblin", side="opponent", role="hostile")],
         genre_slug="caverns_and_claudes",
+        allow_synthetic_opponent=True,
     )
     assert enc is not None
     pc_names = [a.name for a in enc.actors if a.side == "player"]
@@ -751,6 +764,7 @@ def test_sealed_letter_does_not_consume_registry_fallback(sealed_letter_pack):
             player_name="Maverick",
             npcs_present=[explicit_opponent],
             genre_slug="test_pack",
+            allow_synthetic_opponent=True,
         )
 
         assert enc is not None
@@ -835,6 +849,7 @@ def test_sealed_letter_empty_npcs_seats_frame_default_never_location_fallback(
         player_name="Maverick",
         npcs_present=[],
         genre_slug="test_pack",
+        allow_synthetic_opponent=True,
     )
 
     # §6: the duel seats, with the Other sourced from the def frame — the
@@ -895,6 +910,7 @@ def test_combat_with_empty_npcs_and_empty_registry_fallback_raises(combat_only_p
             player_name="Orin",
             npcs_present=[],
             genre_slug="test_pack",
+            allow_synthetic_opponent=True,
         )
 
     assert snap.encounter is None, (
@@ -927,6 +943,7 @@ def test_combat_with_no_location_and_empty_npcs_raises(combat_only_pack):
             player_name="Orin",
             npcs_present=[],
             genre_slug="test_pack",
+            allow_synthetic_opponent=True,
         )
 
 
@@ -977,6 +994,7 @@ def test_combat_no_opponent_emits_otel_span(combat_only_pack):
                 player_name="Orin",
                 npcs_present=[],
                 genre_slug="test_pack",
+                allow_synthetic_opponent=True,
             )
 
         spans_by_name = {s.name: s for s in exporter.get_finished_spans()}
@@ -1023,6 +1041,7 @@ def test_non_combat_with_empty_npcs_and_empty_registry_does_not_raise(non_combat
         player_name="Ada",
         npcs_present=[],
         genre_slug="test_pack",
+        allow_synthetic_opponent=True,
     )
 
     assert enc is not None

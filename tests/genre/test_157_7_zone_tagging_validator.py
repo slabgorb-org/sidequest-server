@@ -249,6 +249,39 @@ def test_zoned_real_slug_passes() -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Story 162-3 — the bestiary ``generics:`` rows are pooled content too: a zoned
+# world's untagged generic must fail loud, not silently vanish at seat time.
+# ═══════════════════════════════════════════════════════════════════════════
+def test_zoned_untagged_generic_row_raises() -> None:
+    """162-3 folds ``bestiary.generics`` into the validated pool. A generic row
+    with no ``factions`` in a zoned world is exactly the silent-never-match bug
+    this validator exists to kill (the seater's last-resort Other would just
+    never match its zone) — it must be a LOUD load failure."""
+    cart = _cartography(AKKAD, None)
+    bestiary = Bestiary(
+        entries=[_entry("tagged_roster", [AKKAD])],
+        generics=[_entry("untagged_generic", [])],
+    )
+    with pytest.raises(GenreLoadError) as exc:
+        _validate_zone_tagged_content(cart, bestiary, [], [], world_slug="zoned_world")
+    msg = str(exc.value)
+    assert "untagged_generic" in msg, "error must name the offending generic row id"
+    assert "zoned_world" in msg
+
+
+def test_zoned_tagged_generic_row_passes() -> None:
+    """A ``["*"]``-tagged generic row (exactly how coyote_star tags its generics)
+    is eligible — the validator must not over-reject the real shipped content."""
+    cart = _cartography(AKKAD, None)
+    bestiary = Bestiary(
+        entries=[_entry("tagged_roster", [AKKAD])],
+        generics=[_entry("global_generic", [STAR])],
+    )
+    result = _validate_zone_tagged_content(cart, bestiary, [], [], world_slug="zoned_world")
+    assert result is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # AC3 — referential check: a typo'd faction slug is a LOUD failure, not a
 #        silent never-match at runtime
 # ═══════════════════════════════════════════════════════════════════════════

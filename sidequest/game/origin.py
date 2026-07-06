@@ -38,10 +38,15 @@ if TYPE_CHECKING:
 
 
 class OriginKind(StrEnum):
-    """The six §3a creation families that land an ``Npc``.
+    """The creation families that land an ``Npc`` (§3a's six, plus GENERIC).
 
     The narrator-mention and prose-extraction paths share
     ``NARRATOR_INVENTED`` — both are narrator mints (§3a paths 2/3).
+    ``GENERIC`` (story 162-3) is the sanctioned last-resort seat drawn from
+    the world bestiary's authored ``generics:`` section — the precedence rung
+    that replaced default-path ``EPHEMERAL_STUB`` fabrication. Like AUTHORED
+    and ROOM_BOUND it is stamped at creation, never derived from legacy
+    fields.
     """
 
     AUTHORED = "authored"
@@ -50,6 +55,7 @@ class OriginKind(StrEnum):
     MANUAL_POOL = "manual_pool"
     NARRATOR_INVENTED = "narrator_invented"
     EPHEMERAL_STUB = "ephemeral_stub"
+    GENERIC = "generic"
 
 
 class Origin(BaseModel):
@@ -112,9 +118,10 @@ def derive_origin(npc: Npc) -> Origin:
     * ``manual_origin=True`` → MANUAL_POOL
     * otherwise → NARRATOR_INVENTED
 
-    AUTHORED and ROOM_BOUND are NOT derivable from legacy fields (an authored
-    Npc carries no legacy marker; a room-bound patch is byte-identical to an
-    encounter patch) — those paths stamp ``origin`` at creation.
+    AUTHORED, ROOM_BOUND and GENERIC are NOT derivable from legacy fields (an
+    authored Npc carries no legacy marker; a room-bound patch is
+    byte-identical to an encounter patch; a generics seat predates no save
+    written before 162-3) — those paths stamp ``origin`` at creation.
     """
     if npc.origin is not None:
         return npc.origin

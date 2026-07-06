@@ -140,6 +140,7 @@ def _seated_combat(*, encounter_type: str, pc: str, opponent: str, location: str
         player_name=pc,
         npcs_present=[NpcMention(name=opponent, side="opponent")],
         genre_slug=SWN_TEST_PACK,
+        allow_synthetic_opponent=True,
     )
     assert enc is not None, "seating must produce an encounter"
     return snap, enc, pack

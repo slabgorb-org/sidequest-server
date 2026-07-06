@@ -59,18 +59,31 @@ class BestiaryEntry(BaseModel):
 
 
 class Bestiary(BaseModel):
-    """Top-level ``bestiary.yaml`` shape: a non-empty ``entries:`` list."""
+    """Top-level ``bestiary.yaml`` shape: a non-empty ``entries:`` list plus an
+    optional ``generics:`` section (story 162-3).
+
+    Generic rows are full ``BestiaryEntry`` stat blocks authored as the
+    SANCTIONED last-resort Other for the opponent seater — the origin
+    precedence ends ``... > MM pool > generics > error``, replacing the old
+    DEFAULT-PATH ephemeral stub mint (No Silent Fallbacks). (Frame-sourced defs
+    and the explicit degenerate opt-in still mint an ``EPHEMERAL_STUB`` — see
+    ``OriginKind.GENERIC`` in ``game/origin.py``.) Ids are unique ACROSS both
+    sections: identity is id-keyed (162-2 ``identity_key`` →
+    ``creature:<id>``), so one id over two divergent stat blocks would fork
+    identity at every downstream seam.
+    """
 
     model_config = {"extra": "forbid"}
 
     entries: list[BestiaryEntry]
+    generics: list[BestiaryEntry] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _validate(self) -> Bestiary:
         if not self.entries:
             raise ValueError("bestiary.yaml must define a non-empty `entries:` list")
         seen: set[str] = set()
-        for entry in self.entries:
+        for entry in (*self.entries, *self.generics):
             if entry.id in seen:
                 raise ValueError(f"duplicate bestiary entry id {entry.id!r}")
             seen.add(entry.id)

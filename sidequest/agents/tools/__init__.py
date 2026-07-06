@@ -21,7 +21,6 @@ from sidequest.agents.tools import (
     fate_tools,  # noqa: F401
     generate_encounter,  # noqa: F401
     generate_loadout,  # noqa: F401
-    generate_name,  # noqa: F401
     get_world_grounding,  # noqa: F401
     list_npcs_in_scene,  # noqa: F401
     long_rest,  # noqa: F401

@@ -185,8 +185,10 @@ async def test_orchestrator_routes_narration_through_sdk(
     #    Story 102-5 added wn_attack (37th), wn_skill_check (38th), wn_save
     #    (39th), wn_adjudicate_dead_premise (40th).
     #    ADR-116/144 added propose_fate_compel (41st, ruleset="fate"). 41.
+    #    Story 162-8 removed generate_name tool (dead spawn-path cleanup). 40.
+
     allowed = fake.last_options.allowed_tools
-    assert len(allowed) == len(default_registry.list_names()) == 41
+    assert len(allowed) == len(default_registry.list_names()) == 40
     assert all(name.startswith("mcp__narration__") for name in allowed)
 
     # 3. The result carries the SDK's text.

@@ -50,7 +50,6 @@ from sidequest.telemetry.spans import (
     encounter_opponent_resolved_from_roster_span,
     encounter_opponent_seated_from_generics_span,
     encounter_opponent_toothless_span,
-    encounter_resolved_span,
     encounter_roster_resolution_skipped_span,
     encounter_sealed_letter_arity_rejected_span,
     encounter_stub_fabrication_refused_span,
@@ -2541,47 +2540,6 @@ def instantiate_encounter_from_trigger(
                     acting_character_name=player_name,
                 )
         return enc
-
-
-def resolve_encounter_from_trope(
-    *,
-    snapshot: GameSnapshot,
-    trope_id: str,
-) -> StructuredEncounter | None:
-    """Resolve the active encounter because a trope completed.
-
-    Port of dispatch/tropes.rs:179-181. Returns the resolved encounter
-    (for OTEL / payload emission) or ``None`` if nothing to resolve.
-
-    IOU (story 3.4): this helper has no Python caller as of this commit. The
-    trope engine has not yet been ported to Python (Phase 3 scope). When the
-    trope tick/resolve path lands, hook this function at the completion site
-    — match Rust's dispatch/tropes.rs:179-181 pattern. The helper + unit
-    tests are here so the future port can just call it.
-    """
-    enc = snapshot.encounter
-    if enc is None or enc.resolved:
-        return None
-    with encounter_resolved_span(
-        encounter_type=enc.encounter_type,
-        outcome=f"resolved by trope completion: {trope_id}",
-        source="trope",
-    ):
-        enc.resolve_from_trope(trope_id)
-    _watcher_publish(
-        "state_transition",
-        {
-            "field": "encounter",
-            "op": "resolved",
-            "encounter_type": enc.encounter_type,
-            "outcome": enc.outcome or f"resolved by trope completion: {trope_id}",
-            "source": "trope",
-            "final_player_metric": enc.player_metric.current,
-            "final_opponent_metric": enc.opponent_metric.current,
-        },
-        component="encounter",
-    )
-    return enc
 
 
 def _is_combat_category(pack: GenrePack, encounter_type: str) -> bool:

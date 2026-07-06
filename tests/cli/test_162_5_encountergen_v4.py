@@ -17,10 +17,11 @@ live runtime source for this world.
 Two tests encode that finding:
   * a GREEN characterization pin — the native path reads creatures.yaml (records
     V4=YES so it cannot silently regress);
-  * a RED behavioral tie — a creature spawned from creatures.yaml carries stats
-    that DIVERGE from the bestiary (ADR-155 single-source-of-truth violation).
-    This is the test that forces AC2's fix to RECONCILE the numbers (stripping
-    the stats would leave the spawned husk at hp-default, still != bestiary).
+  * a behavioral tie — a creature spawned from creatures.yaml must carry the
+    bestiary's combat stats (ADR-155 single-source-of-truth). This forced AC2's
+    fix to RECONCILE the numbers rather than strip them (a stripped field spawns
+    the husk at hp-default, still != bestiary). GREEN post-fix; was RED pre-fix
+    (silo_eye spawned hp30 vs bestiary hp36, glass_touched_mount hp14 vs hp18).
 """
 
 from __future__ import annotations
@@ -82,10 +83,13 @@ def test_v4_native_path_reads_creatures_yaml() -> None:
 
 
 def test_v4_spawned_creature_stats_match_bestiary() -> None:
-    """Behavioral tie (RED): a creature SPAWNED from creatures.yaml via the native
-    path must carry the bestiary's combat stats (ADR-155: bestiary is the single
-    source of truth). RED today — silo_eye spawns at hp30 vs bestiary hp36,
-    glass_touched_mount at hp14 vs hp18. GREEN once creatures.yaml is reconciled."""
+    """Behavioral tie: a creature SPAWNED from creatures.yaml via the native path
+    must carry the bestiary's combat stats (ADR-155: bestiary is the single source
+    of truth). Checks BOTH hp and AC — ``creature_to_enemy_block`` sets
+    ``EnemyBlock.hp`` directly but folds AC into ``weaknesses`` as ``"AC {n}"`` on
+    the native path (``armor_class`` stays None), so a wrong-key/silent-default
+    regression in the AC read would otherwise ship unseen. GREEN post-fix; was RED
+    pre-fix (silo_eye spawned hp30 vs hp36, glass_touched_mount hp14 vs hp18)."""
     creatures = {
         c["id"]: c
         for c in _collect_creatures_from_yaml(_creatures_path())
@@ -103,11 +107,20 @@ def test_v4_spawned_creature_stats_match_bestiary() -> None:
     mismatches: list[str] = []
     for cid in shared:
         enemy = creature_to_enemy_block(creatures[cid], rng)
-        expected_hp = by_id[cid].hp
-        if enemy.hp != expected_hp:
-            mismatches.append(
-                f"{cid}: spawned EnemyBlock hp={enemy.hp} but bestiary hp={expected_hp}"
-            )
+        b = by_id[cid]
+        if enemy.hp != b.hp:
+            mismatches.append(f"{cid}: spawned hp={enemy.hp} but bestiary hp={b.hp}")
+        # AC is folded into weaknesses as "AC {n}" on the native creatures.yaml path.
+        spawned_ac: int | None = None
+        for weakness in enemy.weaknesses:
+            rest = weakness[3:].strip() if weakness.startswith("AC ") else ""
+            if rest.isdigit():
+                spawned_ac = int(rest)
+                break
+        if spawned_ac is None:
+            mismatches.append(f"{cid}: spawned EnemyBlock exposes no 'AC n' weakness ({enemy.weaknesses!r})")
+        elif spawned_ac != b.armor_class:
+            mismatches.append(f"{cid}: spawned AC={spawned_ac} but bestiary armor_class={b.armor_class}")
 
     assert not mismatches, (
         f"{PACK}/{WORLD} spawns creatures with stats that diverge from the bestiary "

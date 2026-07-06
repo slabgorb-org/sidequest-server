@@ -1,4 +1,4 @@
-"""Story 162-5 — flickering_reach content reconciliation (GATED, RED).
+"""Story 162-5 — flickering_reach content reconciliation (GATED — regression guards).
 
 Two hard content-drift findings from the 2026-07-05 NPC-generation inventory
 (§4.8) plus the V4 gate:
@@ -20,9 +20,11 @@ Two hard content-drift findings from the 2026-07-05 NPC-generation inventory
        test_162_5_encountergen_v4.py — proves the divergence is live ammunition
        at the spawned-EnemyBlock layer, which forces the reconcile over the strip.)
 
-  AC4  wiring: the reconciled encounter table must be spawnable end-to-end
-       through the real runtime accessor (``pack.effective_bestiary(world)``),
-       each ref resolving to a stat-carrying ``BestiaryEntry``.
+  AC4  content-referential invariant: every encounter ref must resolve to a real
+       ``BestiaryEntry`` in the world's ``effective_bestiary`` (the roster the
+       engine reads). NOT a full wiring test — encounter_tables.yaml has no
+       runtime consumer; the genuine spawn-path wiring test is the V4 tie
+       (tests/cli/test_162_5_encountergen_v4.py, drives creature_to_enemy_block).
 
 Home rationale: content has no test runner; content-referential tests live in
 sidequest-server gated on content-on-disk, mirroring story 162-3's
@@ -30,8 +32,9 @@ tests/genre/test_162_3_generics_content.py. seaboard_of_saints resolves 100%
 today (spec §4.8) and serves as the positive control that proves this test's
 methodology flags real phantoms rather than always failing.
 
-RED today: 18 phantom refs (AC1), all 10 shared ids diverge (AC2), and AC4
-cannot resolve the phantom refs.
+Status: GREEN as of the 162-5 reconciliation (bestiary expanded 10→16, 18 refs
+remapped, creatures.yaml stats reconciled). Kept as regression guards — they were
+RED pre-fix (18 phantom refs; 9/10 shared ids diverged on hp).
 """
 
 from __future__ import annotations
@@ -137,7 +140,7 @@ def _dice(value: Any) -> str | None:
 
 def test_ac1_every_encounter_ref_resolves_to_bestiary() -> None:
     """Every ``creature:`` in flickering_reach/encounter_tables.yaml must exist
-    in the world's effective bestiary. RED today: 18/20 are phantom."""
+    in the world's effective bestiary. GREEN post-fix (was RED pre-fix: 18/20 phantom)."""
     pack = _load_pack(PACK)
     bestiary, source = pack.effective_bestiary(WORLD)
     assert bestiary is not None, f"{PACK}/{WORLD} resolves no bestiary (source tier {source!r})"
@@ -150,7 +153,7 @@ def test_ac1_every_encounter_ref_resolves_to_bestiary() -> None:
     assert bestiary_ids, f"{PACK}/{WORLD} bestiary has no entries — test would be vacuous"
     # Positive control: the two refs that resolve today must still resolve, or
     # the roster/parse has broken and any 'green' below would be meaningless.
-    assert KNOWN_GOOD_REFS <= bestiary_ids, (
+    assert bestiary_ids >= KNOWN_GOOD_REFS, (
         f"known-good refs missing from bestiary {sorted(bestiary_ids)!r} — "
         "content or accessor changed shape"
     )
@@ -188,7 +191,7 @@ def test_ac1_control_world_resolves_fully() -> None:
 def test_ac2_creatures_yaml_does_not_diverge_from_bestiary() -> None:
     """For every id shared between creatures.yaml and the bestiary, each combat
     field (hp, ac↔armor_class, damage dice) must be ABSENT (render-only) or
-    EQUAL to the bestiary (reconciled). RED today: all shared ids diverge."""
+    EQUAL to the bestiary (reconciled). GREEN post-fix (was RED: 9/10 shared ids diverged on hp)."""
     pack = _load_pack(PACK)
     bestiary, _source = pack.effective_bestiary(WORLD)
     assert bestiary is not None
@@ -210,8 +213,12 @@ def test_ac2_creatures_yaml_does_not_diverge_from_bestiary() -> None:
             divergences.append(f"{cid}.hp: creatures={c.get('hp')} bestiary={b.hp}")
         if c.get("ac") is not None and c.get("ac") != b.armor_class:
             divergences.append(f"{cid}.ac: creatures={c.get('ac')} bestiary={b.armor_class}")
+        # Mirror the hp/ac gating: a dice value ASSERTED by creatures.yaml must
+        # match the bestiary. If creatures.yaml asserts a die the bestiary lacks
+        # (b_dice is None), that is still creatures.yaml carrying a divergent
+        # runtime stat the bestiary doesn't own — flag it.
         c_dice, b_dice = _dice(c.get("damage")), _dice(b.damage)
-        if c_dice is not None and b_dice is not None and c_dice != b_dice:
+        if c_dice is not None and c_dice != b_dice:
             divergences.append(f"{cid}.damage: creatures={c_dice} bestiary={b_dice}")
 
     assert not divergences, (
@@ -225,28 +232,28 @@ def test_ac2_creatures_yaml_does_not_diverge_from_bestiary() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_ac4_encounters_spawnable_through_effective_bestiary() -> None:
-    """Wiring test: every encounter ref must resolve to a stat-carrying
-    ``BestiaryEntry`` via ``pack.effective_bestiary`` — the same accessor the
-    live MM injection / opponent seater / materializer read. RED today: phantom
-    refs resolve to nothing, so no enemy can be built for ~90% of encounters."""
+def test_ac4_encounters_resolve_through_effective_bestiary() -> None:
+    """Content-referential invariant (AC4): every encounter ref must resolve to a
+    real ``BestiaryEntry`` in the world's ``effective_bestiary`` — the same roster
+    accessor the live MM injection / opponent seater / materializer read.
+
+    NOTE: this is NOT a full end-to-end wiring test. ``encounter_tables.yaml`` has
+    no runtime consumer today (nothing in the server parses it), so this asserts
+    the refs *would* resolve against the roster the engine uses — not that an
+    encounter is driven live. The genuine spawn-path wiring test is the V4 tie in
+    ``test_162_5_encountergen_v4.py`` (drives the real ``creature_to_enemy_block``).
+    Was RED pre-fix (18 phantom refs); GREEN now — a regression guard against
+    re-introducing an unresolvable ref. (A resolved entry always carries real
+    combat numbers: ``BestiaryEntry`` enforces ``hp``/``armor_class`` ``ge=1`` at
+    parse, so resolution is the only failure mode worth checking here.)"""
     pack = _load_pack(PACK)
     bestiary, _source = pack.effective_bestiary(WORLD)
     assert bestiary is not None
     by_id = {e.id: e for e in bestiary.entries}
     refs = _encounter_creature_refs(_world_dir(PACK, WORLD))
-    assert refs, "no encounter refs — wiring test would be vacuous"
+    assert refs, "no encounter refs — invariant would be vacuous"
 
-    unspawnable: list[str] = []
-    for ref in sorted(refs):
-        entry = by_id.get(ref)
-        if entry is None:
-            unspawnable.append(f"{ref}: no bestiary entry")
-            continue
-        # A resolvable ref must carry real combat numbers, or the "spawn" is a
-        # default-stat husk (hp=4/ac=10) — the No Silent Fallbacks failure mode.
-        if entry.hp < 1 or entry.armor_class < 1:
-            unspawnable.append(f"{ref}: entry has degenerate stats hp={entry.hp} ac={entry.armor_class}")
+    unspawnable = sorted(ref for ref in refs if ref not in by_id)
 
     assert not unspawnable, (
         f"{len(unspawnable)}/{len(refs)} {PACK}/{WORLD} encounters are unspawnable "

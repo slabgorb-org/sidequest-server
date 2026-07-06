@@ -1392,8 +1392,9 @@ def _validate_zone_tagged_content(
     """Strict fail-loud validator for faction/zone-scoped content (story 157-7).
 
     In a *zoned* world — one where at least one ``Region.controlled_by`` is set —
-    every pooled, home-less authored item (each bestiary entry, trope, and
-    seed-trope) MUST carry a non-empty ``factions`` list whose every value is
+    every pooled, home-less authored item (each bestiary entry AND generics row
+    (story 162-3), trope, and seed-trope) MUST carry a non-empty ``factions`` list
+    whose every value is
     either ``"*"`` (world-global) or a real ``controlled_by`` slug present in this
     world's cartography. Any untagged item, or any item tagged with a faction that
     is not a real ``controlled_by`` slug (a typo), raises ``GenreLoadError`` naming
@@ -1429,7 +1430,14 @@ def _validate_zone_tagged_content(
         SPAN_ZONE_ELIGIBILITY_VALIDATOR_FAILURE,
     )
 
-    bestiary_entries = list(bestiary.entries) if bestiary is not None else []
+    # Story 162-3: the authored ``generics:`` rows are pooled, home-less content
+    # exactly like ``entries`` — a zoned world's generic Other must carry a valid
+    # ``factions`` tag or the zone predicate silently drops it at seat time. Fold
+    # both sections into one pool so a missing/typo'd tag on a generic row fails
+    # loud at load, not as a runtime ghost.
+    bestiary_entries = (
+        [*bestiary.entries, *bestiary.generics] if bestiary is not None else []
+    )
     pools: tuple[tuple[str, list], ...] = (
         ("bestiary", bestiary_entries),
         ("trope", list(tropes)),

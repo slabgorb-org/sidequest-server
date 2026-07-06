@@ -89,13 +89,17 @@ def otel_capture() -> Iterator[InMemorySpanExporter]:
         processor.shutdown()
 
 
-def _combat_cdef() -> ConfrontationDef:
+def _combat_cdef(*, opponent_source: str = "bestiary") -> ConfrontationDef:
     """Minimal hp_depletion combat cdef (the 162-2 fork-suite fixture shape).
 
     ``opponent_default_stats`` hp=8 / armor_class=12 deliberately DIFFER from
     the generic row (hp=6 / armor_class=11) so the stat-source assertions
     discriminate: a seat carrying 8/12 took the frame default (the old stub
     path), a seat carrying 6/11 took the authored generic row.
+
+    ``opponent_source="frame"`` (story 162-3 Dev deviation) marks a def whose
+    Other seats from the frame's own ``opponent_default_stats`` and NEVER from
+    bestiary generics — vehicle-scale hp_depletion (e.g. ship_combat's hull).
     """
     strike = BeatDef.model_validate(
         {
@@ -125,6 +129,7 @@ def _combat_cdef() -> ConfrontationDef:
         },
         opponent_damage=DamageSpec(dice="1d6"),
         beats=[strike],
+        opponent_source=opponent_source,
     )
 
 
@@ -160,8 +165,14 @@ class _FakeGenrePack:
     AttributeError at the fixture — never a silent auto-mock (the fixture is
     then extended deliberately)."""
 
-    def __init__(self, bestiary: object | None, source: str = "world") -> None:
-        self.rules = RulesConfig(confrontations=[_combat_cdef()])
+    def __init__(
+        self,
+        bestiary: object | None,
+        source: str = "world",
+        *,
+        cdef: ConfrontationDef | None = None,
+    ) -> None:
+        self.rules = RulesConfig(confrontations=[cdef or _combat_cdef()])
         self._bestiary = bestiary
         self._source = source
         self.bestiary_requests: list[str | None] = []
@@ -180,6 +191,17 @@ def _generics_pack() -> _FakeGenrePack:
     real field; the rows here are REAL ``BestiaryEntry`` objects either way.
     """
     return _FakeGenrePack(SimpleNamespace(entries=[_roster_entry()], generics=[_generic_entry()]))
+
+
+def _frame_generics_pack() -> _FakeGenrePack:
+    """A pack that authors generics BUT whose combat def declares
+    ``opponent_source: frame`` — the Other must seat from the frame's own
+    ``opponent_default_stats``, never the generics rows (vehicle-scale
+    carve-out, Dev deviation)."""
+    return _FakeGenrePack(
+        SimpleNamespace(entries=[_roster_entry()], generics=[_generic_entry()]),
+        cdef=_combat_cdef(opponent_source="frame"),
+    )
 
 
 def _no_generics_packs() -> list[tuple[str, _FakeGenrePack]]:
@@ -526,3 +548,111 @@ class TestSpansRoutedForGmPanel:
         assert SPAN_ENCOUNTER_STUB_FABRICATION_REFUSED == _REFUSAL_SPAN
         assert SPAN_ENCOUNTER_OPPONENT_SEATED_FROM_GENERICS in SPAN_ROUTES
         assert SPAN_ENCOUNTER_STUB_FABRICATION_REFUSED in SPAN_ROUTES
+
+
+# ---------------------------------------------------------------------------
+# 6. opponent_source="frame" seats from the frame, NEVER generics (Dev deviation)
+# ---------------------------------------------------------------------------
+
+
+class TestFrameSourcedSkipsGenerics:
+    def test_frame_def_mints_from_frame_and_never_consults_generics(
+        self,
+        otel_capture: InMemorySpanExporter,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A def declaring ``opponent_source: frame`` (vehicle-scale hp_depletion,
+        e.g. ship_combat's hull) seats the unbacked Other from its OWN
+        ``opponent_default_stats`` (8/12) — bypassing the world's authored
+        generics ENTIRELY, with no ``allow_synthetic_opponent`` and NO warning.
+        A humanoid bestiary generic must never wear a hull. This is the sanctioned
+        frame carve-out, NOT the degenerate opt-in."""
+        from sidequest.game.origin import OriginKind
+
+        snap = _snapshot()
+        pack = _frame_generics_pack()
+
+        with caplog.at_level(logging.WARNING):
+            enc = _drive(snap, pack)
+
+        assert enc is not None
+        assert len(snap.npcs) == 1
+        seated = snap.npcs[0]
+        # Frame-sourced: the old ephemeral stub, NOT a GENERIC seat.
+        assert seated.origin is not None
+        assert seated.origin.kind == OriginKind.EPHEMERAL_STUB, (
+            f"frame-sourced Other must mint EPHEMERAL_STUB from the frame, not a "
+            f"GENERIC seat; got {seated.origin.kind!r}"
+        )
+        # Frame stats (8/12), never the generic row (6/11).
+        assert seated.core.hp.max == 8 and seated.core.armor_class == 12, (
+            f"frame-sourced Other must carry the frame's opponent_default_stats "
+            f"(8/12), not the generic row (6/11); got "
+            f"{seated.core.hp.max}/{seated.core.armor_class}"
+        )
+        # Generics were NEVER consulted — the frame carve-out short-circuits the
+        # lookup BEFORE effective_bestiary is called.
+        assert pack.bestiary_requests == [], (
+            f"frame-sourced seat must skip generics entirely; effective_bestiary "
+            f"was consulted: {pack.bestiary_requests!r}"
+        )
+        # The frame mint fires the SAME lie-detector span as any mint...
+        names = {s.name for s in otel_capture.get_finished_spans()}
+        assert _MINTED_STUB_SPAN in names, (
+            "the frame-sourced mint must still fire the fabrication lie-detector span"
+        )
+        assert _GENERIC_SEAT_SPAN not in names, (
+            "a frame-sourced seat is not a generics seat — that span must stay silent"
+        )
+        # ...but WITHOUT the degenerate-opt-in warning (the frame is authored content).
+        warned = [
+            r
+            for r in caplog.records
+            if r.levelno >= logging.WARNING and "synthetic_stub_minted" in r.getMessage()
+        ]
+        assert not warned, (
+            f"the frame-sourced path is authored content, not a degenerate opt-in — "
+            f"it must NOT warn; got {[r.getMessage() for r in caplog.records]!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 7. Multi-opponent refusal rolls back ANY opponent seated earlier in the pass
+# ---------------------------------------------------------------------------
+
+
+class TestRefusalRollsBackHalfSeat:
+    def test_refusal_after_earlier_pool_promotion_leaves_nothing(self) -> None:
+        """The "nothing half-seated" invariant must hold for MULTI-opponent
+        seating, not just the single-opponent case. Opponent A resolves to a
+        scene-active pool antagonist (promoted + appended to the roster);
+        opponent B is a no-source router name in a world with no generics
+        (raises). The refusal must roll BACK A's promotion too — a discarded
+        encounter must leave the roster exactly as it found it."""
+        _A = "Rax the Enforcer"  # pool-promoted, appended before B is reached
+        _B = "Some Nameless Goon"  # no roster / pool / generics source -> raise
+        snap = _snapshot()
+        snap.npc_pool.append(NpcPoolMember(name=_A, drawn_from="narrator_invented"))
+        pack = _FakeGenrePack(Bestiary(entries=[_roster_entry()]))  # no generics
+
+        with pytest.raises(ValueError, match=r"(?i)generic"):
+            instantiate_encounter_from_trigger(
+                snapshot=snap,
+                pack=pack,  # type: ignore[arg-type]  # duck-typed; see _FakeGenrePack
+                encounter_type="combat",
+                player_name="Kirk",
+                npcs_present=[
+                    NpcMention(name=_A, side="opponent", role="hostile"),
+                    NpcMention(name=_B, side="opponent", role="hostile"),
+                ],
+                genre_slug=snap.genre_slug,
+            )
+
+        assert snap.encounter is None, (
+            f"refusal must restore the encounter slot; got {snap.encounter!r}"
+        )
+        assert snap.npcs == [], (
+            f"refusal must roll back the EARLIER pool-promoted opponent too — the "
+            f"roster must be empty, not half-seated; got "
+            f"{[n.core.name for n in snap.npcs]!r}"
+        )

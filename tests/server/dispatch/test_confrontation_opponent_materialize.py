@@ -33,10 +33,6 @@ from tests._helpers.genre_paths import GENRE_PACKS_DIR, PackNotFound, find_pack_
 
 pytestmark = pytest.mark.asyncio
 
-# Content-authored combat opponent stats (elemental_harmony rules.yaml
-# opponent_default_stats — "Wuxia mook: AC 12, HP 8").
-_MOOK_HP = 8
-
 # Full elemental_harmony canonical WN stat block so the player's initiative roll +
 # attack params never KeyError (the WWN module fails loud on a missing stat).
 _STATS = {
@@ -177,9 +173,9 @@ async def test_named_opponent_is_materialized_and_seated_as_other(otel_capture):
     # The materialized Other carries a real backing core. Story 162-3: an
     # unbacked router-named opponent now seats from the world's authored
     # bestiary ``generics:`` rows (the sanctioned last resort) — the row's
-    # authored stats win over the confrontation frame's ``_MOOK_HP`` default,
-    # the same rule as the 108-2 bound-creature HP preserve. Read the pinned
-    # value from the pack itself so content re-authoring can't desync the pin.
+    # authored stats win over the confrontation frame's ``opponent_default_stats``
+    # default, the same rule as the 108-2 bound-creature HP preserve. Read the
+    # pinned value from the pack itself so content re-authoring can't desync it.
     core = snap.find_creature_core(_OPPONENT)
     assert core is not None, "materialized opponent must have a backing CreatureCore"
     bestiary, _tier = pack.effective_bestiary("burning_peace")

@@ -10,11 +10,13 @@ for the recommended high-traffic worlds so their sessions have a sanctioned
 last-resort Other the moment stub minting becomes a loud failure. Without
 these rows, every unbacked router-named opponent in these worlds raises.
 
-Scope (story context): 2-3 worlds now; the remaining catalog is follow-up
-content work. Tier is deliberately unpinned — a pack may author generics at
-the world tier (beneath_sunden pattern) or genre tier (neon_dystopia's
-genre-root bestiary); the assertion rides ``effective_bestiary`` so either
-authoring home satisfies it.
+Scope (story context): the four worlds this story ships generics for. Tier is
+deliberately unpinned — the assertion rides ``effective_bestiary`` (world tier
+overrides, genre tier inherited) so either authoring home satisfies it. Every
+world shipped here authors at the WORLD tier (``worlds/<world>/bestiary.yaml``),
+including franchise_nations — ``effective_bestiary`` full-replaces with the
+world file whenever the world has one, so a genre-root generics section would be
+shadowed anyway.
 
 RED today: no bestiary carries a ``generics`` section (the field itself does
 not exist until the schema half lands).
@@ -34,12 +36,15 @@ def _has_real_content() -> bool:
 
 pytestmark = pytest.mark.skipif(not _has_real_content(), reason="sidequest-content not on disk")
 
-# The story context's recommended high-traffic worlds (one per pack tier
-# pattern: WWN world-tier, SWN world-tier, CWN genre-tier bestiary).
+# The four worlds this story ships generics for (all authored at the world
+# tier): WWN (beneath_sunden), SWN (coyote_star), CWN (franchise_nations), and
+# Fate/WWN elemental_harmony (burning_peace, added by the Dev fourth-world
+# deviation). Each resolves through ``effective_bestiary``.
 _GENERICS_WORLDS = (
     ("caverns_and_claudes", "beneath_sunden"),
     ("space_opera", "coyote_star"),
     ("neon_dystopia", "franchise_nations"),
+    ("elemental_harmony", "burning_peace"),
 )
 
 

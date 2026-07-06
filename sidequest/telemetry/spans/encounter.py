@@ -1157,9 +1157,12 @@ def encounter_opponent_minted_stub_span(
     """108-2 (MINTING-MAJOR): the seater fabricated an opponent with no backing
     roster/bestiary entry and no co-located bound creature to resolve to. Loud
     lie-detector for the content gap; the stub is marked ephemeral + reaped with
-    its encounter (No Silent Fallbacks). Since 162-3 this fires ONLY on the
-    explicit degenerate opt-in (``allow_synthetic_opponent=True``) — the
-    default path seats from bestiary generics or refuses."""
+    its encounter (No Silent Fallbacks). Since 162-3 this fires on the two
+    remaining mint paths — the frame-sourced default (``opponent_source: frame``
+    / sealed-letter, ADR-153 §6) AND the explicit degenerate opt-in
+    (``allow_synthetic_opponent=True``) — but NEVER on the bestiary-generics
+    default path (which fires ``opponent_seated_from_generics``) or the loud
+    refusal (which fires ``stub_fabrication_refused``)."""
     with Span.open(
         SPAN_ENCOUNTER_OPPONENT_MINTED_STUB,
         {

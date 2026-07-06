@@ -65,7 +65,9 @@ class Bestiary(BaseModel):
     Generic rows are full ``BestiaryEntry`` stat blocks authored as the
     SANCTIONED last-resort Other for the opponent seater — the origin
     precedence ends ``... > MM pool > generics > error``, replacing the old
-    ephemeral stub mint (No Silent Fallbacks). Ids are unique ACROSS both
+    DEFAULT-PATH ephemeral stub mint (No Silent Fallbacks). (Frame-sourced defs
+    and the explicit degenerate opt-in still mint an ``EPHEMERAL_STUB`` — see
+    ``OriginKind.GENERIC`` in ``game/origin.py``.) Ids are unique ACROSS both
     sections: identity is id-keyed (162-2 ``identity_key`` →
     ``creature:<id>``), so one id over two divergent stat blocks would fork
     identity at every downstream seam.

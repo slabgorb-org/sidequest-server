@@ -383,6 +383,15 @@ def _seed_combat_hp_depletion_to_npcs(
     ``allow_synthetic_opponent=True`` to keep the old warn-and-mint behavior.
     ``pack=None`` means generics are unresolvable — direct-driving callers
     that never reach the fabrication branch may omit it.
+
+    Frame-sourced carve-out: a def declaring ``opponent_source: frame``
+    (vehicle-scale hp_depletion, e.g. space_opera ship_combat's hull) or a
+    sealed-letter Other (ADR-153 §6 commit-reveal duel) skips generics ENTIRELY
+    and mints from the def's own authored ``opponent_default_stats``,
+    unconditionally — no ``allow_synthetic_opponent`` needed, no warning. The
+    load validator requires ``opponent_default_stats`` on every combat
+    hp_depletion cdef, so the frame IS an authored source; a humanoid bestiary
+    generic must never wear a hull. This is NOT the degenerate opt-in.
     """
     from sidequest.game.creature_core import CreatureCore, Inventory, hp_pool_from_hp
     from sidequest.game.session import Npc
@@ -689,8 +698,11 @@ def _seed_fate_opponents(
     populated:
 
     - a router-named opponent with no backing ``Npc`` is CREATED with a sheet
-      (mirrors the hp_depletion seeder's create branch — marked ``ephemeral`` so it
-      is reaped with its resolved encounter);
+      (marked ``ephemeral`` so it is reaped with its resolved encounter). NOTE
+      (162-3): this still mirrors the PRE-162-3 hp_depletion create branch — the
+      Fate seeder does NOT yet consult bestiary ``generics:`` or refuse loudly;
+      a Fate-genre generics sibling is scoped as follow-up (see 162-3 Delivery
+      Findings / TEA Fate-seeder question);
     - a seated native-stat creature (a bestiary mob with ``fate_sheet=None``) has a
       sheet ATTACHED beside its existing core (the Fate facet rides ALONGSIDE the
       d20 core — fate_sheet.py: a Fate-bound creature simply ALSO has the facet);
@@ -1270,8 +1282,9 @@ def _resolve_opponent_from_roster(
     Returns the co-located bound creature to seat in the router name's place, or
     ``None`` to leave the router name as-is — because it already matches a roster
     entry (seat it directly; the seater dedups), because no co-located bound
-    adversary exists (the truly-novel fight: the seater mints a loud, ephemeral
-    stub downstream), or because the confrontation is one where conscription is
+    adversary exists (the truly-novel fight: since 162-3 the seater seats a
+    bestiary generic, mints a frame-sourced/degenerate-opt-in stub, or RAISES —
+    downstream), or because the confrontation is one where conscription is
     never right: a NON-combat confrontation (150-2) or ANY confrontation under a
     FATE binding (153-9 — ``is_fate``; a Fate conflict resolves on FateSheet
     stress, not the bound creature's hp, so there is nothing to preserve).
@@ -1664,11 +1677,15 @@ def instantiate_encounter_from_trigger(
     Story 162-3: an hp_depletion combat opponent with no roster/pool backing
     seats from the world bestiary's authored ``generics:`` section — the
     sanctioned last resort. With no generics available this RAISES
-    ``ValueError`` and restores ``snapshot.encounter`` (nothing half-seated,
-    nothing fabricated — No Silent Fallbacks). ``allow_synthetic_opponent=True``
-    is the explicit degenerate opt-in (test fixtures, one-off scenario
-    generation): warn-and-mint the old ephemeral stub instead of raising.
-    Production callers must never pass it.
+    ``ValueError``; the refusal restores ``snapshot.encounter`` AND rolls back
+    any opponent Npc the seeder appended for an earlier actor in the same pass
+    (nothing half-seated, nothing fabricated — No Silent Fallbacks, including the
+    multi-opponent case). A def declaring ``opponent_source: frame`` (or a
+    sealed-letter Other, ADR-153 §6) is exempt: it seats from the def's own
+    authored ``opponent_default_stats``, never generics.
+    ``allow_synthetic_opponent=True`` is the explicit degenerate opt-in (test
+    fixtures, one-off scenario generation): warn-and-mint the old ephemeral stub
+    instead of raising. Production callers must never pass it.
 
     Raises ``ValueError`` when any NPC's side is not in {player, opponent, neutral}
     (CLAUDE.md: no silent fallback). Emits encounter_invalid_side_span for OTEL.
@@ -2471,6 +2488,13 @@ def instantiate_encounter_from_trigger(
                     if pack and pack.rules
                     else _raise_missing_ruleset("hp_depletion_seating")
                 )
+                # 162-3: remember the roster length so a refusal can roll back any
+                # opponent the seeder appended for an EARLIER actor in this same
+                # pass before a LATER unbacked actor raised — a multi-opponent seat
+                # (e.g. a pool-promoted Other seated ahead of a no-source Other in a
+                # world with no generics) must leave NOTHING behind, not just the
+                # single-opponent case.
+                _npcs_before_seed = len(snapshot.npcs)
                 try:
                     _seed_combat_hp_depletion_to_npcs(
                         snapshot=snapshot,
@@ -2484,9 +2508,11 @@ def instantiate_encounter_from_trigger(
                         allow_synthetic_opponent=allow_synthetic_opponent,
                     )
                 except ValueError:
-                    # 162-3: the fabrication refusal must not half-seat — restore
-                    # the pre-trigger encounter slot (None, or the resolved husk
-                    # this trigger was replacing) before propagating the raise.
+                    # 162-3: the fabrication refusal must not half-seat — roll back
+                    # any opponent Npc appended during THIS failed pass and restore
+                    # the pre-trigger encounter slot (None, or the resolved husk this
+                    # trigger was replacing) before propagating the raise.
+                    del snapshot.npcs[_npcs_before_seed:]
                     snapshot.encounter = current
                     raise
                 # ADR-153: a sealed-letter dogfight is a SIMULTANEOUS-COMMIT duel

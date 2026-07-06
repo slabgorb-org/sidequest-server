@@ -183,16 +183,22 @@ def _fate_pack() -> SimpleNamespace:
 
 
 class TestMentionPathResolverAdoption:
-    def test_mention_by_recorded_alias_hits_roster_not_phantom_mint(self) -> None:
+    def test_mention_by_recorded_alias_hits_roster_not_phantom_mint(
+        self, local_otel: InMemorySpanExporter
+    ) -> None:
         """RED: the mention path's Step-1 legs (exact / comma / invented_from) do
         not consult the alias ledger. A narrator cite by a RECORDED alias of a
         rostered NPC misses all three legs and mints a phantom culture-shuffled
         pool duplicate — the two-names-one-enemy fork the resolver exists to kill,
-        alive one seam over. The unified resolver's alias leg reconciles it."""
+        alive one seam over. The unified resolver's alias leg reconciles it, and
+        the npc.referenced span labels the leg ``alias`` (reviewer telemetry gap)."""
+        # Decoy roster NPC (distinct, non-matching) so an npcs[0]-grab mutation is
+        # caught: only the SPECIFIC alias-owner may be stamped.
+        decoy = _statted_npc("Sister Vane", creature_id="vane")
         molgrath = _statted_npc(
             "Molgrath the Eyeless", creature_id="thief", aliases=["Hold-Dead, Still at the Shift"]
         )
-        snap = _snapshot_with(molgrath)
+        snap = _snapshot_with(decoy, molgrath)
 
         _apply_npc_mentions(
             snapshot=snap,
@@ -203,19 +209,33 @@ class TestMentionPathResolverAdoption:
         assert molgrath.last_seen_turn == 6, (
             "a cite by the recorded alias must reconcile to the rostered NPC (npcs_hit)"
         )
+        assert decoy.last_seen_turn != 6, "the decoy must be untouched — no grab-position-0"
         assert snap.npc_pool == [], (
             f"the alias cite minted a phantom pool duplicate instead of matching the "
             f"roster: {[m.name for m in snap.npc_pool]!r}"
         )
+        refs = [
+            dict(s.attributes or {})
+            for s in local_otel.get_finished_spans()
+            if s.name == "npc.referenced"
+        ]
+        hits = [a for a in refs if a.get("matched_name") == "Molgrath the Eyeless"]
+        assert hits and all(a.get("match_form") == "alias" for a in hits), (
+            f"the alias reconciliation must be span-labelled match_form=alias; got {refs!r}"
+        )
 
-    def test_mention_by_diacritic_variant_hits_roster_not_phantom_mint(self) -> None:
+    def test_mention_by_diacritic_variant_hits_roster_not_phantom_mint(
+        self, local_otel: InMemorySpanExporter
+    ) -> None:
         """RED: Step 1 folds case + comma + article but NOT diacritics
         (``casefold`` only, no ``fold_to_ascii``). Jade's perseus namer mints the
         canonical "Veyra Solnë"; the narrator later cites the ASCII "Veyra Solne"
         — casefold won't fold ``ë``, so the cite misses and double-mints. The
-        resolver's single ``normalize_name`` (fold + casefold) is one identity."""
+        resolver's single ``normalize_name`` (fold + casefold) is one identity;
+        the span labels the leg ``diacritic_normalized`` (reviewer telemetry gap)."""
+        decoy = _statted_npc("Corvin Ash", creature_id="corvin")
         veyra = _statted_npc("Veyra Solnë", creature_id="veyra")
-        snap = _snapshot_with(veyra)
+        snap = _snapshot_with(decoy, veyra)
 
         _apply_npc_mentions(
             snapshot=snap,
@@ -226,8 +246,19 @@ class TestMentionPathResolverAdoption:
         assert veyra.last_seen_turn == 7, (
             "the ASCII cite must reconcile to the diacritic-named rostered NPC"
         )
+        assert decoy.last_seen_turn != 7, "the decoy must be untouched — no grab-position-0"
         assert snap.npc_pool == [], (
             f"diacritic drift double-minted the NPC: {[m.name for m in snap.npc_pool]!r}"
+        )
+        refs = [
+            dict(s.attributes or {})
+            for s in local_otel.get_finished_spans()
+            if s.name == "npc.referenced"
+        ]
+        hits = [a for a in refs if a.get("matched_name") == "Veyra Solnë"]
+        assert hits and all(a.get("match_form") == "diacritic_normalized" for a in hits), (
+            f"the diacritic reconciliation must be span-labelled "
+            f"match_form=diacritic_normalized (not a misattributed comma); got {refs!r}"
         )
 
 
@@ -247,17 +278,16 @@ class TestFateSeederResolverAdoption:
         snap.npcs.extend(npcs)
         return snap
 
-    def _seed(self, snap: GameSnapshot, opponent_name: str) -> None:
+    def _seed(self, snap: GameSnapshot, opponent_name: str) -> EncounterActor:
+        opp = EncounterActor(name=opponent_name, role="foe", side="opponent")
         _seed_fate_opponents(
             snapshot=snap,
-            actors=[
-                EncounterActor(name="Reb", role="lead", side="player"),
-                EncounterActor(name=opponent_name, role="foe", side="opponent"),
-            ],
+            actors=[EncounterActor(name="Reb", role="lead", side="player"), opp],
             pack=_fate_pack(),  # type: ignore[arg-type]
             turn=5,
             acting_character_name="Reb",
         )
+        return opp
 
     def test_alias_named_fate_opponent_seats_canonical_no_twin(self) -> None:
         """RED (1c): the Fate seeder's ``by_name`` dict is exact on ``core.name``.
@@ -265,16 +295,23 @@ class TestFateSeederResolverAdoption:
         and fabricates an ephemeral stub beside the real one (two names, one
         enemy — Fate flavour). The resolver's alias leg attaches the sheet to the
         canonical creature instead."""
+        # 162-10 rework (reviewer decoy hardening): a co-located decoy Fate NPC,
+        # seated FIRST, so "resolve the alias to the SPECIFIC creature" is
+        # distinguishable from "seed whatever is in the roster / position 0".
+        decoy = _statted_npc("Doc Marisol", creature_id="marisol")
         el_lobo = _statted_npc("El Lobo", creature_id="lobo", aliases=["The Grey Wolf"])
-        snap = self._fate_snap(el_lobo)
+        snap = self._fate_snap(decoy, el_lobo)
 
         self._seed(snap, "The Grey Wolf")
 
-        assert len(snap.npcs) == 1, (
+        assert len(snap.npcs) == 2, (
             f"the alias minted a Fate twin: {[n.core.name for n in snap.npcs]!r}"
         )
         assert not any(n.ephemeral for n in snap.npcs), "an ephemeral stub was fabricated beside it"
-        assert el_lobo.core.fate_sheet is not None, "the sheet must land on the canonical creature"
+        assert el_lobo.core.fate_sheet is not None, (
+            "the sheet must land on the SPECIFIC alias-matched creature (El Lobo)"
+        )
+        assert decoy.core.fate_sheet is None, "the decoy must be untouched — no grab-position-0"
 
     def test_variant_named_pool_antagonist_is_promoted_not_fabricated(self) -> None:
         """RED (1b): the pool-member promotion leg matches ``m.name == actor.name``
@@ -283,11 +320,16 @@ class TestFateSeederResolverAdoption:
         ("Dona Espina") — so a hollow ephemeral stub is fabricated instead of
         promoting the established cast member. One normalization promotes it."""
         snap = self._fate_snap()
+        # Decoy pool member (also non-creature) so promoting the SPECIFIC
+        # normalize_name match is distinguishable from "promote pool[0]".
+        snap.npc_pool.append(
+            NpcPoolMember(name="Ramona Vale", drawn_from="narrator_invented", is_creature=False)
+        )
         snap.npc_pool.append(
             NpcPoolMember(name="Doña Espina", drawn_from="narrator_invented", is_creature=False)
         )
 
-        self._seed(snap, "Dona Espina")
+        opp = self._seed(snap, "Dona Espina")
 
         assert not any(n.ephemeral for n in snap.npcs), (
             f"the pool antagonist was fabricated as a stub, not promoted: "
@@ -296,6 +338,76 @@ class TestFateSeederResolverAdoption:
         assert len(snap.npcs) == 1, (
             f"expected the pool member promoted to a single backing Npc; got "
             f"{[n.core.name for n in snap.npcs]!r}"
+        )
+        assert snap.npcs[0].core.name == "Doña Espina", (
+            f"promoted the wrong pool member (grab-position-0?): {snap.npcs[0].core.name!r}"
+        )
+        # 162-10 REWORK ([HIGH] reachability brick, reviewer): the Fate resolver
+        # reads the Other's sheet via ``find_creature_core(actor.name)``, which is
+        # EXACT-match. The normalize_name pool leg matches the ASCII actor name
+        # against the diacritic pool member and promotes the CANONICAL name — but
+        # if the seat (actor.name) is left as the variant, the promoted opponent
+        # is UNREACHABLE and the resolver bricks (150-2 class). RED until the
+        # pool-promotion branch canonicalizes ``actor.name = npc.core.name``.
+        assert opp.name == "Doña Espina", (
+            f"pool-promotion left the seat un-canonicalized: actor.name={opp.name!r}"
+        )
+        core = snap.find_creature_core(opp.name)
+        assert core is not None, (
+            "REACHABILITY BRICK: promoted Fate opponent unreachable by seat name "
+            "(find_creature_core is exact-match)"
+        )
+        assert core.fate_sheet is not None, "the reachable core must carry the seeded Fate sheet"
+
+
+# ---------------------------------------------------------------------------
+# 1b. hp_depletion seeder pool leg — the untested twin of the Fate pool fix,
+# plus the [HIGH] reachability brick (reviewer, 162-10 rework): a variant-named
+# pool antagonist must promote AND stay reachable by its seat name.
+# ---------------------------------------------------------------------------
+
+
+class TestHpDepletionPoolPromotionReachable:
+    def test_variant_pool_antagonist_promotes_and_stays_reachable(self) -> None:
+        """RED (reachability) + closes the untested hp_depletion pool leg. The
+        pool leg matches on ``normalize_name`` (was exact) — an ASCII actor
+        ("Dona Espina") promotes the diacritic pool member ("Doña Espina"). The
+        promotion leaves ``actor.name`` the variant, and ``find_creature_core`` is
+        EXACT-match, so the seated opponent is unreachable → the WN attack / HP-bar
+        filter drop it (the 162-2 [HIGH] class). Pins promotion, the SPECIFIC
+        member (decoy present), and seat reachability."""
+        snap = _snapshot_with()  # no roster npc — force the pool-promotion branch
+        snap.npc_pool.append(
+            NpcPoolMember(name="Bram Coalfist", drawn_from="narrator_invented", is_creature=False)
+        )  # decoy pool member (no normalize match) → guards grab-position-0
+        snap.npc_pool.append(
+            NpcPoolMember(name="Doña Espina", drawn_from="narrator_invented", is_creature=False)
+        )
+        opp = EncounterActor(name="Dona Espina", role="combatant", side="opponent")
+
+        _seed_combat_hp_depletion_to_npcs(
+            snapshot=snap,
+            actors=[opp],
+            cdef=_combat_cdef(),
+            turn=5,
+            source="encounter_handshake",
+            acting_character_name="Kirk",
+            ruleset=get_ruleset_module("wwn"),
+        )
+
+        assert not any(n.ephemeral for n in snap.npcs), (
+            f"pool antagonist fabricated as a stub, not promoted: "
+            f"{[(n.core.name, n.ephemeral) for n in snap.npcs]!r}"
+        )
+        assert [n.core.name for n in snap.npcs] == ["Doña Espina"], (
+            f"promoted the wrong / a twin pool member: {[n.core.name for n in snap.npcs]!r}"
+        )
+        assert opp.name == "Doña Espina", (
+            f"pool-promotion left the seat un-canonicalized: actor.name={opp.name!r}"
+        )
+        assert snap.find_creature_core(opp.name) is not None, (
+            "REACHABILITY BRICK: promoted hp_depletion opponent unreachable by seat "
+            "name (find_creature_core is exact-match)"
         )
 
 
@@ -313,8 +425,11 @@ class TestEdgePublishResolverAdoption:
         alias never receives the dial-derived HP pool — its HP bar never updates
         and the ``npc.edge_published`` span never fires (a silent no-op). The
         resolver binds the edge to the canonical creature."""
+        # Decoy roster NPC (hp=24, seated FIRST) — the edge must bind to the
+        # SPECIFIC alias-owner, not to roster[0].
+        decoy = _statted_npc("Cinder Wight", creature_id="wight", hp=24)
         ghast = _statted_npc("Vellum Ghast", creature_id="ghast", hp=24, aliases=["The Pale King"])
-        snap = _snapshot_with(ghast)
+        snap = _snapshot_with(decoy, ghast)
 
         _publish_combat_edge_to_npcs(
             snapshot=snap,
@@ -329,6 +444,7 @@ class TestEdgePublishResolverAdoption:
             f"the alias-named opponent never received the published edge (dial "
             f"threshold=10); hp.max stayed {ghast.core.hp.max}"
         )
+        assert decoy.core.hp.max == 24, "the decoy received the edge — grab-position-0 leak"
         edge_spans = [s for s in local_otel.get_finished_spans() if s.name == "npc.edge_published"]
         assert edge_spans, (
             "no npc.edge_published span fired — the edge silently no-op'd on the alias"

@@ -655,13 +655,17 @@ def test_seed_manual_emits_cap_enforced_span_for_encounter_drop(
     )
 
     assert len(manual.encounters) == MAX_MANUAL_ENCOUNTERS  # cap held
-    enc_spans = [
-        s
-        for s in otel_capture.get_finished_spans()
-        if s.name == "monster_manual.cap_enforced"
-        and s.attributes.get("kind") == "encounter_dropped"
+    cap_spans = [
+        s for s in otel_capture.get_finished_spans() if s.name == "monster_manual.cap_enforced"
     ]
+    enc_spans = [s for s in cap_spans if s.attributes.get("kind") == "encounter_dropped"]
     assert enc_spans, (
         "encounter cap drop during seeding must emit cap_enforced (kind=encounter_dropped)"
     )
     assert enc_spans[0].attributes["genre"] == "testgenre"
+    # The single deduped NPC name never caps, so NO npc-side cap span fires — makes
+    # the "only encounter-side spans fire" claim above an actual assertion (162-9
+    # review hardening).
+    assert not [s for s in cap_spans if str(s.attributes.get("kind", "")).startswith("npc_")], (
+        "NPC side must not cap in this scenario (single deduped name)"
+    )

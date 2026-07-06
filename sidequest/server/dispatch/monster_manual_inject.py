@@ -214,10 +214,12 @@ def ensure_loaded(sd: _SessionData) -> MonsterManual | None:
     # a stale pool can never be reused or livelock a purge/reseed cycle.
     # session_seed is attribution only (V1/V2 forensics): a new session with
     # unchanged content REUSES the pool. reconcile_content adopts a
-    # legacy/unstamped pool without discarding (no nuking pre-162-1 saves) and
-    # legacy over-cap pools are bounded via trim_to_caps below (spec D4). Emit
-    # the forensic spans so the GM panel sees both decisions (OTEL
-    # Observability, spec V1-V3).
+    # legacy/unstamped pool without discarding (no nuking pre-162-1 saves).
+    # Legacy over-cap pools are bounded via trim_to_caps below — UNCONDITIONALLY
+    # and independent of this reconcile step (story 162-9; see the comment at the
+    # trim call), since pool size is knowable without content evidence. Emit the
+    # forensic spans so the GM panel sees both decisions (OTEL Observability,
+    # spec V1-V3).
     #
     # A None content_sha means the bestiary is UNRESOLVABLE (no pack, or a
     # transiently-broken content state) — no evidence, no reconcile: judging

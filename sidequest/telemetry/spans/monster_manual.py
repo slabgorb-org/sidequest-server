@@ -46,12 +46,15 @@ SPAN_MONSTER_MANUAL_POOL_DISCARDED = "monster_manual.pool_discarded"
 # (``kind="npc_dropped"`` / ``"encounter_dropped"``), an authored insert
 # evicting a generated walk-on (``kind="npc_evicted"``, with ``evicted``), an
 # authored insert refused by an all-authored pool
-# (``kind="npc_dropped_all_authored"``), or a legacy over-cap pool bounded on
-# reconcile (``kind="trim"``, with ``npcs_trimmed``/``encounters_trimmed``).
+# (``kind="npc_dropped_all_authored"``), or a legacy over-cap pool bounded
+# unconditionally in ``ensure_loaded`` (``kind="trim"``, with
+# ``npcs_trimmed``/``encounters_trimmed``) — the trim step runs independently of
+# reconcile (story 162-9), so this span can fire even when content_sha is None and
+# reconcile was skipped entirely.
 # These are inventory mutations the GM panel must see — a dropped or vanished
 # pool entry that only exists in a log line is invisible to the lie detector.
 # The model returns CapEvent/PoolTrim data; the call sites (pregen seeding,
-# authored backfill, ensure_loaded's reconcile) emit this span.
+# authored backfill, and ensure_loaded's unconditional trim step) emit this span.
 SPAN_MONSTER_MANUAL_CAP_ENFORCED = "monster_manual.cap_enforced"
 
 # Story 153-x (ADR-106 region population): emitted when a generated region's

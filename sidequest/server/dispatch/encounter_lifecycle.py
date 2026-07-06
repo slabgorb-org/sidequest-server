@@ -463,6 +463,16 @@ def _seed_combat_hp_depletion_to_npcs(
                 npc.core.hp = hp_pool_from_hp(hp)
                 npc.core.armor_class = ac
                 snapshot.npcs.append(npc)
+                # Story 162-10 (review rework): canonicalize the SEAT to the
+                # promoted member's name. The pool leg now matches on
+                # ``normalize_name``, so a case/diacritic-variant ``actor.name``
+                # ("dona espina") can promote a canonically-named member ("Doña
+                # Espina") — but ``find_creature_core`` is EXACT-match, so a seat
+                # left under the variant is unreachable (WN attack / HP-bar filter
+                # drop it — the 162-2 [HIGH] reachability class). Mirror the
+                # roster-hit canonicalization at L425.
+                if npc.core.name != actor.name:
+                    actor.name = npc.core.name
                 pool_origin = pool_member.name
             else:
                 # 108-2 (MINTING-MAJOR): reaching here means the opponent name
@@ -785,6 +795,14 @@ def _seed_fate_opponents(
                 )
                 npc.core.fate_sheet = module.seed_opponent_fate_sheet(rules=pack.rules)
                 snapshot.npcs.append(npc)
+                # Story 162-10 (review rework): canonicalize the SEAT to the
+                # promoted member's name — the Fate resolver reads the Other's
+                # sheet via ``find_creature_core(actor.name)`` (EXACT-match), so a
+                # normalize_name pool match that promotes a diacritic/case-variant
+                # member must rewrite ``actor.name`` or the seat is unreachable and
+                # the throw bricks (150-2 class). Mirrors the roster-hit path (L751).
+                if npc.core.name != actor.name:
+                    actor.name = npc.core.name
                 created = False
             else:
                 core = CreatureCore(
@@ -918,9 +936,10 @@ def _publish_combat_edge_to_npcs(
     """Story 45-21 / 45-52: publish dial-derived edge onto opponent ``Npc``s.
 
     DIAL-THRESHOLD path only. For each opponent-side ``EncounterActor``
-    whose ``name`` matches an ``Npc`` in ``snapshot.npcs``, overwrite the
-    npc's ``core.hp`` pool using the opponent dial as the canonical pool
-    size:
+    whose ``name`` RESOLVES (via ``resolve_roster_npc``: canonical name,
+    recorded alias, or invented_from binding — story 162-10) to an ``Npc`` in
+    ``snapshot.npcs``, overwrite the npc's ``core.hp`` pool using the opponent
+    dial as the canonical pool size:
 
         max     = opponent_metric.threshold
         current = max(1, threshold - current)

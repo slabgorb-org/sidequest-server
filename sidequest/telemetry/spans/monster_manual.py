@@ -28,9 +28,11 @@ SPAN_MONSTER_MANUAL_ROOM_BOUND = "monster_manual.room_bound"
 SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL = "monster_manual.authored_backfill"
 
 # Story 162-1 (derive-don't-cache, spec D3/V1-V3): emitted when ``ensure_loaded``
-# DISCARDS a previously-stamped Manual pool because its (content_sha,
-# session_seed) key no longer matches — a different content checkout (a
-# multi-clone writer, spec V2) or a new session. This SUPERSEDES the two removed
+# DISCARDS a previously-stamped Manual pool because its ``content_sha`` no longer
+# matches — a different content checkout (a multi-clone writer, spec V2).
+# content_sha is the ONLY discard axis; session_seed is refreshed for attribution
+# but never triggers a discard (a new session with the same content reuses the
+# pool). This SUPERSEDES the two removed
 # targeted purges (native-class + foreign-bestiary): staleness is now impossible
 # because the pool is keyed by content version and discarded wholesale, so the
 # beneath_sunden purge/reseed livelock and the barsoom foreign bleed cannot
@@ -44,12 +46,15 @@ SPAN_MONSTER_MANUAL_POOL_DISCARDED = "monster_manual.pool_discarded"
 # (``kind="npc_dropped"`` / ``"encounter_dropped"``), an authored insert
 # evicting a generated walk-on (``kind="npc_evicted"``, with ``evicted``), an
 # authored insert refused by an all-authored pool
-# (``kind="npc_dropped_all_authored"``), or a legacy over-cap pool bounded on
-# reconcile (``kind="trim"``, with ``npcs_trimmed``/``encounters_trimmed``).
+# (``kind="npc_dropped_all_authored"``), or a legacy over-cap pool bounded
+# unconditionally in ``ensure_loaded`` (``kind="trim"``, with
+# ``npcs_trimmed``/``encounters_trimmed``) — the trim step runs independently of
+# reconcile (story 162-9), so this span can fire even when content_sha is None and
+# reconcile was skipped entirely.
 # These are inventory mutations the GM panel must see — a dropped or vanished
 # pool entry that only exists in a log line is invisible to the lie detector.
 # The model returns CapEvent/PoolTrim data; the call sites (pregen seeding,
-# authored backfill, ensure_loaded's reconcile) emit this span.
+# authored backfill, and ensure_loaded's unconditional trim step) emit this span.
 SPAN_MONSTER_MANUAL_CAP_ENFORCED = "monster_manual.cap_enforced"
 
 # Story 153-x (ADR-106 region population): emitted when a generated region's

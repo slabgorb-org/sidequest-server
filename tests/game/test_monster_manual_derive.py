@@ -10,12 +10,14 @@ pool) and flickering_reach/glenross's 310/1,153-NPC runaway. Targeted
 
 This suite pins the derive-don't-cache contract that REPLACES that model:
 
-- **content-sha + session-seed keyed pool** — the manual records the
-  ``content_sha`` and ``session_seed`` it was derived under.
+- **content-sha keyed pool, session-seed attribution** — the manual records the
+  ``content_sha`` it was derived under (the staleness axis) plus the
+  ``session_seed`` that last touched it (forensic attribution only).
 - **discard-on-mismatch replaces purge-repair** — ``reconcile_content`` clears
-  the *whole* pool when either key changed (a different content checkout or a
-  new session), so staleness is impossible and the two purge methods become
-  unnecessary. No targeted, name-matched purge.
+  the *whole* pool when the ``content_sha`` changed (a different content
+  checkout); ``session_seed`` is refreshed but never triggers a discard (a new
+  session with the same content reuses the pool). Staleness is impossible and the
+  two purge methods become unnecessary. No targeted, name-matched purge.
 - **accumulation cap** — ``add_npc`` / ``add_encounter`` bound pool growth so the
   1,153-NPC runaway cannot recur; the cap never evicts an authored NPC (V3).
 - **fail-loud empty world-slug** — ``_file_path`` / ``load`` / ``save`` raise on a
@@ -392,6 +394,65 @@ def test_trim_to_caps_noop_under_cap():
     assert len(m.npcs) == 1
 
 
+def test_trim_to_caps_bounds_encounters_oldest_first():
+    # Coverage gap (162-9): trim_to_caps's ENCOUNTER side was untested — only the
+    # NPC side and the under-cap no-op were. Encounters have no authored carve-out,
+    # so an over-cap pool is head-truncated to the cap, oldest first.
+    cap = mm_mod.MAX_MANUAL_ENCOUNTERS
+    encounters = [
+        mm_mod.ManualEncounter(
+            data={"enemies": [{"name": f"beast-{i:04d}"}]},
+            label=f"beast-{i:04d}",
+            tier=1,
+        )
+        for i in range(cap + 15)
+    ]
+    m = MonsterManual(genre="g", world="w", encounters=encounters)
+
+    trim = m.trim_to_caps()
+
+    assert trim is not None
+    assert trim.encounters_trimmed == 15  # cap+15 -> cap kept
+    assert trim.npcs_trimmed == 0
+    assert len(m.encounters) == cap
+    # Oldest dropped first (head-truncation): the first 15 labels are gone.
+    labels = {e.label for e in m.encounters}
+    assert "beast-0000" not in labels
+    assert f"beast-{cap + 14:04d}" in labels
+
+
+def test_trim_to_caps_all_authored_over_cap_is_silent_noop(caplog):
+    # Zero-trim guard (162-9): an all-authored pool past the NPC cap has nothing
+    # trimmable (authored are never dropped), so trim returns None. The pre-162-9
+    # code still logged "pool_trimmed — dropped 0 oldest generated NPCs" on every
+    # load — the warning guarded on the over-cap condition, not the actual trim
+    # count, so it re-fired each turn as a no-op masquerading as a trim. Assert the
+    # misleading zero-count warning no longer fires.
+    import logging
+
+    cap = mm_mod.MAX_MANUAL_NPCS
+    authored = [
+        mm_mod.ManualNpc(
+            data={"name": f"cast-{i:04d}"},
+            name=f"cast-{i:04d}",
+            role="r",
+            culture="c",
+            authored=True,
+        )
+        for i in range(cap + 10)
+    ]
+    m = MonsterManual(genre="g", world="w", npcs=authored)
+
+    with caplog.at_level(logging.WARNING):
+        trim = m.trim_to_caps()
+
+    assert trim is None  # nothing trimmable -> no PoolTrim
+    assert len(m.npcs) == cap + 10  # authored preserved, pool still over cap
+    assert not any("pool_trimmed" in r.getMessage() for r in caplog.records), (
+        "zero-trim must not log the misleading 'dropped 0 oldest generated NPCs' warning"
+    )
+
+
 # ── cap decisions return events for the caller's OTEL span (rework) ─
 
 
@@ -425,6 +486,36 @@ def test_add_npc_authored_eviction_returns_evict_event():
     assert event.kind == "npc_evicted"
     assert event.incoming == "Named Boss"
     assert event.evicted == "walkon-0000"  # oldest AVAILABLE generated walk-on
+
+
+def test_add_npc_all_authored_at_cap_returns_drop_all_authored_event():
+    # Coverage gap (162-9): the fourth CapEvent kind was untested. When the pool is
+    # ALL authored and already at the cap, an incoming authored NPC has no generated
+    # walk-on to evict — the insert is refused with kind="npc_dropped_all_authored"
+    # (authored are never crowded out, but an already-over-full authored roster is
+    # not grown without bound either). Closes the CapEvent-kind set.
+    cap = mm_mod.MAX_MANUAL_NPCS
+    authored = [
+        mm_mod.ManualNpc(
+            data={"name": f"cast-{i:04d}"},
+            name=f"cast-{i:04d}",
+            role="r",
+            culture="c",
+            authored=True,
+        )
+        for i in range(cap)
+    ]
+    m = MonsterManual(genre="g", world="w", npcs=authored)
+
+    event = m.add_npc(_npc("Latecomer"), [], authored=True)
+
+    assert event is not None
+    assert event.kind == "npc_dropped_all_authored"
+    assert event.incoming == "Latecomer"
+    assert event.evicted is None
+    # The refused insert did NOT grow the pool past the cap.
+    assert len(m.npcs) == cap
+    assert m.find_npc_by_exact_name("Latecomer") is None
 
 
 def test_add_encounter_at_cap_returns_drop_event():

@@ -34,6 +34,8 @@ from sidequest.genre.models.rules import (
 )
 from sidequest.magic.confrontations import BranchName
 from sidequest.magic.outputs import apply_mandatory_outputs
+from sidequest.mutation.models import MutationCatalog
+from sidequest.mutation.state import MutationState
 
 if TYPE_CHECKING:
     from sidequest.protocol.messages import ConfrontationPayload
@@ -96,6 +98,38 @@ def resolve_recipient_pc(
     return ((class_def, total_slots, prepared), pc_name)
 
 
+def _project_mutation_economy(
+    mutation_state: MutationState | None,
+    mutation_catalog: MutationCatalog | None,
+    recipient_actor_name: str | None,
+) -> dict[str, Any] | None:
+    """Project the recipient's owned-mutation economy for the overlay picker.
+
+    The ``spellcasting`` twin (story 158-56): resolves the seated PC's owned
+    positive-mutation ids (``mutation_state.characters[actor].positive_ids``)
+    through the pack's ``MutationCatalog`` to ``{id, name, strain_cost}`` rows —
+    ``id`` rides ``DICE_THROW.mutation_id`` on the commit, ``name`` is the picker
+    label, ``strain_cost`` is the player-visible spend math (Sebastien/Jade
+    legibility). Returns ``None`` (never a fabricated empty economy) when there
+    is no mutation_state/catalog, no seated actor, or the actor owns nothing —
+    the UI gates the picker on the value. Scoped to ``recipient_actor_name``, so
+    a co-seated mutant's owned list never leaks into this recipient's picker.
+
+    An owned id absent from the catalog is config drift and raises loudly via
+    ``positive_by_id`` (No Silent Fallbacks) rather than silently dropping.
+    """
+    if mutation_state is None or mutation_catalog is None or not recipient_actor_name:
+        return None
+    cs = mutation_state.characters.get(recipient_actor_name)
+    if cs is None or not cs.positive_ids:
+        return None
+    owned = [
+        {"id": m.id, "name": m.name, "strain_cost": m.strain_cost}
+        for m in (mutation_catalog.positive_by_id(mid) for mid in cs.positive_ids)
+    ]
+    return {"owned": owned}
+
+
 def should_emit_native_confrontation(rules: RulesConfig | None) -> bool:
     """Whether the native beat/dial ConfrontationOverlay should be projected for a
     pack bound to ``rules`` (ADR-144).
@@ -128,6 +162,8 @@ def build_confrontation_payload(
     active_stakes: str | None = None,
     portrait_resolver: Callable[[str], str | None] | None = None,
     rules: RulesConfig | None = None,
+    mutation_state: MutationState | None = None,
+    mutation_catalog: MutationCatalog | None = None,
 ) -> dict[str, Any]:
     """Assemble the CONFRONTATION payload the UI overlay consumes.
 
@@ -344,6 +380,12 @@ def build_confrontation_payload(
             }
             if effective_spellcasting is not None
             else None
+        ),
+        # Story 158-56: the spellcasting twin — the recipient's owned mutations
+        # so the overlay's "Use Mutation" picker can name WHICH one to invoke
+        # (rides DICE_THROW.mutation_id). None for non-mutants / non-AWN packs.
+        "mutation_economy": _project_mutation_economy(
+            mutation_state, mutation_catalog, recipient_actor_name
         ),
     }
 
@@ -783,6 +825,14 @@ def make_confrontation_frame_supplier(
             # have .rules (validated at load) — a missing attribute is a bug
             # that must fail loud, not degrade to a difficulty-less offer.
             rules=genre_pack.rules,
+            # Story 158-56: project the recipient's owned-mutation economy so the
+            # overlay's "Use Mutation" picker can list them (AWN mutants). None
+            # for non-AWN packs (no mutations catalog) or no seated mutant —
+            # scoped to ``recipient_actor`` inside the builder. ``getattr`` for
+            # the optional catalog matches the sibling mutation-path accessors
+            # (narration_apply / magic_working) and tolerates duck-typed packs.
+            mutation_state=snapshot.mutation_state,
+            mutation_catalog=getattr(genre_pack, "mutations", None),
         )
         # Free-for-all N-seat table: attach a per-seat private projection so
         # each socket sees only its own hand (+ public state) until showdown.

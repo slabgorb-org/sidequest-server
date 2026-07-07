@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import random as _random
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
@@ -23,7 +24,7 @@ from sidequest.game.encounter import (
     StructuredEncounter,
 )
 from sidequest.game.lore_store import LoreStore
-from sidequest.game.origin import Origin, OriginKind, resolve_roster_npc
+from sidequest.game.origin import Origin, OriginKind, normalize_name, resolve_roster_npc
 from sidequest.game.resource_pool import ResourceThreshold
 from sidequest.game.ruleset.registry import get_ruleset_module
 from sidequest.game.ruleset.without_number import WithoutNumberRulesetModule
@@ -438,8 +439,15 @@ def _seed_combat_hp_depletion_to_npcs(
             # still resolves. This is NOT a fabrication, so it does NOT fire the
             # ``minted_stub`` lie-detector span; the ``pool_origin`` rides the
             # edge-published span below so the GM panel sees the promotion.
+            # 162-10: one-normalization on the pool leg (was ``m.name ==
+            # actor.name``, exact) — the Fate sibling's twin fix, so a
+            # diacritic/case-variant pool antagonist promotes, not fabricates.
             pool_member = next(
-                (m for m in snapshot.npc_pool if m.name == actor.name and not m.is_creature),
+                (
+                    m
+                    for m in snapshot.npc_pool
+                    if normalize_name(m.name) == normalize_name(actor.name) and not m.is_creature
+                ),
                 None,
             )
             if pool_member is not None:
@@ -455,6 +463,16 @@ def _seed_combat_hp_depletion_to_npcs(
                 npc.core.hp = hp_pool_from_hp(hp)
                 npc.core.armor_class = ac
                 snapshot.npcs.append(npc)
+                # Story 162-10 (review rework): canonicalize the SEAT to the
+                # promoted member's name. The pool leg now matches on
+                # ``normalize_name``, so a case/diacritic-variant ``actor.name``
+                # ("dona espina") can promote a canonically-named member ("Doña
+                # Espina") — but ``find_creature_core`` is EXACT-match, so a seat
+                # left under the variant is unreachable (WN attack / HP-bar filter
+                # drop it — the 162-2 [HIGH] reachability class). Mirror the
+                # roster-hit canonicalization at L425.
+                if npc.core.name != actor.name:
+                    actor.name = npc.core.name
                 pool_origin = pool_member.name
             else:
                 # 108-2 (MINTING-MAJOR): reaching here means the opponent name
@@ -727,11 +745,21 @@ def _seed_fate_opponents(
     assert isinstance(module, FateRulesetModule)
 
     actor_loc = snapshot.party_location(perspective=acting_character_name)
-    by_name = {npc.core.name: npc for npc in snapshot.npcs}
     for actor in actors:
         if actor.side != "opponent":
             continue
-        npc = by_name.get(actor.name)
+        # Story 162-10: adopt the unified resolver (canonical + alias +
+        # invented_from, one diacritic-folding normalization) in place of the
+        # exact-match ``by_name`` dict — an opponent named by a rostered Fate
+        # adversary's RECORDED alias / case-or-diacritic variant missed the dict
+        # and fabricated an ephemeral twin beside the real one (the
+        # two-names-one-enemy fork, Fate flavour; sprint/archive/162-2-session.md:76).
+        # Canonicalize the seat like the hp_depletion sibling (L425) so the Fate
+        # resolver — which reads the Other's sheet by ``find_creature_core(actor.name)``
+        # — reaches it.
+        npc = resolve_roster_npc(snapshot.npcs, actor.name)
+        if npc is not None and npc.core.name != actor.name:
+            actor.name = npc.core.name
         if npc is None:
             # Story 126-32 (manifestation a): the narrated antagonist may have
             # been established on a PRIOR turn and is sitting in
@@ -744,8 +772,15 @@ def _seed_fate_opponents(
             # opponent"``, no pronouns) beside the cast member the player has been
             # talking to. Creature members are skipped — a bestiary mob is the
             # native/MM seater's job, not the Fate person-binder's.
+            # 162-10: the same one-normalization on the pool leg (was
+            # ``m.name == actor.name``, exact) so a diacritic/case-variant pool
+            # antagonist promotes instead of fabricating a stub.
             pool_member = next(
-                (m for m in snapshot.npc_pool if m.name == actor.name and not m.is_creature),
+                (
+                    m
+                    for m in snapshot.npc_pool
+                    if normalize_name(m.name) == normalize_name(actor.name) and not m.is_creature
+                ),
                 None,
             )
             if pool_member is not None:
@@ -760,6 +795,14 @@ def _seed_fate_opponents(
                 )
                 npc.core.fate_sheet = module.seed_opponent_fate_sheet(rules=pack.rules)
                 snapshot.npcs.append(npc)
+                # Story 162-10 (review rework): canonicalize the SEAT to the
+                # promoted member's name — the Fate resolver reads the Other's
+                # sheet via ``find_creature_core(actor.name)`` (EXACT-match), so a
+                # normalize_name pool match that promotes a diacritic/case-variant
+                # member must rewrite ``actor.name`` or the seat is unreachable and
+                # the throw bricks (150-2 class). Mirrors the roster-hit path (L751).
+                if npc.core.name != actor.name:
+                    actor.name = npc.core.name
                 created = False
             else:
                 core = CreatureCore(
@@ -893,9 +936,10 @@ def _publish_combat_edge_to_npcs(
     """Story 45-21 / 45-52: publish dial-derived edge onto opponent ``Npc``s.
 
     DIAL-THRESHOLD path only. For each opponent-side ``EncounterActor``
-    whose ``name`` matches an ``Npc`` in ``snapshot.npcs``, overwrite the
-    npc's ``core.hp`` pool using the opponent dial as the canonical pool
-    size:
+    whose ``name`` RESOLVES (via ``resolve_roster_npc``: canonical name,
+    recorded alias, or invented_from binding — story 162-10) to an ``Npc`` in
+    ``snapshot.npcs``, overwrite the npc's ``core.hp`` pool using the opponent
+    dial as the canonical pool size:
 
         max     = opponent_metric.threshold
         current = max(1, threshold - current)
@@ -940,13 +984,21 @@ def _publish_combat_edge_to_npcs(
     # hp_depletion sibling) — shared by every opponent seated this turn.
     actor_loc = snapshot.party_location(perspective=acting_character_name)
 
-    by_name = {npc.core.name: npc for npc in snapshot.npcs}
     for actor in actors:
         if actor.side != "opponent":
             continue
-        npc = by_name.get(actor.name)
+        # Story 162-10: adopt the unified resolver (canonical + alias +
+        # invented_from, one diacritic-folding normalization) in place of the
+        # exact-match ``by_name`` dict — an opponent seated under a recorded
+        # alias never received the dial-derived HP pool (its bar never updated,
+        # the ``npc.edge_published`` span never fired: a silent no-op;
+        # sprint/archive/162-2-session.md:76). Canonicalize the span's name so
+        # the GM panel reads the bound creature, not the prose alias.
+        npc = resolve_roster_npc(snapshot.npcs, actor.name)
         if npc is None:
             continue
+        if npc.core.name != actor.name:
+            actor.name = npc.core.name
         npc.core.hp.max = hp_max
         npc.core.hp.base_max = hp_max
         npc.core.hp.current = hp_current
@@ -1928,22 +1980,23 @@ def instantiate_encounter_from_trigger(
         # RECORDED alias / invented_from binding / case variant of a roster
         # NPC. Seat it under the CANONICAL name — every downstream consumer
         # resolves the opponent by exact actor name (``find_creature_core``:
-        # HP bars, WN attack, query_encounter, edge publish), and a dial-path
-        # confrontation never reaches the hp_depletion seeder that could
-        # otherwise canonicalize. The resolver's own ``identity.resolved``
-        # span makes the rebind observable; prose keeps the alias via the
-        # ledger.
+        # HP bars, WN attack, query_encounter), and a dial-path confrontation
+        # never reaches the hp_depletion seeder that could otherwise
+        # canonicalize. (162-10 comment fix: ``_publish_combat_edge_to_npcs``
+        # resolves via the shared ``resolve_roster_npc`` now, NOT
+        # ``find_creature_core`` — so it is no longer in that exact-match list.)
+        # Observability: an alias / invented_from rebind IS visible via the
+        # resolver's ``identity.resolved`` span, but a case/diacritic
+        # (canonical-leg) rebind derives nothing and is span-SILENT by design
+        # (origin.py — only the alias / invented_from legs span). Prose keeps
+        # the alias via the ledger.
         known = resolve_roster_npc(snapshot.npcs, materialized_threat.name)
         if known is not None and known.core.name != materialized_threat.name:
-            from sidequest.agents.orchestrator import NpcMention as _NpcMention
-
-            materialized_threat = _NpcMention(
-                name=known.core.name,
-                pronouns=materialized_threat.pronouns,
-                role=materialized_threat.role,
-                appearance=materialized_threat.appearance,
-                side=materialized_threat.side,
-            )
+            # 162-10: ``dataclasses.replace`` preserves the mention's flags
+            # (is_new / is_creature / disengaged / is_place); the prior manual
+            # field-copy dropped them (inert today — the ship-scale firewall runs
+            # pre-rebind — but a latent trap for future consumers).
+            materialized_threat = replace(materialized_threat, name=known.core.name)
         resolved_opponent = _resolve_opponent_from_roster(
             snapshot,
             threat_name=materialized_threat.name,
@@ -2182,6 +2235,18 @@ def instantiate_encounter_from_trigger(
                 npc_name = getattr(npc, "name", None) or str(npc)
                 side_raw = getattr(npc, "side", None) or "neutral"
                 side = _validate_side(npc_name, side_raw)
+                # Story 162-10: canonicalize a roster-resolved seat name at BUILD
+                # time so the participant.joined membership span + the init span's
+                # combatant_names (and the exact-match presence-stamp lookup
+                # below at ``_npc_by_name``) all read the CANONICAL name — not the
+                # prose alias the seeder would only rewrite later (L425). Before
+                # this, the GM-panel lie-detector saw the alias join and the
+                # canonical name fight (sprint/archive/162-2-session.md:356). A
+                # name resolving to no roster NPC (a PC, a novel opponent) is
+                # left untouched.
+                _canon = resolve_roster_npc(snapshot.npcs, npc_name)
+                if _canon is not None and _canon.core.name != npc_name:
+                    npc_name = _canon.core.name
                 actors.append(EncounterActor(name=npc_name, role=role, side=side))
             # Story 59-35: seat scene-present FRIENDLY allies as side="player"
             # combatants (ADR-116 friendly half / SOUL Guitar Solo). Additive to

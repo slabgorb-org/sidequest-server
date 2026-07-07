@@ -51,6 +51,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 from sidequest.agents.orchestrator import NpcMention
 from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.game.encounter import EncounterActor
+from sidequest.game.origin import resolve_roster_npc
 from sidequest.game.ruleset.registry import get_ruleset_module
 from sidequest.game.session import GameSnapshot, Npc, NpcPatch
 from sidequest.game.turn import TurnManager
@@ -270,8 +271,6 @@ class TestConscriptionRecordsAlias:
         a LATER reference by the prose name must (a) resolve to the same
         entity via the unified resolver and (b) re-seat with NO stub and NO
         roster growth. Two names, one enemy, one identity — permanently."""
-        from sidequest.game.origin import resolve_roster_npc
-
         molgrath = _statted_creature("Molgrath the Eyeless")
         snap = _snapshot_with(molgrath)
         self._instantiate(snap, "Hold-Dead, Still at the Shift")
@@ -423,6 +422,13 @@ class TestSeatNameCanonicalization:
         The alias itself stays in the ledger for prose."""
         ghast = _statted_creature("Vellum Ghast", creature_id="ghast", aliases=["The Pale King"])
         snap = _snapshot_with(ghast)
+        # 162-10 decoy-roster hardening (162-2 finding L355): a co-located decoy
+        # with a DISTINCT creature_id, seated FIRST, so a "canonicalize to
+        # roster[0]" mutation would rename the seat to the decoy and this test
+        # catches it — a single-entry roster cannot tell "resolver match" from
+        # "whatever is in the roster".
+        decoy = _statted_creature("Bone Piper", creature_id="piper")
+        snap.npcs.insert(0, decoy)
         actor = EncounterActor(name="The Pale King", role="combatant", side="opponent")
 
         _seed_combat_hp_depletion_to_npcs(
@@ -439,6 +445,10 @@ class TestSeatNameCanonicalization:
             f"seat kept the alias {actor.name!r} — unreachable by every "
             f"find_creature_core consumer (HP bars, WN attack, query_encounter)"
         )
+        assert resolve_roster_npc(snap.npcs, actor.name) is ghast, (
+            "the seat must canonicalize to the SPECIFIC resolver-matched creature, "
+            "not merely to some roster member (the decoy)"
+        )
         core = snap.find_creature_core(actor.name)
         assert core is not None, "seated opponent core unreachable by seat name"
         # The exact predicate the HP-bar overlay filter applies
@@ -448,7 +458,10 @@ class TestSeatNameCanonicalization:
     def test_case_variant_seat_canonicalizes_actor_name(self) -> None:
         """RED (rework): same invariant through the normalization leg —
         a case/whitespace-variant seat name is rewritten to canonical."""
-        snap = _snapshot_with(_statted_creature("Vellum Ghast", creature_id="ghast"))
+        ghast = _statted_creature("Vellum Ghast", creature_id="ghast")
+        snap = _snapshot_with(ghast)
+        # 162-10 decoy-roster hardening (162-2 finding L355): decoy seated first.
+        snap.npcs.insert(0, _statted_creature("Bone Piper", creature_id="piper"))
         actor = EncounterActor(name="vellum ghast", role="combatant", side="opponent")
 
         _seed_combat_hp_depletion_to_npcs(
@@ -462,6 +475,9 @@ class TestSeatNameCanonicalization:
         )
 
         assert actor.name == "Vellum Ghast"
+        assert resolve_roster_npc(snap.npcs, actor.name) is ghast, (
+            "the case-variant seat must canonicalize to the SPECIFIC matched creature"
+        )
         assert snap.find_creature_core(actor.name) is not None
 
     def test_instantiate_with_alias_threat_seats_canonical_actor_name(self) -> None:
@@ -473,6 +489,11 @@ class TestSeatNameCanonicalization:
         seated opponent must be the canonical name, core reachable."""
         ghast = _statted_creature("Vellum Ghast", creature_id="ghast", aliases=["The Pale King"])
         snap = _snapshot_with(ghast)
+        # 162-10 decoy-roster hardening (162-2 finding L355): decoy seated first so
+        # a "seat whatever's in the roster" mutation would rename the opponent to
+        # the decoy — a single-entry roster could not distinguish the two.
+        decoy = _statted_creature("Bone Piper", creature_id="piper")
+        snap.npcs.insert(0, decoy)
 
         enc = instantiate_encounter_from_trigger(
             snapshot=snap,
@@ -489,9 +510,13 @@ class TestSeatNameCanonicalization:
             f"alias threat seated under its alias {opponents!r} — encounter "
             f"actor unresolvable by find_creature_core"
         )
-        assert len(snap.npcs) == 1, "and it must not have minted a twin"
+        # No twin minted: the roster stays [decoy, ghast] (2), and the opponent
+        # resolves to the SPECIFIC ghast, not the decoy or a fabricated stub.
+        assert len(snap.npcs) == 2, f"a twin was minted: {[n.core.name for n in snap.npcs]!r}"
+        assert not any(n.ephemeral for n in snap.npcs)
         for a in enc.actors:
             if a.side == "opponent":
+                assert resolve_roster_npc(snap.npcs, a.name) is ghast
                 assert snap.find_creature_core(a.name) is not None
 
 

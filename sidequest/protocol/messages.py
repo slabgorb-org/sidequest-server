@@ -1036,6 +1036,15 @@ class ConfrontationPayload(ProtocolBase):
     # model is extra="forbid" — an undeclared key would crash the mid-turn
     # CONFRONTATION emit on the first sealed MP commit.
     committed_actors: list[str] | None = None
+    # Story 158-56: the recipient's owned-mutation economy — the ``spellcasting``
+    # twin for AWN mutants. Drives the overlay's "Use Mutation" picker: the player
+    # names WHICH owned mutation to invoke (rides DICE_THROW.mutation_id, 158-54),
+    # and strain_cost is the player-visible spend math (Sebastien/Jade legibility).
+    # ``None`` for non-mutants / non-AWN packs — never a fabricated empty economy;
+    # the UI gates the picker on the value, not on key presence. Declared because
+    # the model is extra="forbid". Shape when non-None: {"owned": [{"id": str,
+    # "name": str, "strain_cost": int}, ...]}.
+    mutation_economy: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------

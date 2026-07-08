@@ -73,7 +73,12 @@ from sidequest.genre.models.rules import (
 from sidequest.genre.models.scenario import ScenarioNpc, ScenarioPack
 from sidequest.genre.models.theme import GenreTheme
 from sidequest.genre.models.tropes import SeedTrope, TropeDefinition
-from sidequest.genre.models.world import CartographyConfig, NavigationMode, WorldConfig
+from sidequest.genre.models.world import (
+    CartographyConfig,
+    MapTreatmentConfig,
+    NavigationMode,
+    WorldConfig,
+)
 from sidequest.genre.models.wwn_spell import WwnSpellCatalog
 from sidequest.genre.premise_validate import validate_premises
 from sidequest.genre.resolve import resolve_trope_inheritance
@@ -1071,6 +1076,18 @@ def _load_cartography(yaml_path: Path) -> CartographyConfig:
     return cartography
 
 
+def _load_map_treatment(world_path: Path) -> MapTreatmentConfig | None:
+    """Load the optional per-world ``map.yaml`` presentation layer (spec §2).
+
+    Absent → None (d3-dag fallback, by design). Present but malformed →
+    MapTreatmentConfig.model_validate raises (No Silent Fallbacks).
+    """
+    raw = _load_yaml_raw_optional(world_path / "map.yaml")
+    if raw is None:
+        return None
+    return MapTreatmentConfig.model_validate(raw)
+
+
 def _load_openings(
     openings_path: Path,
     *,
@@ -1435,9 +1452,7 @@ def _validate_zone_tagged_content(
     # ``factions`` tag or the zone predicate silently drops it at seat time. Fold
     # both sections into one pool so a missing/typo'd tag on a generic row fails
     # loud at load, not as a runtime ghost.
-    bestiary_entries = (
-        [*bestiary.entries, *bestiary.generics] if bestiary is not None else []
-    )
+    bestiary_entries = [*bestiary.entries, *bestiary.generics] if bestiary is not None else []
     pools: tuple[tuple[str, list], ...] = (
         ("bestiary", bestiary_entries),
         ("trope", list(tropes)),
@@ -1537,6 +1552,7 @@ def _load_single_world(
     )
 
     cartography: CartographyConfig = _load_cartography(world_path / "cartography.yaml")
+    map_treatment = _load_map_treatment(world_path)
 
     cultures_dir = world_path / "cultures"
     if cultures_dir.is_dir():
@@ -2077,6 +2093,7 @@ def _load_single_world(
         lore=lore,
         legends=legends,
         cartography=cartography,
+        map_treatment=map_treatment,
         is_cluster=is_cluster,
         cultures=cultures,
         tropes=tropes,

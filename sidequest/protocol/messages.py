@@ -1730,6 +1730,21 @@ class CartographyRouteWire(ProtocolBase):
     to_id: str | None = None
 
 
+class CartographyTreatmentWire(ProtocolBase):
+    """Optional main-map presentation block on the MAP_UPDATE payload (spec §4).
+
+    Absent → the UI falls back to the d3-dag CartographyMap. ``kind`` is one of
+    raster | orrery | dag | generated. For ``raster``, ``image_url`` is the
+    already-resolved CDN/local URL and ``node_anchors`` maps region_id ->
+    [x, y] image pixels.
+    """
+
+    kind: str
+    image_url: str | None = None
+    node_anchors: dict[str, list[float]] = Field(default_factory=dict)
+    style_hints: dict[str, Any] = Field(default_factory=dict)
+
+
 class CartographyMapPayload(ProtocolBase):
     """Region-mode cartography data for the MapOverlay component.
 
@@ -1743,6 +1758,7 @@ class CartographyMapPayload(ProtocolBase):
     explored: list[Any] = Field(default_factory=list)
     fog_bounds: dict[str, int] = Field(default_factory=lambda: {"width": 0, "height": 0})
     cartography: dict[str, Any] | None = None
+    treatment: CartographyTreatmentWire | None = None
 
 
 class CartographyMapMessage(ProtocolBase):

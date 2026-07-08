@@ -244,6 +244,45 @@ class CartographyConfig(BaseModel):
     rooms: list[RoomDef] | None = None
 
 
+class MapProvenance(BaseModel):
+    """Public-domain sourcing metadata for a raster main-map scan (spec §2).
+
+    Required for a ``raster`` treatment — enforced by the pack validator, not
+    here, so a non-raster treatment can omit it. The composer's PD-provenance
+    pattern applied to maps: every scan names its source, date, archive, and
+    the basis on which it is public domain.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    source: str
+    date: str
+    archive: str
+    pd_basis: str
+
+
+class MapTreatmentConfig(BaseModel):
+    """Optional per-world main-map presentation layer, loaded from
+    ``worlds/<slug>/map.yaml`` (spec §2).
+
+    The cartography graph stays coordinate-free and semantic; this declares
+    HOW it is drawn. Absent ``map.yaml`` → no treatment → d3-dag fallback (by
+    design). This model enforces STRUCTURE only (enum kind, types,
+    ``extra="forbid"`` — a malformed map.yaml fails loud at load). Content
+    completeness (raster requires ``image`` + ``provenance``; every region
+    has a ``node_anchor``) is enforced by the pack validator, which can see
+    the sibling cartography.yaml.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    treatment: Literal["raster", "orrery", "dag", "generated"]
+    image: str | None = None
+    provenance: MapProvenance | None = None
+    node_anchors: dict[str, list[float]] = Field(default_factory=dict)
+    style_hints: dict[str, Any] = Field(default_factory=dict)
+
+
 # ---------------------------------------------------------------------------
 # WorldConfig — uses flatten extras
 # ---------------------------------------------------------------------------

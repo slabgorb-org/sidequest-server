@@ -203,6 +203,8 @@ from sidequest.genre.models.tropes import (
 from sidequest.genre.models.world import (
     CartographyConfig,
     LegendEntry,
+    MapProvenance,
+    MapTreatmentConfig,
     NavigationMode,
     Region,
     RoomDef,
@@ -415,6 +417,8 @@ __all__ = [
     # world
     "CartographyConfig",
     "LegendEntry",
+    "MapProvenance",
+    "MapTreatmentConfig",
     "NavigationMode",
     "Region",
     "RoomDef",

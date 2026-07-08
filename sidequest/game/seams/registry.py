@@ -22,8 +22,32 @@ _REGISTRY: dict[str, SeamResolver] = {
 }
 
 
+def _ensure_site_resolvers() -> None:
+    """Lazily register the Track B site resolvers (``enter_site``/``exit_site``).
+
+    They live in ``sidequest.game.sites``, which imports ``seams.base`` — a
+    module-level import here would close a ``seams`` ↔ ``sites`` cycle
+    (registry → sites.enter_site → seams.base → seams/__init__ → registry). The
+    resolvers are dispatched by kind (not by a route ``to_id``), so nothing on
+    the module-load path needs them; registering on first ``get_seam_resolver``
+    lookup — after both packages are fully imported — breaks the cycle without a
+    behavior change. They are additive alongside ``deep_descent`` for now; Task 6
+    retires the deep_descent path.
+    """
+    if "enter_site" in _REGISTRY:
+        return
+    from sidequest.game.sites.enter_site import resolve_enter_site
+    from sidequest.game.sites.exit_site import resolve_exit_site
+
+    # Single atomic update — never leave the registry half-populated (a partial
+    # state would let a concurrent get_seam_resolver("exit_site") pass the guard
+    # then miss).
+    _REGISTRY.update({"enter_site": resolve_enter_site, "exit_site": resolve_exit_site})
+
+
 def get_seam_resolver(kind: str) -> SeamResolver:
     """Resolve a registered seam kind. Fails loud — never a default."""
+    _ensure_site_resolvers()
     resolver = _REGISTRY.get(kind)
     if resolver is None:
         known = ", ".join(sorted(_REGISTRY)) or "(none)"

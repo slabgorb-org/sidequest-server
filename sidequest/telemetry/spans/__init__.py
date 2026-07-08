@@ -108,6 +108,7 @@ from .scrapbook import *  # noqa: F401, F403
 from .script_tool import *  # noqa: F401, F403
 from .seed import *  # noqa: F401, F403
 from .sidecar_extraction import *  # noqa: F401, F403
+from .site import *  # noqa: F401, F403
 from .span import Span  # noqa: F401
 from .state_patch import *  # noqa: F401, F403
 from .system_resolve import *  # noqa: F401, F403

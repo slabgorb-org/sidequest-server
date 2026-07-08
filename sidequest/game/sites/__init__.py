@@ -5,6 +5,8 @@ and indexes each site by owning node and by id, resolving free-text entry
 descriptors and mapping site-namespaced node ids back to their owning site.
 """
 
+from sidequest.game.sites.enter_site import resolve_enter_site
+from sidequest.game.sites.exit_site import resolve_exit_site
 from sidequest.game.sites.models import SiteDecl, SiteDescriptor, SiteExtent
 from sidequest.game.sites.namespacing import (
     is_site_node_id,
@@ -19,6 +21,8 @@ __all__ = [
     "SiteExtent",
     "SiteRegistry",
     "is_site_node_id",
+    "resolve_enter_site",
+    "resolve_exit_site",
     "site_entrance_id",
     "site_id_of",
 ]

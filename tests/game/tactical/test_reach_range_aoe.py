@@ -29,16 +29,24 @@ def test_line_of_sight_clear_and_blocked():
 
 
 def test_adjudicate_reach_melee_in_and_out():
-    hit = adjudicate_reach(origin=(1, 1), target=(2, 1), max_cells=1, mask=ROOM, mode="melee", require_los=False)
+    hit = adjudicate_reach(
+        origin=(1, 1), target=(2, 1), max_cells=1, mask=ROOM, mode="melee", require_los=False
+    )
     assert hit.in_range and hit.distance_cells == 1 and hit.reason == ""
-    miss = adjudicate_reach(origin=(1, 1), target=(3, 3), max_cells=1, mask=ROOM, mode="melee", require_los=False)
+    miss = adjudicate_reach(
+        origin=(1, 1), target=(3, 3), max_cells=1, mask=ROOM, mode="melee", require_los=False
+    )
     assert not miss.in_range and miss.distance_cells == 2 and "reach" in miss.reason.lower()
 
 
 def test_adjudicate_reach_ranged_requires_los():
-    blocked = adjudicate_reach(origin=(1, 1), target=(4, 1), max_cells=40, mask=WALLED, mode="ranged", require_los=True)
+    blocked = adjudicate_reach(
+        origin=(1, 1), target=(4, 1), max_cells=40, mask=WALLED, mode="ranged", require_los=True
+    )
     assert not blocked.in_range and blocked.has_los is False and "sight" in blocked.reason.lower()
-    clear = adjudicate_reach(origin=(1, 1), target=(4, 1), max_cells=40, mask=OPEN, mode="ranged", require_los=True)
+    clear = adjudicate_reach(
+        origin=(1, 1), target=(4, 1), max_cells=40, mask=OPEN, mode="ranged", require_los=True
+    )
     assert clear.in_range and clear.has_los is True
 
 

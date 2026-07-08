@@ -1,11 +1,19 @@
 # Flickering Reach — world bestiary (hermetic WWN test fixture, story 158-55)
 #
 # SRD-aligned WWN stat blocks so encountergen resolves a NON-EMPTY encounters
-# pool for this world — the tier-1 entry is what test_158_55_fixture_tier1.py
+# pool for this world — the tier-1 entries are what test_158_55_fixture_tier1.py
 # asserts, so the ~7 chargen-wiring tests can bind a genuinely-seedable world
 # instead of a phantom combo masked by the _tolerant_seed_manual swallow.
 # Stats follow the Worlds Without Number SRD 1.0 generic stat lines
 # (level == HD, hp == average, ascending AC, physical save 15 - floor(level/2)).
+#
+# The bestiary spans BOTH seed tiers seed_manual generates (ENCOUNTER_TIERS =
+# (1, 2), tier_to_level_range 1->[1,3], 2->[4,6]): the two level-1/2 creatures
+# populate tier 1 and the level-5 warlord populates tier 2. That out-of-tier-1
+# creature is load-bearing for the test — with only tier-1-range creatures, a
+# tier-2 seed would silently full-pool-fall-back to them (encountergen.py:376)
+# and the tier assertion could not tell a working level filter from a broken
+# one. Do NOT drop the level-5 entry to "simplify" the fixture.
 entries:
   - id: scav_rat
     name: Reach Scavenger
@@ -41,3 +49,22 @@ entries:
     description: >-
       A sun-blistered marauder in scavenged plate who works the dead
       crossroads, blade loose, taking what the flickering sun leaves behind.
+  - id: rust_warlord
+    name: Rust-Crown Warlord
+    level: 5
+    hp: 22
+    armor_class: 15
+    attack_bonus: 5
+    damage: "1d10"
+    move: "30 ft."
+    morale: 9
+    skill: 2
+    save: 13
+    role: crossroads warlord
+    tags: [human, raider, elite]
+    abilities:
+      - "War-band — lesser raiders rally to press any advantage it takes"
+    description: >-
+      The masterless king of the dead crossroads, plated in rust and old
+      war-loot, who sets the toll no traveller dares refuse under the
+      flickering sun. The tier-2 threat of the Reach.

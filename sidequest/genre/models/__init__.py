@@ -202,17 +202,12 @@ from sidequest.genre.models.tropes import (
 )
 from sidequest.genre.models.world import (
     CartographyConfig,
-    GraphEdge,
     LegendEntry,
     NavigationMode,
     Region,
     RoomDef,
     Route,
-    SubGraph,
-    Terrain,
     WorldConfig,
-    WorldGraph,
-    WorldGraphNode,
 )
 
 __all__ = [
@@ -419,15 +414,10 @@ __all__ = [
     "WitnessedActsFile",
     # world
     "CartographyConfig",
-    "GraphEdge",
     "LegendEntry",
     "NavigationMode",
     "Region",
     "RoomDef",
     "Route",
-    "SubGraph",
-    "Terrain",
     "WorldConfig",
-    "WorldGraph",
-    "WorldGraphNode",
 ]

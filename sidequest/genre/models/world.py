@@ -95,86 +95,6 @@ class RoomDef(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Hierarchical world graph
-# ---------------------------------------------------------------------------
-
-
-class Terrain(StrEnum):
-    """Terrain type for graph edges.
-
-    Genre-spanning vocabulary. Terrestrial values (road/wilderness/water/underground)
-    cover most ground-bound worlds; space values (vacuum/atmospheric/jump_lane/orbit)
-    cover orbital and interstellar worlds. New values can be added as new genres
-    require them — the engine treats Terrain as opaque metadata for narrator color
-    and renderer hints, not as a closed mechanical category.
-    """
-
-    # Terrestrial
-    road = "road"
-    wilderness = "wilderness"
-    water = "water"
-    underground = "underground"
-    # Space / orbital
-    vacuum = "vacuum"
-    atmospheric = "atmospheric"
-    jump_lane = "jump_lane"
-    orbit = "orbit"
-
-
-class WorldGraphNode(BaseModel):
-    """A node in the world graph — a major location.
-
-    ``extra="allow"`` so genre packs can decorate nodes with genre-specific flavor
-    (e.g. ``kind: gas_giant``, ``provenance: pre-collapse-relic``) without bloating
-    the engine schema. Unknown fields are preserved on the model so narrator and
-    renderer code can read them; the engine itself treats them as opaque.
-    """
-
-    model_config = {"extra": "allow"}
-
-    id: str
-    name: str
-    description: str = ""
-
-
-class GraphEdge(BaseModel):
-    """An edge between two world graph nodes.
-
-    ``extra="allow"`` so genre packs can tag edges with relationship metadata
-    (e.g. ``relation: orbits``, ``seasonal: true``) without forcing those
-    concepts into the engine schema. The engine reads only the typed fields;
-    extras are narrator/renderer flavor.
-    """
-
-    from_: str = Field(alias="from", serialization_alias="from")
-    to: str
-    danger: int
-    terrain: Terrain = Terrain.road
-    distance: int = 1
-    encounter_table_key: str | None = None
-
-    model_config = {"extra": "allow", "populate_by_name": True}
-
-
-class SubGraph(BaseModel):
-    """A sub-graph: internal topology for a world graph node."""
-
-    model_config = {"extra": "forbid"}
-
-    nodes: list[WorldGraphNode] = Field(default_factory=list)
-    edges: list[GraphEdge] = Field(default_factory=list)
-
-
-class WorldGraph(BaseModel):
-    """The top-level world graph."""
-
-    model_config = {"extra": "forbid"}
-
-    nodes: list[WorldGraphNode] = Field(default_factory=list)
-    edges: list[GraphEdge] = Field(default_factory=list)
-
-
-# ---------------------------------------------------------------------------
 # Landmark — untagged union (string or detailed object)
 # ---------------------------------------------------------------------------
 
@@ -322,8 +242,6 @@ class CartographyConfig(BaseModel):
     # existing world — a pure/additive field, no behavior change when unset.
     sites: list[SiteDecl] = Field(default_factory=list)
     rooms: list[RoomDef] | None = None
-    world_graph: WorldGraph | None = None
-    sub_graphs: dict[str, SubGraph] | None = None
 
 
 # ---------------------------------------------------------------------------

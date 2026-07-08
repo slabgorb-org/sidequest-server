@@ -1,0 +1,43 @@
+# Flickering Reach — world bestiary (hermetic WWN test fixture, story 158-55)
+#
+# SRD-aligned WWN stat blocks so encountergen resolves a NON-EMPTY encounters
+# pool for this world — the tier-1 entry is what test_158_55_fixture_tier1.py
+# asserts, so the ~7 chargen-wiring tests can bind a genuinely-seedable world
+# instead of a phantom combo masked by the _tolerant_seed_manual swallow.
+# Stats follow the Worlds Without Number SRD 1.0 generic stat lines
+# (level == HD, hp == average, ascending AC, physical save 15 - floor(level/2)).
+entries:
+  - id: scav_rat
+    name: Reach Scavenger
+    level: 1
+    hp: 4
+    armor_class: 12
+    attack_bonus: 1
+    damage: "1d4"
+    move: "30 ft."
+    morale: 6
+    skill: 1
+    save: 15
+    role: hardpan scrounger
+    tags: [beast, vermin]
+    abilities:
+      - "Swarms — fights in numbers among the crossroads wreckage"
+    description: >-
+      A lean, dust-colored scavenger of the cracked flats — bold only
+      when the pack has a traveller cornered against the dead crossroads.
+  - id: reach_raider
+    name: Crossroads Raider
+    level: 2
+    hp: 9
+    armor_class: 13
+    attack_bonus: 3
+    damage: "1d8"
+    move: "30 ft."
+    morale: 8
+    skill: 1
+    save: 14
+    role: masterless road-thief
+    tags: [human, raider]
+    description: >-
+      A sun-blistered marauder in scavenged plate who works the dead
+      crossroads, blade loose, taking what the flickering sun leaves behind.

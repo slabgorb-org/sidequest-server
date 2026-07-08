@@ -122,6 +122,62 @@ def _isolate_frontier_observers() -> Iterator[None]:
     session_integration._ATTACHED_SAVES.update(attached_before)
 
 
+@pytest.fixture(autouse=True)
+def _otel_provider_isolation() -> Iterator[None]:
+    """Suite hygiene (story 158-55): snapshot + restore the global OTEL
+    ``TracerProvider`` around every test so a test that mutates it cannot leak
+    into later tests on the same xdist worker.
+
+    Two leak modes are covered:
+
+    * **Provider swap** — a test that calls ``trace.set_tracer_provider(...)``
+      (usually after ``reset_otel_provider()`` clears the once-guard, as several
+      ``tests/dungeon`` and ``tests/server`` span-assertion tests do) installs
+      its own provider in the process-global slot. Restoring ``_TRACER_PROVIDER``
+      and the ``Once._done`` flag puts the prior provider back.
+    * **Processor add** — the ``_attach_exporter`` pattern (e.g.
+      ``tests/server/test_merged_mp_emitter_projection.py``) calls
+      ``get_tracer_provider().add_span_processor(...)`` on the EXISTING shared
+      provider. ``SynchronousMultiSpanProcessor`` keeps its processors in an
+      immutable tuple rebound on every add, so snapshotting the tuple and
+      restoring it strips any processor a test appended (and the dead
+      ``BatchSpanProcessor`` → :4317 that hangs ``force_flush`` on later tests).
+
+    Before this guard the failing set ROTATED run-to-run: under ``-n auto``'s
+    ``--dist load`` work-stealing, whichever OTEL-assertion test shared a worker
+    with a leaking mutator saw a polluted provider — accumulated
+    ``SimpleSpanProcessor``s, the dead ``:4317`` exporter hanging the 30 s
+    ``force_flush`` budget, or a provider swapped out from under the production
+    ``WatcherSpanProcessor``. Private-API access (``trace._TRACER_PROVIDER`` /
+    ``_TRACER_PROVIDER_SET_ONCE``) mirrors ``tests/dungeon/conftest.py``; update
+    if the OTEL SDK moves the guard.
+    """
+    from opentelemetry import trace
+
+    once = getattr(trace, "_TRACER_PROVIDER_SET_ONCE", None)
+    provider_before = getattr(trace, "_TRACER_PROVIDER", None)
+    once_done_before = getattr(once, "_done", None) if once is not None else None
+
+    current = trace.get_tracer_provider()
+    active = getattr(current, "_active_span_processor", None)
+    # ``_span_processors`` is an immutable tuple rebound on each add, so the bare
+    # reference is a valid snapshot — a later ``+= (proc,)`` cannot mutate it.
+    processors_before = getattr(active, "_span_processors", None)
+
+    yield
+
+    # Restore the global provider reference + once-guard FIRST so
+    # get_tracer_provider() resolves the pre-test provider ...
+    trace._TRACER_PROVIDER = provider_before  # type: ignore[attr-defined]
+    if once is not None and once_done_before is not None:
+        once._done = once_done_before
+    # ... then strip any span processor a test appended to that provider.
+    restored = trace.get_tracer_provider()
+    active_after = getattr(restored, "_active_span_processor", None)
+    if active_after is not None and processors_before is not None:
+        active_after._span_processors = processors_before
+
+
 # ---------------------------------------------------------------------------
 # Ephemeral real-Postgres fixtures (ADR-115). Defined at the tests/ root so
 # the few non-persistence suites that drive real PG (e.g.

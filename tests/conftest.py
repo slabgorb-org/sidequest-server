@@ -144,8 +144,6 @@ def _otel_tracer_installed() -> None:
     (``test_otlp_export_wiring.py``) set it themselves per-test via monkeypatch,
     so clearing the process-wide default here is safe and matches CI.
     """
-    import os
-
     os.environ.pop("SIDEQUEST_OTLP_ENDPOINT", None)
 
     from sidequest.telemetry.setup import init_tracer
@@ -176,14 +174,49 @@ def _otel_provider_isolation() -> Iterator[None]:
     REFERENCE and once-guard are deliberately left untouched — resetting them
     breaks ``init_tracer``'s ``_initialized`` singleton and the sibling tests
     that assume the shared provider persists.
+
+    Fail-loud snapshot (No Silent Fallbacks): a bare API ``ProxyTracerProvider``
+    (no SDK provider installed) owns no processor set, so there is nothing to
+    isolate — tolerate it and no-op. But when the real SDK ``TracerProvider`` is
+    installed (it always is under this suite — ``_otel_tracer_installed`` calls
+    ``init_tracer`` session-wide) and the ``_active_span_processor`` /
+    ``_span_processors`` internals this snapshot reads are absent, the OTel SDK
+    layout was renamed under us; raise instead of silently skipping the restore
+    (which would let processors leak again — the very bug this fixture fixes).
     """
     from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
 
-    active = getattr(trace.get_tracer_provider(), "_active_span_processor", None)
-    processors_before = getattr(active, "_span_processors", None)
+    provider = trace.get_tracer_provider()
+
+    # Setup-time fail-loud: the session-scoped ``_otel_tracer_installed`` always
+    # installs the real SDK ``TracerProvider``, so its processor internals MUST be
+    # present here. If they are absent the OTel SDK layout was renamed under us —
+    # raise, rather than silently no-op the isolation and let processors leak
+    # again. Only the bare API ``ProxyTracerProvider`` case (no SDK provider) is
+    # tolerated: it owns no processor set, so ``processors_before`` stays None.
+    processors_before = None
+    if isinstance(provider, TracerProvider):
+        active = getattr(provider, "_active_span_processor", None)
+        if active is None:
+            raise AttributeError(
+                "OTel SDK TracerProvider has no `_active_span_processor` — the SDK "
+                "internals `_otel_provider_isolation` snapshots have been renamed; "
+                "update this fixture to the current OTel SDK layout."
+            )
+        processors_before = getattr(active, "_span_processors", None)
+        if processors_before is None:
+            raise AttributeError(
+                "OTel multi-span processor has no `_span_processors` — the SDK "
+                "internals `_otel_provider_isolation` snapshots have been renamed; "
+                "update this fixture to the current OTel SDK layout."
+            )
 
     yield
 
+    # Teardown re-fetches so the ``active_after is not None`` guard stays
+    # legitimate: a test that reset the global provider to the API proxy has no
+    # processor set to restore onto. Restoring strips any per-test additions.
     active_after = getattr(trace.get_tracer_provider(), "_active_span_processor", None)
     if active_after is not None and processors_before is not None:
         active_after._span_processors = processors_before

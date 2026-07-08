@@ -1,31 +1,13 @@
-# Character creation scenes — Barsoom world (story 89-5)
+# Character creation scenes for the flickering_reach WWN test world.
 #
-# WORLD-TIER SURFACE: this list REPLACES the heavy_metal genre crucible
-# wholesale (char_creation_resolve.py contract — no per-scene merge). The
-# scribe-and-ledger framing of the doom worlds has no place under the two
-# moons; Barsoom enters its players through the eyes of a dying world.
-#
-# ── DOCUMENTED TIER EXCEPTION (design D5 / §9 — Keith's mechanics call,
-#    2026-06-05) ─────────────────────────────────────────────────────────
-# The Earthman origin below carries REAL CRUNCH at the world tier — the
-# single sanctioned exception to "crunch in the genre, flavor in the
-# world." Both halves resolve to verified engine consumers:
-#   * stat_bonuses {STR: 2} → CharacterBuilder.generate_stats applies
-#     accumulated bonuses additively under every stat-generation strategy
-#     (the pre-wired consumer; reads at every STR stat_check and save);
-#   * origin_trait → the builder seeds a Race-source ability and emits the
-#     chargen.origin_trait.applied OTEL event (the GM-panel proof).
-# The trait is defined HERE, on the choice — never keyed off the race
-# string in engine code — so no other world can conjure it.
-#
-# Native physiology (green-Martian four arms, First Born stature) is
-# FICTION-ONLY per the same call: no native origin carries stat_bonuses,
-# mutation_hint, or origin_trait. The narrator frames four arms; the
-# engine does not.
-#
-# Class surface: heroic-pulp Callings only (Warrior, Expert, Mentalist,
-# Super-scientist). The doom Callings (Necromancer/Elementalist/Pact-born)
-# are deliberately NOT offered — faithful Barsoom has no necromancers.
+# REUSED, CONTENT-IRRELEVANT: these scenes are a verbatim copy of the
+# heavy_metal/barsoom world's char_creation, kept only so this hermetic
+# test world is loadable through the real chargen path (world.yaml
+# describes its actual purpose — seeding a tier-1 WWN encounter). No test
+# asserts on this scene text; the tier-resolution tests exercise
+# bestiary.yaml, not these choices. Do not treat the Barsoom framing below
+# as this fixture's own theming — if you need to edit chargen behavior,
+# edit the source world, not this copy.
 
 - id: origins
   title: Under the Hurtling Moons

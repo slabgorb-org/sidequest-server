@@ -80,7 +80,13 @@ from sidequest.telemetry.spans.dungeon_persist import (
     mask_write_span,
 )
 
-__all__ = ["PgDungeonRepository", "PgDungeonTransaction"]
+# Per-site storage key (Track B, Story 164-1). Every dungeon table is keyed
+# ``(session_id, site_id, …)``; a call that omits ``site_id`` lands under this
+# legacy default, so Sünden's existing single-dungeon path is unchanged.
+# Must match alembic 0003's ``_SITE``.
+DEFAULT_SITE_ID = "frontier"
+
+__all__ = ["DEFAULT_SITE_ID", "PgDungeonRepository", "PgDungeonTransaction"]
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +113,7 @@ class PgDungeonTransaction:
         *,
         generator_version: str = _DEFAULT_GENERATOR_VERSION,
         masks: Mapping[str, dict] | None = None,
+        site_id: str = DEFAULT_SITE_ID,
     ) -> None:
         """Persist one expansion's nodes + edges (no commit — caller owns boundary)."""
         with dungeon_persist_commit_span(
@@ -135,6 +142,7 @@ class PgDungeonTransaction:
                 node_rows.append(
                     (
                         self._sid,
+                        site_id,
                         live.id,
                         live.expansion_id,
                         live.depth_score,
@@ -148,6 +156,7 @@ class PgDungeonTransaction:
             edge_rows = [
                 (
                     self._sid,
+                    site_id,
                     expansion.expansion_id,
                     edge.a,
                     edge.b,
@@ -164,15 +173,15 @@ class PgDungeonTransaction:
                 with self._conn.cursor() as cur:
                     cur.executemany(
                         "INSERT INTO dungeon_map "
-                        "(session_id, region_id, expansion_id, depth_score, generator_version, "
+                        "(session_id, site_id, region_id, expansion_id, depth_score, generator_version, "
                         " payload, mask, created_at) "
-                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
                         node_rows,
                     )
                     cur.executemany(
                         "INSERT INTO dungeon_edge "
-                        "(session_id, expansion_id, a, b, kind, hidden, shortcut, payload, created_at) "
-                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                        "(session_id, site_id, expansion_id, a, b, kind, hidden, shortcut, payload, created_at) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                         edge_rows,
                     )
             except psycopg.errors.UniqueViolation as exc:
@@ -191,22 +200,23 @@ class PgDungeonTransaction:
             with mask_write_span(mask_rows=len(masks)):
                 pass
 
-    def put_frontier(self, fe: FrontierEdge) -> None:
+    def put_frontier(self, fe: FrontierEdge, *, site_id: str = DEFAULT_SITE_ID) -> None:
         """Upsert a frontier edge (INSERT … ON CONFLICT … DO UPDATE)."""
         now = datetime.now(tz=UTC).isoformat()
         try:
             self._conn.execute(
                 "INSERT INTO dungeon_frontier "
-                "(session_id, frontier_edge_id, from_region_id, heading, spawn_depth_score, "
+                "(session_id, site_id, frontier_edge_id, from_region_id, heading, spawn_depth_score, "
                 " payload, created_at) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s) "
-                "ON CONFLICT (session_id, frontier_edge_id) DO UPDATE SET "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
+                "ON CONFLICT (session_id, site_id, frontier_edge_id) DO UPDATE SET "
                 "  from_region_id = excluded.from_region_id, "
                 "  heading = excluded.heading, "
                 "  spawn_depth_score = excluded.spawn_depth_score, "
                 "  payload = excluded.payload",
                 (
                     self._sid,
+                    site_id,
                     fe.frontier_edge_id,
                     fe.from_region_id,
                     fe.heading,
@@ -218,14 +228,17 @@ class PgDungeonTransaction:
         except psycopg.Error as exc:
             raise DatabaseError(f"put_frontier failed: {exc}") from exc
 
-    def record_mutation(self, region_id: str, kind: str, payload: dict) -> None:
+    def record_mutation(
+        self, region_id: str, kind: str, payload: dict, *, site_id: str = DEFAULT_SITE_ID
+    ) -> None:
         """Append one mutation fact (append-only, never updated or deleted)."""
         now = datetime.now(tz=UTC).isoformat()
         try:
             self._conn.execute(
-                "INSERT INTO dungeon_mutation_overlay (session_id, region_id, kind, payload, created_at) "
-                "VALUES (%s, %s, %s, %s, %s)",
-                (self._sid, region_id, kind, json.dumps(payload), now),
+                "INSERT INTO dungeon_mutation_overlay "
+                "(session_id, site_id, region_id, kind, payload, created_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                (self._sid, site_id, region_id, kind, json.dumps(payload), now),
             )
         except psycopg.Error as exc:
             raise DatabaseError(f"record_mutation failed: {exc}") from exc
@@ -241,7 +254,7 @@ class PgDungeonTransaction:
     # with the expansion (Plan-5 atomicity: NO orphan ledger).
     # ------------------------------------------------------------------
 
-    def open_thread(self, thread: ComplicationThread) -> None:
+    def open_thread(self, thread: ComplicationThread, *, site_id: str = DEFAULT_SITE_ID) -> None:
         """Insert a new complication thread (status='open') on this txn's conn."""
         with ledger_add_span(
             thread_id=thread.thread_id,
@@ -252,11 +265,12 @@ class PgDungeonTransaction:
             try:
                 self._conn.execute(
                     "INSERT INTO dungeon_complication_ledger "
-                    "(session_id, thread_id, origin_region_id, kind, status, "
+                    "(session_id, site_id, thread_id, origin_region_id, kind, status, "
                     " started_at_depth_score, payload, created_at) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
                     (
                         self._sid,
+                        site_id,
                         thread.thread_id,
                         thread.origin_region_id,
                         thread.kind,
@@ -271,7 +285,7 @@ class PgDungeonTransaction:
             except psycopg.Error as exc:
                 raise DatabaseError(f"open_thread failed: {exc}") from exc
 
-    def open_threads(self) -> list[ComplicationThread]:
+    def open_threads(self, *, site_id: str = DEFAULT_SITE_ID) -> list[ComplicationThread]:
         """Return all status='open' threads (ORDER BY thread_id) on this txn's conn.
 
         Reads on ``self._conn`` so dedup/coalescence within one attach pass sees
@@ -281,8 +295,8 @@ class PgDungeonTransaction:
             "SELECT thread_id, origin_region_id, kind, status, "
             "started_at_depth_score, payload "
             "FROM dungeon_complication_ledger "
-            "WHERE session_id = %s AND status = 'open' ORDER BY thread_id",
-            (self._sid,),
+            "WHERE session_id = %s AND site_id = %s AND status = 'open' ORDER BY thread_id",
+            (self._sid, site_id),
         ).fetchall()
         try:
             return [
@@ -347,24 +361,24 @@ class PgDungeonRepository:
     # campaign_seed — write-once
     # ------------------------------------------------------------------
 
-    def get_campaign_seed(self) -> int | None:
+    def get_campaign_seed(self, *, site_id: str = DEFAULT_SITE_ID) -> int | None:
         """Return the persisted campaign seed, or ``None`` on a fresh session."""
         with self._pool.connection() as conn:
             row = conn.execute(
-                "SELECT campaign_seed FROM dungeon_meta WHERE session_id = %s",
-                (self._sid,),
+                "SELECT campaign_seed FROM dungeon_meta WHERE session_id = %s AND site_id = %s",
+                (self._sid, site_id),
             ).fetchone()
         return None if row is None else int(row[0])
 
-    def set_campaign_seed(self, seed: int) -> None:
-        """Persist the campaign seed exactly once (write-once).
+    def set_campaign_seed(self, seed: int, *, site_id: str = DEFAULT_SITE_ID) -> None:
+        """Persist the campaign seed exactly once per site (write-once).
 
-        Raises ``PersistError`` on a second write — the seed is frozen with
-        the dungeon (save-is-truth).  Does NOT autocommit (uses its own
-        ``session_tx``).
+        Raises ``PersistError`` on a second write for the same site — the seed
+        is frozen with the dungeon (save-is-truth).  Does NOT autocommit (uses
+        its own ``session_tx``).
         """
         # Check first (same pattern as DungeonStore — explicit get then insert)
-        if self.get_campaign_seed() is not None:
+        if self.get_campaign_seed(site_id=site_id) is not None:
             raise PersistError(
                 "campaign_seed already set — it is write-once "
                 "(save-is-truth); refusing to overwrite a frozen seed"
@@ -373,9 +387,9 @@ class PgDungeonRepository:
         try:
             with session_tx(self._pool, self._sid) as conn:
                 conn.execute(
-                    "INSERT INTO dungeon_meta (session_id, campaign_seed, created_at) "
-                    "VALUES (%s, %s, %s)",
-                    (self._sid, seed, now),
+                    "INSERT INTO dungeon_meta (session_id, site_id, campaign_seed, created_at) "
+                    "VALUES (%s, %s, %s, %s)",
+                    (self._sid, site_id, seed, now),
                 )
         except psycopg.errors.UniqueViolation as exc:
             # Race: another writer won between our get and insert
@@ -397,6 +411,7 @@ class PgDungeonRepository:
         *,
         generator_version: str = _DEFAULT_GENERATOR_VERSION,
         masks: Mapping[str, dict] | None = None,
+        site_id: str = DEFAULT_SITE_ID,
     ) -> None:
         """Persist one expansion's regions + edges in their own transaction.
 
@@ -405,26 +420,31 @@ class PgDungeonRepository:
         """
         with session_tx(self._pool, self._sid) as conn:
             PgDungeonTransaction(conn, self._sid).commit_expansion(
-                expansion, graph, generator_version=generator_version, masks=masks
+                expansion,
+                graph,
+                generator_version=generator_version,
+                masks=masks,
+                site_id=site_id,
             )
 
     # ------------------------------------------------------------------
     # load_map / load_masks
     # ------------------------------------------------------------------
 
-    def load_map(self, *, entrance_id: str) -> RegionGraph:
-        """Rebuild the full RegionGraph from dungeon_map + dungeon_edge.
+    def load_map(self, *, entrance_id: str, site_id: str = DEFAULT_SITE_ID) -> RegionGraph:
+        """Rebuild the full RegionGraph from dungeon_map + dungeon_edge for one site.
 
         Nodes are loaded first; RegionGraph.add_edge validates endpoints loudly.
         """
         with self._pool.connection() as conn:
             node_rows = conn.execute(
-                "SELECT payload FROM dungeon_map WHERE session_id = %s",
-                (self._sid,),
+                "SELECT payload FROM dungeon_map WHERE session_id = %s AND site_id = %s",
+                (self._sid, site_id),
             ).fetchall()
             edge_rows = conn.execute(
-                "SELECT payload FROM dungeon_edge WHERE session_id = %s ORDER BY edge_id",
-                (self._sid,),
+                "SELECT payload FROM dungeon_edge "
+                "WHERE session_id = %s AND site_id = %s ORDER BY edge_id",
+                (self._sid, site_id),
             ).fetchall()
 
         g = RegionGraph(entrance_id=entrance_id)
@@ -437,8 +457,8 @@ class PgDungeonRepository:
             raise SerializationError(f"corrupt dungeon payload: {exc}") from exc
         return g
 
-    def load_masks(self) -> dict[str, dict]:
-        """Return persisted region masks as ``{region_id: mask_dict}``.
+    def load_masks(self, *, site_id: str = DEFAULT_SITE_ID) -> dict[str, dict]:
+        """Return persisted region masks as ``{region_id: mask_dict}`` for one site.
 
         Rows whose ``mask BYTEA`` is NULL are omitted — absence means "no mask
         known", not "empty mask".  A fresh session returns ``{}``.  A corrupted
@@ -447,8 +467,8 @@ class PgDungeonRepository:
         with self._pool.connection() as conn:
             rows = conn.execute(
                 "SELECT region_id, mask FROM dungeon_map "
-                "WHERE session_id = %s AND mask IS NOT NULL ORDER BY region_id",
-                (self._sid,),
+                "WHERE session_id = %s AND site_id = %s AND mask IS NOT NULL ORDER BY region_id",
+                (self._sid, site_id),
             ).fetchall()
 
         masks: dict[str, dict] = {}
@@ -466,18 +486,18 @@ class PgDungeonRepository:
     # put_frontier / load_frontier
     # ------------------------------------------------------------------
 
-    def put_frontier(self, fe: FrontierEdge) -> None:
+    def put_frontier(self, fe: FrontierEdge, *, site_id: str = DEFAULT_SITE_ID) -> None:
         """Upsert a frontier edge (INSERT … ON CONFLICT … DO UPDATE)."""
         with session_tx(self._pool, self._sid) as conn:
-            PgDungeonTransaction(conn, self._sid).put_frontier(fe)
+            PgDungeonTransaction(conn, self._sid).put_frontier(fe, site_id=site_id)
 
-    def load_frontier(self) -> list[FrontierEdge]:
-        """Return all frontier edges ordered by ``frontier_edge_id``."""
+    def load_frontier(self, *, site_id: str = DEFAULT_SITE_ID) -> list[FrontierEdge]:
+        """Return all frontier edges ordered by ``frontier_edge_id`` for one site."""
         with self._pool.connection() as conn:
             rows = conn.execute(
                 "SELECT payload FROM dungeon_frontier "
-                "WHERE session_id = %s ORDER BY frontier_edge_id",
-                (self._sid,),
+                "WHERE session_id = %s AND site_id = %s ORDER BY frontier_edge_id",
+                (self._sid, site_id),
             ).fetchall()
         try:
             return [FrontierEdge.from_dict(json.loads(r[0])) for r in rows]
@@ -488,18 +508,22 @@ class PgDungeonRepository:
     # record_mutation / load_mutations
     # ------------------------------------------------------------------
 
-    def record_mutation(self, region_id: str, kind: str, payload: dict) -> None:
+    def record_mutation(
+        self, region_id: str, kind: str, payload: dict, *, site_id: str = DEFAULT_SITE_ID
+    ) -> None:
         """Append one mutation fact in its own transaction."""
         with session_tx(self._pool, self._sid) as conn:
-            PgDungeonTransaction(conn, self._sid).record_mutation(region_id, kind, payload)
+            PgDungeonTransaction(conn, self._sid).record_mutation(
+                region_id, kind, payload, site_id=site_id
+            )
 
-    def load_mutations(self) -> list[DungeonMutation]:
+    def load_mutations(self, *, site_id: str = DEFAULT_SITE_ID) -> list[DungeonMutation]:
         """Return all mutations ordered by ``mutation_id`` (append-only replay order)."""
         with self._pool.connection() as conn:
             rows = conn.execute(
                 "SELECT region_id, kind, payload FROM dungeon_mutation_overlay "
-                "WHERE session_id = %s ORDER BY mutation_id",
-                (self._sid,),
+                "WHERE session_id = %s AND site_id = %s ORDER BY mutation_id",
+                (self._sid, site_id),
             ).fetchall()
         try:
             return [
@@ -517,7 +541,7 @@ class PgDungeonRepository:
     # open_thread / get_thread / open_threads / resolve_thread
     # ------------------------------------------------------------------
 
-    def open_thread(self, thread: ComplicationThread) -> None:
+    def open_thread(self, thread: ComplicationThread, *, site_id: str = DEFAULT_SITE_ID) -> None:
         """Insert a new complication thread (status='open')."""
         with ledger_add_span(
             thread_id=thread.thread_id,
@@ -529,11 +553,12 @@ class PgDungeonRepository:
                 with session_tx(self._pool, self._sid) as conn:
                     conn.execute(
                         "INSERT INTO dungeon_complication_ledger "
-                        "(session_id, thread_id, origin_region_id, kind, status, "
+                        "(session_id, site_id, thread_id, origin_region_id, kind, status, "
                         " started_at_depth_score, payload, created_at) "
-                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
                         (
                             self._sid,
+                            site_id,
                             thread.thread_id,
                             thread.origin_region_id,
                             thread.kind,
@@ -548,15 +573,15 @@ class PgDungeonRepository:
             except psycopg.Error as exc:
                 raise DatabaseError(f"open_thread failed: {exc}") from exc
 
-    def get_thread(self, thread_id: str) -> ComplicationThread:
+    def get_thread(self, thread_id: str, *, site_id: str = DEFAULT_SITE_ID) -> ComplicationThread:
         """Return the thread for ``thread_id``, raising ``NotFoundError`` if absent."""
         with self._pool.connection() as conn:
             row = conn.execute(
                 "SELECT thread_id, origin_region_id, kind, status, "
                 "started_at_depth_score, payload "
                 "FROM dungeon_complication_ledger "
-                "WHERE session_id = %s AND thread_id = %s",
-                (self._sid, thread_id),
+                "WHERE session_id = %s AND site_id = %s AND thread_id = %s",
+                (self._sid, site_id, thread_id),
             ).fetchone()
         if row is None:
             raise NotFoundError(f"complication thread {thread_id!r} not found")
@@ -572,7 +597,7 @@ class PgDungeonRepository:
         except json.JSONDecodeError as exc:
             raise SerializationError(f"corrupt thread payload: {exc}") from exc
 
-    def resolve_thread(self, thread_id: str) -> None:
+    def resolve_thread(self, thread_id: str, *, site_id: str = DEFAULT_SITE_ID) -> None:
         """Mark a thread resolved; raises ``NotFoundError`` if ``thread_id`` is unknown."""
         with ledger_resolve_span(thread_id=thread_id):
             resolved_at = datetime.now(tz=UTC).isoformat()
@@ -581,8 +606,8 @@ class PgDungeonRepository:
                     result = conn.execute(
                         "UPDATE dungeon_complication_ledger "
                         "SET status = 'resolved', resolved_at = %s "
-                        "WHERE session_id = %s AND thread_id = %s",
-                        (resolved_at, self._sid, thread_id),
+                        "WHERE session_id = %s AND site_id = %s AND thread_id = %s",
+                        (resolved_at, self._sid, site_id, thread_id),
                     )
                     if result.rowcount == 0:
                         raise NotFoundError(
@@ -593,15 +618,15 @@ class PgDungeonRepository:
             except psycopg.Error as exc:
                 raise DatabaseError(f"resolve_thread failed: {exc}") from exc
 
-    def open_threads(self) -> list[ComplicationThread]:
-        """Return all threads with ``status='open'`` ordered by ``thread_id``."""
+    def open_threads(self, *, site_id: str = DEFAULT_SITE_ID) -> list[ComplicationThread]:
+        """Return all threads with ``status='open'`` ordered by ``thread_id`` for one site."""
         with self._pool.connection() as conn:
             rows = conn.execute(
                 "SELECT thread_id, origin_region_id, kind, status, "
                 "started_at_depth_score, payload "
                 "FROM dungeon_complication_ledger "
-                "WHERE session_id = %s AND status = 'open' ORDER BY thread_id",
-                (self._sid,),
+                "WHERE session_id = %s AND site_id = %s AND status = 'open' ORDER BY thread_id",
+                (self._sid, site_id),
             ).fetchall()
         try:
             return [

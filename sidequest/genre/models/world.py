@@ -264,6 +264,29 @@ class Route(BaseModel):
     )
 
 
+SiteExtent = Literal["bounded", "frontier"]
+
+
+class SiteDecl(BaseModel):
+    """One authored site on a world node (cartography ``sites:`` entry).
+
+    Defined here rather than in ``sidequest.game.sites.models`` so
+    ``CartographyConfig`` can type its ``sites`` field without a ``game ->
+    genre`` import cycle; ``game.sites.models`` re-exports it. ``seed`` is
+    never authored — it is derived ``blake2b(campaign_seed, site_id)`` at
+    materialization (Track B, Task 12). ``extra="allow"`` lets future
+    per-archetype flavor ride along without failing load.
+    """
+
+    model_config = {"extra": "allow"}
+
+    site_id: str
+    name: str
+    archetype: str
+    attached_to: str
+    extent: SiteExtent = "bounded"
+
+
 class CartographyConfig(BaseModel):
     """Map and region configuration.
 
@@ -295,6 +318,9 @@ class CartographyConfig(BaseModel):
     discovery_mode: Literal["public", "fog"] = "public"
     regions: dict[str, Region] = Field(default_factory=dict)
     routes: list[Route] = Field(default_factory=list)
+    # Authored sites attached to world nodes (Track B). Empty for every
+    # existing world — a pure/additive field, no behavior change when unset.
+    sites: list[SiteDecl] = Field(default_factory=list)
     rooms: list[RoomDef] | None = None
     world_graph: WorldGraph | None = None
     sub_graphs: dict[str, SubGraph] | None = None

@@ -27,6 +27,7 @@ via the ``migrated_db`` fixture. The DB-independent
 alone, so RED is verifiable even without Postgres (the module-level import fails
 at collection today).
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -81,9 +82,7 @@ async def test_two_sites_do_not_collide(monkeypatch: Any, migrated_db: str) -> N
     assert set(deep.nodes) == {"frontier:entrance"}
 
 
-async def test_default_key_write_isolated_from_new_site(
-    monkeypatch: Any, migrated_db: str
-) -> None:
+async def test_default_key_write_isolated_from_new_site(monkeypatch: Any, migrated_db: str) -> None:
     """AC-9: a commit under the implicit DEFAULT_SITE_ID (the legacy path — no
     ``site_id`` kwarg) is invisible to an explicitly-keyed new site, and a
     default-keyed ``load_map`` returns only the legacy node. Proves the default
@@ -97,9 +96,7 @@ async def test_default_key_write_isolated_from_new_site(
     n_legacy = _node("frontier:entrance")
     g_legacy = RegionGraph(entrance_id="frontier:entrance")
     g_legacy.add_node(n_legacy)
-    repo.commit_expansion(
-        Expansion(expansion_id=0, new_nodes=[n_legacy], new_edges=[]), g_legacy
-    )
+    repo.commit_expansion(Expansion(expansion_id=0, new_nodes=[n_legacy], new_edges=[]), g_legacy)
 
     # A new, explicitly-keyed site in the same session.
     n_new = _node("gilded_boar:entrance")

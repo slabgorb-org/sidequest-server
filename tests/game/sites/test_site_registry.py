@@ -15,6 +15,7 @@ consumes — proven by ``test_cartography_config_sites_wire_into_registry``,
 which builds the registry from a genuine ``CartographyConfig`` (no mock).
 Dispatch-path wiring tests belong to the consuming stories.
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -32,6 +33,13 @@ from sidequest.game.sites import (
 from sidequest.genre.models.world import CartographyConfig
 
 
+def _region(name: str, adjacent: list[str] | None = None) -> dict:
+    """A minimal VALID Region dict. ``Region`` requires ``summary`` and
+    ``description``; the registry only reads ``adjacent``, so those fields are
+    filled with the name to keep the fixture terse but schema-valid."""
+    return {"name": name, "summary": name, "description": name, "adjacent": adjacent or []}
+
+
 def _cart() -> CartographyConfig:
     """A world with two sites: a frontier deep owned by the_dropmouth (reachable
     from the adjacent ropefoot camp) and a bounded tavern owned by the square."""
@@ -39,15 +47,25 @@ def _cart() -> CartographyConfig:
         {
             "navigation_mode": "region",
             "regions": {
-                "ropefoot": {"name": "Ropefoot Camp", "adjacent": ["the_dropmouth"]},
-                "the_dropmouth": {"name": "The Dropmouth", "adjacent": ["ropefoot"]},
-                "square": {"name": "Village Square", "adjacent": []},
+                "ropefoot": _region("Ropefoot Camp", ["the_dropmouth"]),
+                "the_dropmouth": _region("The Dropmouth", ["ropefoot"]),
+                "square": _region("Village Square"),
             },
             "sites": [
-                {"site_id": "frontier", "name": "The Deep", "archetype": "megadungeon",
-                 "attached_to": "the_dropmouth", "extent": "frontier"},
-                {"site_id": "gilded_boar", "name": "The Gilded Boar", "archetype": "tavern",
-                 "attached_to": "square", "extent": "bounded"},
+                {
+                    "site_id": "frontier",
+                    "name": "The Deep",
+                    "archetype": "megadungeon",
+                    "attached_to": "the_dropmouth",
+                    "extent": "frontier",
+                },
+                {
+                    "site_id": "gilded_boar",
+                    "name": "The Gilded Boar",
+                    "archetype": "tavern",
+                    "attached_to": "square",
+                    "extent": "bounded",
+                },
             ],
         }
     )
@@ -60,14 +78,22 @@ def _cart_multi() -> CartographyConfig:
         {
             "navigation_mode": "region",
             "regions": {
-                "hub": {"name": "Hub", "adjacent": ["annex"]},
-                "annex": {"name": "Annex", "adjacent": ["hub"]},
+                "hub": _region("Hub", ["annex"]),
+                "annex": _region("Annex", ["hub"]),
             },
             "sites": [
-                {"site_id": "owned", "name": "Owned Hall", "archetype": "tavern",
-                 "attached_to": "hub"},
-                {"site_id": "reachable", "name": "Reachable Vault", "archetype": "vault",
-                 "attached_to": "annex"},
+                {
+                    "site_id": "owned",
+                    "name": "Owned Hall",
+                    "archetype": "tavern",
+                    "attached_to": "hub",
+                },
+                {
+                    "site_id": "reachable",
+                    "name": "Reachable Vault",
+                    "archetype": "vault",
+                    "attached_to": "annex",
+                },
             ],
         }
     )
@@ -76,6 +102,7 @@ def _cart_multi() -> CartographyConfig:
 # --------------------------------------------------------------------------
 # AC-1: pure/additive — zero behavior change when ``sites`` is empty
 # --------------------------------------------------------------------------
+
 
 def test_sites_field_defaults_empty() -> None:
     # A world that declares no sites gets an empty list (no behavior change).
@@ -104,6 +131,7 @@ def test_from_cartography_none_is_defensive_empty() -> None:
 # AC-2: indexes sites by owner and adjacency
 # --------------------------------------------------------------------------
 
+
 def test_sites_for_node_includes_owner() -> None:
     reg = SiteRegistry.from_cartography(_cart())
     # the_dropmouth OWNS the frontier site; square owns the tavern.
@@ -129,12 +157,17 @@ def test_sites_for_node_dedups_repeated_adjacency() -> None:
         {
             "navigation_mode": "region",
             "regions": {
-                "camp": {"name": "Camp", "adjacent": ["rim", "rim"]},
-                "rim": {"name": "Rim", "adjacent": ["camp"]},
+                "camp": _region("Camp", ["rim", "rim"]),
+                "rim": _region("Rim", ["camp"]),
             },
             "sites": [
-                {"site_id": "deep", "name": "The Deep", "archetype": "megadungeon",
-                 "attached_to": "rim", "extent": "frontier"},
+                {
+                    "site_id": "deep",
+                    "name": "The Deep",
+                    "archetype": "megadungeon",
+                    "attached_to": "rim",
+                    "extent": "frontier",
+                },
             ],
         }
     )
@@ -157,6 +190,7 @@ def test_by_id_hit_and_miss() -> None:
 # --------------------------------------------------------------------------
 # AC-3: descriptor resolution disambiguates by name / id
 # --------------------------------------------------------------------------
+
 
 def test_resolve_descriptor_by_full_name() -> None:
     reg = SiteRegistry.from_cartography(_cart())
@@ -200,12 +234,20 @@ def test_resolve_descriptor_ambiguous_name_match() -> None:
     cart = CartographyConfig.model_validate(
         {
             "navigation_mode": "region",
-            "regions": {"crossroads": {"name": "Crossroads", "adjacent": []}},
+            "regions": {"crossroads": _region("Crossroads")},
             "sites": [
-                {"site_id": "old_mill", "name": "The Old Mill", "archetype": "tavern",
-                 "attached_to": "crossroads"},
-                {"site_id": "old_forge", "name": "The Old Forge", "archetype": "vault",
-                 "attached_to": "crossroads"},
+                {
+                    "site_id": "old_mill",
+                    "name": "The Old Mill",
+                    "archetype": "tavern",
+                    "attached_to": "crossroads",
+                },
+                {
+                    "site_id": "old_forge",
+                    "name": "The Old Forge",
+                    "archetype": "vault",
+                    "attached_to": "crossroads",
+                },
             ],
         }
     )
@@ -217,6 +259,7 @@ def test_resolve_descriptor_ambiguous_name_match() -> None:
 # --------------------------------------------------------------------------
 # AC-4: namespacing helpers + site_owning_node round-trip
 # --------------------------------------------------------------------------
+
 
 def test_site_owning_node_maps_namespaced_id_back() -> None:
     reg = SiteRegistry.from_cartography(_cart())
@@ -259,6 +302,7 @@ def test_site_id_of() -> None:
 # SiteDescriptor type-design invariants (frozen runtime view, extent default)
 # --------------------------------------------------------------------------
 
+
 def test_site_descriptor_entrance_node_id_property() -> None:
     reg = SiteRegistry.from_cartography(_cart())
     boar = reg.by_id("gilded_boar")
@@ -277,10 +321,14 @@ def test_site_extent_defaults_bounded() -> None:
     cart = CartographyConfig.model_validate(
         {
             "navigation_mode": "region",
-            "regions": {"square": {"name": "Square", "adjacent": []}},
+            "regions": {"square": _region("Square")},
             "sites": [
-                {"site_id": "inn", "name": "The Inn", "archetype": "tavern",
-                 "attached_to": "square"},
+                {
+                    "site_id": "inn",
+                    "name": "The Inn",
+                    "archetype": "tavern",
+                    "attached_to": "square",
+                },
             ],
         }
     )
@@ -293,6 +341,7 @@ def test_site_extent_defaults_bounded() -> None:
 # AC-12 (in-scope wiring): the registry consumes the REAL CartographyConfig
 # model field — not a mock. Dispatch-path wiring is deferred to 164-2/3/4.
 # --------------------------------------------------------------------------
+
 
 def test_cartography_config_sites_wire_into_registry() -> None:
     cart = _cart()

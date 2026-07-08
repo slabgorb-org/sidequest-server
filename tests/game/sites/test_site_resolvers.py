@@ -17,13 +17,13 @@ creates them in GREEN.
 from __future__ import annotations
 
 import pytest
-from sidequest.game.sites.enter_site import resolve_enter_site
-from sidequest.game.sites.exit_site import resolve_exit_site
 
 from sidequest.dungeon.region_graph.model import RegionGraph, RegionNode
 from sidequest.game.seams.base import SeamCrossingError
 from sidequest.game.session import GameSnapshot
 from sidequest.game.sites import SiteDescriptor
+from sidequest.game.sites.enter_site import resolve_enter_site
+from sidequest.game.sites.exit_site import resolve_exit_site
 from sidequest.genre.models.world import (
     CartographyConfig,
     NavigationMode,
@@ -186,6 +186,27 @@ def test_exit_site_dangling_owner_raises() -> None:
         )
 
     assert ei.value.reason == "dangling_site_owner"
+    assert snap.pc_regions["Rux"] == "frontier:entrance"
+
+
+def test_exit_site_missing_cartography_raises_distinct_reason() -> None:
+    """Cartography was never threaded (a WIRING fault) — fail loud with its OWN
+    reason (``no_cartography``), NOT ``dangling_site_owner`` (a DATA fault). The
+    GM panel / fail-loud doctrine reads ``SeamCrossingError.reason`` to route
+    debugging, so a wiring fault must not masquerade as a bad-owner data fault.
+    Mirrors enter_site's ``no_site_store`` vs ``no_site_entrance`` split."""
+    snap = _snapshot("frontier:entrance")
+
+    with pytest.raises(SeamCrossingError) as ei:
+        resolve_exit_site(
+            snapshot=snap,
+            player_name="Rux",
+            site=_FRONTIER,
+            cartography=None,
+            resolved_via="site_exit",
+        )
+
+    assert ei.value.reason == "no_cartography"
     assert snap.pc_regions["Rux"] == "frontier:entrance"
 
 

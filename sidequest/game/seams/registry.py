@@ -39,8 +39,10 @@ def _ensure_site_resolvers() -> None:
     from sidequest.game.sites.enter_site import resolve_enter_site
     from sidequest.game.sites.exit_site import resolve_exit_site
 
-    _REGISTRY["enter_site"] = resolve_enter_site
-    _REGISTRY["exit_site"] = resolve_exit_site
+    # Single atomic update — never leave the registry half-populated (a partial
+    # state would let a concurrent get_seam_resolver("exit_site") pass the guard
+    # then miss).
+    _REGISTRY.update({"enter_site": resolve_enter_site, "exit_site": resolve_exit_site})
 
 
 def get_seam_resolver(kind: str) -> SeamResolver:

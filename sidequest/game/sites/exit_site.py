@@ -29,6 +29,14 @@ def resolve_exit_site(
     """Bind THIS PC back to ``site.attached_to`` (the owning cartography region),
     or raise. Membership-checked — never strand the PC on a phantom region."""
     from_region = snapshot.region_for(perspective=player_name) or ""
+    if cartography is None:
+        raise SeamCrossingError(
+            reason="no_cartography",
+            surface=(
+                f"There is a way out of {site.name}, but the map itself was "
+                "never loaded — a wiring fault, not a sealed door."
+            ),
+        )
     surface_id = site.attached_to
     regions = getattr(cartography, "regions", None) or {}
     if not surface_id or surface_id not in regions:

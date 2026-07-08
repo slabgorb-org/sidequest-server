@@ -122,6 +122,106 @@ def _isolate_frontier_observers() -> Iterator[None]:
     session_integration._ATTACHED_SAVES.update(attached_before)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _otel_tracer_installed() -> None:
+    """Install the real SDK ``TracerProvider`` ONCE for the whole test session.
+
+    Story 158-55: the suite's OTEL-span assertions are a mix — some fixtures
+    (``otel_capture``) call ``init_tracer()`` to install the provider, others
+    (``tests/server/test_room_graph_init.py`` etc.) merely ``assert
+    isinstance(get_tracer_provider(), TracerProvider)`` and rely on a *sibling*
+    having installed it earlier in the process. That made "is the provider
+    present" order-dependent. ``init_tracer`` is idempotent (its own
+    ``_initialized`` guard), so calling it at session start makes the real
+    provider present for EVERY test with no reliance on which OTEL test ran
+    first — the stable baseline the per-test processor guard below restores to.
+
+    Also neutralizes a stray ``SIDEQUEST_OTLP_ENDPOINT`` for the unit session:
+    with it set (a dev with a local Jaeger export var), ``init_tracer`` installs
+    a ``BatchSpanProcessor`` → OTLP collector, and if nothing is listening the
+    exporter's ``force_flush`` HANGS against the 30 s test budget — a real,
+    order-dependent suite hang. CI runs without the var; the OTLP-path tests
+    (``test_otlp_export_wiring.py``) set it themselves per-test via monkeypatch,
+    so clearing the process-wide default here is safe and matches CI.
+    """
+    os.environ.pop("SIDEQUEST_OTLP_ENDPOINT", None)
+
+    from sidequest.telemetry.setup import init_tracer
+
+    init_tracer()
+
+
+@pytest.fixture(autouse=True)
+def _otel_provider_isolation() -> Iterator[None]:
+    """Suite hygiene (story 158-55): restore the global ``TracerProvider``'s
+    span-processor set around every test so a test that adds a processor cannot
+    leak it into later tests on the same xdist worker.
+
+    The live leak: ``otel_capture`` (and the ``_attach_exporter`` pattern in
+    ``tests/server/test_merged_mp_emitter_projection.py`` et al.) call
+    ``get_tracer_provider().add_span_processor(...)`` on the SHARED provider and
+    only ``processor.shutdown()`` on teardown — a shut-down processor is NEVER
+    removed from the provider's tuple. Under ``-n auto``'s ``--dist load`` those
+    accumulate per worker, so the failing set ROTATED: a later OTEL-assertion
+    test saw dozens of stale ``SimpleSpanProcessor``s (and a dead
+    ``BatchSpanProcessor`` → :4317 whose ``force_flush`` hung the 30 s budget).
+
+    ``SynchronousMultiSpanProcessor`` keeps its processors in an immutable tuple
+    rebound on every add, so the bare reference is a valid snapshot and
+    reassigning it strips exactly what a test appended. The snapshot is taken
+    AFTER higher-scope fixtures set up, so a module/session-scoped capture
+    processor is preserved; only per-test additions are stripped. The provider
+    REFERENCE and once-guard are deliberately left untouched — resetting them
+    breaks ``init_tracer``'s ``_initialized`` singleton and the sibling tests
+    that assume the shared provider persists.
+
+    Fail-loud snapshot (No Silent Fallbacks): a bare API ``ProxyTracerProvider``
+    (no SDK provider installed) owns no processor set, so there is nothing to
+    isolate — tolerate it and no-op. But when the real SDK ``TracerProvider`` is
+    installed (it always is under this suite — ``_otel_tracer_installed`` calls
+    ``init_tracer`` session-wide) and the ``_active_span_processor`` /
+    ``_span_processors`` internals this snapshot reads are absent, the OTel SDK
+    layout was renamed under us; raise instead of silently skipping the restore
+    (which would let processors leak again — the very bug this fixture fixes).
+    """
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+
+    provider = trace.get_tracer_provider()
+
+    # Setup-time fail-loud: the session-scoped ``_otel_tracer_installed`` always
+    # installs the real SDK ``TracerProvider``, so its processor internals MUST be
+    # present here. If they are absent the OTel SDK layout was renamed under us —
+    # raise, rather than silently no-op the isolation and let processors leak
+    # again. Only the bare API ``ProxyTracerProvider`` case (no SDK provider) is
+    # tolerated: it owns no processor set, so ``processors_before`` stays None.
+    processors_before = None
+    if isinstance(provider, TracerProvider):
+        active = getattr(provider, "_active_span_processor", None)
+        if active is None:
+            raise AttributeError(
+                "OTel SDK TracerProvider has no `_active_span_processor` — the SDK "
+                "internals `_otel_provider_isolation` snapshots have been renamed; "
+                "update this fixture to the current OTel SDK layout."
+            )
+        processors_before = getattr(active, "_span_processors", None)
+        if processors_before is None:
+            raise AttributeError(
+                "OTel multi-span processor has no `_span_processors` — the SDK "
+                "internals `_otel_provider_isolation` snapshots have been renamed; "
+                "update this fixture to the current OTel SDK layout."
+            )
+
+    yield
+
+    # Teardown re-fetches so the ``active_after is not None`` guard stays
+    # legitimate: a test that reset the global provider to the API proxy has no
+    # processor set to restore onto. Restoring strips any per-test additions.
+    active_after = getattr(trace.get_tracer_provider(), "_active_span_processor", None)
+    if active_after is not None and processors_before is not None:
+        active_after._span_processors = processors_before
+
+
 # ---------------------------------------------------------------------------
 # Ephemeral real-Postgres fixtures (ADR-115). Defined at the tests/ root so
 # the few non-persistence suites that drive real PG (e.g.

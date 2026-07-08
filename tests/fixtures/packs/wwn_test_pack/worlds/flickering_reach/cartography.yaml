@@ -1,0 +1,22 @@
+world_name: Flickering Reach
+starting_region: crossroads
+navigation_mode: region
+
+map_style: >-
+  A plain test map — cracked hardpan and three ruined roads meeting
+  at a dead crossroads under a stuttering sun. Hermetic WWN fixture
+  (story 158-55); no art pipeline consumes it.
+map_resolution: [1024, 768]
+
+regions:
+  crossroads:
+    name: The Dead Crossroads
+    summary: "Cracked hardpan where three ruined roads meet under a flickering sun"
+    description: >-
+      A stretch of sun-split flats where three old roads converge on the
+      rusted hulks of a caravan that never arrived. The only place in the
+      Reach, and all a chargen-wiring test needs to bind a world that
+      genuinely seeds a Monster Manual.
+    terrain: wasteland
+    adjacent: []
+    tags: [frontier, dangerous]

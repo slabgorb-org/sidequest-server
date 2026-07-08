@@ -1,0 +1,14 @@
+name: Flickering Reach
+slug: flickering_reach
+draft: false
+description: >-
+  A hermetic WWN test world for story 158-55. A stretch of cracked
+  hardpan under a stuttering sun, just enough of a place for a
+  chargen-wiring test to bind a world that genuinely seeds a
+  Monster Manual. Its only job is to resolve a tier-1 encounter so
+  the suite never leans on a swallowed fail-loud guard again.
+tagline: "A test world that seeds for real."
+starting_location: "The dead crossroads under the flickering sun"
+starting_region: crossroads
+starting_time: "noon"
+extensions: []

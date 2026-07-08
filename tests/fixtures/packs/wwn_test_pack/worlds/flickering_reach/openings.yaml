@@ -1,0 +1,49 @@
+version: "0.1.0"
+world: flickering_reach
+genre: wwn_test_pack
+
+openings:
+  - id: crossroads_solo_arrival
+    name: "The Dead Crossroads — A Lone Arrival"
+    triggers:
+      mode: solo
+      backgrounds: []
+    setting:
+      location_label: "The dead crossroads under the flickering sun"
+    tone:
+      register: spare, dry, quietly dangerous
+      avoid_at_all_costs:
+        - explaining the fixture world to the player as exposition
+        - a friendly guide arriving to narrate the rules
+    establishing_narration: >-
+      You come to the dead crossroads as the sun stutters overhead —
+      three ruined roads meeting at the rusted hulks of a caravan that
+      never arrived. Something lean and dust-colored watches from the
+      wreckage.
+    first_turn_invitation: >-
+      The hardpan is split and hot underfoot and nothing here is
+      waiting for you to be ready. The nearest cover is the caravan,
+      and the watching thing has not yet decided you are worth the run.
+
+  - id: crossroads_table_convened
+    name: "The Dead Crossroads — A Common Road"
+    triggers:
+      mode: multiplayer
+      backgrounds: []
+      min_players: 2
+      max_players: 6
+    setting:
+      location_label: "The dead crossroads under the flickering sun"
+    tone:
+      register: spare, conspiratorial, dangerous
+      avoid_at_all_costs:
+        - a single NPC monologuing the mission
+        - forcing the party to already know each other
+    establishing_narration: >-
+      You have each come to the dead crossroads by a different ruined
+      road, and the stuttering sun finds you all at the same rusted
+      caravan at the same wrong moment. Something is moving in the
+      wreckage, and it has noticed that there are several of you.
+    first_turn_invitation: >-
+      None of you chose the others. The hardpan is hot and split and the
+      thing in the caravan is already deciding which of you is closest.

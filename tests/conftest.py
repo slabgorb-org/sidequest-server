@@ -122,58 +122,69 @@ def _isolate_frontier_observers() -> Iterator[None]:
     session_integration._ATTACHED_SAVES.update(attached_before)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _otel_tracer_installed() -> None:
+    """Install the real SDK ``TracerProvider`` ONCE for the whole test session.
+
+    Story 158-55: the suite's OTEL-span assertions are a mix — some fixtures
+    (``otel_capture``) call ``init_tracer()`` to install the provider, others
+    (``tests/server/test_room_graph_init.py`` etc.) merely ``assert
+    isinstance(get_tracer_provider(), TracerProvider)`` and rely on a *sibling*
+    having installed it earlier in the process. That made "is the provider
+    present" order-dependent. ``init_tracer`` is idempotent (its own
+    ``_initialized`` guard), so calling it at session start makes the real
+    provider present for EVERY test with no reliance on which OTEL test ran
+    first — the stable baseline the per-test processor guard below restores to.
+
+    Also neutralizes a stray ``SIDEQUEST_OTLP_ENDPOINT`` for the unit session:
+    with it set (a dev with a local Jaeger export var), ``init_tracer`` installs
+    a ``BatchSpanProcessor`` → OTLP collector, and if nothing is listening the
+    exporter's ``force_flush`` HANGS against the 30 s test budget — a real,
+    order-dependent suite hang. CI runs without the var; the OTLP-path tests
+    (``test_otlp_export_wiring.py``) set it themselves per-test via monkeypatch,
+    so clearing the process-wide default here is safe and matches CI.
+    """
+    import os
+
+    os.environ.pop("SIDEQUEST_OTLP_ENDPOINT", None)
+
+    from sidequest.telemetry.setup import init_tracer
+
+    init_tracer()
+
+
 @pytest.fixture(autouse=True)
 def _otel_provider_isolation() -> Iterator[None]:
-    """Suite hygiene (story 158-55): snapshot + restore the global OTEL
-    ``TracerProvider`` around every test so a test that mutates it cannot leak
-    into later tests on the same xdist worker.
+    """Suite hygiene (story 158-55): restore the global ``TracerProvider``'s
+    span-processor set around every test so a test that adds a processor cannot
+    leak it into later tests on the same xdist worker.
 
-    Two leak modes are covered:
+    The live leak: ``otel_capture`` (and the ``_attach_exporter`` pattern in
+    ``tests/server/test_merged_mp_emitter_projection.py`` et al.) call
+    ``get_tracer_provider().add_span_processor(...)`` on the SHARED provider and
+    only ``processor.shutdown()`` on teardown — a shut-down processor is NEVER
+    removed from the provider's tuple. Under ``-n auto``'s ``--dist load`` those
+    accumulate per worker, so the failing set ROTATED: a later OTEL-assertion
+    test saw dozens of stale ``SimpleSpanProcessor``s (and a dead
+    ``BatchSpanProcessor`` → :4317 whose ``force_flush`` hung the 30 s budget).
 
-    * **Provider swap** — a test that calls ``trace.set_tracer_provider(...)``
-      (usually after ``reset_otel_provider()`` clears the once-guard, as several
-      ``tests/dungeon`` and ``tests/server`` span-assertion tests do) installs
-      its own provider in the process-global slot. Restoring ``_TRACER_PROVIDER``
-      and the ``Once._done`` flag puts the prior provider back.
-    * **Processor add** — the ``_attach_exporter`` pattern (e.g.
-      ``tests/server/test_merged_mp_emitter_projection.py``) calls
-      ``get_tracer_provider().add_span_processor(...)`` on the EXISTING shared
-      provider. ``SynchronousMultiSpanProcessor`` keeps its processors in an
-      immutable tuple rebound on every add, so snapshotting the tuple and
-      restoring it strips any processor a test appended (and the dead
-      ``BatchSpanProcessor`` → :4317 that hangs ``force_flush`` on later tests).
-
-    Before this guard the failing set ROTATED run-to-run: under ``-n auto``'s
-    ``--dist load`` work-stealing, whichever OTEL-assertion test shared a worker
-    with a leaking mutator saw a polluted provider — accumulated
-    ``SimpleSpanProcessor``s, the dead ``:4317`` exporter hanging the 30 s
-    ``force_flush`` budget, or a provider swapped out from under the production
-    ``WatcherSpanProcessor``. Private-API access (``trace._TRACER_PROVIDER`` /
-    ``_TRACER_PROVIDER_SET_ONCE``) mirrors ``tests/dungeon/conftest.py``; update
-    if the OTEL SDK moves the guard.
+    ``SynchronousMultiSpanProcessor`` keeps its processors in an immutable tuple
+    rebound on every add, so the bare reference is a valid snapshot and
+    reassigning it strips exactly what a test appended. The snapshot is taken
+    AFTER higher-scope fixtures set up, so a module/session-scoped capture
+    processor is preserved; only per-test additions are stripped. The provider
+    REFERENCE and once-guard are deliberately left untouched — resetting them
+    breaks ``init_tracer``'s ``_initialized`` singleton and the sibling tests
+    that assume the shared provider persists.
     """
     from opentelemetry import trace
 
-    once = getattr(trace, "_TRACER_PROVIDER_SET_ONCE", None)
-    provider_before = getattr(trace, "_TRACER_PROVIDER", None)
-    once_done_before = getattr(once, "_done", None) if once is not None else None
-
-    current = trace.get_tracer_provider()
-    active = getattr(current, "_active_span_processor", None)
-    # ``_span_processors`` is an immutable tuple rebound on each add, so the bare
-    # reference is a valid snapshot — a later ``+= (proc,)`` cannot mutate it.
+    active = getattr(trace.get_tracer_provider(), "_active_span_processor", None)
     processors_before = getattr(active, "_span_processors", None)
 
     yield
 
-    # Restore the global provider reference + once-guard FIRST so
-    # get_tracer_provider() resolves the pre-test provider ...
-    trace._TRACER_PROVIDER = provider_before  # type: ignore[attr-defined]
-    if once is not None and once_done_before is not None:
-        once._done = once_done_before
-    # ... then strip any span processor a test appended to that provider.
-    restored = trace.get_tracer_provider()
-    active_after = getattr(restored, "_active_span_processor", None)
+    active_after = getattr(trace.get_tracer_provider(), "_active_span_processor", None)
     if active_after is not None and processors_before is not None:
         active_after._span_processors = processors_before
 

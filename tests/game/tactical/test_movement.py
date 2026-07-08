@@ -40,8 +40,8 @@ def test_reachable_difficult_terrain_doubles_cost():
 def test_movement_cost_straight_and_diagonal():
     assert movement_cost([(1, 1), (2, 1), (3, 1)], ROOM) == 2
     assert movement_cost([(1, 1), (2, 1)], ROOM) == 1
-    # diagonal step is one cell (Chebyshev)
-    assert movement_cost([(1, 1), (2, 2)], "###\n#..\n#..") is None  # (2,2) wall in this mask
+    # diagonal step is one cell (Chebyshev); stepping onto a wall is illegal -> None
+    assert movement_cost([(1, 1), (2, 2)], "###\n#..\n#.#") is None  # (2,2) is a wall here
 
 
 def test_movement_cost_rejects_non_adjacent_and_walls():

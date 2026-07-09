@@ -334,6 +334,82 @@ def _is_awn_mutation_beat(beat: BeatDef, pack: GenrePack | None) -> bool:
     )
 
 
+def _resolve_room_mask(snapshot, dungeon_store, character_name: str) -> str | None:
+    """Decode the seating room's ASCII tactical mask from the dungeon store, or
+    None when unavailable (no store / no room / no persisted mask). None means the
+    reach gate skips — the deliberate no-grid boundary, not a silent fallback."""
+    if dungeon_store is None:
+        return None
+    room_id = snapshot.character_locations.get(character_name)
+    if room_id is None:
+        return None
+    mask_dict = dungeon_store.load_masks().get(room_id)
+    if not mask_dict or "mask_bytes_b64" not in mask_dict:
+        return None
+    import base64
+
+    return base64.b64decode(mask_dict["mask_bytes_b64"]).decode("ascii")
+
+
+def _enforce_tactical_reach(
+    *, ruleset, encounter, actor, target_name, spec, mask, snapshot, tracer=None
+):
+    """Gate a strike on grid reach when a tactical grid is active (165-3, ADR-096
+    v2 Track C2 — C1's production wiring into ``dispatch_dice_throw``).
+
+    Returns the ``RangeAdjudication`` verdict, or ``None`` when enforcement is
+    deliberately skipped: a non-WN ruleset (capability gate, ADR-117), a missing
+    mask, or either actor lacking a ``per_actor_state['cell']``. A skip emits
+    ``tactical.enforcement.skipped`` (NOT a silent fallback — the GM panel sees the
+    deliberate no-grid boundary). An in-range verdict emits
+    ``tactical.move.validated``; an out-of-range verdict emits
+    ``tactical.move.denied`` and the caller aborts the strike with the legible
+    ``verdict.reason`` (never silently retargets — SOUL: The Test)."""
+    from sidequest.game.ruleset.without_number import WithoutNumberRulesetModule
+    from sidequest.telemetry.spans.tactical import (
+        tactical_enforcement_skipped_span,
+        tactical_move_denied_span,
+        tactical_move_validated_span,
+    )
+
+    if not isinstance(ruleset, WithoutNumberRulesetModule):
+        return None
+    target = encounter.find_actor(target_name) if target_name is not None else None
+    a_cell = actor.per_actor_state.get("cell")
+    t_cell = target.per_actor_state.get("cell") if target is not None else None
+    if mask is None or a_cell is None or t_cell is None:
+        with tactical_enforcement_skipped_span(actor=actor.name, reason="no_grid", _tracer=tracer):
+            pass
+        return None
+
+    verdict = ruleset.adjudicate_tactical_reach(
+        attacker_cell=(int(a_cell[0]), int(a_cell[1])),
+        target_cell=(int(t_cell[0]), int(t_cell[1])),
+        spec=spec,
+        mask=mask,
+    )
+    if verdict.in_range:
+        with tactical_move_validated_span(
+            actor=actor.name,
+            cells_spent=0,
+            cells_budget=verdict.max_cells,
+            from_cell=(int(a_cell[0]), int(a_cell[1])),
+            to_cell=(int(t_cell[0]), int(t_cell[1])),
+            _tracer=tracer,
+        ):
+            pass
+    else:
+        with tactical_move_denied_span(
+            actor=actor.name,
+            cells_spent=verdict.distance_cells,
+            cells_budget=verdict.max_cells,
+            reason=verdict.reason,
+            _tracer=tracer,
+        ):
+            pass
+    return verdict
+
+
 def dispatch_dice_throw(
     *,
     payload: DiceThrowPayload,
@@ -348,6 +424,7 @@ def dispatch_dice_throw(
     room_broadcast: Callable[[object], None] | None,
     snapshot: GameSnapshot,
     emit_confrontation: Callable[[object, Callable[[str], object]], None] | None = None,
+    dungeon_store: object | None = None,
 ) -> DiceThrowOutcome:
     """Apply or seal a beat, resolve dice, broadcast wire messages, return outcome.
 
@@ -726,6 +803,28 @@ def dispatch_dice_throw(
             f"character {character_name!r} not found in encounter actors "
             "and no player-side actor is present"
         )
+
+    # 165-3 (ADR-096 v2, Track C2): reach enforcement — C1's production wiring
+    # into the confrontation-resolution chokepoint. A live tactical grid gates a
+    # physical strike on melee reach; an out-of-reach strike aborts with a legible
+    # refusal (never silently retargets — SOUL: The Test). Skipped as a deliberate
+    # no-grid no-op (with an OTEL breadcrumb) when there is no mask or the actors
+    # carry no cell. spec=None enforces MELEE reach — the plan's safe default;
+    # ranged range enforcement needs the weapon's range_band plumbed to the
+    # dispatch spec (a follow-up, see Delivery Findings). Cast/Program throws carry
+    # their own range logic and are not reach-gated.
+    if encounter is not None and payload.spell_id is None and not is_net_run:
+        _reach_verdict = _enforce_tactical_reach(
+            ruleset=ruleset,
+            encounter=encounter,
+            actor=actor,
+            target_name=_opposite_side_first_actor(encounter, actor.side),
+            spec=None,
+            mask=_resolve_room_mask(snapshot, dungeon_store, character_name),
+            snapshot=snapshot,
+        )
+        if _reach_verdict is not None and not _reach_verdict.in_range:
+            raise DiceDispatchError(_reach_verdict.reason)
 
     # Opposed-check fork (combat fairness, 2026-04-26).
     # When the active confrontation declares ``resolution_mode:

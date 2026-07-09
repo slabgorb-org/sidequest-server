@@ -376,6 +376,10 @@ class DiceThrowHandler:
                 room_broadcast=room_broadcast,
                 snapshot=snapshot,
                 emit_confrontation=emit_confrontation,
+                # 165-3 (ADR-096 v2, Track C2): plumb the dungeon store so the
+                # reach gate can load the room's tactical mask (Beneath Sünden
+                # path wires sd.dungeon_store; None elsewhere → gate no-ops).
+                dungeon_store=getattr(sd, "dungeon_store", None),
             )
         except DiceDispatchError as exc:
             logger.warning("dice.dispatch_error error=%s", exc)

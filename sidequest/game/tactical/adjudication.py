@@ -244,6 +244,12 @@ def adjudicate_reach(
     when ``require_los``, has clear line of sight. Reports the real distance so
     a denial reads 'target is N cells away; your reach is M'. Never silently
     corrects."""
+    if mode not in ("melee", "ranged"):
+        raise ValueError(
+            f"mode must be 'melee' or 'ranged', got {mode!r} "
+            "(unknown modes used to fall through to the 'range' noun silently — "
+            "No Silent Fallbacks, 165-1 carryover)"
+        )
     dist = chebyshev_distance(origin, target)
     has_los = line_of_sight(origin, target, mask) if require_los else True
     if dist > max_cells:

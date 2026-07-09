@@ -44,6 +44,21 @@ def test_combat_move_cells_floors_to_min_one_cell():
     assert wn.combat_move_cells(SimpleNamespace(move=1)) == 1  # int(1/1.5)=0 -> max(1, 0)
 
 
+def test_combat_move_cells_explicit_zero_is_honored_not_defaulted():
+    """165-3 BLOCKER 2b: an immobilized stock authors ``move=0``
+    (mutation/stocks.py propagates it). The 165-2 shim did
+    ``getattr(core, "move", None) or DEFAULT_MOVE_METERS`` — and ``0 or 10`` is
+    ``10``, so a pinned-down actor SILENTLY regained the full 10 m default Move
+    (6 cells). That is a No-Silent-Fallbacks violation: an explicit 0 must be
+    honoured, distinct from an absent value. The fix is an ``is None`` check
+    (not falsy-``or``)."""
+    wn = _wn()
+    default_cells = wn.combat_move_cells(SimpleNamespace(move=None))  # SRD 10 m -> 6
+    zero_cells = wn.combat_move_cells(SimpleNamespace(move=0))
+    assert zero_cells != default_cells, "move=0 was silently promoted to the SRD default"
+    assert zero_cells == 1  # max(1, int(0/1.5)) floor — the immobilized actor is honoured
+
+
 def test_weapon_range_cells_melee_and_ranged():
     wn = _wn()
     assert wn.weapon_range_cells(SimpleNamespace(range_band=None)) == (
@@ -55,14 +70,43 @@ def test_weapon_range_cells_melee_and_ranged():
     assert mode == "ranged" and cells == wn.RANGE_BAND_CELLS["rifle"]
 
 
-def test_weapon_range_cells_unknown_band_defaults_to_rifle():
-    """An unrecognised ranged band falls back to the rifle cap rather than
-    raising. (Documenting the plan's chosen behaviour — see the Delivery Finding
-    on whether this silent fallback should fail loud instead.)"""
+def test_weapon_range_cells_garbage_band_fails_loud():
+    """165-3 BLOCKER 2a (165-2 Delivery Finding, now RESOLVED): an unparseable
+    band must FAIL LOUD, never silently cap at rifle. The 165-2 shim did
+    ``.get(band, RANGE_BAND_CELLS["rifle"])`` — a No-Silent-Fallbacks violation
+    (a mistyped/unknown weapon range would ship as a 40-cell rifle and nobody
+    would notice). ``"trebuchet"`` is neither a numeric ``"N/N"`` range, ``melee``,
+    nor a known categorical band, so it must raise (ValueError listing the
+    accepted forms). REPLACES test_weapon_range_cells_unknown_band_defaults_to_rifle,
+    which pinned the buggy behaviour."""
     wn = _wn()
-    mode, cells = wn.weapon_range_cells(SimpleNamespace(range_band="trebuchet"))
-    assert mode == "ranged"
-    assert cells == wn.RANGE_BAND_CELLS["rifle"]
+    with pytest.raises(ValueError):
+        wn.weapon_range_cells(SimpleNamespace(range_band="trebuchet"))
+
+
+def test_weapon_range_cells_reads_real_content_nn_format():
+    """165-3 BLOCKER 1: real packs author ``range_band`` as ``"N/N"`` short/long
+    METRE strings ("10/30", "600/2400" — 16 distinct values across 8 inventory
+    files), NOT the categorical keys ("rifle"/"pistol"/…) the 165-2 table was
+    keyed on. So the shipped shim resolved EVERY ranged weapon identically: a
+    ``DamageSpec`` carries no ``range_band`` at all (→ silent melee), and even
+    read off the ``CatalogItem`` the ``"N/N"`` value missed every table key and
+    hit the rifle silent-cap (BLOCKER 2a). This story wires the reach gate to
+    real specs, so the ``"N/N"`` format MUST resolve to a real ranged band whose
+    cell reach tracks the authored range — a pistol must not out-range a rifle.
+
+    Contract (fix-agnostic — derive-from-numbers OR map-to-band, Dev's call):
+    a real ``"N/N"`` weapon is ``ranged`` (not silently melee), and two weapons of
+    very different range do NOT collapse to one identical cap."""
+    wn = _wn()
+    short_mode, short_cells = wn.weapon_range_cells(SimpleNamespace(range_band="10/30"))
+    long_mode, long_cells = wn.weapon_range_cells(SimpleNamespace(range_band="600/2400"))
+    assert short_mode == "ranged", "a real ranged weapon must not silently resolve as melee"
+    assert long_mode == "ranged"
+    assert short_cells != long_cells, (
+        "distinct authored ranges collapsed to one cap — the rifle silent-fallback bug"
+    )
+    assert short_cells < long_cells, "a short-range weapon must not out-reach a long-range one"
 
 
 # --- Adjudicators over C1 ------------------------------------------------------------

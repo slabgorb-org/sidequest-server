@@ -8,10 +8,9 @@ opponents in order; idempotent (an actor already carrying a cell keeps it);
 pure over the passed anchors.
 """
 
-from sidequest.game.tactical.seating import seat_actor_cells
-
 from sidequest.dungeon.tactical import TokenAnchor
 from sidequest.game.encounter import EncounterActor, EncounterMetric, StructuredEncounter
+from sidequest.game.tactical.seating import seat_actor_cells
 
 
 def _encounter(actors=None):
@@ -76,6 +75,43 @@ def test_overflow_opponents_beyond_anchors_are_unplaced():
     assert placed["spider-b"] == (3, 3)
     assert "spider-c" not in placed
     assert "cell" not in enc.actors[3].per_actor_state
+
+
+def test_multiplayer_players_do_not_collide_with_opponents():
+    """165-3 BLOCKER 3: with 2 players + 1 opponent, PlayerB overflows off the
+    entrance anchor into the creature pool — the SAME pool the opponent draws
+    from — so PlayerB and the opponent both land on the first creature cell
+    (reviewer reproduced (3,1)). Keith's playgroup is multiplayer, so this is the
+    common case, not an edge. No two seated actors may share a cell."""
+    enc = _encounter(
+        actors=[
+            EncounterActor(name="Rux", role="combatant", side="player"),
+            EncounterActor(name="Vale", role="combatant", side="player"),
+            EncounterActor(name="rope-spider", role="combatant", side="opponent"),
+        ]
+    )
+    placed = seat_actor_cells(enc, ANCHORS)
+    cells = list(placed.values())
+    assert len(cells) == len(set(cells)), f"cell collision across sides: {placed}"
+
+
+def test_mixed_sides_all_seated_cells_unique():
+    """165-3 BLOCKER 3 (neutral horn): neutral-side actors fall into the same
+    ``else`` branch as opponents and draw from the creature pool, so a neutral can
+    steal a monster's anchor or collide with one. Across a mixed player/opponent/
+    neutral roster, every seated cell must be unique — the seating invariant that
+    holds under either fix (a shared occupancy set OR reserved per-side pools)."""
+    enc = _encounter(
+        actors=[
+            EncounterActor(name="Rux", role="combatant", side="player"),
+            EncounterActor(name="Vale", role="combatant", side="player"),
+            EncounterActor(name="rope-spider", role="combatant", side="opponent"),
+            EncounterActor(name="hostage", role="bystander", side="neutral"),
+        ]
+    )
+    placed = seat_actor_cells(enc, ANCHORS)
+    cells = list(placed.values())
+    assert len(cells) == len(set(cells)), f"non-unique seating across sides: {placed}"
 
 
 def test_seated_cell_is_json_list_of_ints():

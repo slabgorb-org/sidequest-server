@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from sidequest.dungeon.seed_bootstrap import ENTRANCE_ID
 from sidequest.game.seams.base import SeamCrossingError, SeamCrossingResult
 from sidequest.game.session import WorldStatePatch
 from sidequest.telemetry.spans.site import site_enter_span
@@ -49,22 +50,26 @@ def resolve_enter_site(
     # The declared (namespaced) ``entrance_node_id`` is the normal BOUNDED-site
     # case. The Sünden FRONTIER-LEGACY case (Story 164-3) keeps its un-namespaced
     # legacy node ids for B1 — storage is ``(session, site_id)``-keyed, so node-id
-    # namespacing is a B4 follow-up — which means the loaded graph anchors on the
-    # legacy ``entrance``, NOT ``frontier:entrance``. Prefer the graph's OWN
-    # entrance when the declared node is absent: a LOUD, single fallback (No
-    # Silent Fallbacks), harmless for bounded sites (whose entrance IS the
-    # namespaced id and is present). The fallback target must itself be a REAL
-    # node — never invent a phantom entrance, or the fail-loud path is lost.
+    # namespacing is a B4 follow-up — which means the persisted graph anchors on
+    # the legacy ``ENTRANCE_ID`` ("entrance"), NOT ``frontier:entrance``. When the
+    # declared namespaced node is absent, bind to that REAL legacy entrance node:
+    # a LOUD, single fallback (No Silent Fallbacks), harmless for bounded sites
+    # (whose entrance IS the namespaced id and is present, so they never reach
+    # here). NOTE: we must NOT test ``graph.entrance_id`` — ``load_map`` sets that
+    # to whatever entrance_id the CALLER passed (here == ``target``), so it can
+    # never bridge the namespaced→legacy gap. That was dead code that shipped
+    # green only because a test double diverged from the real repository, and it
+    # stranded every live Sünden descent at ``no_site_entrance`` (Story 164-8).
     target = site.entrance_node_id
     if target not in graph.nodes:
-        if graph.entrance_id and graph.entrance_id in graph.nodes:
+        if ENTRANCE_ID in graph.nodes:
             logger.warning(
                 "site.enter frontier_legacy_entrance_fallback site=%s declared=%s using=%s",
                 site.site_id,
                 site.entrance_node_id,
-                graph.entrance_id,
+                ENTRANCE_ID,
             )
-            target = graph.entrance_id
+            target = ENTRANCE_ID
         else:
             raise SeamCrossingError(
                 reason="no_site_entrance",

@@ -62,15 +62,22 @@ class _LegacyEntranceStore:
     ``entrance_node_id`` (``frontier:entrance``). Sünden's frontier keeps its
     legacy node ids for B1 (storage is site-keyed; node-id namespacing is a B4
     follow-up), so the graph the store returns anchors on ``entrance``. The
-    resolver must prefer ``graph.entrance_id`` when the declared namespaced node
-    is absent — a LOUD, single fallback, harmless for bounded sites."""
+    resolver must fall back to the real legacy ``ENTRANCE_ID`` node when the
+    declared namespaced node is absent — a LOUD, single fallback, harmless for
+    bounded sites."""
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
 
     def load_map(self, *, entrance_id: str, site_id: str = "frontier") -> RegionGraph:
         self.calls.append((entrance_id, site_id))
-        g = RegionGraph(entrance_id="entrance")
+        # Mirror the REAL PgDungeonRepository.load_map (game/pg/dungeon.py):
+        # ``graph.entrance_id`` echoes the entrance_id the CALLER passed in — it is
+        # NOT independently "the graph's own entrance". The frontier-legacy NODES,
+        # though, keep the un-namespaced legacy ``entrance`` id (B1; namespacing is
+        # a B4 follow-up). The earlier double hard-coded ``entrance_id="entrance"``,
+        # which silently diverged from production and hid the dead-fallback bug.
+        g = RegionGraph(entrance_id=entrance_id)
         g.add_node(RegionNode(id="entrance", expansion_id=0, theme="shaft_collar"))
         return g
 
@@ -140,16 +147,18 @@ def test_enter_site_missing_store_raises_recoverable() -> None:
     assert snap.pc_regions["Rux"] == "the_dropmouth", "a failed enter must not move the PC"
 
 
-def test_enter_site_frontier_legacy_prefers_graph_entrance() -> None:
-    """Story 164-3 (carryover #1): the Sünden frontier site's graph uses the legacy
-    un-namespaced ``entrance`` node, not the site's namespaced ``frontier:entrance``.
-    When the declared ``entrance_node_id`` is absent from the graph, the resolver
-    prefers ``graph.entrance_id`` (a loud single fallback) and binds the PC there —
-    it does NOT raise ``no_site_entrance``. This is the refinement Task 6's migration
-    decision makes to Task 4's resolver so Sünden stays green across the cutover.
+def test_enter_site_frontier_legacy_binds_seed_entrance() -> None:
+    """Story 164-3 (carryover #1) / 164-8 fix: the Sünden frontier site's graph uses
+    the legacy un-namespaced ``entrance`` node, not the site's namespaced
+    ``frontier:entrance``. When the declared ``entrance_node_id`` is absent from the
+    graph, the resolver binds the PC to the real legacy ``ENTRANCE_ID`` node (a loud
+    single fallback) — it does NOT raise ``no_site_entrance``.
 
-    RED on develop: today ``resolve_enter_site`` raises ``no_site_entrance`` because
-    ``frontier:entrance`` is not in the (legacy) graph's nodes."""
+    Regression guard for 164-8: the fallback must key off ``ENTRANCE_ID``, NOT
+    ``graph.entrance_id`` (which ``load_map`` sets to the caller-passed id, == the
+    absent namespaced target — dead code). The prior double hid this by hard-coding
+    ``graph.entrance_id="entrance"``; ``_LegacyEntranceStore`` now mirrors the real
+    repository, so this test fails if the dead-fallback regression returns."""
     snap = _snapshot("the_dropmouth")
     store = _LegacyEntranceStore()
 

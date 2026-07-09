@@ -64,12 +64,15 @@ ENTRANCE_ROOM_NAME = "Under the Rope"
 
 
 class _StoreWithEntrance:
-    """DungeonStore/Repository double: graph anchored on the legacy ENTRANCE_ID.
-    Accepts both the bare narration-recovery signature and the site-keyed
-    resolver signature (resolve_enter_site binds to graph.entrance_id)."""
+    """DungeonStore/Repository double: graph whose NODES anchor on the legacy
+    ENTRANCE_ID. Accepts both the bare narration-recovery signature and the
+    site-keyed resolver signature. Mirrors the REAL PgDungeonRepository.load_map:
+    ``graph.entrance_id`` echoes the caller-passed ``entrance_id`` (it is NOT the
+    graph's own entrance), so resolve_enter_site's frontier-legacy fallback must
+    key off ENTRANCE_ID, not graph.entrance_id (Story 164-8 regression guard)."""
 
     def load_map(self, *, entrance_id=ENTRANCE_ID, site_id="frontier"):
-        g = RegionGraph(entrance_id=ENTRANCE_ID)
+        g = RegionGraph(entrance_id=entrance_id)
         g.add_node(RegionNode(id=ENTRANCE_ID, expansion_id=0, theme="shaft_collar"))
         return g
 

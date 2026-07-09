@@ -538,3 +538,427 @@ class TestContentValidation:
         assert not failures, (
             f"Live packs must pass content validation, but these failed: {failures}"
         )
+
+
+class TestMapTreatmentValidation:
+    """Story 163-3 / plan Task 8: a ``raster`` main-map treatment must declare a
+    non-empty ``image``, a four-key ``provenance`` block, and a ``node_anchor``
+    for every ``cartography.yaml`` region. Absent ``map.yaml`` is the dag
+    fallback and must stay OK; non-raster treatments get a structural check only.
+
+    All fixtures are synthetic (server tests never read live packs). These are
+    black-box tests through ``validate_pack_structure`` — they also serve as the
+    wiring test: a validator that is written but not called from
+    ``_validate_world`` leaves these red.
+    """
+
+    def test_raster_map_missing_anchor_is_error(self, tmp_path: Path) -> None:
+        """Every cartography region needs a node_anchor; a region (r2) with no
+        anchor is an error."""
+        pack_dir = tmp_path / "p"
+        pack_dir.mkdir()
+        _minimal_pack(pack_dir)
+        world_dir = pack_dir / "worlds" / "w"
+        world_dir.mkdir(parents=True)
+        _minimal_world(world_dir)
+        (world_dir / "cartography.yaml").write_text(
+            "navigation_mode: region\nstarting_region: r1\n"
+            "regions:\n  r1: {name: R1, summary: s, description: d}\n"
+            "  r2: {name: R2, summary: s, description: d}\n",
+            encoding="utf-8",
+        )
+        (world_dir / "map.yaml").write_text(
+            "treatment: raster\nimage: sheet.jpg\n"
+            "provenance: {source: OS, date: '1900', archive: NLS, pd_basis: expired}\n"
+            "node_anchors:\n  r1: [1, 2]\n",  # r2 missing
+            encoding="utf-8",
+        )
+        errors, _ = validate_pack_structure(pack_dir, schema_path_real)
+        assert any("r2" in e and "anchor" in e.lower() for e in errors), errors
+
+    def test_raster_map_missing_provenance_is_error(self, tmp_path: Path) -> None:
+        """A raster treatment with no provenance block at all is an error."""
+        pack_dir = tmp_path / "p"
+        pack_dir.mkdir()
+        _minimal_pack(pack_dir)
+        world_dir = pack_dir / "worlds" / "w"
+        world_dir.mkdir(parents=True)
+        _minimal_world(world_dir)
+        (world_dir / "cartography.yaml").write_text(
+            "navigation_mode: region\nstarting_region: r1\n"
+            "regions:\n  r1: {name: R1, summary: s, description: d}\n",
+            encoding="utf-8",
+        )
+        (world_dir / "map.yaml").write_text(
+            "treatment: raster\nimage: sheet.jpg\nnode_anchors:\n  r1: [1, 2]\n",
+            encoding="utf-8",
+        )
+        errors, _ = validate_pack_structure(pack_dir, schema_path_real)
+        assert any("provenance" in e.lower() for e in errors), errors
+
+    def test_raster_map_partial_provenance_missing_key_is_error(self, tmp_path: Path) -> None:
+        """A provenance block present but missing ONE of the four required keys
+        (here ``pd_basis``) is an error — exercises the per-key check, a distinct
+        branch from a wholly absent provenance block."""
+        pack_dir = tmp_path / "p"
+        pack_dir.mkdir()
+        _minimal_pack(pack_dir)
+        world_dir = pack_dir / "worlds" / "w"
+        world_dir.mkdir(parents=True)
+        _minimal_world(world_dir)
+        (world_dir / "cartography.yaml").write_text(
+            "navigation_mode: region\nstarting_region: r1\n"
+            "regions:\n  r1: {name: R1, summary: s, description: d}\n",
+            encoding="utf-8",
+        )
+        (world_dir / "map.yaml").write_text(
+            "treatment: raster\nimage: sheet.jpg\n"
+            "provenance: {source: OS, date: '1900', archive: NLS}\n"  # pd_basis missing
+            "node_anchors:\n  r1: [1, 2]\n",
+            encoding="utf-8",
+        )
+        errors, _ = validate_pack_structure(pack_dir, schema_path_real)
+        assert any("pd_basis" in e for e in errors), errors
+
+    def test_raster_map_missing_image_is_error(self, tmp_path: Path) -> None:
+        """A raster treatment with no ``image`` is an error — the map has nothing
+        to render. Otherwise fully valid (provenance + anchors present) so the
+        image rule is isolated."""
+        pack_dir = tmp_path / "p"
+        pack_dir.mkdir()
+        _minimal_pack(pack_dir)
+        world_dir = pack_dir / "worlds" / "w"
+        world_dir.mkdir(parents=True)
+        _minimal_world(world_dir)
+        (world_dir / "cartography.yaml").write_text(
+            "navigation_mode: region\nstarting_region: r1\n"
+            "regions:\n  r1: {name: R1, summary: s, description: d}\n",
+            encoding="utf-8",
+        )
+        (world_dir / "map.yaml").write_text(
+            "treatment: raster\n"  # no image
+            "provenance: {source: OS, date: '1900', archive: NLS, pd_basis: expired}\n"
+            "node_anchors:\n  r1: [1, 2]\n",
+            encoding="utf-8",
+        )
+        errors, _ = validate_pack_structure(pack_dir, schema_path_real)
+        assert any("image" in e.lower() for e in errors), errors
+
+    def test_unknown_treatment_kind_is_error(self, tmp_path: Path) -> None:
+        """An unrecognised treatment kind is a structural error regardless of the
+        raster-specific rules."""
+        pack_dir = tmp_path / "p"
+        pack_dir.mkdir()
+        _minimal_pack(pack_dir)
+        world_dir = pack_dir / "worlds" / "w"
+        world_dir.mkdir(parents=True)
+        _minimal_world(world_dir)
+        (world_dir / "cartography.yaml").write_text(
+            "navigation_mode: region\nstarting_region: r1\n"
+            "regions:\n  r1: {name: R1, summary: s, description: d}\n",
+            encoding="utf-8",
+        )
+        (world_dir / "map.yaml").write_text("treatment: potato\n", encoding="utf-8")
+        errors, _ = validate_pack_structure(pack_dir, schema_path_real)
+        assert any("potato" in e and "treatment" in e.lower() for e in errors), errors
+
+    def test_non_raster_treatment_skips_raster_rules(self, tmp_path: Path) -> None:
+        """A valid non-raster treatment (orrery) with no provenance and no anchors
+        is OK — the raster-only rules must not leak onto other kinds. Control that
+        guards over-application."""
+        pack_dir = tmp_path / "p"
+        pack_dir.mkdir()
+        _minimal_pack(pack_dir)
+        world_dir = pack_dir / "worlds" / "w"
+        world_dir.mkdir(parents=True)
+        _minimal_world(world_dir)
+        (world_dir / "cartography.yaml").write_text(
+            "navigation_mode: region\nstarting_region: r1\n"
+            "regions:\n  r1: {name: R1, summary: s, description: d}\n"
+            "  r2: {name: R2, summary: s, description: d}\n",
+            encoding="utf-8",
+        )
+        (world_dir / "map.yaml").write_text("treatment: orrery\n", encoding="utf-8")
+        errors, _ = validate_pack_structure(pack_dir, schema_path_real)
+        assert not any("provenance" in e.lower() or "anchor" in e.lower() for e in errors), errors
+
+    def test_absent_map_yaml_is_ok(self, tmp_path: Path) -> None:
+        """No ``map.yaml`` at all is the dag fallback — never an error. Control
+        that guards the live packs (none ship a map.yaml today)."""
+        pack_dir = tmp_path / "p"
+        pack_dir.mkdir()
+        _minimal_pack(pack_dir)
+        world_dir = pack_dir / "worlds" / "w"
+        world_dir.mkdir(parents=True)
+        _minimal_world(world_dir)  # writes an empty cartography.yaml, no map.yaml
+        errors, _ = validate_pack_structure(pack_dir, schema_path_real)
+        assert not any("map.yaml" in e for e in errors), errors
+
+    def test_raster_map_non_dict_cartography_does_not_crash(self, tmp_path: Path) -> None:
+        """A malformed (non-dict) cartography.yaml must not crash the validator —
+        parity with `_validate_weather_zones`'s dict guard. The raster image/
+        provenance rules still evaluate; anchor coverage is skipped because there
+        are no readable regions in a non-mapping cartography."""
+        pack_dir = tmp_path / "p"
+        pack_dir.mkdir()
+        _minimal_pack(pack_dir)
+        world_dir = pack_dir / "worlds" / "w"
+        world_dir.mkdir(parents=True)
+        _minimal_world(world_dir)
+        # cartography.yaml parses to a list, not a mapping.
+        (world_dir / "cartography.yaml").write_text("- not\n- a\n- mapping\n", encoding="utf-8")
+        (world_dir / "map.yaml").write_text(
+            "treatment: raster\nimage: sheet.jpg\n"
+            "provenance: {source: OS, date: '1900', archive: NLS, pd_basis: expired}\n"
+            "node_anchors:\n  r1: [1, 2]\n",
+            encoding="utf-8",
+        )
+        # Must not raise; a valid raster block over an unreadable cartography
+        # yields no anchor-coverage errors (no regions to check).
+        errors, _ = validate_pack_structure(pack_dir, schema_path_real)
+        assert not any("node_anchor" in e for e in errors), errors
+
+    def test_raster_map_list_node_anchors_not_silently_covered(self, tmp_path: Path) -> None:
+        """A bare-list `node_anchors` (region ids with no coordinates) must NOT
+        count as anchor coverage — a list-membership check would falsely mark a
+        region 'anchored'. Every region still needs a real mapping anchor."""
+        pack_dir = tmp_path / "p"
+        pack_dir.mkdir()
+        _minimal_pack(pack_dir)
+        world_dir = pack_dir / "worlds" / "w"
+        world_dir.mkdir(parents=True)
+        _minimal_world(world_dir)
+        (world_dir / "cartography.yaml").write_text(
+            "navigation_mode: region\nstarting_region: r1\n"
+            "regions:\n  r1: {name: R1, summary: s, description: d}\n",
+            encoding="utf-8",
+        )
+        (world_dir / "map.yaml").write_text(
+            "treatment: raster\nimage: sheet.jpg\n"
+            "provenance: {source: OS, date: '1900', archive: NLS, pd_basis: expired}\n"
+            "node_anchors: [r1]\n",  # a bare list, not a mapping of id -> coords
+            encoding="utf-8",
+        )
+        errors, _ = validate_pack_structure(pack_dir, schema_path_real)
+        assert any("r1" in e and "anchor" in e.lower() for e in errors), errors
+
+    def test_non_hashable_treatment_does_not_crash(self, tmp_path: Path) -> None:
+        """A non-hashable `treatment` (e.g. a YAML list `treatment: [raster]`)
+        must be reported as an unknown treatment, not crash the validator on the
+        `kind not in {…}` set-membership check (TypeError: unhashable type)."""
+        pack_dir = tmp_path / "p"
+        pack_dir.mkdir()
+        _minimal_pack(pack_dir)
+        world_dir = pack_dir / "worlds" / "w"
+        world_dir.mkdir(parents=True)
+        _minimal_world(world_dir)
+        (world_dir / "cartography.yaml").write_text(
+            "navigation_mode: region\nstarting_region: r1\n"
+            "regions:\n  r1: {name: R1, summary: s, description: d}\n",
+            encoding="utf-8",
+        )
+        (world_dir / "map.yaml").write_text("treatment: [raster]\n", encoding="utf-8")
+        errors, _ = validate_pack_structure(pack_dir, schema_path_real)
+        assert any("treatment" in e.lower() for e in errors), errors
+
+    def test_raster_map_whitespace_image_is_error(self, tmp_path: Path) -> None:
+        """A whitespace-only `image` must not satisfy the non-empty-image gate."""
+        pack_dir = tmp_path / "p"
+        pack_dir.mkdir()
+        _minimal_pack(pack_dir)
+        world_dir = pack_dir / "worlds" / "w"
+        world_dir.mkdir(parents=True)
+        _minimal_world(world_dir)
+        (world_dir / "cartography.yaml").write_text(
+            "navigation_mode: region\nstarting_region: r1\n"
+            "regions:\n  r1: {name: R1, summary: s, description: d}\n",
+            encoding="utf-8",
+        )
+        (world_dir / "map.yaml").write_text(
+            'treatment: raster\nimage: "   "\n'
+            "provenance: {source: OS, date: '1900', archive: NLS, pd_basis: expired}\n"
+            "node_anchors:\n  r1: [1, 2]\n",
+            encoding="utf-8",
+        )
+        errors, _ = validate_pack_structure(pack_dir, schema_path_real)
+        assert any("image" in e.lower() for e in errors), errors
+
+    def test_raster_map_whitespace_provenance_is_error(self, tmp_path: Path) -> None:
+        """A whitespace-only provenance value must not satisfy the PD-provenance
+        gate — the licensing invariant Task 8 encodes cannot be defeated by
+        blank-looking text."""
+        pack_dir = tmp_path / "p"
+        pack_dir.mkdir()
+        _minimal_pack(pack_dir)
+        world_dir = pack_dir / "worlds" / "w"
+        world_dir.mkdir(parents=True)
+        _minimal_world(world_dir)
+        (world_dir / "cartography.yaml").write_text(
+            "navigation_mode: region\nstarting_region: r1\n"
+            "regions:\n  r1: {name: R1, summary: s, description: d}\n",
+            encoding="utf-8",
+        )
+        (world_dir / "map.yaml").write_text(
+            "treatment: raster\nimage: sheet.jpg\n"
+            "provenance: {source: \"   \", date: '1900', archive: NLS, pd_basis: expired}\n"
+            "node_anchors:\n  r1: [1, 2]\n",
+            encoding="utf-8",
+        )
+        errors, _ = validate_pack_structure(pack_dir, schema_path_real)
+        assert any("source" in e for e in errors), errors
+
+
+class TestWeatherZoneValidation:
+    """Story 163-3 / plan Task 18: every region ``weather_zone`` must resolve to a
+    key in the world's ``weather.yaml`` ``climate_zones``. A region declaring a
+    weather_zone with no weather.yaml is an error (a climate binding with no
+    climate). No weather_zone anywhere is OK.
+
+    Synthetic fixtures only. ``cartography.yaml`` is not model-validated by the
+    pack validator, so an unknown ``weather_zone`` field yields no competing error
+    — the only source of a weather_zone error is ``_validate_weather_zones``.
+    """
+
+    def test_region_weather_zone_unknown_is_error(self, tmp_path: Path) -> None:
+        """A region weather_zone that is not a declared climate zone is an error
+        naming the bad zone."""
+        pack_dir = tmp_path / "p"
+        pack_dir.mkdir()
+        _minimal_pack(pack_dir)
+        world_dir = pack_dir / "worlds" / "w"
+        world_dir.mkdir(parents=True)
+        _minimal_world(world_dir)
+        (world_dir / "cartography.yaml").write_text(
+            "navigation_mode: region\nstarting_region: r1\n"
+            "regions:\n  r1: {name: R1, summary: s, description: d, weather_zone: nope}\n",
+            encoding="utf-8",
+        )
+        (world_dir / "weather.yaml").write_text(
+            "climate_zones:\n  glen_floor:\n    seasons:\n      autumn:\n"
+            "        temp_range: [5, 12]\n        conditions: [smirr]\n        weights: [1]\n",
+            encoding="utf-8",
+        )
+        errors, _ = validate_pack_structure(pack_dir, schema_path_real)
+        assert any("weather_zone" in e and "nope" in e for e in errors), errors
+
+    def test_region_weather_zone_valid_passes(self, tmp_path: Path) -> None:
+        """A region weather_zone that IS a declared climate zone is OK — control
+        against false-failing valid content."""
+        pack_dir = tmp_path / "p"
+        pack_dir.mkdir()
+        _minimal_pack(pack_dir)
+        world_dir = pack_dir / "worlds" / "w"
+        world_dir.mkdir(parents=True)
+        _minimal_world(world_dir)
+        (world_dir / "cartography.yaml").write_text(
+            "navigation_mode: region\nstarting_region: r1\n"
+            "regions:\n  r1: {name: R1, summary: s, description: d, weather_zone: glen_floor}\n",
+            encoding="utf-8",
+        )
+        (world_dir / "weather.yaml").write_text(
+            "climate_zones:\n  glen_floor:\n    seasons:\n      autumn:\n"
+            "        temp_range: [5, 12]\n        conditions: [smirr]\n        weights: [1]\n",
+            encoding="utf-8",
+        )
+        errors, _ = validate_pack_structure(pack_dir, schema_path_real)
+        assert not any("weather_zone" in e for e in errors), errors
+
+    def test_weather_zone_declared_without_weather_yaml_is_error(self, tmp_path: Path) -> None:
+        """A region declaring a weather_zone with NO ``weather.yaml`` present is an
+        error — a climate binding with nothing to bind to. This also guards the
+        absent-file read path: the validator must NOT crash on the missing
+        weather.yaml (``_read_yaml`` raises FileNotFoundError without an
+        ``is_file()`` guard)."""
+        pack_dir = tmp_path / "p"
+        pack_dir.mkdir()
+        _minimal_pack(pack_dir)
+        world_dir = pack_dir / "worlds" / "w"
+        world_dir.mkdir(parents=True)
+        _minimal_world(world_dir)
+        (world_dir / "cartography.yaml").write_text(
+            "navigation_mode: region\nstarting_region: r1\n"
+            "regions:\n  r1: {name: R1, summary: s, description: d, weather_zone: glen_floor}\n",
+            encoding="utf-8",
+        )
+        # deliberately NO weather.yaml
+        errors, _ = validate_pack_structure(pack_dir, schema_path_real)
+        assert any("weather_zone" in e for e in errors), errors
+
+    def test_no_weather_zone_anywhere_is_ok(self, tmp_path: Path) -> None:
+        """A world whose regions declare no weather_zone (and which has no
+        weather.yaml) produces no weather errors — control for the early return."""
+        pack_dir = tmp_path / "p"
+        pack_dir.mkdir()
+        _minimal_pack(pack_dir)
+        world_dir = pack_dir / "worlds" / "w"
+        world_dir.mkdir(parents=True)
+        _minimal_world(world_dir)
+        (world_dir / "cartography.yaml").write_text(
+            "navigation_mode: region\nstarting_region: r1\n"
+            "regions:\n  r1: {name: R1, summary: s, description: d}\n",
+            encoding="utf-8",
+        )
+        errors, _ = validate_pack_structure(pack_dir, schema_path_real)
+        assert not any("weather" in e.lower() for e in errors), errors
+
+    def test_non_hashable_weather_zone_does_not_crash(self, tmp_path: Path) -> None:
+        """A non-hashable region `weather_zone` (e.g. `weather_zone: [glen_floor]`)
+        must be reported as an invalid zone, not crash the validator on the
+        `wz not in zones` set-membership check (TypeError: unhashable type)."""
+        pack_dir = tmp_path / "p"
+        pack_dir.mkdir()
+        _minimal_pack(pack_dir)
+        world_dir = pack_dir / "worlds" / "w"
+        world_dir.mkdir(parents=True)
+        _minimal_world(world_dir)
+        (world_dir / "cartography.yaml").write_text(
+            "navigation_mode: region\nstarting_region: r1\n"
+            "regions:\n  r1: {name: R1, summary: s, description: d, weather_zone: [glen_floor]}\n",
+            encoding="utf-8",
+        )
+        (world_dir / "weather.yaml").write_text(
+            "climate_zones:\n  glen_floor:\n    seasons:\n      autumn:\n"
+            "        temp_range: [5, 12]\n        conditions: [smirr]\n        weights: [1]\n",
+            encoding="utf-8",
+        )
+        errors, _ = validate_pack_structure(pack_dir, schema_path_real)
+        assert any("weather_zone" in e for e in errors), errors
+
+    def test_malformed_climate_zones_scalar_does_not_crash(self, tmp_path: Path) -> None:
+        """A scalar `climate_zones` (e.g. `climate_zones: 42`) must be reported,
+        not crash the validator on `set(42)` (TypeError: not iterable)."""
+        pack_dir = tmp_path / "p"
+        pack_dir.mkdir()
+        _minimal_pack(pack_dir)
+        world_dir = pack_dir / "worlds" / "w"
+        world_dir.mkdir(parents=True)
+        _minimal_world(world_dir)
+        (world_dir / "cartography.yaml").write_text(
+            "navigation_mode: region\nstarting_region: r1\n"
+            "regions:\n  r1: {name: R1, summary: s, description: d, weather_zone: glen_floor}\n",
+            encoding="utf-8",
+        )
+        (world_dir / "weather.yaml").write_text("climate_zones: 42\n", encoding="utf-8")
+        errors, _ = validate_pack_structure(pack_dir, schema_path_real)
+        # A clean error string is produced (no crash); it names the climate binding.
+        assert any("climate" in e.lower() for e in errors), errors
+
+    def test_malformed_climate_zones_list_of_dicts_does_not_crash(self, tmp_path: Path) -> None:
+        """A list-of-mappings `climate_zones` must be reported, not crash the
+        validator on `set([{...}])` (TypeError: unhashable dict)."""
+        pack_dir = tmp_path / "p"
+        pack_dir.mkdir()
+        _minimal_pack(pack_dir)
+        world_dir = pack_dir / "worlds" / "w"
+        world_dir.mkdir(parents=True)
+        _minimal_world(world_dir)
+        (world_dir / "cartography.yaml").write_text(
+            "navigation_mode: region\nstarting_region: r1\n"
+            "regions:\n  r1: {name: R1, summary: s, description: d, weather_zone: glen_floor}\n",
+            encoding="utf-8",
+        )
+        (world_dir / "weather.yaml").write_text(
+            "climate_zones:\n  - {name: glen_floor}\n", encoding="utf-8"
+        )
+        errors, _ = validate_pack_structure(pack_dir, schema_path_real)
+        assert any("climate" in e.lower() for e in errors), errors

@@ -1033,6 +1033,136 @@ def _validate_perseus_cloud_quest_seed(world_dir: Path, label: str) -> list[str]
     return []
 
 
+def _validate_map_treatment(world_dir: Path, label: str) -> list[str]:
+    """Story 163-3 / three-tier-mapping spec §2/§5 (Task 8): a ``raster``
+    main-map treatment must declare a non-empty ``image``, a four-key
+    ``provenance`` block, and a ``node_anchor`` for every ``cartography.yaml``
+    region.
+
+    Absent ``map.yaml`` → the dag fallback, which is always OK. A non-raster
+    treatment (orrery/dag/generated) gets a structural kind-check only; the
+    raster-specific provenance/anchor rules do not apply to it.
+    """
+    map_path = world_dir / "map.yaml"
+    if not map_path.is_file():
+        return []
+    data, read_err = _read_yaml(map_path, label)
+    if read_err is not None:
+        return [read_err]
+    if not isinstance(data, dict):
+        return [f"{label}: map.yaml must be a mapping"]
+    kind = data.get("treatment")
+    if not isinstance(kind, str) or kind not in {"raster", "orrery", "dag", "generated"}:
+        return [f"{label}: map.yaml has unknown treatment {kind!r} (raster|orrery|dag|generated)"]
+    if kind != "raster":
+        return []
+
+    errors: list[str] = []
+    image = data.get("image")
+    if not isinstance(image, str) or not image.strip():
+        errors.append(f"{label}: raster map.yaml requires a non-empty 'image'")
+    prov = data.get("provenance")
+    required_prov = ("source", "date", "archive", "pd_basis")
+    if not isinstance(prov, dict):
+        errors.append(
+            f"{label}: raster map.yaml requires a 'provenance' block ({', '.join(required_prov)})"
+        )
+    else:
+        for key in required_prov:
+            # Reject blank values (falsy or whitespace-only) — a whitespace-only
+            # provenance value must not satisfy the PD-provenance licensing gate.
+            val = prov.get(key)
+            if not val or (isinstance(val, str) and not val.strip()):
+                errors.append(f"{label}: raster map.yaml provenance missing {key!r}")
+
+    # Anchor coverage: every cartography region needs a node_anchor. cartography
+    # is a required world file so it is normally present; guard the read anyway
+    # (parity with every sibling validator — _read_yaml does not guard existence).
+    # Shape-guard both cartography and node_anchors: a non-mapping cartography
+    # would crash `.get`, and a non-mapping node_anchors (e.g. a bare list of ids)
+    # would make `in` a silently-wrong membership check.
+    cart_path = world_dir / "cartography.yaml"
+    if cart_path.is_file():
+        cart_data, cart_err = _read_yaml(cart_path, label)
+        if cart_err is not None:
+            return errors + [cart_err]
+        regions = cart_data.get("regions") if isinstance(cart_data, dict) else None
+        anchors = data.get("node_anchors")
+        anchors = anchors if isinstance(anchors, dict) else {}
+        if isinstance(regions, dict):
+            for region_id in regions:
+                if region_id not in anchors:
+                    errors.append(
+                        f"{label}: raster map.yaml has no node_anchor for region "
+                        f"{region_id!r} (every region needs an anchor)"
+                    )
+    return errors
+
+
+def _validate_weather_zones(world_dir: Path, label: str) -> list[str]:
+    """Story 163-3 / three-tier-mapping spec §2 A2 (Task 18): every region
+    ``weather_zone`` must resolve to a key of the world's ``weather.yaml``
+    ``climate_zones``.
+
+    A world with no ``weather_zone`` declared anywhere → OK. A region that
+    declares a ``weather_zone`` while the world ships no ``weather.yaml`` (or an
+    empty ``climate_zones``) is an error — a climate binding with no climate.
+    """
+    cart_path = world_dir / "cartography.yaml"
+    if not cart_path.is_file():
+        return []
+    cart_data, cart_err = _read_yaml(cart_path, label)
+    if cart_err is not None or not isinstance(cart_data, dict):
+        return []  # cartography problems reported elsewhere
+    regions = cart_data.get("regions") or {}
+    if not isinstance(regions, dict):
+        return []
+    declared = {
+        rid: r.get("weather_zone")
+        for rid, r in regions.items()
+        if isinstance(r, dict) and r.get("weather_zone")
+    }
+    if not declared:
+        return []
+
+    # A region declares a weather_zone: the world must carry a weather.yaml with
+    # climate_zones. Guard the read — _read_yaml raises FileNotFoundError on an
+    # absent file (weather.yaml is optional), so an unguarded read would crash
+    # the validator instead of reporting the missing climate binding.
+    weather_path = world_dir / "weather.yaml"
+    no_climate_error = (
+        f"{label}: regions declare weather_zone but world has no weather.yaml climate_zones"
+    )
+    if not weather_path.is_file():
+        return [no_climate_error]
+    weather_data, w_err = _read_yaml(weather_path, label)
+    if w_err is not None:
+        return [w_err]
+    climate_zones = (
+        (weather_data or {}).get("climate_zones") if isinstance(weather_data, dict) else None
+    )
+    if climate_zones is None:
+        return [no_climate_error]
+    if not isinstance(climate_zones, dict):
+        # Shape-guard before set(): a scalar crashes set(), a list-of-mappings
+        # crashes on unhashable elements, a bare string decomposes to characters.
+        return [
+            f"{label}: weather.yaml climate_zones must be a mapping of zone-id → "
+            f"definition (got {type(climate_zones).__name__})"
+        ]
+    zones = set(climate_zones)
+    if not zones:
+        return [no_climate_error]
+    errors: list[str] = []
+    for rid, wz in declared.items():
+        if not isinstance(wz, str) or wz not in zones:
+            errors.append(
+                f"{label}: region {rid!r} weather_zone {wz!r} is not a climate zone "
+                f"(zones: {sorted(zones)})"
+            )
+    return errors
+
+
 # ---------------------------------------------------------------------------
 # World-level validation
 # ---------------------------------------------------------------------------
@@ -1175,6 +1305,12 @@ def _validate_world(
 
     # ADR-146 (story 117-3) — the perseus_cloud floor-boss quest_seed exemplar.
     content_errors.extend(_validate_perseus_cloud_quest_seed(world_dir, label))
+
+    # Story 163-3 (three-tier-mapping §2/§5) — main-map treatment invariants:
+    # a raster map.yaml needs provenance + a node_anchor per region; every
+    # region weather_zone must resolve to a real weather.yaml climate zone.
+    content_errors.extend(_validate_map_treatment(world_dir, label))
+    content_errors.extend(_validate_weather_zones(world_dir, label))
 
     # Cross-reference content lint (story 64-5) — world tier.
     resolved_trope_ids = genre_trope_ids | _collect_trope_ids(world_dir / "tropes.yaml")

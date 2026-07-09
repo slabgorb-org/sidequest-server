@@ -28,9 +28,7 @@ def test_runtime_payload_has_tokens_and_features(tmp_path: Path, monkeypatch) ->
         _maybe_build_runtime_cavern_payload,
     )
 
-    payload = _maybe_build_runtime_cavern_payload(
-        sd=sd, room_id=room_id, snapshot=snapshot
-    )
+    payload = _maybe_build_runtime_cavern_payload(sd=sd, room_id=room_id, snapshot=snapshot)
     assert payload is not None, "Builder returned None — runtime branch not entered"
     assert payload.features, "features must be populated from the tactical block"
     assert payload.tokens, "tokens must be placed for the party PC present in the room"
@@ -80,9 +78,7 @@ def test_unrevealed_creature_not_placed(tmp_path: Path, monkeypatch) -> None:
         _maybe_build_runtime_cavern_payload,
     )
 
-    payload = _maybe_build_runtime_cavern_payload(
-        sd=sd, room_id=room_id, snapshot=snapshot
-    )
+    payload = _maybe_build_runtime_cavern_payload(sd=sd, room_id=room_id, snapshot=snapshot)
     assert payload is not None, "Builder returned None — runtime branch not entered"
     hostile = [t for t in payload.tokens if t.token_id.startswith("creature:")]
     assert hostile == [], "pre-ambush creatures must not leak onto the map"
@@ -110,14 +106,10 @@ def test_withdrawn_actor_not_placed(tmp_path: Path, monkeypatch) -> None:
         _maybe_build_runtime_cavern_payload,
     )
 
-    payload = _maybe_build_runtime_cavern_payload(
-        sd=sd, room_id=room_id, snapshot=snapshot
-    )
+    payload = _maybe_build_runtime_cavern_payload(sd=sd, room_id=room_id, snapshot=snapshot)
     assert payload is not None, "Builder returned None — runtime branch not entered"
     creature_tokens = [t for t in payload.tokens if t.token_id.startswith("creature:")]
-    assert creature_tokens == [], (
-        "withdrawn opponent actor must NOT be placed on the map"
-    )
+    assert creature_tokens == [], "withdrawn opponent actor must NOT be placed on the map"
     # The PC (Rux) is still in the room — entrance-anchor token must be present.
     pc_tokens = [t for t in payload.tokens if t.token_id.startswith("pc:")]
     assert pc_tokens, "party PC 'Rux' must still appear even when opponent withdrew"
@@ -144,9 +136,7 @@ def test_runtime_payload_populates_move_adjudications(tmp_path: Path, monkeypatc
         _maybe_build_runtime_cavern_payload,
     )
 
-    payload = _maybe_build_runtime_cavern_payload(
-        sd=sd, room_id=room_id, snapshot=snapshot
-    )
+    payload = _maybe_build_runtime_cavern_payload(sd=sd, room_id=room_id, snapshot=snapshot)
     assert payload is not None, "Builder returned None — runtime branch not entered"
 
     move_adjs = [a for a in payload.adjudications if a.kind == "move"]

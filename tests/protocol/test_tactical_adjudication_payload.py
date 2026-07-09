@@ -103,9 +103,7 @@ def test_grid_payload_adjudications_default_is_not_shared_between_instances():
 
     p1 = TacticalGridPayload(room_id="r1", room_name="A", room_type="cavern")
     p2 = TacticalGridPayload(room_id="r2", room_name="B", room_type="cavern")
-    p1.adjudications.append(
-        TacticalAdjudication(actor="Rux", kind="move", valid=True)
-    )
+    p1.adjudications.append(TacticalAdjudication(actor="Rux", kind="move", valid=True))
     assert p2.adjudications == [], "adjudications default leaked across payload instances"
 
 
@@ -116,9 +114,7 @@ def test_adjudication_serializes_cells_as_json_arrays():
     """
     from sidequest.protocol.models import TacticalAdjudication
 
-    adj = TacticalAdjudication(
-        actor="Rux", kind="aoe", valid=True, cells=[(2, 1), (3, 1)]
-    )
+    adj = TacticalAdjudication(actor="Rux", kind="aoe", valid=True, cells=[(2, 1), (3, 1)])
     dumped = adj.model_dump()
     assert dumped["cells"] == [[2, 1], [3, 1]]
     assert all(isinstance(c, list) for c in dumped["cells"])

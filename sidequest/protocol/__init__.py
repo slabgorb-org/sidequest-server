@@ -112,6 +112,7 @@ from sidequest.protocol.models import (
     RelationshipsPayload,
     RolledStat,
     StateDelta,
+    TacticalAdjudication,
     TacticalGridPayload,
     TokenPayload,
 )
@@ -194,6 +195,7 @@ __all__ = [
     "RelationshipsPayload",
     "RolledStat",
     "StateDelta",
+    "TacticalAdjudication",
     "TacticalGridPayload",
     "TokenPayload",
     # Phase 1 payloads + messages

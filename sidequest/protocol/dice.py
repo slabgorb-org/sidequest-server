@@ -234,6 +234,13 @@ class DiceResultPayload(ProtocolBase):
     # primary ``check`` overlay's value/tier.
     roll_role: Literal["check", "damage"] = "check"
 
+    # Additive tactical range echo (Story 165-4, ADR-096 v2). When a strike was
+    # reach/range-adjudicated (165-3), the resolved weapon band + measured cell
+    # distance ride along so the resolution card can show the math. Absent on
+    # rolls with no tactical range (social checks, saves) — None, never guessed.
+    range_band: str | None = None
+    distance_cells: int | None = None
+
     @model_validator(mode="after")
     def _require_face_count_matches_pool(self) -> DiceResultPayload:
         for i, group in enumerate(self.rolls):

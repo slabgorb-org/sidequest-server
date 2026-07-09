@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from sidequest.protocol.messages import TacticalGridMessage, TacticalGridPayload
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
@@ -235,7 +235,7 @@ def _maybe_build_runtime_cavern_payload(
         block = mask_dict["block"]
 
         from sidequest.dungeon.tactical import RegionTactical
-        from sidequest.protocol.models import TacticalFeature
+        from sidequest.protocol.models import TacticalAdjudication, TacticalFeature
 
         tactical_raw = mask_dict.get("tactical")
         if tactical_raw is None:
@@ -278,6 +278,39 @@ def _maybe_build_runtime_cavern_payload(
             snapshot=snapshot, room_id=room_id, anchors=tactical.anchors
         )
 
+        # Round move-summary echo (Story 165-4, ADR-096 v2): each PC in this room
+        # gets a move-budget adjudication so the client can show "you can move N
+        # cells" — the 165-3 enforcement math, surfaced. Additive: WN-family
+        # rulesets expose combat_move_cells; a ruleset without a cell-based Move
+        # (e.g. Fate) is a scope boundary and simply contributes no move echo.
+        adjudications: list[TacticalAdjudication] = []
+        pack = getattr(sd, "genre_pack", None)
+        if pack is not None and getattr(pack, "rules", None) is not None:
+            from sidequest.game.ruleset.registry import get_ruleset_module
+
+            ruleset = get_ruleset_module(pack.rules.ruleset)
+            # combat_move_cells lives on the WN-family subclasses, not the base
+            # RulesetModule ABC — resolve it dynamically so a ruleset without a
+            # cell-based Move (e.g. Fate) simply contributes no move echo.
+            move_cells = getattr(ruleset, "combat_move_cells", None)
+            if callable(move_cells):
+                pcs_here = [
+                    name
+                    for name, loc in (getattr(snapshot, "character_locations", {}) or {}).items()
+                    if loc == room_id
+                ]
+                for name in pcs_here:
+                    core = snapshot.find_creature_core(name)
+                    adjudications.append(
+                        TacticalAdjudication(
+                            actor=name,
+                            kind="move",
+                            valid=True,
+                            # combat_move_cells returns int; getattr loses the type.
+                            cells_budget=cast("int", move_cells(core)),
+                        )
+                    )
+
         return TacticalGridPayload(
             room_id=room_id,
             room_name=room_id,  # procedural rooms have no authored name — region_id IS the name
@@ -295,6 +328,7 @@ def _maybe_build_runtime_cavern_payload(
             initiative=None,
             entities=[],
             features=features,
+            adjudications=adjudications,
         )
 
     return None

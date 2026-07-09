@@ -144,11 +144,13 @@ def test_load_dungeon_map_context_reads_world_tier_palette(
         genre_slug="caverns_and_claudes",
         world_slug="beneath_sunden",
         dungeon_repository=SimpleNamespace(
-            load_map=lambda entrance_id: SimpleNamespace(nodes={"entrance": object()})
+            load_map=lambda **kwargs: SimpleNamespace(nodes={"entrance": object()})
         ),
     )
 
-    result = _load_dungeon_map_context(sd)  # type: ignore[arg-type]
+    result = _load_dungeon_map_context(  # type: ignore[arg-type]
+        sd, site_id="frontier", entrance_id="entrance"
+    )
     assert result is not None
     _graph, palette, _entrance = result
     assert "new_world_theme" in palette.themes, "map emit must read world-tier themes/"

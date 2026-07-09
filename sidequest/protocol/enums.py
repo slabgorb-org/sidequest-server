@@ -129,13 +129,15 @@ class MessageType(StrEnum):
     # state changes. Fires when an encounter with a non-None
     # location_overlay activates or deactivates touching a bound_room_id.
     LOCATION_OVERLAY_CHANGED = "LOCATION_OVERLAY_CHANGED"
-    # Beneath Sünden BETTER fix (seam 3). Procedural megadungeon map
-    # frame: the live region graph (discovered regions + current region +
-    # typed adjacencies) projected to the UI Map tab. ADR-019 MAP_UPDATE
-    # was deleted in the Rust→Python port; ADR-055 needs a NEW message —
-    # this is it (do NOT revive MAP_UPDATE). The UI MapWidget routes this
-    # through its Automapper region-graph path.
-    DUNGEON_MAP = "DUNGEON_MAP"
+    # Track B site frame (story 164-4; renamed from DUNGEON_MAP, one
+    # cutover, no alias). The live site-interior region graph (discovered
+    # regions + current region + typed adjacencies + site identity)
+    # projected to the UI Map tab whenever the connection's PC is inside a
+    # site scene — the Sünden frontier megadungeon, a tavern, a vault.
+    # ADR-019 MAP_UPDATE was deleted in the Rust→Python port; ADR-055
+    # needs a NEW message — this is it (do NOT revive MAP_UPDATE). The UI
+    # MapWidget routes this through its Automapper region-graph path.
+    SITE_MAP = "SITE_MAP"
     # ADR-137 / Story 77-8: player-facing quest spine projection. The
     # RELATIONSHIPS-snapshot analog for quests — carries quest_log +
     # quest_anchors + active_stakes together, reactive on seed/record_quest/

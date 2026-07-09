@@ -5,7 +5,7 @@ edges, never embedded in a plane — so a per-edge DIRECTION was never assigned,
 which is why "I go north" / "the corridor ahead" could not resolve and the
 narrator was driven to confabulate. ``assign_bearings`` gives each region's
 exits a stable, DISTINCT bearing (compass for passages, up/down for vertical
-ways), derived purely from the graph so the narrator prompt, the DUNGEON_MAP
+ways), derived purely from the graph so the narrator prompt, the SITE_MAP
 frame, and the movement resolver all agree without persistence.
 
 Content-free: synthetic ``RegionGraph`` + a duck-typed palette.

@@ -18,11 +18,13 @@ TDD plan items 17-20 (per-PC split-party + per-connection map).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
 from sidequest.dungeon.region_graph.model import RegionEdge, RegionGraph, RegionNode
+from sidequest.genre.models.world import CartographyConfig, NavigationMode, SiteDecl
 
 if TYPE_CHECKING:
     from sidequest.dungeon.themes import ThemePalette
@@ -250,7 +252,7 @@ def test_emit_span_carries_pc_name_and_region(monkeypatch: pytest.MonkeyPatch) -
     assert fields["pc_region"] == "r2"
 
     # The emitted payload's discovered set includes r3 (the OTHER PC's find).
-    assert emitted, "expected a DUNGEON_MAP frame"
+    assert emitted, "expected a SITE_MAP frame"
     payload = emitted[-1].payload
     assert {loc.id for loc in payload.explored} == {"r1", "r2", "r3"}
     assert payload.current_location == "r2"
@@ -265,7 +267,10 @@ class _FakeSessionData:
 
     The emit's content-path deps (DungeonStore.load_map, GenreLoader,
     load_theme_palette) are isolated behind the single
-    ``_load_dungeon_map_context`` seam, stubbed below.
+    ``_load_dungeon_map_context`` seam, stubbed below. Track B (164-4): the
+    emit is scene-gated now, so the fake declares the legacy frontier site
+    and a duck-typed store returning the synthetic graph — scene resolution
+    finds the bare-id deep via the frontier membership probe.
     """
 
     def __init__(
@@ -283,6 +288,21 @@ class _FakeSessionData:
         self.store = object()
         self._graph = graph
         self._palette = palette
+        cart = CartographyConfig(
+            navigation_mode=NavigationMode.region,
+            regions={},
+            sites=[
+                SiteDecl(
+                    site_id="frontier",
+                    name="The Deep",
+                    archetype="megadungeon",
+                    attached_to="surface",
+                    extent="frontier",
+                )
+            ],
+        )
+        self.genre_pack = SimpleNamespace(worlds={world_slug: SimpleNamespace(cartography=cart)})
+        self.dungeon_repository = SimpleNamespace(load_map=lambda **kwargs: graph)
 
 
 @pytest.fixture(autouse=True)
@@ -291,12 +311,13 @@ def _stub_content_path(monkeypatch: pytest.MonkeyPatch) -> Any:
     the full emit entry point runs CONTENT-FREE against the synthetic graph
     the _FakeSessionData carries.
 
-    ``_load_dungeon_map_context(sd)`` returns ``(graph, palette, entrance_id)``
-    or ``None`` (other-world no-op / no-schema / empty map). We return the
-    synthetic pair so the per-PC payload logic runs unchanged."""
+    ``_load_dungeon_map_context`` returns ``(graph, palette, entrance_id)``
+    or ``None`` (empty map). Signature-agnostic (Track B added site_id/
+    entrance_id kwargs); we return the synthetic pair so the per-PC payload
+    logic runs unchanged."""
     from sidequest.server.websocket_handlers import map_emit as h
 
-    def _stub_load(sd: Any) -> Any:
+    def _stub_load(sd: Any, *args: Any, **kwargs: Any) -> Any:
         return (sd._graph, sd._palette, _ENTRANCE)
 
     monkeypatch.setattr(h, "_load_dungeon_map_context", _stub_load, raising=True)

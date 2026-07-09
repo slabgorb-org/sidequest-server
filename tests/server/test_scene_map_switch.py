@@ -1,27 +1,30 @@
-"""Descent-phase map switch (playtest 2026-06-22, beneath_sunden ``697cbc14``).
+"""Scene-context map switch (Track B, story 164-4; née descent-phase,
+playtest 2026-06-22, beneath_sunden ``697cbc14``).
 
 beneath_sunden is a HYBRID world: an authored surface cartography graph
 (``ropefoot``/``the_dropmouth``, region-mode MAP_UPDATE) PLUS the ADR-106
-procedural deep (``entrance``/``expNNN.rN``, DUNGEON_MAP). Both map emitters fire
-EVERY turn into the UI's single ``mapData`` slot, and the cartography emit is
-dispatched second — so it CLOBBERED the DUNGEON_MAP and the player saw the two
-surface regions no matter how deep they stood (``dungeon.map_emitted region=
-exp001.r2`` immediately overwritten by ``cartography.map_emitted discovered=1``).
+procedural deep — declared as the ``frontier`` site and projected as
+SITE_MAP (renamed from DUNGEON_MAP in the 164-4 cutover). Both map emitters
+fire EVERY turn into the UI's single ``mapData`` slot, and the cartography
+emit is dispatched second — so without a gate it CLOBBERS the site frame
+and the player sees the two surface regions no matter how deep they stand.
 
-The fix is a per-connection descent-phase gate (``_descent_phase``) so exactly
-ONE map projection owns the turn:
-  - ``"deep"``    -> the PC's region is a node in the procedural graph:
-                     DUNGEON_MAP owns the map, the cartography emit stands down
-                     (``cartography.map_skipped`` reason=``deep_phase``).
-  - ``"surface"`` -> the PC is above the rope (a cartography region, NOT a
-                     dungeon node): the cartography MAP_UPDATE owns the map, the
-                     dungeon emit stands down (``dungeon.map_skipped`` reason=
-                     ``surface_phase``) instead of shipping a useless 0/N frame.
-  - ``"n/a"``     -> not a dungeon world: cartography behaves exactly as before.
+The gate is the per-connection scene context (``resolve_scene_context``),
+which replaced the beneath_sunden-hardcoded ``_descent_phase`` binary so
+exactly ONE map projection owns the turn:
+  - site scene  -> the PC's region is a node in a site's graph: SITE_MAP
+                   owns the map, the cartography emit stands down
+                   (``cartography.map_skipped`` reason=``site_scene``).
+  - world scene -> the PC is on the cartography: MAP_UPDATE owns the map,
+                   the site emit stands down (``dungeon.map_skipped``
+                   reason=``world_scene`` — loud for a site-bearing world,
+                   silent no-op for a siteless one).
 
-CONTENT-FREE: synthetic ``RegionGraph`` + stub palette + a hand-built snapshot;
-the single content/IO seam (``_load_dungeon_map_context``) is stubbed, never a
-live pack (``feedback_no_content_coupled_tests``).
+CONTENT-FREE: synthetic ``RegionGraph`` + stub palette + a hand-built
+snapshot; the single content/IO seam (``_load_dungeon_map_context``) is
+stubbed, never a live pack (``feedback_no_content_coupled_tests``). The
+synthetic sd declares the frontier site + a duck-typed store so scene
+resolution finds the bare-id deep exactly as production does.
 """
 
 from __future__ import annotations
@@ -35,7 +38,7 @@ import pytest
 from sidequest.dungeon.region_graph.model import RegionEdge, RegionGraph, RegionNode
 from sidequest.game.session import GameSnapshot
 from sidequest.game.turn import TurnManager
-from sidequest.genre.models.world import CartographyConfig, NavigationMode, Region
+from sidequest.genre.models.world import CartographyConfig, NavigationMode, Region, SiteDecl
 from sidequest.server.websocket_handlers import map_emit as h
 
 if TYPE_CHECKING:
@@ -60,7 +63,7 @@ class _StubPalette:
 
 
 def _deep_graph() -> RegionGraph:
-    """The synthetic procedural deep: entrance - exp001.r2."""
+    """The synthetic procedural deep: entrance - exp001.r2 (bare B1 ids)."""
     g = RegionGraph(entrance_id=_ENTRANCE)
     g.add_node(RegionNode(id="entrance", expansion_id=0, theme="t"))
     g.add_node(RegionNode(id="exp001.r2", expansion_id=1, theme="t"))
@@ -74,8 +77,10 @@ def _palette() -> ThemePalette:
 
 def _beneath_sunden_sd() -> Any:
     """A beneath_sunden-shaped session: region-mode surface cartography
-    (ropefoot/the_dropmouth) PLUS a dungeon (supplied by stubbing
-    _load_dungeon_map_context). The two graphs are deliberately disjoint."""
+    (ropefoot/the_dropmouth) PLUS the declared ``frontier`` site whose
+    duck-typed store answers with the synthetic deep graph (the two graphs
+    are deliberately disjoint) — mirrors the real pack's cartography
+    ``sites:`` entry (content #527)."""
     regions = {
         "ropefoot": Region(
             name="Ropefoot",
@@ -91,7 +96,19 @@ def _beneath_sunden_sd() -> Any:
         ),
     }
     world_obj = SimpleNamespace(
-        cartography=CartographyConfig(navigation_mode=NavigationMode.region, regions=regions)
+        cartography=CartographyConfig(
+            navigation_mode=NavigationMode.region,
+            regions=regions,
+            sites=[
+                SiteDecl(
+                    site_id="frontier",
+                    name="The Deep",
+                    archetype="megadungeon",
+                    attached_to="the_dropmouth",
+                    extent="frontier",
+                )
+            ],
+        )
     )
     pack = SimpleNamespace(worlds={"beneath_sunden": world_obj})
     return SimpleNamespace(
@@ -99,6 +116,7 @@ def _beneath_sunden_sd() -> Any:
         world_slug="beneath_sunden",
         genre_slug="caverns_and_claudes",
         player_id="p1",
+        dungeon_repository=SimpleNamespace(load_map=lambda **kwargs: _deep_graph()),
     )
 
 
@@ -117,10 +135,11 @@ def _snapshot(*, pc_region: str, discovered: tuple[str, ...] = ("ropefoot",)) ->
 
 @pytest.fixture
 def _stub_deep_ctx(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the single content/IO seam so _descent_phase + the dungeon emit run
-    against the synthetic deep graph (entrance/exp001.r2), content-free."""
+    """Stub the single content/IO seam so the site emit runs against the
+    synthetic deep graph (entrance/exp001.r2), content-free. Signature-
+    agnostic (Track B added site_id/entrance_id kwargs)."""
 
-    def _stub_load(sd: Any) -> Any:
+    def _stub_load(sd: Any, *args: Any, **kwargs: Any) -> Any:
         return (_deep_graph(), _palette(), _ENTRANCE)
 
     monkeypatch.setattr(h, "_load_dungeon_map_context", _stub_load, raising=True)
@@ -137,7 +156,7 @@ def _capture_events(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
 
 
 # --------------------------------------------------------------------------
-# dungeon emit: SURFACE phase stands down (no 0/N frame to be clobbered)
+# site emit: WORLD scene stands down (no 0/N frame to be clobbered)
 # --------------------------------------------------------------------------
 def test_dungeon_emit_stands_down_on_surface(
     _stub_deep_ctx: None, monkeypatch: pytest.MonkeyPatch
@@ -153,15 +172,15 @@ def test_dungeon_emit_stands_down_on_surface(
         emit_fn=lambda *a, **k: emitted.append(a),
     )
 
-    assert emitted == [], "dungeon emit must NOT ship a frame when the PC is on the surface"
+    assert emitted == [], "site emit must NOT ship a frame when the PC is on the surface"
     skipped = [e for e in events if e["type"] == "dungeon.map_skipped"]
     assert skipped, f"expected dungeon.map_skipped, got {[e['type'] for e in events]}"
-    assert skipped[-1]["fields"]["reason"] == "surface_phase"
+    assert skipped[-1]["fields"]["reason"] == "world_scene"
     assert not any(e["type"] == "dungeon.map_emitted" for e in events)
 
 
 # --------------------------------------------------------------------------
-# dungeon emit: DEEP phase still ships the DUNGEON_MAP (guard against over-suppression)
+# site emit: SITE scene still ships the SITE_MAP (guard against over-suppression)
 # --------------------------------------------------------------------------
 def test_dungeon_emit_ships_in_deep(_stub_deep_ctx: None, monkeypatch: pytest.MonkeyPatch) -> None:
     events = _capture_events(monkeypatch)
@@ -175,12 +194,12 @@ def test_dungeon_emit_ships_in_deep(_stub_deep_ctx: None, monkeypatch: pytest.Mo
         emit_fn=lambda msg, kind: emitted.append((kind, msg)),
     )
 
-    assert any(k == "DUNGEON_MAP" for k, _ in emitted), "deep phase must ship the DUNGEON_MAP"
+    assert any(k == "SITE_MAP" for k, _ in emitted), "the deep must ship the SITE_MAP"
     assert any(e["type"] == "dungeon.map_emitted" for e in events)
 
 
 # --------------------------------------------------------------------------
-# cartography emit: DEEP phase stands down (the clobber bug — the heart of the fix)
+# cartography emit: SITE scene stands down (the clobber bug — the heart of the fix)
 # --------------------------------------------------------------------------
 def test_cartography_emit_stands_down_in_deep(
     _stub_deep_ctx: None, monkeypatch: pytest.MonkeyPatch
@@ -198,15 +217,16 @@ def test_cartography_emit_stands_down_in_deep(
     )
 
     assert not [m for (t, m) in sent if t == "MAP_UPDATE"], (
-        "cartography must NOT clobber the deep DUNGEON_MAP with the surface graph"
+        "cartography must NOT clobber the deep SITE_MAP with the surface graph"
     )
     skipped = [e for e in events if e["type"] == "cartography.map_skipped"]
     assert skipped, f"expected cartography.map_skipped, got {[e['type'] for e in events]}"
-    assert skipped[-1]["fields"]["reason"] == "deep_phase"
+    assert skipped[-1]["fields"]["reason"] == "site_scene"
+    assert skipped[-1]["fields"]["site_id"] == "frontier"
 
 
 # --------------------------------------------------------------------------
-# cartography emit: SURFACE phase still ships the MAP_UPDATE
+# cartography emit: WORLD scene still ships the MAP_UPDATE
 # --------------------------------------------------------------------------
 def test_cartography_emit_ships_on_surface(
     _stub_deep_ctx: None, monkeypatch: pytest.MonkeyPatch
@@ -229,9 +249,10 @@ def test_cartography_emit_ships_on_surface(
 
 
 # --------------------------------------------------------------------------
-# regression: non-dungeon region world -> phase "n/a" -> cartography unchanged.
-# No _load_dungeon_map_context stub: the REAL applies_to() returns False, so the
-# gate must not interfere (and must not blow up resolving a non-dungeon sd).
+# regression: siteless region world -> world scene -> cartography unchanged.
+# No _load_dungeon_map_context stub and NO sites declared: the scene resolves
+# to world off an inert registry, so the gate must not interfere (and must
+# not blow up resolving a siteless sd with no dungeon_repository).
 # --------------------------------------------------------------------------
 def test_cartography_emit_unchanged_for_non_dungeon_world(
     monkeypatch: pytest.MonkeyPatch,
@@ -266,5 +287,5 @@ def test_cartography_emit_unchanged_for_non_dungeon_world(
     )
 
     assert [m for (t, m) in sent if t == "MAP_UPDATE"], (
-        "a non-dungeon region world must still emit MAP_UPDATE (phase n/a)"
+        "a siteless region world must still emit MAP_UPDATE (world scene)"
     )

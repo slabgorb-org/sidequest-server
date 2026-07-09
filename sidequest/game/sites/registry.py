@@ -45,6 +45,18 @@ class SiteRegistry:
     def by_id(self, site_id: str) -> SiteDescriptor | None:
         return self._by_id.get(site_id)
 
+    @property
+    def has_sites(self) -> bool:
+        """True iff the world declares any sites (a ``False`` registry is inert)."""
+        return bool(self._sites)
+
+    def frontier_sites(self) -> list[SiteDescriptor]:
+        """Sites with ``extent == "frontier"`` — the legacy sites whose nodes
+        carry bare (un-namespaced) ids, so membership must be resolved against
+        the store rather than the ``{site_id}:`` prefix (B1 Sünden path; dies
+        with the B4 namespacing follow-up)."""
+        return [s for s in self._sites if s.extent == "frontier"]
+
     def sites_for_node(self, region_id: str) -> list[SiteDescriptor]:
         """Sites the PC can enter from ``region_id``: those OWNED by this node
         plus those owned by an ADJACENT node (the "down the rope at the camp"

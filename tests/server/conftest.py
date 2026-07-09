@@ -741,6 +741,24 @@ def session_fixture():
         ),
         orchestrator=MagicMock(),
     )
+    # Story 163-1 wired a map.yaml treatment layer into the cartography emit
+    # (``_build_cartography_map_message``): it reads
+    # ``pack.worlds.get(world_slug).map_treatment`` and, when non-None, builds a
+    # ``CartographyTreatmentWire`` from ``mt.treatment`` / ``.node_anchors`` /
+    # ``.style_hints``. A bare MagicMock world returns a truthy auto-mock there,
+    # so the pydantic wire construction raises ``ValidationError`` (kind wants a
+    # str, node_anchors/style_hints want dicts — all three get MagicMocks). Pin
+    # ``map_treatment=None`` on the returned world: the field is
+    # ``MapTreatmentConfig | None = None`` on a real World (pack.py), and
+    # ``sunken_keep`` (this fixture's world) ships no map.yaml, so None is its
+    # true value. (A few worlds DO ship a raster map.yaml; that non-None emit
+    # branch is covered independently by test_cartography_treatment_build /
+    # test_map_treatment_span, not here.) So the emit takes the None branch.
+    # Touches only this attribute; every other access on the world stays
+    # auto-mocked, preserving pre-163-1 behavior. Same real-defaults pattern as
+    # progression/rules/drama_thresholds above.
+    sd.genre_pack.worlds.get.return_value.map_treatment = None
+
     # Task E.2 wiring: ``_apply_narration_result_to_snapshot`` (called by
     # ``_execute_narration_turn``) now requires ``room=sd._room``. The
     # production slug-connect path always populates ``sd._room``; tests

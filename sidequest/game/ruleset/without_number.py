@@ -70,6 +70,7 @@ from sidequest.telemetry.spans.wn import (
 
 if TYPE_CHECKING:
     from sidequest.game.chargen_contribution import FociContribution
+    from sidequest.game.tactical.adjudication import MoveAdjudication, RangeAdjudication
     from sidequest.genre.models.character import ClassDef
 
 # Source key for the WN psionic Effort pool. WN psionics draw every discipline
@@ -137,6 +138,88 @@ class WithoutNumberRulesetModule(RulesetModule):
     #: WN attack still ablates HP instead of silently dealing 0. All four
     #: siblings inherit; a sibling may override if its SRD unarmed value differs.
     SRD_UNARMED_DICE: str = "1d2"
+
+    # --- Tactical grid (ADR-096 v2, Track C2) --------------------------------
+    # SRD-sourced, authored ONCE on the WN core; every sibling (swn/wwn/cwn/awn)
+    # inherits. NOT per-world (the flat-13 re-derivation bug class).
+    #: Metres per tactical cell — the ADR-096 5-ft / 1.5-m grid convention.
+    METERS_PER_CELL: float = 1.5
+    #: WN SRD default combat Move: a Move action covers ~10 m.
+    DEFAULT_MOVE_METERS: int = 10
+    #: Melee reach in cells (adjacent, incl. diagonal). SRD melee = 1 cell.
+    MELEE_REACH_CELLS: int = 1
+    #: SRD ranged band -> max cell distance. Room-scale grids (~15-25 cells) make
+    #: LOS the binding ranged constraint; this table bites for short weapons.
+    #: Confirm the exact figures against the WN SRD weapon range table.
+    RANGE_BAND_CELLS: dict[str, int] = {
+        "melee": 1,
+        "thrown": 6,
+        "shotgun": 8,
+        "pistol": 20,
+        "rifle": 40,
+        "heavy": 60,
+        "near": 6,
+        "far": 40,
+    }
+
+    def combat_move_cells(self, core: object | None) -> int:
+        """Per-turn Move budget in cells. Reads ``core.move`` (metres, mutant-
+        stock overridable) or the SRD default; floors to cells, min 1."""
+        move_m = getattr(core, "move", None) or self.DEFAULT_MOVE_METERS
+        return max(1, int(move_m / self.METERS_PER_CELL))
+
+    def weapon_range_cells(self, spec: object | None) -> tuple[str, int]:
+        """('melee'|'ranged', max_cells) for a resolved weapon ``spec``. A None /
+        'melee' band is melee reach; any other band is ranged (LOS-gated), capped
+        by the SRD band table (defaulting to rifle for an unknown ranged band)."""
+        band = getattr(spec, "range_band", None)
+        if band is None or band == "melee":
+            return ("melee", self.MELEE_REACH_CELLS)
+        return ("ranged", self.RANGE_BAND_CELLS.get(band, self.RANGE_BAND_CELLS["rifle"]))
+
+    def adjudicate_tactical_move(
+        self,
+        *,
+        origin: tuple[int, int],
+        path: list[tuple[int, int]],
+        core: object | None,
+        mask: str,
+        difficult: frozenset[tuple[int, int]] = frozenset(),
+    ) -> MoveAdjudication:
+        """Adjudicate one grid move against the actor's Move budget. Delegates to
+        the pure C1 library (this is C1's production wiring)."""
+        from sidequest.game.tactical.adjudication import adjudicate_move
+
+        return adjudicate_move(
+            origin=origin,
+            path=path,
+            budget_cells=self.combat_move_cells(core),
+            mask=mask,
+            difficult=difficult,
+        )
+
+    def adjudicate_tactical_reach(
+        self,
+        *,
+        attacker_cell: tuple[int, int],
+        target_cell: tuple[int, int],
+        spec: object | None,
+        mask: str,
+    ) -> RangeAdjudication:
+        """Adjudicate whether ``target_cell`` is attackable from ``attacker_cell``
+        with weapon ``spec``. Melee = adjacency; ranged = Chebyshev band + LOS.
+        Delegates to the pure C1 library."""
+        from sidequest.game.tactical.adjudication import adjudicate_reach
+
+        mode, max_cells = self.weapon_range_cells(spec)
+        return adjudicate_reach(
+            origin=attacker_cell,
+            target=target_cell,
+            max_cells=max_cells,
+            mask=mask,
+            mode=mode,
+            require_los=(mode == "ranged"),
+        )
 
     @property
     def awards_native_turn_xp(self) -> bool:

@@ -242,6 +242,35 @@ def test_exit_site_from_inside_resolves_site_exit() -> None:
     assert snap.pc_regions["Rux"] == "the_dropmouth"
 
 
+def test_enter_site_action_at_entrance_does_not_eject_the_pc() -> None:
+    """Reviewer MEDIUM (EXIT/ENTER precedence): a PC standing on the frontier
+    entrance who issues ``action="enter_site"`` (the router's payload leaves
+    ``direction`` unset, i.e. ``""``) must NOT be silently ejected to the surface
+    owner. The enter request is a no-op / in-scene handling — never a site_exit.
+
+    RED: the legacy EXIT disjunct ``(from_region==ENTRANCE_ID and direction!="deeper")``
+    fires because it does not require ``action != "enter_site"``, converting the
+    enter into a ``site_exit`` → the PC is teleported OUT to ``the_dropmouth``."""
+    snap = _snapshot(ENTRANCE_ID)
+    out = _run(
+        run_movement_dispatch(
+            _site_move("enter_site", "the deep"),
+            snapshot=snap,
+            player_name="Rux",
+            dungeon_store=_LegacyFrontierStore(),
+            palette=_FakePalette(),
+            pack=_pack_with_cartography("beneath_sunden", _sunden_cart()),
+        )
+    )
+    assert out.data.get("resolved_via") != "site_exit", (
+        "enter_site must not become a site exit",
+        out.data,
+    )
+    assert snap.pc_regions["Rux"] != "the_dropmouth", (
+        "an enter_site at the entrance must not eject the PC to the surface owner"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Unresolved enter — fail loud to the GM panel, never a silent no-op.
 # ---------------------------------------------------------------------------

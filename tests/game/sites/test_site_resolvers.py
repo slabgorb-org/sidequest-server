@@ -154,6 +154,44 @@ class _LegacyFrontierStore:
         return g
 
 
+class _EchoingFrontierStore:
+    """Models the REAL ``PgDungeonRepository.load_map`` (``game/pg/dungeon.py:434``):
+    it ECHOES the requested ``entrance_id`` back as ``graph.entrance_id`` while
+    loading DB nodes keyed on the bare ``ENTRANCE_ID`` (the legacy Sünden
+    bootstrap). Unlike ``_LegacyFrontierStore`` — which HARDCODES
+    ``entrance_id=ENTRANCE_ID`` and so accidentally makes ``graph.entrance_id`` a
+    real node — this reproduces the production shape the entrance fallback must
+    survive: ``graph.entrance_id`` is the site-namespaced id that is NOT a node."""
+
+    def load_map(self, *, entrance_id: str, site_id: str = "frontier") -> RegionGraph:
+        g = RegionGraph(entrance_id=entrance_id)  # ECHO the requested id, like pg/dungeon.py
+        g.add_node(RegionNode(id=ENTRANCE_ID, expansion_id=0, theme="shaft_collar"))
+        return g
+
+
+def test_enter_site_falls_back_when_repo_echoes_requested_entrance_id() -> None:
+    """Reviewer CRITICAL (production regression): the real ``PgDungeonRepository``
+    ECHOES the requested ``entrance_id`` (``frontier:entrance``) as
+    ``graph.entrance_id`` while keying its nodes on the bare ``entrance``.
+    ``resolve_enter_site`` must STILL bind the PC to the graph's real entrance
+    (``ENTRANCE_ID``) — not raise ``no_site_entrance``.
+
+    RED: today the fallback probes ``graph.entrance_id`` (the echoed
+    ``frontier:entrance``, never a node), so it raises — permanently blocking live
+    beneath_sünden descent post-cutover. The fix must probe the graph's real
+    entrance (``ENTRANCE_ID``) independent of the echoed id."""
+    snap = _snapshot("the_dropmouth")
+    result = resolve_enter_site(
+        snapshot=snap,
+        player_name="Rux",
+        site=_FRONTIER,
+        dungeon_repository=_EchoingFrontierStore(),
+        resolved_via="site_enter",
+    )
+    assert result.to_region == ENTRANCE_ID, "must bind to the graph's real entrance, not raise"
+    assert snap.pc_regions["Rux"] == ENTRANCE_ID
+
+
 def test_enter_site_falls_back_to_graph_entrance_for_legacy_frontier() -> None:
     """Story 164-3 (forward-seeded from 164-2, Task 6): the frontier site DECLARES a
     namespaced entrance (``frontier:entrance``) but the bootstrapped Sünden store

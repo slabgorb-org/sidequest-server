@@ -405,7 +405,8 @@ async def run_movement_dispatch(
         # the site entrance (the reverse-seam ascent). resolve_exit_site binds to
         # site.attached_to; a wiring fault fails loud through movement.unresolved.
         if owning_site is not None and (
-            action == "exit_site" or (from_region == _ENTRANCE_ID and direction != "deeper")
+            action == "exit_site"
+            or (action != "enter_site" and from_region == _ENTRANCE_ID and direction != "deeper")
         ):
             try:
                 crossing = resolve_exit_site(

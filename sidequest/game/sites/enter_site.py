@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from sidequest.dungeon.seed_bootstrap import ENTRANCE_ID
 from sidequest.game.seams.base import SeamCrossingError, SeamCrossingResult
 from sidequest.game.session import WorldStatePatch
 from sidequest.telemetry.spans.site import site_enter_span
@@ -51,13 +52,17 @@ def resolve_enter_site(
         # Frontier-legacy fallback (Track B Task 6): the frontier site declares a
         # namespaced entrance ('frontier:entrance'), but the bootstrapped Sünden
         # store keyed its graph on the bare ENTRANCE_ID ('entrance'). Bind to the
-        # graph's REAL entrance when the declared node is absent — a single LOUD
-        # fallback, correct for the frontier-legacy case and harmless for bounded
-        # sites (whose entrance IS the namespaced id, so this branch never fires).
-        # Full node-id namespacing is a B4 follow-up; storage isolation is already
-        # (session, site_id)-keyed, so the node id need not be namespaced for B1.
-        if graph.entrance_id and graph.entrance_id in graph.nodes:
-            entrance_node = graph.entrance_id
+        # graph's REAL bootstrap anchor (ENTRANCE_ID) when the declared node is
+        # absent — a single LOUD fallback, correct for the frontier-legacy case and
+        # harmless for bounded sites (whose entrance IS the namespaced id, so this
+        # branch never fires). We probe ENTRANCE_ID directly, NOT graph.entrance_id:
+        # the real PgDungeonRepository.load_map ECHOES the requested entrance_id back
+        # as graph.entrance_id (pg/dungeon.py), so graph.entrance_id is the very id
+        # that just failed — it is never the real node. Full node-id namespacing is a
+        # B4 follow-up; storage isolation is already (session, site_id)-keyed, so the
+        # node id need not be namespaced for B1.
+        if ENTRANCE_ID in graph.nodes:
+            entrance_node = ENTRANCE_ID
         else:
             raise SeamCrossingError(
                 reason="no_site_entrance",

@@ -203,11 +203,14 @@ def test_message_type_narration_segment_wire_string() -> None:
     assert MessageType.NARRATION_SEGMENT == "NARRATION_SEGMENT"
 
 
-def test_message_type_dungeon_map_wire_string() -> None:
-    """Beneath Sünden BETTER fix (seam 3) — the NEW ADR-055 procedural
-    megadungeon map frame. Distinct from the port-deleted ADR-019
-    MAP_UPDATE (which is NOT revived)."""
-    assert MessageType.DUNGEON_MAP == "DUNGEON_MAP"
+def test_message_type_site_map_wire_string() -> None:
+    """Track B Task 8 (story 164-4): DUNGEON_MAP renamed to SITE_MAP — one
+    cutover, no alias. The same ADR-055 map frame, generalized from the
+    beneath_sunden megadungeon to ANY site scene (tavern/vault/frontier).
+    Still distinct from the port-deleted ADR-019 MAP_UPDATE (NOT revived).
+    (``getattr`` so a missing member fails the assertion rather than
+    erroring — the RED signal is "SITE_MAP does not exist yet".)"""
+    assert getattr(MessageType, "SITE_MAP", None) == "SITE_MAP"
 
 
 def test_message_type_character_incapacitated_wire_string() -> None:
@@ -291,6 +294,9 @@ def test_message_type_complete_count() -> None:
     non-roll FATE_ACTION verbs. Intentional addition; bumped 57 → 58.
     ADR-148/149 (story 126-8) added FATE_DEFEND_REQUEST — the server→client prompt
     at the DEFEND barrier; intentional addition, bumped 58 → 59.
+    Track B Task 8 (story 164-4) RENAMED DUNGEON_MAP → SITE_MAP — the map frame
+    generalized from the beneath_sunden megadungeon to ANY site scene, one
+    cutover, no alias. A rename, not an addition; count stays 59.
     When new variants land, update this count and the individual wire-string
     test above so the contract test keeps catching silent drift.
     """

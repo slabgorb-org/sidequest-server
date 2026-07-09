@@ -1,3 +1,5 @@
+import pytest
+
 from sidequest.game.tactical.adjudication import (
     adjudicate_reach,
     aoe_burst,
@@ -62,3 +64,53 @@ def test_aoe_line_stops_at_wall():
     line = aoe_line((1, 1), (5, 1), WALLED)
     assert (1, 1) in line and (2, 1) in line
     assert (4, 1) not in line  # ray stopped by the (3,1) wall
+
+
+# --- 165-3: adjudicate_reach mode-validation (165-1 tightening) -----------------------
+
+
+def test_adjudicate_reach_rejects_unknown_mode():
+    """165-1 carryover, RESOLVED here: ``adjudicate_reach(mode)`` was unvalidated,
+    so an unknown mode silently fell through to the 'range' noun (the
+    No-Silent-Fallbacks tension the 165-1 reviewer flagged). As 165-3 wires this
+    adjudicator into the production strike path, an unknown mode must FAIL LOUD —
+    ``mode`` is a closed {'melee','ranged'} vocabulary, not free text."""
+    with pytest.raises(ValueError):
+        adjudicate_reach(
+            origin=(1, 1),
+            target=(2, 1),
+            max_cells=1,
+            mask=ROOM,
+            mode="broadsword",  # neither 'melee' nor 'ranged'
+            require_los=False,
+        )
+
+
+# --- 165-3: 165-1 coverage backfill (characterization of already-shipped C1) ----------
+# These pin behaviour the reach/AoE enforcement now depends on. Per the 165-1
+# carryover ("close the coverage gaps as you consume the library"). They exercise
+# EXISTING correct C1 behaviour, so they pass green — regression guards, not new ACs.
+
+
+def test_line_of_sight_excludes_endpoints():
+    """LOS checks only cells STRICTLY between origin and target (``ray[1:-1]``):
+    a wall glyph AT an endpoint never blocks, so a shooter/target standing at
+    cover's edge still sees out. 165-1 gap: the endpoint-exclusion branch was
+    untested. (Off-map is still blocking — a separate branch.)"""
+    # (1,1),(2,1) floor; (3,1) is a wall sitting exactly on the target endpoint.
+    mask = "#####\n#..#.\n#####"
+    assert line_of_sight((1, 1), (3, 1), mask) is True  # endpoint wall ignored
+    # Contrast: a wall in the INTERIOR of the ray does block.
+    interior = "######\n#.##..\n######"  # (2,1),(3,1) walls between (1,1) and (4,1)
+    assert line_of_sight((1, 1), (4, 1), interior) is False
+
+
+def test_aoe_burst_ignores_los_when_disabled():
+    """``require_los=False`` lights every in-radius floor cell, even those a wall
+    would shadow (a cover-ignoring burst — gas/expanding effects). 165-1 gap: the
+    ``require_los=False`` branch was untested; the existing burst test only covers
+    the default LOS-shadowed path."""
+    lit = aoe_burst((1, 1), 3, WALLED, require_los=False)
+    assert (4, 1) in lit  # behind the (3,1) wall, but LOS gating is OFF
+    shadowed = aoe_burst((1, 1), 3, WALLED, require_los=True)
+    assert (4, 1) not in shadowed  # contrast: default LOS gate shadows it

@@ -334,6 +334,99 @@ def _is_awn_mutation_beat(beat: BeatDef, pack: GenrePack | None) -> bool:
     )
 
 
+def _resolve_room_mask(snapshot, dungeon_store, character_name: str) -> str | None:
+    """Decode the seating room's ASCII tactical mask from the dungeon store, or
+    None when unavailable (no store / no room / no persisted mask). None means the
+    reach gate skips — the deliberate no-grid boundary, not a silent fallback."""
+    if dungeon_store is None:
+        return None
+    room_id = snapshot.character_locations.get(character_name)
+    if room_id is None:
+        return None
+    mask_dict = dungeon_store.load_masks().get(room_id)
+    if not mask_dict or "mask_bytes_b64" not in mask_dict:
+        return None
+    import base64
+
+    return base64.b64decode(mask_dict["mask_bytes_b64"]).decode("ascii")
+
+
+def _enforce_tactical_reach(
+    *, ruleset, encounter, actor, target_name, spec, mask, snapshot, tracer=None
+):
+    """Gate a strike on grid reach when a tactical grid is active (165-3, ADR-096
+    v2 Track C2 — C1's production wiring into ``dispatch_dice_throw``).
+
+    Returns the ``RangeAdjudication`` verdict, or ``None`` when enforcement is
+    deliberately skipped: a non-WN ruleset (capability gate, ADR-117), a missing
+    mask, or either actor lacking a ``per_actor_state['cell']``. A skip emits
+    ``tactical.enforcement.skipped`` (NOT a silent fallback — the GM panel sees the
+    deliberate no-grid boundary). An in-range verdict emits
+    ``tactical.move.validated``; an out-of-range verdict emits
+    ``tactical.move.denied``. In v1 the gate is OBSERVABILITY-ONLY: it EMITS the
+    denied span for the GM panel, but the caller does NOT read the returned verdict
+    or abort the strike (no player-move verb exists yet to resolve a denial —
+    aborting would softlock; Keith ruling 2026-07-09). The returned verdict is dead
+    at the sole call site today; the enforcement-abort that consumes it ships later
+    WITH the move verb."""
+    from sidequest.game.ruleset.without_number import WithoutNumberRulesetModule
+    from sidequest.telemetry.spans.tactical import (
+        tactical_enforcement_skipped_span,
+        tactical_move_denied_span,
+        tactical_move_validated_span,
+    )
+
+    if not isinstance(ruleset, WithoutNumberRulesetModule):
+        return None
+    target = encounter.find_actor(target_name) if target_name is not None else None
+    a_cell = actor.per_actor_state.get("cell")
+    t_cell = target.per_actor_state.get("cell") if target is not None else None
+    # Distinct skip reasons so the GM panel can tell "this room has no grid" from
+    # "an actor was never seated" (the latter is a wiring bug, not a scope no-op).
+    skip_reason = (
+        "no_grid"
+        if mask is None
+        else "attacker_unseated"
+        if a_cell is None
+        else "target_unseated"
+        if t_cell is None
+        else None
+    )
+    if skip_reason is not None:
+        with tactical_enforcement_skipped_span(
+            actor=actor.name, reason=skip_reason, _tracer=tracer
+        ):
+            pass
+        return None
+
+    verdict = ruleset.adjudicate_tactical_reach(
+        attacker_cell=(int(a_cell[0]), int(a_cell[1])),
+        target_cell=(int(t_cell[0]), int(t_cell[1])),
+        spec=spec,
+        mask=mask,
+    )
+    if verdict.in_range:
+        with tactical_move_validated_span(
+            actor=actor.name,
+            cells_spent=0,
+            cells_budget=verdict.max_cells,
+            from_cell=(int(a_cell[0]), int(a_cell[1])),
+            to_cell=(int(t_cell[0]), int(t_cell[1])),
+            _tracer=tracer,
+        ):
+            pass
+    else:
+        with tactical_move_denied_span(
+            actor=actor.name,
+            cells_spent=verdict.distance_cells,
+            cells_budget=verdict.max_cells,
+            reason=verdict.reason,
+            _tracer=tracer,
+        ):
+            pass
+    return verdict
+
+
 def dispatch_dice_throw(
     *,
     payload: DiceThrowPayload,
@@ -348,6 +441,7 @@ def dispatch_dice_throw(
     room_broadcast: Callable[[object], None] | None,
     snapshot: GameSnapshot,
     emit_confrontation: Callable[[object, Callable[[str], object]], None] | None = None,
+    dungeon_store: object | None = None,
 ) -> DiceThrowOutcome:
     """Apply or seal a beat, resolve dice, broadcast wire messages, return outcome.
 
@@ -725,6 +819,51 @@ def dispatch_dice_throw(
         raise DiceDispatchError(
             f"character {character_name!r} not found in encounter actors "
             "and no player-side actor is present"
+        )
+
+    # 165-3 (ADR-096 v2, Track C2): reach enforcement — C1's production wiring
+    # into the confrontation-resolution chokepoint. On a live tactical grid a
+    # physical COMBAT strike runs the weapon's reach/range gate for OBSERVABILITY-
+    # ONLY (v1): the gate emits the validated/denied/skipped spans so the GM panel
+    # sees reach, but it does NOT abort the strike. There is no player-move verb yet
+    # to close distance (seat_actor_cells is the only writer of a cell; narration
+    # can't budge a token), so aborting an out-of-reach strike would softlock combat
+    # on turn one — seating places the melee PC at the entrance and the monster
+    # across the room. Enforcement-abort ships in a later story WITH the move verb
+    # that resolves a denial. (Keith ruling 2026-07-09; sprint/epic-165.yaml.)
+    # Skipped as a deliberate no-grid no-op (with an OTEL breadcrumb) when there is
+    # no mask or an actor carries no cell. Scoped to hp_depletion combat (a social/
+    # chase skill check is not a strike); cast/Program throws carry their own range
+    # logic and are not reach-gated. The weapon's real range_band is resolved so a
+    # RANGED weapon uses its SRD band instead of being melee-gated.
+    if (
+        encounter is not None
+        and payload.spell_id is None
+        and not is_net_run
+        and cdef.win_condition == "hp_depletion"
+    ):
+        from types import SimpleNamespace
+
+        from sidequest.game.ruleset.combat_rules import (
+            resolve_weapon_range_band_from_beat_and_actor,
+        )
+
+        _range_band = resolve_weapon_range_band_from_beat_and_actor(
+            beat=beat,
+            actor_core=snapshot.find_creature_core(character_name),
+            pack=pack,
+            world_slug=snapshot.world_slug,
+        )
+        # Run the gate for its spans (observability); do NOT act on the verdict —
+        # no abort until a move verb exists to resolve a denial (block comment above).
+        _enforce_tactical_reach(
+            ruleset=ruleset,
+            encounter=encounter,
+            actor=actor,
+            target_name=_opposite_side_first_actor(encounter, actor.side),
+            spec=SimpleNamespace(range_band=_range_band),
+            mask=_resolve_room_mask(snapshot, dungeon_store, character_name),
+            snapshot=snapshot,
         )
 
     # Opposed-check fork (combat fairness, 2026-04-26).

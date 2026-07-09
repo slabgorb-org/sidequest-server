@@ -1703,6 +1703,36 @@ def instantiate_table_encounter(
     )
 
 
+def _seat_tactical_cells(*, encounter, snapshot, dungeon_store, player_name: str) -> None:
+    """Task 8 (ADR-096 v2, Track C2): seat durable per-actor grid cells from the
+    seating room's ``RegionTactical`` anchors so the reach gate (Task 7) has cells
+    to adjudicate. A ``dungeon_store``-less (region-mode) session is a clean no-op.
+    When the store is present but the room carries no tactical block, the
+    ``tactical.positions.seated`` span fires with ``seated_count=0`` (honest:
+    seating ran, grid absent) and nothing is placed."""
+    if dungeon_store is None or encounter is None:
+        return
+    room_id = snapshot.character_locations.get(player_name)
+    if room_id is None:
+        return
+    from sidequest.telemetry.spans.tactical import tactical_positions_seated_span
+
+    mask_dict = dungeon_store.load_masks().get(room_id)
+    tactical_block = (mask_dict or {}).get("tactical")
+    if not tactical_block:
+        with tactical_positions_seated_span(seated_count=0, room_id=str(room_id)):
+            pass
+        return
+
+    from sidequest.dungeon.tactical import RegionTactical
+    from sidequest.game.tactical.seating import seat_actor_cells
+
+    tactical = RegionTactical.from_dict(tactical_block)
+    placed = seat_actor_cells(encounter, tactical.anchors)
+    with tactical_positions_seated_span(seated_count=len(placed), room_id=str(room_id)):
+        pass
+
+
 def instantiate_encounter_from_trigger(
     *,
     snapshot: GameSnapshot,
@@ -1715,6 +1745,7 @@ def instantiate_encounter_from_trigger(
     security_tier: str | None = None,
     materialized_threat: NpcMention | None = None,
     allow_synthetic_opponent: bool = False,
+    dungeon_store: object | None = None,
 ) -> StructuredEncounter | None:
     """Create a StructuredEncounter when the narrator emits ``confrontation=T``.
 
@@ -2604,6 +2635,15 @@ def instantiate_encounter_from_trigger(
                     source="encounter_handshake",
                     acting_character_name=player_name,
                 )
+        # Task 8 (ADR-096 v2, C2): seat per-actor grid cells from the room's
+        # RegionTactical anchors when the seating room has a tactical grid, so the
+        # Task-7 reach gate has positions to adjudicate. No-op off a grid.
+        _seat_tactical_cells(
+            encounter=enc,
+            snapshot=snapshot,
+            dungeon_store=dungeon_store,
+            player_name=player_name,
+        )
         return enc
 
 

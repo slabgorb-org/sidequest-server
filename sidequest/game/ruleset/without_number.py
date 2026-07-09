@@ -24,6 +24,7 @@ never does (SWN authors no lethality surface).
 from __future__ import annotations
 
 import random
+import re
 from typing import TYPE_CHECKING
 
 from opentelemetry import trace
@@ -129,6 +130,33 @@ def _stat(stats: dict[str, int], key: str) -> int:
     )
 
 
+# Real packs author ``CatalogItem.range_band`` as an ``"N/N"`` short/long metre
+# range (``"10/30"``, ``"600/2400"`` — 16 distinct values across the inventory
+# YAML), NOT the categorical keys ``RANGE_BAND_CELLS`` is keyed on. This parses it.
+_NN_RANGE_RE = re.compile(r"^\s*(\d+)\s*/\s*(\d+)\s*$")
+
+
+def _range_band_to_cells(band: str, table: dict[str, int], meters_per_cell: float) -> int:
+    """Translate a weapon ``range_band`` to a max-reach cell count (165-3 B1/B2a).
+
+    Accepts the real ``"N/N"`` short/long metre format (derive from the LONG range
+    — the max distance a shot can still land) OR a categorical SRD band key present
+    in ``table``. Raises ``ValueError`` for anything else: a mistyped band must not
+    silently ship as the rifle cap (No Silent Fallbacks)."""
+    m = _NN_RANGE_RE.match(band)
+    if m is not None:
+        # Max distance a shot can still land = the larger of the two figures
+        # (robust to a reversed "long/short" authoring).
+        long_m = max(int(m.group(1)), int(m.group(2)))
+        return max(1, int(long_m / meters_per_cell))
+    if band in table:
+        return table[band]
+    raise ValueError(
+        f"unknown weapon range_band {band!r}: expected 'melee', an 'N/N' metre "
+        f"range (e.g. '10/30'), or one of {sorted(table)}"
+    )
+
+
 class WithoutNumberRulesetModule(RulesetModule):
     #: set by every concrete subclass; the core itself is never registered.
     slug: str
@@ -164,18 +192,36 @@ class WithoutNumberRulesetModule(RulesetModule):
 
     def combat_move_cells(self, core: object | None) -> int:
         """Per-turn Move budget in cells. Reads ``core.move`` (metres, mutant-
-        stock overridable) or the SRD default; floors to cells, min 1."""
-        move_m = getattr(core, "move", None) or self.DEFAULT_MOVE_METERS
+        stock overridable) or the SRD default; floors to cells, min 1.
+
+        165-3 BLOCKER 2b: an explicit ``move=0`` (immobilized stock) must be
+        HONOURED, not silently promoted to the default — so this is an ``is None``
+        check, NOT a falsy ``or`` (``0 or 10`` would restore the full 10 m Move to
+        a pinned-down actor). No Silent Fallbacks."""
+        move_m = getattr(core, "move", None)
+        if move_m is None:
+            move_m = self.DEFAULT_MOVE_METERS
         return max(1, int(move_m / self.METERS_PER_CELL))
 
     def weapon_range_cells(self, spec: object | None) -> tuple[str, int]:
-        """('melee'|'ranged', max_cells) for a resolved weapon ``spec``. A None /
-        'melee' band is melee reach; any other band is ranged (LOS-gated), capped
-        by the SRD band table (defaulting to rifle for an unknown ranged band)."""
+        """('melee'|'ranged', max_cells) for a resolved weapon ``spec``.
+
+        Band resolution (165-3 BLOCKER 1 + 2a — No Silent Fallbacks):
+        - ``None`` / ``"melee"`` → melee reach.
+        - an ``"N/N"`` metre range (the format real packs author on
+          ``CatalogItem.range_band``, e.g. ``"10/30"``…``"600/2400"``) → ranged,
+          with the max reach derived from the LONG range (max distance a shot can
+          still land): ``long_m / METERS_PER_CELL``, min 1 cell. LOS is the binding
+          constraint at room scale, so an over-long cap is harmless.
+        - a categorical SRD band key present in ``RANGE_BAND_CELLS`` (``"rifle"``,
+          ``"near"``, …) → ranged, table value (back-compat).
+        - anything else → **raise** (a mistyped band must not silently ship as a
+          40-cell rifle; that masked-config bug is exactly what the rule forbids)."""
         band = getattr(spec, "range_band", None)
         if band is None or band == "melee":
             return ("melee", self.MELEE_REACH_CELLS)
-        return ("ranged", self.RANGE_BAND_CELLS.get(band, self.RANGE_BAND_CELLS["rifle"]))
+        cells = _range_band_to_cells(band, self.RANGE_BAND_CELLS, self.METERS_PER_CELL)
+        return ("ranged", cells)
 
     def adjudicate_tactical_move(
         self,

@@ -362,6 +362,17 @@ class DiceThrowHandler:
 
             emit_confrontation = _emit_confrontation
 
+        # 165-3 (ADR-096 v2, Track C2): resolve the dungeon store the way the other
+        # handler subsystems do (websocket_session_handler.py:986) — it lives on the
+        # lookahead handle's persistence, set for procedural worlds (Beneath Sünden)
+        # and None elsewhere. _SessionData has NO dungeon_store field; the old
+        # getattr(sd, "dungeon_store", None) read a nonexistent attribute and always
+        # resolved None, so the reach gate loaded no mask and silently skipped on
+        # every real strike. None off a non-procedural world → gate no-ops (the
+        # deliberate no-grid boundary, not a silent fallback).
+        _lookahead_handle = getattr(sd, "lookahead_handle", None)
+        _dungeon_store = _lookahead_handle.persistence if _lookahead_handle is not None else None
+
         try:
             outcome = dispatch_dice_throw(
                 payload=payload,
@@ -376,6 +387,10 @@ class DiceThrowHandler:
                 room_broadcast=room_broadcast,
                 snapshot=snapshot,
                 emit_confrontation=emit_confrontation,
+                # 165-3 (ADR-096 v2, Track C2): the dungeon store (resolved above
+                # from the lookahead handle) so the reach gate can load the room's
+                # tactical mask. None off a non-procedural world → gate no-ops.
+                dungeon_store=_dungeon_store,
             )
         except DiceDispatchError as exc:
             logger.warning("dice.dispatch_error error=%s", exc)

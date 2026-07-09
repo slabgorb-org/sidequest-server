@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from sidequest.protocol.messages import TacticalGridMessage, TacticalGridPayload
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
@@ -119,9 +119,14 @@ def _maybe_build_runtime_cavern_payload(
     """Build a TacticalGridPayload from a persisted runtime cavern mask.
 
     Story 52-4 (ADR-096 + ADR-106). When ``_maybe_emit_tactical_grid``
-    finds no static room YAML and the world has a procedural dungeon
-    (``sd.dungeon_store`` is wired by the Beneath Sünden path), look up
-    the persisted mask BLOB for ``room_id`` and:
+    finds no static room YAML and the world has a procedural dungeon,
+    look up the persisted mask BLOB for ``room_id`` and:
+
+    NOTE (dead-gate caveat): this whole path is gated on ``sd.dungeon_store``,
+    which is dead in production today — the live store is
+    ``sd.lookahead_handle.persistence``. Until the Plan-7 store-unification
+    lands, this builder (and the 165-4 move-summary echo it carries) is
+    exercised only by fixtures that set ``dungeon_store`` directly.
 
     1. Emit a ``.cavern.png`` sidecar at the local-renders mount via
        ``emit_runtime_cavern_png`` (fires the
@@ -235,7 +240,7 @@ def _maybe_build_runtime_cavern_payload(
         block = mask_dict["block"]
 
         from sidequest.dungeon.tactical import RegionTactical
-        from sidequest.protocol.models import TacticalFeature
+        from sidequest.protocol.models import TacticalAdjudication, TacticalFeature
 
         tactical_raw = mask_dict.get("tactical")
         if tactical_raw is None:
@@ -278,6 +283,59 @@ def _maybe_build_runtime_cavern_payload(
             snapshot=snapshot, room_id=room_id, anchors=tactical.anchors
         )
 
+        # Round move-summary echo (Story 165-4, ADR-096 v2): each PC in this room
+        # gets a move-budget adjudication so the client can show "you can move N
+        # cells" — the 165-3 enforcement math, surfaced. Additive: WN-family
+        # rulesets expose combat_move_cells; a ruleset without a cell-based Move
+        # (e.g. Fate) is a scope boundary and simply contributes no move echo.
+        #
+        # genre_pack and pack.rules are REQUIRED, non-Optional invariants — access
+        # them directly so a broken invariant fails LOUD (No Silent Fallbacks)
+        # rather than silently degrading to "zero adjudications". Only
+        # combat_move_cells is a genuine capability gate (a WN-family method absent
+        # on the base RulesetModule ABC / on Fate).
+        adjudications: list[TacticalAdjudication] = []
+        pack = sd.genre_pack
+        from sidequest.game.ruleset.registry import get_ruleset_module
+
+        ruleset = get_ruleset_module(pack.rules.ruleset)
+        move_cells = getattr(ruleset, "combat_move_cells", None)
+        capable = callable(move_cells)
+        if capable:
+            pcs_here = [
+                name
+                for name, loc in (getattr(snapshot, "character_locations", {}) or {}).items()
+                if loc == room_id
+            ]
+            for name in pcs_here:
+                core = snapshot.find_creature_core(name)
+                adjudications.append(
+                    TacticalAdjudication(
+                        actor=name,
+                        kind="move",
+                        valid=True,
+                        # combat_move_cells returns int; getattr loses the type.
+                        cells_budget=cast("int", move_cells(core)),
+                    )
+                )
+        # OTEL: the GM panel must be able to tell an ENGAGED move-summary from a
+        # deliberate no-capability skip and see how many echoes were built —
+        # otherwise this subsystem decision is a lie-detector blind spot. Same
+        # tactical_grid.* ephemeral-event pattern the two siblings above use.
+        _watcher_publish(
+            "tactical_grid.move_summary",
+            {
+                "genre": sd.genre_slug,
+                "world": sd.world_slug,
+                "room_id": room_id,
+                "ruleset": pack.rules.ruleset,
+                "capable": capable,
+                "adjudication_count": len(adjudications),
+            },
+            component="cavern_renderer",
+            severity="info",
+        )
+
         return TacticalGridPayload(
             room_id=room_id,
             room_name=room_id,  # procedural rooms have no authored name — region_id IS the name
@@ -295,6 +353,7 @@ def _maybe_build_runtime_cavern_payload(
             initiative=None,
             entities=[],
             features=features,
+            adjudications=adjudications,
         )
 
     return None

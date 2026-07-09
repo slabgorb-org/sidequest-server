@@ -238,6 +238,8 @@ def _compose_result_payload(
     outcome: RollOutcome,
     seed: int,
     throw_params: ThrowParams,
+    range_band: str | None = None,
+    distance_cells: int | None = None,
 ) -> DiceResultPayload:
     return DiceResultPayload(
         request_id=request.request_id,
@@ -254,6 +256,12 @@ def _compose_result_payload(
         # "damage" and the primary beat/check result stays "check" — the UI
         # overlay keys on this to avoid rendering a damage roll as the primary.
         roll_role=request.roll_role,
+        # 165-4: the resolved weapon band + measured cell distance from the
+        # 165-3 reach adjudication ride along on the check result so the
+        # resolution card can show the range math. Both stay None on rolls
+        # with no tactical range (social checks, saves, damage follow-ons).
+        range_band=range_band,
+        distance_cells=distance_cells,
     )
 
 
@@ -836,6 +844,15 @@ def dispatch_dice_throw(
     # chase skill check is not a strike); cast/Program throws carry their own range
     # logic and are not reach-gated. The weapon's real range_band is resolved so a
     # RANGED weapon uses its SRD band instead of being melee-gated.
+    #
+    # 165-4: the resolved band + the reach verdict's measured distance echo onto
+    # the emitted check dice-result so the resolution card can show the range
+    # math. The band resolves regardless of the grid; ``distance_cells`` comes
+    # from the verdict and stays None when the gate skips (no grid / an actor
+    # unseated). Still observability-only — we READ the verdict for the echo but
+    # do NOT act on it to abort (no move verb yet; block comment above).
+    _tactical_range_band: str | None = None
+    _tactical_distance_cells: int | None = None
     if (
         encounter is not None
         and payload.spell_id is None
@@ -848,23 +865,31 @@ def dispatch_dice_throw(
             resolve_weapon_range_band_from_beat_and_actor,
         )
 
-        _range_band = resolve_weapon_range_band_from_beat_and_actor(
+        # The resolver returns the ranged weapon's SRD band string, or None as the
+        # melee/natural/unarmed sentinel (weapon_range_cells maps None == "melee").
+        # Echo the honest "melee" label for a melee strike so the resolution card
+        # shows the band on every combat strike, not just ranged ones; the gate
+        # still receives the raw resolver output (it maps None -> melee reach).
+        _resolved_band = resolve_weapon_range_band_from_beat_and_actor(
             beat=beat,
             actor_core=snapshot.find_creature_core(character_name),
             pack=pack,
             world_slug=snapshot.world_slug,
         )
-        # Run the gate for its spans (observability); do NOT act on the verdict —
-        # no abort until a move verb exists to resolve a denial (block comment above).
-        _enforce_tactical_reach(
+        _tactical_range_band = _resolved_band or "melee"
+        _reach_verdict = _enforce_tactical_reach(
             ruleset=ruleset,
             encounter=encounter,
             actor=actor,
             target_name=_opposite_side_first_actor(encounter, actor.side),
-            spec=SimpleNamespace(range_band=_range_band),
+            spec=SimpleNamespace(range_band=_resolved_band),
             mask=_resolve_room_mask(snapshot, dungeon_store, character_name),
             snapshot=snapshot,
         )
+        # None when the gate deliberately skipped (no grid / unseated actor);
+        # a real verdict carries the measured Chebyshev distance for the echo.
+        if _reach_verdict is not None:
+            _tactical_distance_cells = _reach_verdict.distance_cells
 
     # Opposed-check fork (combat fairness, 2026-04-26).
     # When the active confrontation declares ``resolution_mode:
@@ -1127,6 +1152,8 @@ def dispatch_dice_throw(
         outcome=resolved.outcome,
         seed=seed,
         throw_params=payload.throw_params,
+        range_band=_tactical_range_band,
+        distance_cells=_tactical_distance_cells,
     )
 
     emit_dice_result_broadcast(

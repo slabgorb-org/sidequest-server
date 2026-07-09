@@ -725,6 +725,31 @@ class TacticalFeature(ProtocolBase):
         return list(value)
 
 
+class TacticalAdjudication(ProtocolBase):
+    """An echoed tactical adjudication for the resolution card / grid (ADR-096 v2).
+
+    Additive echo (Story 165-4) — lets the client show the math (cells spent vs
+    budget, range band, denial reason) that 165-3's WN reach/range enforcement
+    already computed, without recomputing it. Empty defaults keep the wire
+    contract stable for Track B's SITE_MAP cutover.
+    """
+
+    actor: str
+    kind: str  # "move" | "reach" | "aoe"
+    valid: bool
+    cells_spent: int | None = None
+    cells_budget: int | None = None
+    distance_cells: int | None = None
+    max_cells: int | None = None
+    mode: str | None = None  # "melee" | "ranged"
+    reason: str = ""
+    cells: list[tuple[int, int]] = Field(default_factory=list)
+
+    @field_serializer("cells")
+    def _ser_cells(self, value: list[tuple[int, int]]) -> list[list[int]]:
+        return [list(c) for c in value]
+
+
 # ---------------------------------------------------------------------------
 # Location manifest (Story 54-2 / ADR-109)
 # ---------------------------------------------------------------------------
@@ -1341,6 +1366,16 @@ class TacticalGridPayload(ProtocolBase):
 
     features: list[TacticalFeature] = Field(default_factory=list)
     """Positioned tactical feature markers (water/hazard/cover/...). ADR-096 token+feature phase."""
+
+    adjudications: list[TacticalAdjudication] = Field(default_factory=list)
+    """Echoed tactical adjudications for the player-facing math (Story 165-4, ADR-096 v2).
+    ADDITIVE with an empty default — Track B's SITE_MAP cutover keeps the same
+    TacticalGridPayload shape untouched. Carries the per-round move-budget summary
+    (and, later, denied reach/range echoes) built from 165-3's enforcement math.
+    The move summary is built only on the runtime-cavern emit path, which today is
+    gated behind the (dead-in-prod) ``dungeon_store``; it reaches players once the
+    Plan-7 store-unification onto ``lookahead_handle.persistence`` lands. (The dice
+    resolution card's range echo, on DiceResultPayload, is already live at dispatch.)"""
 
 
 # ---------------------------------------------------------------------------

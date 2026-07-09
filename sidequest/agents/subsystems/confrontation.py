@@ -55,6 +55,7 @@ async def run_confrontation_dispatch(
     player_name: str,
     npcs_present: list[Any] | None = None,
     additional_player_names: list[str] | None = None,
+    dungeon_store: Any | None = None,
 ) -> SubsystemOutput:
     """Engage a confrontation encounter on the canonical snapshot.
 
@@ -163,6 +164,11 @@ async def run_confrontation_dispatch(
             additional_player_names=additional_player_names,
             security_tier=dispatch.params.get("security_tier"),
             materialized_threat=materialized_threat,
+            # 165-3 (ADR-096 v2, Track C2): thread the dungeon store so the seating
+            # chokepoint seats actor cells from the room's tactical grid. Sourced
+            # from the intent-router pass context (already present there) via the
+            # dispatch bank's context-filter — None off a procedural-dungeon world.
+            dungeon_store=dungeon_store,
         )
     except NoOpponentAvailableError as exc:
         logger.warning(

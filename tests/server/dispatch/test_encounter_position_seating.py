@@ -22,6 +22,8 @@ outcome assertions are the real AC.
 
 from __future__ import annotations
 
+import pytest
+
 from tests.server.tactical_emit_fixtures import build_sd_with_tactical_region
 
 # WN initiative rolls 1d8+DEX at seating, so the seated player needs a stat block
@@ -91,3 +93,46 @@ def test_instantiation_without_dungeon_store_seats_no_cells():
             f"{actor.name} was seated on a cell without a tactical grid — grid-less "
             "combat must place nothing"
         )
+
+
+@pytest.mark.asyncio
+async def test_live_confrontation_dispatch_forwards_dungeon_store_to_seating(monkeypatch):
+    """WIRING (the real-caller half): the LIVE seating caller
+    ``run_confrontation_dispatch`` must FORWARD its ``dungeon_store`` to the seating
+    chokepoint — otherwise Task 8 seating never runs in production (the store IS
+    already carried in the intent-router-pass dispatch-bank context; the gap was
+    that the subsystem entrypoint dropped it). Spy on the chokepoint and assert the
+    store arrives. This closes the loop the stub-spy dispatch wiring test cannot: it
+    proves a production creation path, not a hand-passed kwarg."""
+    import sidequest.agents.subsystems.confrontation as conf
+    from sidequest.protocol.dispatch import SubsystemDispatch
+
+    sd, snap, _room_id = build_sd_with_tactical_region(creature_revealed=False)
+    _seed_player_stats(snap)
+
+    received: dict = {}
+
+    def _spy(**kwargs):
+        received.update(kwargs)
+        return None  # None == no encounter seated; the dispatch handles it gracefully
+
+    monkeypatch.setattr(conf, "instantiate_encounter_from_trigger", _spy)
+
+    await conf.run_confrontation_dispatch(
+        SubsystemDispatch(
+            subsystem="confrontation",
+            params={"type": "combat"},
+            idempotency_key="conf-165-3-seating-wire",
+            confidence=1.0,
+        ),
+        snapshot=snap,
+        pack=sd.genre_pack,
+        player_name="Rux",
+        npcs_present=[],
+        dungeon_store=sd.dungeon_store,
+    )
+    assert received.get("dungeon_store") is sd.dungeon_store, (
+        "run_confrontation_dispatch did not forward dungeon_store to "
+        "instantiate_encounter_from_trigger — Task 8 seating would be dead in "
+        f"production; received keys={sorted(received)}"
+    )

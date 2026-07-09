@@ -377,8 +377,21 @@ def _enforce_tactical_reach(
     target = encounter.find_actor(target_name) if target_name is not None else None
     a_cell = actor.per_actor_state.get("cell")
     t_cell = target.per_actor_state.get("cell") if target is not None else None
-    if mask is None or a_cell is None or t_cell is None:
-        with tactical_enforcement_skipped_span(actor=actor.name, reason="no_grid", _tracer=tracer):
+    # Distinct skip reasons so the GM panel can tell "this room has no grid" from
+    # "an actor was never seated" (the latter is a wiring bug, not a scope no-op).
+    skip_reason = (
+        "no_grid"
+        if mask is None
+        else "attacker_unseated"
+        if a_cell is None
+        else "target_unseated"
+        if t_cell is None
+        else None
+    )
+    if skip_reason is not None:
+        with tactical_enforcement_skipped_span(
+            actor=actor.name, reason=skip_reason, _tracer=tracer
+        ):
             pass
         return None
 
@@ -805,21 +818,38 @@ def dispatch_dice_throw(
         )
 
     # 165-3 (ADR-096 v2, Track C2): reach enforcement — C1's production wiring
-    # into the confrontation-resolution chokepoint. A live tactical grid gates a
-    # physical strike on melee reach; an out-of-reach strike aborts with a legible
-    # refusal (never silently retargets — SOUL: The Test). Skipped as a deliberate
-    # no-grid no-op (with an OTEL breadcrumb) when there is no mask or the actors
-    # carry no cell. spec=None enforces MELEE reach — the plan's safe default;
-    # ranged range enforcement needs the weapon's range_band plumbed to the
-    # dispatch spec (a follow-up, see Delivery Findings). Cast/Program throws carry
-    # their own range logic and are not reach-gated.
-    if encounter is not None and payload.spell_id is None and not is_net_run:
+    # into the confrontation-resolution chokepoint. On a live tactical grid a
+    # physical COMBAT strike is gated on the weapon's reach/range; an out-of-reach
+    # strike aborts with a legible refusal (never silently retargets — SOUL: The
+    # Test). Skipped as a deliberate no-grid no-op (with an OTEL breadcrumb) when
+    # there is no mask or an actor carries no cell. Scoped to hp_depletion combat
+    # (a social/chase skill check is not a strike); cast/Program throws carry their
+    # own range logic and are not reach-gated. The weapon's real range_band is
+    # resolved so a RANGED weapon uses its SRD band instead of being melee-gated.
+    if (
+        encounter is not None
+        and payload.spell_id is None
+        and not is_net_run
+        and cdef.win_condition == "hp_depletion"
+    ):
+        from types import SimpleNamespace
+
+        from sidequest.game.ruleset.combat_rules import (
+            resolve_weapon_range_band_from_beat_and_actor,
+        )
+
+        _range_band = resolve_weapon_range_band_from_beat_and_actor(
+            beat=beat,
+            actor_core=snapshot.find_creature_core(character_name),
+            pack=pack,
+            world_slug=snapshot.world_slug,
+        )
         _reach_verdict = _enforce_tactical_reach(
             ruleset=ruleset,
             encounter=encounter,
             actor=actor,
             target_name=_opposite_side_first_actor(encounter, actor.side),
-            spec=None,
+            spec=SimpleNamespace(range_band=_range_band),
             mask=_resolve_room_mask(snapshot, dungeon_store, character_name),
             snapshot=snapshot,
         )

@@ -91,6 +91,7 @@ async def run_dogfight_dispatch(
     player_name: str,
     npcs_present: list[Any] | None = None,
     additional_player_names: list[str] | None = None,
+    dungeon_store: Any | None = None,
 ) -> SubsystemOutput:
     """Seat the ADR-077 dogfight on the canonical snapshot from a ship-combat intent.
 
@@ -150,6 +151,9 @@ async def run_dogfight_dispatch(
             genre_slug=snapshot.genre_slug,
             additional_player_names=additional_player_names,
             materialized_threat=materialized_threat,
+            # 165-3 (ADR-096 v2, Track C2): thread the dungeon store so seating
+            # stamps grid cells (context-filtered from the intent-router pass).
+            dungeon_store=dungeon_store,
         )
     except (NoOpponentAvailableError, SealedLetterArityError) as exc:
         logger.warning(

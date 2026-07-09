@@ -145,7 +145,9 @@ def _range_band_to_cells(band: str, table: dict[str, int], meters_per_cell: floa
     silently ship as the rifle cap (No Silent Fallbacks)."""
     m = _NN_RANGE_RE.match(band)
     if m is not None:
-        long_m = int(m.group(2))
+        # Max distance a shot can still land = the larger of the two figures
+        # (robust to a reversed "long/short" authoring).
+        long_m = max(int(m.group(1)), int(m.group(2)))
         return max(1, int(long_m / meters_per_cell))
     if band in table:
         return table[band]

@@ -32,22 +32,23 @@ from sidequest.agents.subsystems import SubsystemOutput
 from sidequest.dungeon.region_graph.model import RegionGraph
 from sidequest.dungeon.region_projection import RegionExit, project_region, requested_bearing
 from sidequest.dungeon.seed_bootstrap import ENTRANCE_ID as _ENTRANCE_ID
-from sidequest.game.seams import (
-    SeamCrossingError,
-    get_seam_resolver,
-    seam_route_for,
-    seam_route_via_adjacency,
-    surface_owner_for_entrance,
-)
+from sidequest.dungeon.seed_bootstrap import is_procedural_region_id
+from sidequest.game.seams import SeamCrossingError
 from sidequest.game.seams.deep_descent import resolve_deep_descent
-from sidequest.game.seams.surface_ascent import resolve_surface_ascent
 from sidequest.game.session import GameSnapshot, WorldStatePatch
+from sidequest.game.sites import SiteRegistry
+from sidequest.game.sites.enter_site import resolve_enter_site
+from sidequest.game.sites.exit_site import resolve_exit_site
 from sidequest.genre.models.world import NavigationMode, Route
 from sidequest.protocol.dispatch import NarratorDirective, SubsystemDispatch, VisibilityTag
 from sidequest.telemetry.spans import (
     movement_region_mode_span,
     movement_resolved_span,
     movement_unresolved_span,
+)
+from sidequest.telemetry.spans.site import (
+    site_enter_unresolved_span,
+    site_exit_unresolved_span,
 )
 
 if TYPE_CHECKING:
@@ -355,6 +356,12 @@ async def run_movement_dispatch(
     """
     direction = str(dispatch.params.get("direction", "") or "")
     exit_descriptor = str(dispatch.params.get("exit_descriptor", "") or "")
+    # Track B (Story 164-3, Task 6): the router emits site targets as an
+    # ``action`` (enter_site / exit_site) + a free-text ``site_descriptor``; the
+    # ``direction`` / ``exit_descriptor`` vocabulary above stays for in-scene
+    # navigation within a site or between cartography regions.
+    action = str(dispatch.params.get("action", "") or "")
+    site_descriptor = str(dispatch.params.get("site_descriptor", "") or "")
 
     # --- Region-mode worlds do not use this procedural-dungeon navigator. ---
     # This handler traverses a RegionGraph loaded from a DungeonStore (the
@@ -371,31 +378,89 @@ async def run_movement_dispatch(
     # ``no_dungeon_store`` below, and an undeterminable pack/world (pack=None)
     # also falls through to fail-loud rather than silently deferring.
     cart = _cartography_for(pack=pack, world_slug=snapshot.world_slug)
+    site_registry = SiteRegistry.from_cartography(cart)
     if _is_region_mode(cart):
         from_region = snapshot.region_for(perspective=player_name) or ""
 
-        # --- Story 105-2: the hybrid case de4f85c8 didn't anticipate. ---
-        # A region-mode world whose current region owns a registered seam
-        # route (beneath_sunden: the_dropmouth → deep_descent) IS the
-        # static→procedural boundary. When the PC's region owns a seam
-        # route, that seam is the region's onward boundary — ANY movement
-        # intent except ``back`` crosses it; ``back`` is surface adjacency,
-        # not a seam, so it stays deferred. Deferring the rest to the
-        # heading→region path is what made the 59-12 handoff dead code and
-        # the Deep unreachable (epic 105).
-        seam_route = seam_route_for(cart, from_region)
-        if seam_route is not None and direction != "back":
-            try:
-                crossing = get_seam_resolver(str(seam_route.to_id))(
+        # --- Track B (Story 164-3, Task 6): SITE targets replace the seam ladder. ---
+        # The five-rung inlined seam ladder (owned-seam descent, adjacent-seam
+        # descent, entrance ascent) is REPLACED by two site-target branches
+        # dispatched BY KIND through the SiteRegistry × the enter_site/exit_site
+        # resolvers. Sünden's deep is now the first ``frontier`` site; the
+        # crossing DESTINATION (``to_region``) is unchanged — only the internal
+        # path and the ``resolved_via`` name (``site_enter`` / ``site_exit``)
+        # differ. In-scene graph navigation (§Q1 below) and lateral cartography
+        # travel are untouched (they stay on the ``direction`` vocabulary).
+
+        # --- Site EXIT: THIS PC stands inside a site (pc_region is a site node). ---
+        owning_site = site_registry.site_owning_node(from_region) if from_region else None
+        # The Sünden FRONTIER-LEGACY site keeps un-namespaced node ids for B1
+        # ('entrance' / 'expNNN.rN'), which ``site_owning_node`` (namespace-parse)
+        # cannot match. ``is_procedural_region_id`` recognizes EXACTLY that legacy
+        # namespace, so a PC standing on one belongs to the default frontier site.
+        # This shim is Sünden-legacy-specific by design and dies with the B4
+        # node-id namespacing follow-up.
+        if owning_site is None and from_region and is_procedural_region_id(from_region):
+            from sidequest.game.pg.dungeon import DEFAULT_SITE_ID
+
+            owning_site = site_registry.by_id(DEFAULT_SITE_ID)
+            # No Silent Fallbacks (Story 164-3 review): a PC standing on a legacy
+            # procedural node whose region-mode world declares NO frontier site is
+            # a cartography MISCONFIGURATION — the frontier site is what OWNS these
+            # nodes post-cutover. If the PC explicitly asks to LEAVE (``exit_site``)
+            # and no site resolves, fail LOUD with a clear reason + span, never a
+            # silent fall-through to the §Q1 navigator's misleading
+            # ``no_candidate_edges`` (which masks the missing ``sites:`` config —
+            # the exact "hours debugging why it isn't quite right" trap). A
+            # non-exit intent (in-scene nav) does NOT need the site, so it falls
+            # through to §Q1 unharmed.
+            if owning_site is None and action == "exit_site":
+                logger.warning(
+                    "movement.frontier_site_undeclared world=%s region=%s site_id=%s "
+                    "(procedural node but no frontier site declared in cartography)",
+                    snapshot.world_slug,
+                    from_region,
+                    DEFAULT_SITE_ID,
+                )
+                with site_exit_unresolved_span(
+                    pc_name=player_name,
+                    from_region=from_region,
+                    reason="frontier_site_undeclared",
+                ):
+                    pass
+                return _unresolved(
                     snapshot=snapshot,
                     player_name=player_name,
-                    route=seam_route,
-                    resolved_via="surface_descent",
-                    dungeon_store=dungeon_store,
+                    reason="frontier_site_undeclared",
+                    from_region=from_region,
                     direction=direction,
                     exit_descriptor=exit_descriptor,
+                    available=[],
+                    surface=(
+                        "There is no way out mapped from here — this place was "
+                        "never declared as a site."
+                    ),
+                )
+        if owning_site is not None and action == "exit_site":
+            try:
+                crossing = resolve_exit_site(
+                    snapshot=snapshot,
+                    player_name=player_name,
+                    site=owning_site,
+                    cartography=cart,
+                    resolved_via="site_exit",
                 )
             except SeamCrossingError as err:
+                # The catcher owns the failure span (seams/base contract): emit the
+                # site-channel fail-loud so the GM panel's ``sites`` component sees
+                # exit failures too (Story 164-3 review — parity with the enter
+                # catcher below), THEN surface the truth through movement.unresolved.
+                with site_exit_unresolved_span(
+                    pc_name=player_name,
+                    from_region=from_region,
+                    reason=err.reason,
+                ):
+                    pass
                 return _unresolved(
                     snapshot=snapshot,
                     player_name=player_name,
@@ -412,130 +477,111 @@ async def run_movement_dispatch(
                 from_region=from_region,
                 to_region=crossing.to_region,
                 additional_player_names=additional_player_names,
-                resolved_via="surface_descent",
+                resolved_via="site_exit",
             )
             return SubsystemOutput(
                 data={
                     "to_region": crossing.to_region,
                     "from_region": from_region,
-                    "resolved_via": "surface_descent",
+                    "resolved_via": "site_exit",
                 }
             )
 
-        # --- sq-playtest 2026-06-21: descend from one step off the seam. ---
-        # The PC's region owns no seam, but sits directly adjacent to the
-        # region that does (beneath_sünden: 'ropefoot', the waiting-camp, is
-        # adjacent to 'the_dropmouth', which owns the deep_descent seam). The
-        # rope and winch are at the camp's lip, not a separate journey — a
-        # player who says "down the rope" at the camp means to descend, not to
-        # first walk to the shaft mouth and descend on a SECOND turn. Cross
-        # the adjacent owner's seam in one deliberate action.
-        #
-        # Gated on direction == "deeper" (the descent signal the router emits
-        # once the seam is surfaced at this region — see intent_router_pass
-        # _build_state_summary), NOT the broad ``!= "back"`` used for the
-        # owned-seam case: a surface camp has lateral intra-region movement
-        # ("walk to the board") that must NOT teleport the party into the deep.
-        # The router only assigns "deeper" to an actual descent.
-        if seam_route is None and direction == "deeper":
-            adjacent_seam = seam_route_via_adjacency(cart, from_region)
-            if adjacent_seam is not None:
-                try:
-                    crossing = get_seam_resolver(str(adjacent_seam.to_id))(
-                        snapshot=snapshot,
-                        player_name=player_name,
-                        route=adjacent_seam,
-                        resolved_via="surface_descent_adjacent",
-                        dungeon_store=dungeon_store,
-                        direction=direction,
-                        exit_descriptor=exit_descriptor,
-                    )
-                except SeamCrossingError as err:
-                    return _unresolved(
-                        snapshot=snapshot,
-                        player_name=player_name,
-                        reason=err.reason,
-                        from_region=from_region,
-                        direction=direction,
-                        exit_descriptor=exit_descriptor,
-                        available=[],
-                        surface=err.surface,
-                    )
-                _advance_colocated_peers(
-                    snapshot,
-                    acting_pc=player_name,
+        # --- Site ENTER: THIS PC on a world node crosses INTO a named site. ---
+        if owning_site is None and action == "enter_site":
+            site, ambiguous = site_registry.resolve_descriptor(from_region, site_descriptor)
+            if ambiguous:
+                names = ", ".join(s.name for s in site_registry.sites_for_node(from_region))
+                return _unresolved(
+                    snapshot=snapshot,
+                    player_name=player_name,
+                    reason="ambiguous_site",
                     from_region=from_region,
-                    to_region=crossing.to_region,
-                    additional_player_names=additional_player_names,
-                    resolved_via="surface_descent_adjacent",
+                    direction=direction,
+                    exit_descriptor=site_descriptor,
+                    available=[],
+                    surface=f"Which way in — {names}?",
                 )
-                return SubsystemOutput(
-                    data={
-                        "to_region": crossing.to_region,
-                        "from_region": from_region,
-                        "resolved_via": "surface_descent_adjacent",
-                    }
-                )
-
-        # --- Story 105-3: the reverse seam — leaving the Deep. ---
-        # A PC standing on the dungeon entrance node is at the static→procedural
-        # threshold seen from BELOW. Any intent except going deeper is a
-        # departure: ascend back to the surface cartography region that OWNS the
-        # deep crossing (the registered-kind route's from_id), via the same
-        # per-PC patch path the descent uses. Symmetric to the descent rule
-        # above ("any intent except back crosses down"). Without this, an
-        # exit-ward intent at the entrance deferred to the heading→region path,
-        # which has no surface node to head to — stranding the party below
-        # (epic 105 reverse crossing). No seam owner found (a non-dungeon
-        # region-mode world, or an ambiguous multi-descent map) → fall through
-        # to the in-dungeon / defer logic below, never an invented surface
-        # (No Silent Fallbacks).
-        if from_region == _ENTRANCE_ID and direction != "deeper":
-            ascent_route = surface_owner_for_entrance(cart)
-            if ascent_route is not None:
-                # Symmetric to the descent block above: a recoverable seam fault
-                # (a malformed registered-kind route — null or unmapped from_id)
-                # raises SeamCrossingError and must fail LOUD through
-                # movement.unresolved (the OTEL lie-detector), never an uncaught
-                # raise and never a silent region_mode defer. surface_owner_for_entrance
-                # intentionally still returns the malformed route so the resolver
-                # raises here and the GM panel sees the wiring fault.
-                try:
-                    crossing = resolve_surface_ascent(
-                        snapshot=snapshot,
-                        player_name=player_name,
-                        route=ascent_route,
-                        resolved_via="surface_ascent",
-                        direction=direction,
-                        exit_descriptor=exit_descriptor,
-                        cartography=cart,
-                    )
-                except SeamCrossingError as err:
-                    return _unresolved(
-                        snapshot=snapshot,
-                        player_name=player_name,
-                        reason=err.reason,
-                        from_region=from_region,
-                        direction=direction,
-                        exit_descriptor=exit_descriptor,
-                        available=[],
-                        surface=err.surface,
-                    )
-                _advance_colocated_peers(
-                    snapshot,
-                    acting_pc=player_name,
+            if site is None:
+                # No enterable site matched the descriptor. Fail LOUD on the site
+                # channel (the catcher owns the failure span), then DEFER to
+                # narration: an unmatched enter is not a hard error — the player
+                # may be describing in-scene movement the site layer doesn't own.
+                with site_enter_unresolved_span(
+                    pc_name=player_name,
                     from_region=from_region,
-                    to_region=crossing.to_region,
-                    additional_player_names=additional_player_names,
-                    resolved_via="surface_ascent",
+                    reason="no_matching_site",
+                    descriptor=site_descriptor,
+                ):
+                    pass
+                return _defer_region_mode(
+                    snapshot=snapshot,
+                    player_name=player_name,
+                    from_region=from_region,
+                    direction=direction,
+                    exit_descriptor=site_descriptor,
                 )
-                return SubsystemOutput(
-                    data={
-                        "to_region": crossing.to_region,
-                        "from_region": from_region,
-                        "resolved_via": "surface_ascent",
-                    }
+            # Bounded sites materialize their WHOLE graph before the bind (Tasks
+            # 11/12). B1 lands the frontier path only — a bounded target fails
+            # loud as pending until the materializer exists (Sünden is frontier,
+            # so the live path never reaches this guard).
+            if site.extent == "bounded":
+                return _unresolved(
+                    snapshot=snapshot,
+                    player_name=player_name,
+                    reason="bounded_site_pending",
+                    from_region=from_region,
+                    direction=direction,
+                    exit_descriptor=site_descriptor,
+                    available=[],
+                    surface="That door isn't ready yet.",
                 )
+            try:
+                crossing = resolve_enter_site(
+                    snapshot=snapshot,
+                    player_name=player_name,
+                    site=site,
+                    dungeon_repository=dungeon_store,
+                    resolved_via="site_enter",
+                    direction=direction,
+                    exit_descriptor=site_descriptor,
+                )
+            except SeamCrossingError as err:
+                # The catcher owns the failure span (seams/base contract): emit
+                # the site-channel fail-loud, THEN surface the truth through
+                # movement.unresolved. The PC does not move.
+                with site_enter_unresolved_span(
+                    pc_name=player_name,
+                    from_region=from_region,
+                    reason=err.reason,
+                    descriptor=site_descriptor,
+                ):
+                    pass
+                return _unresolved(
+                    snapshot=snapshot,
+                    player_name=player_name,
+                    reason=err.reason,
+                    from_region=from_region,
+                    direction=direction,
+                    exit_descriptor=site_descriptor,
+                    available=[],
+                    surface=err.surface,
+                )
+            _advance_colocated_peers(
+                snapshot,
+                acting_pc=player_name,
+                from_region=from_region,
+                to_region=crossing.to_region,
+                additional_player_names=additional_player_names,
+                resolved_via="site_enter",
+            )
+            return SubsystemOutput(
+                data={
+                    "to_region": crossing.to_region,
+                    "from_region": from_region,
+                    "resolved_via": "site_enter",
+                }
+            )
 
         # --- Pingpong 2026-06-12: the PC is already INSIDE the dungeon. ---
         # A region-mode hybrid world's PC who has crossed the seam stands on

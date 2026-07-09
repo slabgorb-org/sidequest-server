@@ -19,13 +19,14 @@ from __future__ import annotations
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+import sidequest.telemetry.spans as spans_module
 from sidequest.telemetry.spans.site import (
     site_enter_span,
     site_enter_unresolved_span,
     site_exit_span,
+    site_exit_unresolved_span,
 )
-
-import sidequest.telemetry.spans as spans_module
 
 
 def _recording(monkeypatch) -> InMemorySpanExporter:
@@ -110,6 +111,26 @@ def test_site_enter_unresolved_span_mirrors_to_turn_telemetry(monkeypatch) -> No
     assert fields["op"] == "site.enter_unresolved"
     assert fields["reason"] == "ambiguous_site"
     assert fields["descriptor"] == "the door"
+
+
+def test_site_exit_unresolved_span_mirrors_to_turn_telemetry(monkeypatch) -> None:
+    """An unresolvable EXIT must ALSO reach the sink (``op: site.exit_unresolved``)
+    with the reason — the symmetric partner of the enter-unresolved mirror, so the
+    GM panel's ``sites`` component is not blind to exit failures (Story 164-3
+    review finding)."""
+    _recording(monkeypatch)
+    calls = _capture_publish(monkeypatch)
+
+    with site_exit_unresolved_span(
+        pc_name="Rux", from_region="frontier:entrance", reason="dangling_site_owner"
+    ):
+        pass
+
+    assert calls, "site.exit_unresolved MUST reach turn_telemetry via publish_event"
+    event_type, fields, _kw = calls[0]
+    assert event_type == "state_transition"
+    assert fields["op"] == "site.exit_unresolved"
+    assert fields["reason"] == "dangling_site_owner"
 
 
 def test_site_span_mirror_skips_when_span_not_recording(monkeypatch) -> None:

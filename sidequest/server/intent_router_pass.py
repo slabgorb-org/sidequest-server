@@ -58,6 +58,7 @@ from sidequest.game.seams import (
     surface_owner_for_entrance,
 )
 from sidequest.game.session import GameSnapshot
+from sidequest.game.sites import SiteRegistry
 from sidequest.genre.models.pack import GenrePack
 from sidequest.protocol.dispatch import (
     DispatchPackage,
@@ -698,6 +699,27 @@ def _build_state_summary(
                         "present" if dungeon_store is not None else "absent",
                         snapshot.turn_manager.interaction,
                     )
+
+            # Story 164-3 (Track B, Task 5): enterable sub-locations (sites) the
+            # acting PC can cross INTO from here — the deep below a shaft, a
+            # tavern, a vault. Built from the SiteRegistry, which surfaces sites
+            # OWNED by this node PLUS those owned by an ADJACENT node (the
+            # one-action "down the rope at the camp" reach). This is the lexical
+            # bridge that lets the router classify "into the tavern" / "down into
+            # the deep" as an enter_site movement (Task 6 dispatches it by kind).
+            # Additive: a world with no ``sites:`` yields an empty list, so the
+            # key is OMITTED (no noise) — parity with current_region_exits, and
+            # per-PC (no acting seat → no region → no projection).
+            _enterable = (
+                SiteRegistry.from_cartography(_cart).sites_for_node(_region_id)
+                if _region_id
+                else []
+            )
+            if _enterable:
+                summary["current_sites"] = [
+                    {"site_id": s.site_id, "name": s.name, "archetype": s.archetype}
+                    for s in _enterable
+                ]
 
     # Orbital course/clock vocabulary (Story 158-50, ADR-130). When the world
     # has an orbital tier, surface the SAME <courses> block the narrator builds

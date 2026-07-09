@@ -37,6 +37,7 @@ from sidequest.genre.models.world import (
     NavigationMode,
     Region,
     Route,
+    SiteDecl,
 )
 from sidequest.protocol.dispatch import SubsystemDispatch, VisibilityTag
 
@@ -54,6 +55,18 @@ def _movement(direction: str, descriptor: str = "") -> SubsystemDispatch:
         subsystem="movement",
         params={"direction": direction, "exit_descriptor": descriptor},
         idempotency_key="mv-ascent",
+        confidence=1.0,
+        visibility=VisibilityTag(visible_to="all"),
+    )
+
+
+def _exit() -> SubsystemDispatch:
+    """Router exit_site shape (Story 164-3, Task 5): leaving the site the party
+    is inside — the cutover's replacement for the direction-driven ascent."""
+    return SubsystemDispatch(
+        subsystem="movement",
+        params={"action": "exit_site"},
+        idempotency_key="mv-ascent-exit",
         confidence=1.0,
         visibility=VisibilityTag(visible_to="all"),
     )
@@ -122,6 +135,15 @@ def _hybrid_cartography() -> CartographyConfig:
                 from_id="the_dropmouth",
                 to_id="deep_descent",
             ),
+        ],
+        sites=[
+            SiteDecl(
+                site_id="frontier",
+                name="The Deep",
+                archetype="megadungeon",
+                attached_to="the_dropmouth",
+                extent="frontier",
+            )
         ],
     )
 
@@ -299,24 +321,17 @@ def deep_dangling_owner_kit():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "direction,descriptor",
-    [
-        ("back", ""),
-        ("up", ""),
-        ("toward_exit", ""),
-        # Descriptor-only departure intent at the entrance still ascends.
-        ("", "back up the rope"),
-    ],
-)
-def test_entrance_node_ascends_to_surface(capture_spans, deep_world_kit, direction, descriptor):
-    """AC1 + AC2: from the entrance node, a back/up/toward_exit intent with no
-    deeper in-graph candidate resolves the PC to the seam-owning cartography
-    region (the_dropmouth) via the per-PC patch path — no improvisation."""
+def test_entrance_node_ascends_to_surface(capture_spans, deep_world_kit):
+    """AC1 + AC2 (retargeted): from the legacy frontier entrance node, an
+    ``exit_site`` binds the PC back to the site's owning cartography region
+    (the_dropmouth, the site's ``attached_to``) via the per-PC patch path — no
+    improvisation. The legacy un-namespaced ``entrance`` is recognized as site
+    membership through the ``is_procedural_region_id`` shim. Was surface_ascent;
+    the destination is unchanged."""
     kit = deep_world_kit
     out = _run(
         run_movement_dispatch(
-            _movement(direction, descriptor),
+            _exit(),
             snapshot=kit.snapshot,
             player_name="Groucho",
             dungeon_store=kit.store,
@@ -324,23 +339,23 @@ def test_entrance_node_ascends_to_surface(capture_spans, deep_world_kit, directi
             pack=kit.pack,
         )
     )
-    assert out.data.get("resolved_via") == "surface_ascent", (
-        f"expected surface_ascent crossing, got: {out.data}"
+    assert out.data.get("resolved_via") == "site_exit", (
+        f"expected site_exit crossing, got: {out.data}"
     )
     assert out.data.get("to_region") == "the_dropmouth", (
-        f"expected to_region='the_dropmouth' (the seam owner), got: {out.data.get('to_region')!r}"
+        f"expected to_region='the_dropmouth' (the site owner), got: {out.data.get('to_region')!r}"
     )
     assert kit.snapshot.region_for(perspective="Groucho") == "the_dropmouth", (
         f"PC not rebound to surface; still at {kit.snapshot.region_for(perspective='Groucho')!r}"
     )
-    # OTEL proof the ascent was the seam resolver, not improvisation. The seam is
-    # the SAME bidirectional route, so seam_kind is unchanged ("deep_descent");
-    # resolved_via is the new direction discriminator.
-    resolved = [s for s in capture_spans.get_finished_spans() if s.name == "movement.resolved"]
-    assert len(resolved) == 1, "expected exactly one movement.resolved span for the ascent"
-    attrs = resolved[0].attributes or {}
-    assert attrs.get("resolved_via") == "surface_ascent"
-    assert attrs.get("seam_kind") == "deep_descent"
+    # OTEL proof the ascent was the site resolver, not improvisation: the
+    # site.exit span carries the surface owner as the destination.
+    exit_spans = [s for s in capture_spans.get_finished_spans() if s.name == "site.exit"]
+    assert len(exit_spans) == 1, "expected exactly one site.exit span for the ascent"
+    attrs = exit_spans[0].attributes or {}
+    assert attrs.get("resolved_via") == "site_exit"
+    assert attrs.get("to_region") == "the_dropmouth"
+    assert attrs.get("site_id") == "frontier"
 
 
 def test_deeper_from_entrance_does_not_ascend(capture_spans, deep_world_kit):

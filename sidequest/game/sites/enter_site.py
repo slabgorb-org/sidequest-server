@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from sidequest.dungeon.seed_bootstrap import ENTRANCE_ID
 from sidequest.game.seams.base import SeamCrossingError, SeamCrossingResult
 from sidequest.game.session import WorldStatePatch
 from sidequest.telemetry.spans.site import site_enter_span
@@ -46,25 +47,53 @@ def resolve_enter_site(
             ),
         )
     graph = dungeon_repository.load_map(entrance_id=site.entrance_node_id, site_id=site.site_id)
-    if site.entrance_node_id not in graph.nodes:
-        raise SeamCrossingError(
-            reason="no_site_entrance",
-            surface=f"The interior of {site.name} has not yet formed.",
-        )
-    snapshot.apply_world_patch(WorldStatePatch(pc_region={player_name: site.entrance_node_id}))
+    # The declared (namespaced) ``entrance_node_id`` is the normal BOUNDED-site
+    # case. The Sünden FRONTIER-LEGACY case (Story 164-3) keeps its un-namespaced
+    # legacy node ids for B1 — storage is ``(session, site_id)``-keyed, so node-id
+    # namespacing is a B4 follow-up — which means the persisted graph anchors on
+    # the legacy ``ENTRANCE_ID`` ("entrance"), NOT ``frontier:entrance``. When the
+    # declared namespaced node is absent, bind to that REAL legacy entrance node:
+    # a LOUD, single fallback (No Silent Fallbacks), harmless for bounded sites
+    # (whose entrance IS the namespaced id and is present, so they never reach
+    # here). NOTE: we must NOT test ``graph.entrance_id`` — ``load_map`` sets that
+    # to whatever entrance_id the CALLER passed (here == ``target``), so it can
+    # never bridge the namespaced→legacy gap. That was dead code that shipped
+    # green only because a test double diverged from the real repository, and it
+    # stranded every live Sünden descent at ``no_site_entrance`` (Story 164-8).
+    target = site.entrance_node_id
+    if target not in graph.nodes:
+        if ENTRANCE_ID in graph.nodes:
+            logger.warning(
+                "site.enter frontier_legacy_entrance_fallback site=%s declared=%s using=%s",
+                site.site_id,
+                site.entrance_node_id,
+                ENTRANCE_ID,
+            )
+            target = ENTRANCE_ID
+        else:
+            raise SeamCrossingError(
+                reason="no_site_entrance",
+                surface=f"The interior of {site.name} has not yet formed.",
+            )
+    snapshot.apply_world_patch(WorldStatePatch(pc_region={player_name: target}))
     with site_enter_span(
         pc_name=player_name, site_id=site.site_id, from_region=from_region
     ) as span:
-        span.set_attribute("to_region", site.entrance_node_id)
+        span.set_attribute("to_region", target)
         span.set_attribute("resolved_via", resolved_via)
         span.set_attribute("extent", site.extent)
         span.set_attribute("archetype", site.archetype)
+        # Stamp the player's coarse intent, exactly as movement.resolved does, so
+        # the GM panel can see WHAT the player said mapped to this crossing
+        # (Story 164-3 carryover #2c — the site spans omitted it before).
+        span.set_attribute("intent.direction", direction)
+        span.set_attribute("intent.exit_descriptor", exit_descriptor)
     logger.debug(
         "site.enter pc=%s site=%s from=%s to=%s via=%s",
         player_name,
         site.site_id,
         from_region,
-        site.entrance_node_id,
+        target,
         resolved_via,
     )
-    return SeamCrossingResult(to_region=site.entrance_node_id)
+    return SeamCrossingResult(to_region=target)

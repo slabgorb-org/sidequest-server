@@ -56,6 +56,32 @@ class _SiteStore:
         return g
 
 
+class _LegacyEntranceStore:
+    """Story 164-3 frontier-legacy case: the store's graph entrance is the
+    un-namespaced legacy ``entrance`` (ENTRANCE_ID), NOT the site's namespaced
+    ``entrance_node_id`` (``frontier:entrance``). Sünden's frontier keeps its
+    legacy node ids for B1 (storage is site-keyed; node-id namespacing is a B4
+    follow-up), so the graph the store returns anchors on ``entrance``. The
+    resolver must fall back to the real legacy ``ENTRANCE_ID`` node when the
+    declared namespaced node is absent — a LOUD, single fallback, harmless for
+    bounded sites."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def load_map(self, *, entrance_id: str, site_id: str = "frontier") -> RegionGraph:
+        self.calls.append((entrance_id, site_id))
+        # Mirror the REAL PgDungeonRepository.load_map (game/pg/dungeon.py):
+        # ``graph.entrance_id`` echoes the entrance_id the CALLER passed in — it is
+        # NOT independently "the graph's own entrance". The frontier-legacy NODES,
+        # though, keep the un-namespaced legacy ``entrance`` id (B1; namespacing is
+        # a B4 follow-up). The earlier double hard-coded ``entrance_id="entrance"``,
+        # which silently diverged from production and hid the dead-fallback bug.
+        g = RegionGraph(entrance_id=entrance_id)
+        g.add_node(RegionNode(id="entrance", expansion_id=0, theme="shaft_collar"))
+        return g
+
+
 def _snapshot(region: str) -> GameSnapshot:
     return GameSnapshot(
         genre_slug="caverns_and_claudes",
@@ -121,9 +147,45 @@ def test_enter_site_missing_store_raises_recoverable() -> None:
     assert snap.pc_regions["Rux"] == "the_dropmouth", "a failed enter must not move the PC"
 
 
+def test_enter_site_frontier_legacy_binds_seed_entrance() -> None:
+    """Story 164-3 (carryover #1) / 164-8 fix: the Sünden frontier site's graph uses
+    the legacy un-namespaced ``entrance`` node, not the site's namespaced
+    ``frontier:entrance``. When the declared ``entrance_node_id`` is absent from the
+    graph, the resolver binds the PC to the real legacy ``ENTRANCE_ID`` node (a loud
+    single fallback) — it does NOT raise ``no_site_entrance``.
+
+    Regression guard for 164-8: the fallback must key off ``ENTRANCE_ID``, NOT
+    ``graph.entrance_id`` (which ``load_map`` sets to the caller-passed id, == the
+    absent namespaced target — dead code). The prior double hid this by hard-coding
+    ``graph.entrance_id="entrance"``; ``_LegacyEntranceStore`` now mirrors the real
+    repository, so this test fails if the dead-fallback regression returns."""
+    snap = _snapshot("the_dropmouth")
+    store = _LegacyEntranceStore()
+
+    result = resolve_enter_site(
+        snapshot=snap,
+        player_name="Rux",
+        site=_FRONTIER,
+        dungeon_repository=store,
+        resolved_via="site_enter",
+    )
+
+    # Bound to the graph's actual (legacy) entrance, not the namespaced declared id.
+    assert result.to_region == "entrance"
+    assert snap.region_for(perspective="Rux") == "entrance"
+    assert snap.pc_regions["Rux"] == "entrance"
+
+
 def test_enter_site_missing_entrance_node_raises() -> None:
-    """The store exists but the entrance node was never materialized — fail loud
-    (``reason=no_site_entrance``) rather than binding the PC to a phantom node."""
+    """The store exists but NEITHER the declared entrance node NOR a usable
+    ``graph.entrance_id`` was materialized — fail loud (``reason=no_site_entrance``)
+    rather than binding the PC to a phantom node.
+
+    164-3 note: this guards the frontier-legacy fallback
+    (``test_enter_site_frontier_legacy_prefers_graph_entrance``) against inventing
+    a phantom entrance — the fallback may only bind to a ``graph.entrance_id`` that
+    is a REAL node. Here the graph is empty (its ``entrance_id`` is not a node), so
+    the fallback cannot apply and the resolver must still raise."""
     snap = _snapshot("the_dropmouth")
     store = _SiteStore(entrance_present=False)
 

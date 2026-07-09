@@ -31,6 +31,7 @@ from .span import Span
 SPAN_SITE_ENTER = "site.enter"
 SPAN_SITE_EXIT = "site.exit"
 SPAN_SITE_ENTER_UNRESOLVED = "site.enter_unresolved"
+SPAN_SITE_EXIT_UNRESOLVED = "site.exit_unresolved"
 
 
 def _attr(field: str):
@@ -76,6 +77,18 @@ SPAN_ROUTES[SPAN_SITE_ENTER_UNRESOLVED] = SpanRoute(
         "from_region": _attr("from_region")(s),
         "reason": _attr("reason")(s),
         "descriptor": _attr("descriptor")(s),
+    },
+)
+
+SPAN_ROUTES[SPAN_SITE_EXIT_UNRESOLVED] = SpanRoute(
+    event_type="state_transition",
+    component="sites",
+    extract=lambda s: {
+        "field": "pc_regions",
+        "op": "site.exit_unresolved",
+        "pc_name": _attr("pc_name")(s),
+        "from_region": _attr("from_region")(s),
+        "reason": _attr("reason")(s),
     },
 )
 
@@ -154,11 +167,42 @@ def site_enter_unresolved_span(
     _mirror(SPAN_SITE_ENTER_UNRESOLVED, span)
 
 
+@contextmanager
+def site_exit_unresolved_span(
+    *,
+    pc_name: str,
+    from_region: str,
+    reason: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Fail-loud span for an unresolvable site EXIT — the symmetric partner of
+    ``site_enter_unresolved_span``. Without it a GM-panel operator filtering the
+    ``sites`` component sees every enter failure but zero exit failures (Story
+    164-3 review finding). Exit failures carry no descriptor (the ``exit_site``
+    router shape has none), so this span omits it."""
+    with Span.open(
+        SPAN_SITE_EXIT_UNRESOLVED,
+        {
+            "pc_name": pc_name,
+            "from_region": from_region,
+            "reason": reason,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        span.set_status(Status(StatusCode.ERROR, reason))
+        yield span
+    _mirror(SPAN_SITE_EXIT_UNRESOLVED, span)
+
+
 __all__ = [
     "SPAN_SITE_ENTER",
     "SPAN_SITE_ENTER_UNRESOLVED",
     "SPAN_SITE_EXIT",
+    "SPAN_SITE_EXIT_UNRESOLVED",
     "site_enter_span",
     "site_enter_unresolved_span",
     "site_exit_span",
+    "site_exit_unresolved_span",
 ]

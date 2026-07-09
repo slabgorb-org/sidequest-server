@@ -56,6 +56,25 @@ class _SiteStore:
         return g
 
 
+class _LegacyEntranceStore:
+    """Story 164-3 frontier-legacy case: the store's graph entrance is the
+    un-namespaced legacy ``entrance`` (ENTRANCE_ID), NOT the site's namespaced
+    ``entrance_node_id`` (``frontier:entrance``). Sünden's frontier keeps its
+    legacy node ids for B1 (storage is site-keyed; node-id namespacing is a B4
+    follow-up), so the graph the store returns anchors on ``entrance``. The
+    resolver must prefer ``graph.entrance_id`` when the declared namespaced node
+    is absent — a LOUD, single fallback, harmless for bounded sites."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def load_map(self, *, entrance_id: str, site_id: str = "frontier") -> RegionGraph:
+        self.calls.append((entrance_id, site_id))
+        g = RegionGraph(entrance_id="entrance")
+        g.add_node(RegionNode(id="entrance", expansion_id=0, theme="shaft_collar"))
+        return g
+
+
 def _snapshot(region: str) -> GameSnapshot:
     return GameSnapshot(
         genre_slug="caverns_and_claudes",
@@ -121,9 +140,43 @@ def test_enter_site_missing_store_raises_recoverable() -> None:
     assert snap.pc_regions["Rux"] == "the_dropmouth", "a failed enter must not move the PC"
 
 
+def test_enter_site_frontier_legacy_prefers_graph_entrance() -> None:
+    """Story 164-3 (carryover #1): the Sünden frontier site's graph uses the legacy
+    un-namespaced ``entrance`` node, not the site's namespaced ``frontier:entrance``.
+    When the declared ``entrance_node_id`` is absent from the graph, the resolver
+    prefers ``graph.entrance_id`` (a loud single fallback) and binds the PC there —
+    it does NOT raise ``no_site_entrance``. This is the refinement Task 6's migration
+    decision makes to Task 4's resolver so Sünden stays green across the cutover.
+
+    RED on develop: today ``resolve_enter_site`` raises ``no_site_entrance`` because
+    ``frontier:entrance`` is not in the (legacy) graph's nodes."""
+    snap = _snapshot("the_dropmouth")
+    store = _LegacyEntranceStore()
+
+    result = resolve_enter_site(
+        snapshot=snap,
+        player_name="Rux",
+        site=_FRONTIER,
+        dungeon_repository=store,
+        resolved_via="site_enter",
+    )
+
+    # Bound to the graph's actual (legacy) entrance, not the namespaced declared id.
+    assert result.to_region == "entrance"
+    assert snap.region_for(perspective="Rux") == "entrance"
+    assert snap.pc_regions["Rux"] == "entrance"
+
+
 def test_enter_site_missing_entrance_node_raises() -> None:
-    """The store exists but the entrance node was never materialized — fail loud
-    (``reason=no_site_entrance``) rather than binding the PC to a phantom node."""
+    """The store exists but NEITHER the declared entrance node NOR a usable
+    ``graph.entrance_id`` was materialized — fail loud (``reason=no_site_entrance``)
+    rather than binding the PC to a phantom node.
+
+    164-3 note: this guards the frontier-legacy fallback
+    (``test_enter_site_frontier_legacy_prefers_graph_entrance``) against inventing
+    a phantom entrance — the fallback may only bind to a ``graph.entrance_id`` that
+    is a REAL node. Here the graph is empty (its ``entrance_id`` is not a node), so
+    the fallback cannot apply and the resolver must still raise."""
     snap = _snapshot("the_dropmouth")
     store = _SiteStore(entrance_present=False)
 

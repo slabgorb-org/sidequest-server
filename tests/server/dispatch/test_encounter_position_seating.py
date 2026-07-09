@@ -136,3 +136,49 @@ async def test_live_confrontation_dispatch_forwards_dungeon_store_to_seating(mon
         "instantiate_encounter_from_trigger — Task 8 seating would be dead in "
         f"production; received keys={sorted(received)}"
     )
+
+
+@pytest.mark.asyncio
+async def test_live_dogfight_dispatch_forwards_dungeon_store_to_seating(monkeypatch):
+    """WIRING (the dogfight half — reviewer HIGH, 165-3 rework): ``run_dogfight_dispatch``
+    is the SECOND live seating caller and must ALSO forward its ``dungeon_store`` to
+    the chokepoint. The confrontation path is spy-tested above; dogfight shipped the
+    same forwarding UNTESTED — the identical silent-drop class (a dropped kwarg =
+    dead Task-8 seating on the dogfight path, no test to catch it). Spy the
+    chokepoint and assert the store arrives.
+
+    ``params['type']`` is set so ``_resolve_dogfight_type`` is short-circuited and no
+    dogfight-capable pack is required; ``params['opponent']`` materializes the Other
+    so seating is attempted (and thus the store forwarded)."""
+    import sidequest.agents.subsystems.dogfight as dog
+    from sidequest.protocol.dispatch import SubsystemDispatch
+
+    sd, snap, _room_id = build_sd_with_tactical_region(creature_revealed=False)
+    _seed_player_stats(snap)
+
+    received: dict = {}
+
+    def _spy(**kwargs):
+        received.update(kwargs)
+        return None  # None == no encounter seated; the dispatch handles it gracefully
+
+    monkeypatch.setattr(dog, "instantiate_encounter_from_trigger", _spy)
+
+    await dog.run_dogfight_dispatch(
+        SubsystemDispatch(
+            subsystem="dogfight",
+            params={"type": "combat", "opponent": "Red Baron"},
+            idempotency_key="dogfight-165-3-seating-wire",
+            confidence=1.0,
+        ),
+        snapshot=snap,
+        pack=sd.genre_pack,
+        player_name="Rux",
+        npcs_present=[],
+        dungeon_store=sd.dungeon_store,
+    )
+    assert received.get("dungeon_store") is sd.dungeon_store, (
+        "run_dogfight_dispatch did not forward dungeon_store to "
+        "instantiate_encounter_from_trigger — Task 8 seating would be dead on the "
+        f"dogfight path in production; received keys={sorted(received)}"
+    )

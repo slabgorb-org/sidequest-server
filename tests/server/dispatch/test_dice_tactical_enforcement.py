@@ -136,3 +136,111 @@ def test_dial_ruleset_not_enforced():
         snapshot=None,
     )
     assert verdict is None  # non-WN ruleset -> no grid enforcement
+
+
+# --- 165-3 REWORK additions (reviewer MEDIUM [TEST]) -----------------------------
+# The DISTINCT skip reasons and the ranged-weapon leg were untested. The skip-reason
+# distinctness is load-bearing observability: the GM panel must tell "this room has
+# no grid" (no_grid, a scope no-op) from "an actor was never seated"
+# (attacker_unseated / target_unseated, a wiring BUG). Both must be verifiable, so we
+# assert the emitted span's reason, not just the None return.
+# (EncounterActor / EncounterMetric / StructuredEncounter imported at top.)
+
+
+def _one_seated(*, attacker_has_cell: bool, target_has_cell: bool):
+    """A combat where exactly one side carries a cell — to exercise the distinct
+    unseated skip reasons."""
+    a = EncounterActor(
+        name="Rux",
+        role="combatant",
+        side="player",
+        per_actor_state={"cell": [1, 1]} if attacker_has_cell else {},
+    )
+    t = EncounterActor(
+        name="rope-spider",
+        role="combatant",
+        side="opponent",
+        per_actor_state={"cell": [2, 1]} if target_has_cell else {},
+    )
+    return StructuredEncounter(
+        encounter_type="combat",
+        player_metric=EncounterMetric(name="tension", threshold=10),
+        opponent_metric=EncounterMetric(name="fear", threshold=10),
+        actors=[a, t],
+    )
+
+
+def _skip_reasons(otel_capture) -> list[str]:
+    return [
+        (s.attributes or {}).get("reason")
+        for s in otel_capture.get_finished_spans()
+        if s.name == "tactical.enforcement.skipped"
+    ]
+
+
+def test_attacker_unseated_skips_with_distinct_reason(otel_capture):
+    """Mask present but the ATTACKER carries no cell → skip, and the breadcrumb must
+    say ``attacker_unseated`` (a seating wiring bug), NOT ``no_grid`` (a scope no-op).
+    The GM panel distinguishes the two."""
+    enc = _one_seated(attacker_has_cell=False, target_has_cell=True)
+    verdict = _enforce_tactical_reach(
+        ruleset=get_ruleset_module("wwn"),
+        encounter=enc,
+        actor=enc.actors[0],
+        target_name="rope-spider",
+        spec=SimpleNamespace(range_band=None),
+        mask=ROOM,
+        snapshot=None,
+    )
+    assert verdict is None
+    assert "attacker_unseated" in _skip_reasons(otel_capture)
+
+
+def test_target_unseated_skips_with_distinct_reason(otel_capture):
+    """Mask present, attacker seated, but the TARGET carries no cell →
+    ``target_unseated`` (distinct from ``no_grid`` and ``attacker_unseated``)."""
+    enc = _one_seated(attacker_has_cell=True, target_has_cell=False)
+    verdict = _enforce_tactical_reach(
+        ruleset=get_ruleset_module("wwn"),
+        encounter=enc,
+        actor=enc.actors[0],
+        target_name="rope-spider",
+        spec=SimpleNamespace(range_band=None),
+        mask=ROOM,
+        snapshot=None,
+    )
+    assert verdict is None
+    assert "target_unseated" in _skip_reasons(otel_capture)
+
+
+def test_ranged_weapon_reaches_where_melee_would_deny():
+    """A ranged weapon (``"N/N"`` metre band) must reach a target that a melee strike
+    could not. Attacker (1,1) → target (5,1) is 4 cells (out of melee reach 1) but a
+    ``"100/300"`` band (long 300 m / 1.5 = 200 cells) is well in range with clear LOS.
+    Guards the ranged leg so a band→melee collapse (BLOCKER-1 class) fails a test."""
+    enc = _combat((1, 1), (5, 1))  # 4 cells along the clear top row
+
+    melee = _enforce_tactical_reach(
+        ruleset=get_ruleset_module("wwn"),
+        encounter=enc,
+        actor=enc.actors[0],
+        target_name="rope-spider",
+        spec=SimpleNamespace(range_band=None),  # melee
+        mask=ROOM,
+        snapshot=None,
+    )
+    assert melee is not None and melee.in_range is False, "melee must NOT reach 4 cells"
+
+    ranged = _enforce_tactical_reach(
+        ruleset=get_ruleset_module("wwn"),
+        encounter=enc,
+        actor=enc.actors[0],
+        target_name="rope-spider",
+        spec=SimpleNamespace(range_band="100/300"),  # ranged, ~200-cell reach
+        mask=ROOM,
+        snapshot=None,
+    )
+    assert ranged is not None and ranged.in_range is True, (
+        "a ranged weapon must reach a target 4 cells away with clear LOS — a "
+        "false-deny here means the band silently collapsed to melee"
+    )

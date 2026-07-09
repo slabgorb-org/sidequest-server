@@ -19,6 +19,7 @@ from __future__ import annotations
 import pytest
 
 from sidequest.dungeon.region_graph.model import RegionGraph, RegionNode
+from sidequest.dungeon.seed_bootstrap import ENTRANCE_ID
 from sidequest.game.seams.base import SeamCrossingError
 from sidequest.game.session import GameSnapshot
 from sidequest.game.sites import SiteDescriptor
@@ -138,6 +139,46 @@ def test_enter_site_missing_entrance_node_raises() -> None:
 
     assert ei.value.reason == "no_site_entrance"
     assert snap.pc_regions["Rux"] == "the_dropmouth"
+
+
+class _LegacyFrontierStore:
+    """The bootstrapped Sünden frontier store: its graph is keyed on the bare
+    ``ENTRANCE_ID`` (``entrance``), NOT the site-namespaced ``frontier:entrance``
+    the descriptor declares. This is the frontier-legacy shape the entrance
+    fallback exists for — node-id namespacing is a B4 follow-up, so B1's frontier
+    keeps its bootstrap ``entrance`` node."""
+
+    def load_map(self, *, entrance_id: str, site_id: str = "frontier") -> RegionGraph:
+        g = RegionGraph(entrance_id=ENTRANCE_ID)
+        g.add_node(RegionNode(id=ENTRANCE_ID, expansion_id=0, theme="shaft_collar"))
+        return g
+
+
+def test_enter_site_falls_back_to_graph_entrance_for_legacy_frontier() -> None:
+    """Story 164-3 (forward-seeded from 164-2, Task 6): the frontier site DECLARES a
+    namespaced entrance (``frontier:entrance``) but the bootstrapped Sünden store
+    keyed its graph on the bare ``ENTRANCE_ID`` (``entrance``). ``resolve_enter_site``
+    must bind to ``graph.entrance_id`` when the declared node is absent BUT the graph
+    has a real entrance — a single loud fallback, correct for frontier-legacy and
+    harmless for bounded sites (whose entrance IS the namespaced id).
+
+    RED: today this raises ``no_site_entrance`` because ``frontier:entrance`` is not
+    a node in the legacy graph. The separate ``_missing_entrance_node_raises`` case
+    (a truly EMPTY graph — no entrance at all) still raises after this fallback."""
+    snap = _snapshot("the_dropmouth")
+    store = _LegacyFrontierStore()
+
+    result = resolve_enter_site(
+        snapshot=snap,
+        player_name="Rux",
+        site=_FRONTIER,
+        dungeon_repository=store,
+        resolved_via="site_enter",
+    )
+
+    assert result.to_region == ENTRANCE_ID, "must fall back to the graph's real entrance"
+    assert snap.region_for(perspective="Rux") == ENTRANCE_ID
+    assert snap.pc_regions["Rux"] == ENTRANCE_ID
 
 
 # ---------------------------------------------------------------------------

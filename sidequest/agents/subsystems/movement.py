@@ -46,7 +46,10 @@ from sidequest.telemetry.spans import (
     movement_resolved_span,
     movement_unresolved_span,
 )
-from sidequest.telemetry.spans.site import site_enter_unresolved_span
+from sidequest.telemetry.spans.site import (
+    site_enter_unresolved_span,
+    site_exit_unresolved_span,
+)
 
 if TYPE_CHECKING:
     from sidequest.dungeon.lookahead_worker import LookaheadWorkerHandle
@@ -401,6 +404,43 @@ async def run_movement_dispatch(
             from sidequest.game.pg.dungeon import DEFAULT_SITE_ID
 
             owning_site = site_registry.by_id(DEFAULT_SITE_ID)
+            # No Silent Fallbacks (Story 164-3 review): a PC standing on a legacy
+            # procedural node whose region-mode world declares NO frontier site is
+            # a cartography MISCONFIGURATION — the frontier site is what OWNS these
+            # nodes post-cutover. If the PC explicitly asks to LEAVE (``exit_site``)
+            # and no site resolves, fail LOUD with a clear reason + span, never a
+            # silent fall-through to the §Q1 navigator's misleading
+            # ``no_candidate_edges`` (which masks the missing ``sites:`` config —
+            # the exact "hours debugging why it isn't quite right" trap). A
+            # non-exit intent (in-scene nav) does NOT need the site, so it falls
+            # through to §Q1 unharmed.
+            if owning_site is None and action == "exit_site":
+                logger.warning(
+                    "movement.frontier_site_undeclared world=%s region=%s site_id=%s "
+                    "(procedural node but no frontier site declared in cartography)",
+                    snapshot.world_slug,
+                    from_region,
+                    DEFAULT_SITE_ID,
+                )
+                with site_exit_unresolved_span(
+                    pc_name=player_name,
+                    from_region=from_region,
+                    reason="frontier_site_undeclared",
+                ):
+                    pass
+                return _unresolved(
+                    snapshot=snapshot,
+                    player_name=player_name,
+                    reason="frontier_site_undeclared",
+                    from_region=from_region,
+                    direction=direction,
+                    exit_descriptor=exit_descriptor,
+                    available=[],
+                    surface=(
+                        "There is no way out mapped from here — this place was "
+                        "never declared as a site."
+                    ),
+                )
         if owning_site is not None and action == "exit_site":
             try:
                 crossing = resolve_exit_site(
@@ -411,6 +451,16 @@ async def run_movement_dispatch(
                     resolved_via="site_exit",
                 )
             except SeamCrossingError as err:
+                # The catcher owns the failure span (seams/base contract): emit the
+                # site-channel fail-loud so the GM panel's ``sites`` component sees
+                # exit failures too (Story 164-3 review — parity with the enter
+                # catcher below), THEN surface the truth through movement.unresolved.
+                with site_exit_unresolved_span(
+                    pc_name=player_name,
+                    from_region=from_region,
+                    reason=err.reason,
+                ):
+                    pass
                 return _unresolved(
                     snapshot=snapshot,
                     player_name=player_name,

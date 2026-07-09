@@ -135,8 +135,51 @@ def _cartography_with_site() -> CartographyConfig:
     )
 
 
+def _cartography_no_site() -> CartographyConfig:
+    """A region-mode world that declares NO frontier site (the misconfiguration
+    the shim must fail loud on — Story 164-3 review finding)."""
+    return CartographyConfig(
+        starting_region="the_dropmouth",
+        navigation_mode=NavigationMode.region,
+        regions={
+            "the_dropmouth": Region(
+                name="The Dropmouth", summary="The lip.", description="The shaft mouth."
+            ),
+        },
+        sites=[],
+    )
+
+
+def _cartography_dangling_owner() -> CartographyConfig:
+    """The frontier site's ``attached_to`` names a region NOT on the map — so
+    resolve_exit_site raises ``dangling_site_owner`` (the exit-failure path)."""
+    return CartographyConfig(
+        starting_region="the_dropmouth",
+        navigation_mode=NavigationMode.region,
+        regions={
+            "the_dropmouth": Region(
+                name="The Dropmouth", summary="The lip.", description="The shaft mouth."
+            ),
+        },
+        sites=[
+            SiteDecl(
+                site_id="frontier",
+                name="The Deep",
+                archetype="megadungeon",
+                attached_to="nowhere",  # not a region on the map
+                extent="frontier",
+            )
+        ],
+    )
+
+
 def _pack(world_slug: str = "beneath_sunden"):
     world = types.SimpleNamespace(cartography=_cartography_with_site())
+    return types.SimpleNamespace(worlds={world_slug: world})
+
+
+def _pack_cart(cart: CartographyConfig, world_slug: str = "beneath_sunden"):
+    world = types.SimpleNamespace(cartography=cart)
     return types.SimpleNamespace(worlds={world_slug: world})
 
 
@@ -263,3 +306,59 @@ def test_exit_site_dispatch_from_legacy_frontier_node() -> None:
     assert out.data.get("resolved_via") == "site_exit", out.data
     assert out.data.get("to_region") == "the_dropmouth", out.data
     assert snap.pc_regions["Rux"] == "the_dropmouth"
+
+
+def test_exit_site_undeclared_frontier_fails_loud(otel_capture, caplog) -> None:
+    """Review finding (HIGH, No Silent Fallbacks): a PC on a legacy procedural node
+    in a region-mode world that declares NO frontier site is a cartography
+    misconfiguration. An ``exit_site`` must FAIL LOUD — a clear
+    ``frontier_site_undeclared`` reason + a ``site.exit_unresolved`` span + a
+    warning log — NOT silently fall through to the §Q1 navigator's misleading
+    ``no_candidate_edges``. The PC does not move."""
+    snap = _snapshot(ENTRANCE_ID)  # a legacy procedural node
+    with caplog.at_level("WARNING", logger="sidequest.agents.subsystems.movement"):
+        out = _run(
+            run_movement_dispatch(
+                _exit_dispatch(),
+                snapshot=snap,
+                player_name="Rux",
+                dungeon_store=_FrontierLegacyRepo(),
+                palette=_FakePalette(),
+                pack=_pack_cart(_cartography_no_site()),
+            )
+        )
+    assert out.data.get("error") == "frontier_site_undeclared", out.data
+    assert out.data.get("resolved_via") != "site_exit", out.data
+    assert snap.pc_regions["Rux"] == ENTRANCE_ID, "a misconfigured exit must not move the PC"
+
+    spans = [s for s in otel_capture.get_finished_spans() if s.name == "site.exit_unresolved"]
+    assert len(spans) == 1, "an undeclared-site exit MUST emit site.exit_unresolved (fail loud)"
+    assert (spans[0].attributes or {}).get("reason") == "frontier_site_undeclared"
+    assert any("frontier_site_undeclared" in r.getMessage() for r in caplog.records), (
+        "the missing frontier-site config must surface as a loud warning, not a silent degrade"
+    )
+
+
+def test_exit_site_failure_emits_site_exit_unresolved_span(otel_capture) -> None:
+    """Review finding (MEDIUM, OTEL parity): an ``exit_site`` whose resolver raises
+    (here ``dangling_site_owner`` — the site's ``attached_to`` isn't on the map)
+    must emit a ``site.exit_unresolved`` span from the movement catcher, mirroring
+    the enter path, so the GM panel's ``sites`` component is not blind to exit
+    failures. The PC does not move."""
+    snap = _snapshot(ENTRANCE_ID)
+    out = _run(
+        run_movement_dispatch(
+            _exit_dispatch(),
+            snapshot=snap,
+            player_name="Rux",
+            dungeon_store=_FrontierLegacyRepo(),
+            palette=_FakePalette(),
+            pack=_pack_cart(_cartography_dangling_owner()),
+        )
+    )
+    assert out.data.get("error") == "dangling_site_owner", out.data
+    assert snap.pc_regions["Rux"] == ENTRANCE_ID, "a failed exit must not move the PC"
+
+    spans = [s for s in otel_capture.get_finished_spans() if s.name == "site.exit_unresolved"]
+    assert len(spans) == 1, "an exit_site resolver failure MUST emit site.exit_unresolved"
+    assert (spans[0].attributes or {}).get("reason") == "dangling_site_owner"

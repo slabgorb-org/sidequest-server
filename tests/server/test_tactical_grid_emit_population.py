@@ -9,6 +9,10 @@ test per CLAUDE.md "No Source-Text Wiring Tests").
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
 
 
 def test_runtime_payload_has_tokens_and_features(tmp_path: Path, monkeypatch) -> None:
@@ -158,3 +162,274 @@ def test_runtime_payload_populates_move_adjudications(tmp_path: Path, monkeypatc
         f"move echo must carry the bound ruleset's Move budget "
         f"({expected_budget} cells), got {rux.cells_budget}"
     )
+
+
+# ---------------------------------------------------------------------------
+# 165-4 REWORK RED — Reviewer (rejected 2026-07-09) blocking + coverage findings.
+#
+# The move-summary echo block in _maybe_build_runtime_cavern_payload
+# (map_emit.py:281-312) shipped with three defects the reviewer flagged:
+#   [HIGH] no OTEL span on the ruleset-resolve + adjudication-build decision
+#          (its two siblings in the SAME function both emit tactical_grid.*
+#          watcher events; this one emits nothing → GM panel can't tell whether
+#          the move echo engaged, skipped, or silently no-op'd);
+#   [HIGH] getattr(sd, "genre_pack", None) / getattr(pack, "rules", None) on
+#          REQUIRED non-Optional fields — masks a broken invariant as "zero
+#          adjudications" instead of failing loud (No Silent Fallbacks);
+#   [MED/TEST] coverage gaps — no Fate/no-combat_move_cells branch, no multi-PC.
+#
+# CONTRACT this RED phase pins (TEA design decision — logged as a deviation):
+#   the decision emits via _watcher_publish (the tactical_grid.* ephemeral-event
+#   pattern its two siblings use), event name MOVE_SUMMARY_EVENT, carrying
+#   `capable` (does the bound ruleset expose a cell-based Move?), `ruleset`, and
+#   `adjudication_count` (N move echoes built). Both the engaged and the
+#   no-capability-skip paths MUST fire it so the panel can distinguish them.
+# ---------------------------------------------------------------------------
+
+MOVE_SUMMARY_EVENT = "tactical_grid.move_summary"
+
+
+def _capture_watcher_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[tuple[str, dict[str, Any]]]:
+    """Intercept map_emit._watcher_publish (the sibling events' emit point).
+
+    Mirrors the capture shape in tests/server/test_tactical_grid_otel.py so the
+    move-summary span is asserted the same way tactical_grid.emitted is.
+    """
+    import sidequest.server.websocket_handlers.map_emit as map_emit
+
+    events: list[tuple[str, dict[str, Any]]] = []
+
+    def _capture(
+        event: str,
+        attrs: dict[str, Any],
+        *,
+        component: str | None = None,
+        severity: str | None = None,
+    ) -> Any:
+        events.append((event, dict(attrs)))
+
+    monkeypatch.setattr(map_emit, "_watcher_publish", _capture)
+    return events
+
+
+def _add_second_pc(snap: Any, room_id: str, *, name: str) -> None:
+    """Seat a second live PC in the region so the move-summary loop echoes N>1."""
+    from sidequest.game.character import Character
+    from sidequest.game.creature_core import CreatureCore, HpPool
+
+    core = CreatureCore(
+        name=name,
+        description="A second explorer.",
+        personality="Wary.",
+        hp=HpPool(current=20, max=20, base_max=20),
+        armor_class=15,
+    )
+    snap.characters.append(
+        Character(
+            core=core,
+            backstory="A second delver who came up through the lower galleries.",
+            char_class="Fighter",
+            race="Human",
+        )
+    )
+    snap.character_locations[name] = room_id
+
+
+def test_move_summary_emits_watcher_span_when_move_capable(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """RED [HIGH OTEL]: the engaged move-summary decision must emit a watcher event.
+
+    A WWN pack (combat_move_cells present) + a PC in the region builds one move
+    adjudication; the decision MUST surface a tactical_grid.move_summary watcher
+    event marking it engaged (capable=True) and carrying the count built, exactly
+    like its siblings tactical_grid.tactical_missing / .runtime_render_skipped.
+
+    Fails on develop: the block emits no watcher event at all — the GM panel
+    cannot tell an engaged move echo from a silent no-op.
+    """
+    monkeypatch.setenv("SIDEQUEST_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setenv("SIDEQUEST_ASSET_BASE_URL", "local")
+
+    from tests.server.tactical_emit_fixtures import build_sd_with_tactical_region
+
+    sd, snapshot, room_id = build_sd_with_tactical_region(creature_revealed=True)
+    events = _capture_watcher_events(monkeypatch)
+
+    from sidequest.server.websocket_handlers.map_emit import (
+        _maybe_build_runtime_cavern_payload,
+    )
+
+    payload = _maybe_build_runtime_cavern_payload(sd=sd, room_id=room_id, snapshot=snapshot)
+    assert payload is not None, "Builder returned None — runtime branch not entered"
+
+    move_count = len([a for a in payload.adjudications if a.kind == "move"])
+    assert move_count == 1, "fixture seats exactly one PC — sanity for the count assertion"
+
+    summaries = [attrs for ev, attrs in events if ev == MOVE_SUMMARY_EVENT]
+    assert summaries, (
+        f"{MOVE_SUMMARY_EVENT!r} watcher event did not fire — the move-summary "
+        f"subsystem decision emits no span (OTEL Observability Principle). Saw: "
+        f"{[ev for ev, _ in events]}"
+    )
+    fields = summaries[0]
+    assert fields.get("capable") is True, (
+        f"engaged span must mark the ruleset move-capable, got capable={fields.get('capable')!r}"
+    )
+    assert fields.get("adjudication_count") == move_count, (
+        f"span must carry the count of move echoes built ({move_count}), got "
+        f"adjudication_count={fields.get('adjudication_count')!r}"
+    )
+
+
+def test_move_summary_reports_skip_for_ruleset_without_move_cells(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """RED [HIGH OTEL] + [TEST] Fate coverage: a non-move ruleset is a logged skip.
+
+    A Fate-bound pack has no combat_move_cells (it is not a WN-family ruleset), so
+    the block builds ZERO move echoes — a deliberate scope boundary. Two contracts:
+      * scope boundary (passes on develop): no move adjudications, no crash;
+      * observability (RED on develop): the decision still emits
+        tactical_grid.move_summary, marked capable=False so the GM panel sees the
+        deliberate no-capability skip rather than an invisible no-op.
+    """
+    monkeypatch.setenv("SIDEQUEST_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setenv("SIDEQUEST_ASSET_BASE_URL", "local")
+
+    from tests.server.tactical_emit_fixtures import build_sd_with_tactical_region
+
+    sd, snapshot, room_id = build_sd_with_tactical_region(creature_revealed=True)
+    # Swap the bound ruleset to Fate via a lightweight pack stub — the block reads
+    # only pack.rules.ruleset, then the REAL registry resolves the real FateModule
+    # (which genuinely lacks combat_move_cells). Survives the fail-loud fix, which
+    # accesses sd.genre_pack.rules.ruleset directly.
+    sd.genre_pack = SimpleNamespace(rules=SimpleNamespace(ruleset="fate"))
+
+    events = _capture_watcher_events(monkeypatch)
+
+    from sidequest.server.websocket_handlers.map_emit import (
+        _maybe_build_runtime_cavern_payload,
+    )
+
+    payload = _maybe_build_runtime_cavern_payload(sd=sd, room_id=room_id, snapshot=snapshot)
+    assert payload is not None, "Builder returned None — runtime branch not entered"
+
+    move_adjs = [a for a in payload.adjudications if a.kind == "move"]
+    assert move_adjs == [], (
+        "a ruleset without a cell-based Move must contribute NO move echo "
+        f"(scope boundary), got {move_adjs!r}"
+    )
+
+    summaries = [attrs for ev, attrs in events if ev == MOVE_SUMMARY_EVENT]
+    assert summaries, (
+        f"{MOVE_SUMMARY_EVENT!r} must fire even on the no-capability skip so the GM "
+        f"panel sees the deliberate boundary — got none. Saw: {[ev for ev, _ in events]}"
+    )
+    fields = summaries[0]
+    assert fields.get("capable") is False, (
+        f"skip span must mark the ruleset non-move-capable, got capable={fields.get('capable')!r}"
+    )
+    assert fields.get("adjudication_count") == 0, (
+        f"skip span must report zero echoes built, got {fields.get('adjudication_count')!r}"
+    )
+
+
+def test_move_summary_echoes_one_adjudication_per_present_pc(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """[TEST] multi-PC coverage: the echo is per-PC, not once-per-room.
+
+    Two PCs standing in the region must each get their OWN move adjudication with
+    their own actor name and budget — the reviewer flagged that every prior test
+    exercised a single PC, so a loop bug (echo only the first, or collapse to one)
+    would slip through. Each PC's budget is the bound ruleset's real Move.
+    """
+    monkeypatch.setenv("SIDEQUEST_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setenv("SIDEQUEST_ASSET_BASE_URL", "local")
+
+    from tests.server.tactical_emit_fixtures import build_sd_with_tactical_region
+
+    sd, snapshot, room_id = build_sd_with_tactical_region(creature_revealed=True)
+    _add_second_pc(snapshot, room_id, name="Bexley")
+
+    from sidequest.server.websocket_handlers.map_emit import (
+        _maybe_build_runtime_cavern_payload,
+    )
+
+    payload = _maybe_build_runtime_cavern_payload(sd=sd, room_id=room_id, snapshot=snapshot)
+    assert payload is not None, "Builder returned None — runtime branch not entered"
+
+    move_by_actor = {a.actor: a for a in payload.adjudications if a.kind == "move"}
+    assert set(move_by_actor) == {"Rux", "Bexley"}, (
+        f"each PC in the region must get its own move echo — got actors "
+        f"{sorted(move_by_actor)}"
+    )
+
+    from sidequest.game.ruleset.registry import get_ruleset_module
+
+    ruleset = get_ruleset_module(sd.genre_pack.rules.ruleset)
+    for name, adj in move_by_actor.items():
+        core = next(c.core for c in snapshot.characters if c.core.name == name)
+        assert adj.cells_budget == ruleset.combat_move_cells(core), (
+            f"{name}'s move echo must carry its OWN ruleset Move budget"
+        )
+
+
+def test_move_summary_fails_loud_when_genre_pack_missing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """RED [HIGH No-Silent-Fallbacks]: a missing genre_pack must crash, not skip.
+
+    genre_pack is a REQUIRED, non-Optional _SessionData field. The move-summary
+    block guarded it with getattr(sd, "genre_pack", None), so a broken invariant
+    (genre_pack absent) silently degraded to "zero adjudications." Accessing
+    sd.genre_pack directly makes the broken invariant fail LOUD.
+
+    Fails on develop: the getattr guard swallows the None and the builder returns
+    a payload with empty adjudications (no raise).
+    """
+    monkeypatch.setenv("SIDEQUEST_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setenv("SIDEQUEST_ASSET_BASE_URL", "local")
+
+    from tests.server.tactical_emit_fixtures import build_sd_with_tactical_region
+
+    sd, snapshot, room_id = build_sd_with_tactical_region(creature_revealed=True)
+    sd.genre_pack = None  # simulate the broken required invariant
+
+    from sidequest.server.websocket_handlers.map_emit import (
+        _maybe_build_runtime_cavern_payload,
+    )
+
+    with pytest.raises((AttributeError, TypeError, ValueError)):
+        _maybe_build_runtime_cavern_payload(sd=sd, room_id=room_id, snapshot=snapshot)
+
+
+def test_move_summary_fails_loud_when_pack_rules_missing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """RED [HIGH No-Silent-Fallbacks]: a pack with no rules must crash, not skip.
+
+    Companion to the genre_pack guard — getattr(pack, "rules", None) masks a pack
+    whose required `rules` is missing. Accessing pack.rules directly must fail loud
+    rather than degrade to "zero adjudications."
+
+    Fails on develop: the getattr guard's `is not None` short-circuits the block
+    and the builder returns a payload with empty adjudications (no raise).
+    """
+    monkeypatch.setenv("SIDEQUEST_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setenv("SIDEQUEST_ASSET_BASE_URL", "local")
+
+    from tests.server.tactical_emit_fixtures import build_sd_with_tactical_region
+
+    sd, snapshot, room_id = build_sd_with_tactical_region(creature_revealed=True)
+    sd.genre_pack = SimpleNamespace(rules=None)  # pack present, rules invariant broken
+
+    from sidequest.server.websocket_handlers.map_emit import (
+        _maybe_build_runtime_cavern_payload,
+    )
+
+    with pytest.raises((AttributeError, TypeError, ValueError)):
+        _maybe_build_runtime_cavern_payload(sd=sd, room_id=room_id, snapshot=snapshot)

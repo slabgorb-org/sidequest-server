@@ -234,10 +234,12 @@ class DiceResultPayload(ProtocolBase):
     # primary ``check`` overlay's value/tier.
     roll_role: Literal["check", "damage"] = "check"
 
-    # Additive tactical range echo (Story 165-4, ADR-096 v2). When a strike was
-    # reach/range-adjudicated (165-3), the resolved weapon band + measured cell
-    # distance ride along so the resolution card can show the math. Absent on
-    # rolls with no tactical range (social checks, saves) — None, never guessed.
+    # Additive tactical range echo (Story 165-4, ADR-096 v2). When a combat strike
+    # is reach/range-adjudicated (165-3), the resolved weapon band ("melee" for a
+    # melee weapon, else the ranged SRD band) and the measured cell distance ride
+    # along so the resolution card can show the math. distance_cells is None when
+    # the strike had no grid to measure on. Both absent on rolls with no tactical
+    # range (social checks, saves) — never guessed.
     range_band: str | None = None
     distance_cells: int | None = None
 

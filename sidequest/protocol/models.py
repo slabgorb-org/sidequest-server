@@ -1370,8 +1370,12 @@ class TacticalGridPayload(ProtocolBase):
     adjudications: list[TacticalAdjudication] = Field(default_factory=list)
     """Echoed tactical adjudications for the player-facing math (Story 165-4, ADR-096 v2).
     ADDITIVE with an empty default — Track B's SITE_MAP cutover keeps the same
-    TacticalGridPayload shape untouched. Populated per round with the move-budget
-    summary (and denied reach/range echoes) that 165-3's enforcement computed."""
+    TacticalGridPayload shape untouched. Carries the per-round move-budget summary
+    (and, later, denied reach/range echoes) built from 165-3's enforcement math.
+    The move summary is built only on the runtime-cavern emit path, which today is
+    gated behind the (dead-in-prod) ``dungeon_store``; it reaches players once the
+    Plan-7 store-unification onto ``lookahead_handle.persistence`` lands. (The dice
+    resolution card's range echo, on DiceResultPayload, is already live at dispatch.)"""
 
 
 # ---------------------------------------------------------------------------

@@ -1052,13 +1052,14 @@ def _validate_map_treatment(world_dir: Path, label: str) -> list[str]:
     if not isinstance(data, dict):
         return [f"{label}: map.yaml must be a mapping"]
     kind = data.get("treatment")
-    if kind not in {"raster", "orrery", "dag", "generated"}:
+    if not isinstance(kind, str) or kind not in {"raster", "orrery", "dag", "generated"}:
         return [f"{label}: map.yaml has unknown treatment {kind!r} (raster|orrery|dag|generated)"]
     if kind != "raster":
         return []
 
     errors: list[str] = []
-    if not data.get("image"):
+    image = data.get("image")
+    if not isinstance(image, str) or not image.strip():
         errors.append(f"{label}: raster map.yaml requires a non-empty 'image'")
     prov = data.get("provenance")
     required_prov = ("source", "date", "archive", "pd_basis")
@@ -1068,7 +1069,10 @@ def _validate_map_treatment(world_dir: Path, label: str) -> list[str]:
         )
     else:
         for key in required_prov:
-            if not prov.get(key):
+            # Reject blank values (falsy or whitespace-only) — a whitespace-only
+            # provenance value must not satisfy the PD-provenance licensing gate.
+            val = prov.get(key)
+            if not val or (isinstance(val, str) and not val.strip()):
                 errors.append(f"{label}: raster map.yaml provenance missing {key!r}")
 
     # Anchor coverage: every cartography region needs a node_anchor. cartography
@@ -1134,16 +1138,24 @@ def _validate_weather_zones(world_dir: Path, label: str) -> list[str]:
     weather_data, w_err = _read_yaml(weather_path, label)
     if w_err is not None:
         return [w_err]
-    zones = (
-        set((weather_data or {}).get("climate_zones") or {})
-        if isinstance(weather_data, dict)
-        else set()
+    climate_zones = (
+        (weather_data or {}).get("climate_zones") if isinstance(weather_data, dict) else None
     )
+    if climate_zones is None:
+        return [no_climate_error]
+    if not isinstance(climate_zones, dict):
+        # Shape-guard before set(): a scalar crashes set(), a list-of-mappings
+        # crashes on unhashable elements, a bare string decomposes to characters.
+        return [
+            f"{label}: weather.yaml climate_zones must be a mapping of zone-id → "
+            f"definition (got {type(climate_zones).__name__})"
+        ]
+    zones = set(climate_zones)
     if not zones:
         return [no_climate_error]
     errors: list[str] = []
     for rid, wz in declared.items():
-        if wz not in zones:
+        if not isinstance(wz, str) or wz not in zones:
             errors.append(
                 f"{label}: region {rid!r} weather_zone {wz!r} is not a climate zone "
                 f"(zones: {sorted(zones)})"

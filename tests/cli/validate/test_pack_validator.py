@@ -742,6 +742,71 @@ class TestMapTreatmentValidation:
         errors, _ = validate_pack_structure(pack_dir, schema_path_real)
         assert any("r1" in e and "anchor" in e.lower() for e in errors), errors
 
+    def test_non_hashable_treatment_does_not_crash(self, tmp_path: Path) -> None:
+        """A non-hashable `treatment` (e.g. a YAML list `treatment: [raster]`)
+        must be reported as an unknown treatment, not crash the validator on the
+        `kind not in {…}` set-membership check (TypeError: unhashable type)."""
+        pack_dir = tmp_path / "p"
+        pack_dir.mkdir()
+        _minimal_pack(pack_dir)
+        world_dir = pack_dir / "worlds" / "w"
+        world_dir.mkdir(parents=True)
+        _minimal_world(world_dir)
+        (world_dir / "cartography.yaml").write_text(
+            "navigation_mode: region\nstarting_region: r1\n"
+            "regions:\n  r1: {name: R1, summary: s, description: d}\n",
+            encoding="utf-8",
+        )
+        (world_dir / "map.yaml").write_text("treatment: [raster]\n", encoding="utf-8")
+        errors, _ = validate_pack_structure(pack_dir, schema_path_real)
+        assert any("treatment" in e.lower() for e in errors), errors
+
+    def test_raster_map_whitespace_image_is_error(self, tmp_path: Path) -> None:
+        """A whitespace-only `image` must not satisfy the non-empty-image gate."""
+        pack_dir = tmp_path / "p"
+        pack_dir.mkdir()
+        _minimal_pack(pack_dir)
+        world_dir = pack_dir / "worlds" / "w"
+        world_dir.mkdir(parents=True)
+        _minimal_world(world_dir)
+        (world_dir / "cartography.yaml").write_text(
+            "navigation_mode: region\nstarting_region: r1\n"
+            "regions:\n  r1: {name: R1, summary: s, description: d}\n",
+            encoding="utf-8",
+        )
+        (world_dir / "map.yaml").write_text(
+            'treatment: raster\nimage: "   "\n'
+            "provenance: {source: OS, date: '1900', archive: NLS, pd_basis: expired}\n"
+            "node_anchors:\n  r1: [1, 2]\n",
+            encoding="utf-8",
+        )
+        errors, _ = validate_pack_structure(pack_dir, schema_path_real)
+        assert any("image" in e.lower() for e in errors), errors
+
+    def test_raster_map_whitespace_provenance_is_error(self, tmp_path: Path) -> None:
+        """A whitespace-only provenance value must not satisfy the PD-provenance
+        gate — the licensing invariant Task 8 encodes cannot be defeated by
+        blank-looking text."""
+        pack_dir = tmp_path / "p"
+        pack_dir.mkdir()
+        _minimal_pack(pack_dir)
+        world_dir = pack_dir / "worlds" / "w"
+        world_dir.mkdir(parents=True)
+        _minimal_world(world_dir)
+        (world_dir / "cartography.yaml").write_text(
+            "navigation_mode: region\nstarting_region: r1\n"
+            "regions:\n  r1: {name: R1, summary: s, description: d}\n",
+            encoding="utf-8",
+        )
+        (world_dir / "map.yaml").write_text(
+            "treatment: raster\nimage: sheet.jpg\n"
+            "provenance: {source: \"   \", date: '1900', archive: NLS, pd_basis: expired}\n"
+            "node_anchors:\n  r1: [1, 2]\n",
+            encoding="utf-8",
+        )
+        errors, _ = validate_pack_structure(pack_dir, schema_path_real)
+        assert any("source" in e for e in errors), errors
+
 
 class TestWeatherZoneValidation:
     """Story 163-3 / plan Task 18: every region ``weather_zone`` must resolve to a
@@ -835,3 +900,65 @@ class TestWeatherZoneValidation:
         )
         errors, _ = validate_pack_structure(pack_dir, schema_path_real)
         assert not any("weather" in e.lower() for e in errors), errors
+
+    def test_non_hashable_weather_zone_does_not_crash(self, tmp_path: Path) -> None:
+        """A non-hashable region `weather_zone` (e.g. `weather_zone: [glen_floor]`)
+        must be reported as an invalid zone, not crash the validator on the
+        `wz not in zones` set-membership check (TypeError: unhashable type)."""
+        pack_dir = tmp_path / "p"
+        pack_dir.mkdir()
+        _minimal_pack(pack_dir)
+        world_dir = pack_dir / "worlds" / "w"
+        world_dir.mkdir(parents=True)
+        _minimal_world(world_dir)
+        (world_dir / "cartography.yaml").write_text(
+            "navigation_mode: region\nstarting_region: r1\n"
+            "regions:\n  r1: {name: R1, summary: s, description: d, weather_zone: [glen_floor]}\n",
+            encoding="utf-8",
+        )
+        (world_dir / "weather.yaml").write_text(
+            "climate_zones:\n  glen_floor:\n    seasons:\n      autumn:\n"
+            "        temp_range: [5, 12]\n        conditions: [smirr]\n        weights: [1]\n",
+            encoding="utf-8",
+        )
+        errors, _ = validate_pack_structure(pack_dir, schema_path_real)
+        assert any("weather_zone" in e for e in errors), errors
+
+    def test_malformed_climate_zones_scalar_does_not_crash(self, tmp_path: Path) -> None:
+        """A scalar `climate_zones` (e.g. `climate_zones: 42`) must be reported,
+        not crash the validator on `set(42)` (TypeError: not iterable)."""
+        pack_dir = tmp_path / "p"
+        pack_dir.mkdir()
+        _minimal_pack(pack_dir)
+        world_dir = pack_dir / "worlds" / "w"
+        world_dir.mkdir(parents=True)
+        _minimal_world(world_dir)
+        (world_dir / "cartography.yaml").write_text(
+            "navigation_mode: region\nstarting_region: r1\n"
+            "regions:\n  r1: {name: R1, summary: s, description: d, weather_zone: glen_floor}\n",
+            encoding="utf-8",
+        )
+        (world_dir / "weather.yaml").write_text("climate_zones: 42\n", encoding="utf-8")
+        errors, _ = validate_pack_structure(pack_dir, schema_path_real)
+        # A clean error string is produced (no crash); it names the climate binding.
+        assert any("climate" in e.lower() for e in errors), errors
+
+    def test_malformed_climate_zones_list_of_dicts_does_not_crash(self, tmp_path: Path) -> None:
+        """A list-of-mappings `climate_zones` must be reported, not crash the
+        validator on `set([{...}])` (TypeError: unhashable dict)."""
+        pack_dir = tmp_path / "p"
+        pack_dir.mkdir()
+        _minimal_pack(pack_dir)
+        world_dir = pack_dir / "worlds" / "w"
+        world_dir.mkdir(parents=True)
+        _minimal_world(world_dir)
+        (world_dir / "cartography.yaml").write_text(
+            "navigation_mode: region\nstarting_region: r1\n"
+            "regions:\n  r1: {name: R1, summary: s, description: d, weather_zone: glen_floor}\n",
+            encoding="utf-8",
+        )
+        (world_dir / "weather.yaml").write_text(
+            "climate_zones:\n  - {name: glen_floor}\n", encoding="utf-8"
+        )
+        errors, _ = validate_pack_structure(pack_dir, schema_path_real)
+        assert any("climate" in e.lower() for e in errors), errors

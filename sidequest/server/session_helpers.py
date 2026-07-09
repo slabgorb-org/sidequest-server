@@ -23,6 +23,7 @@ from sidequest.agents.orchestrator import (
     NpcMention,
     TurnContext,
 )
+from sidequest.foundation.asset_urls import resolve_asset_url
 from sidequest.game.builder import humanize_snake_case
 from sidequest.game.creature_core import CreatureCore
 from sidequest.game.npc_pool import NpcPoolMember
@@ -45,6 +46,7 @@ from sidequest.protocol.enums import NarratorVerbosity, NarratorVocabulary
 from sidequest.protocol.messages import (
     CartographyMapMessage,
     CartographyMapPayload,
+    CartographyTreatmentWire,
     ErrorMessage,
     ErrorPayload,
     PlayerPresenceMessage,
@@ -1551,6 +1553,7 @@ def _build_cartography_map_message(
     current_location: str | None,
     player_id: str = "",
     discovered_regions: list[str] | None = None,
+    genre_slug: str = "",
 ) -> CartographyMapMessage | None:
     """Build a MAP_UPDATE message from cartography region data.
 
@@ -1676,6 +1679,26 @@ def _build_cartography_map_message(
                 }
             )
 
+    # Optional main-map treatment (spec §2/§4): when the world declares a
+    # map.yaml presentation layer, ship it on the payload so the UI can draw a
+    # raster scan / orrery instead of the d3-dag fallback. Absent → None (today's
+    # frame). The image filename resolves to a CDN/local URL the same way POI
+    # portraits do (resolve_asset_url).
+    treatment_wire: CartographyTreatmentWire | None = None
+    mt = getattr(world, "map_treatment", None)
+    if mt is not None:
+        image_url = None
+        if mt.image:
+            image_url = resolve_asset_url(
+                f"genre_packs/{genre_slug}/worlds/{world_slug}/assets/maps/{mt.image}"
+            )
+        treatment_wire = CartographyTreatmentWire(
+            kind=mt.treatment,
+            image_url=image_url,
+            node_anchors=mt.node_anchors,
+            style_hints=mt.style_hints,
+        )
+
     with cartography_map_emitted_span(
         current_location=current_location,
         world_slug=world_slug,
@@ -1704,6 +1727,7 @@ def _build_cartography_map_message(
                     # it unconditionally).
                     "is_cluster": bool(getattr(world, "is_cluster", False)),
                 },
+                treatment=treatment_wire,
             ),
             player_id=player_id,
         )

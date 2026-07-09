@@ -271,9 +271,7 @@ def _maybe_build_runtime_cavern_payload(
                 if bearing:
                     exits[bearing] = cell
         except Exception as exc:  # noqa: BLE001 — never crash a turn on bearing lookup
-            logger.warning(
-                "tactical_grid.bearing_pair_failed room_id=%s error=%s", room_id, exc
-            )
+            logger.warning("tactical_grid.bearing_pair_failed room_id=%s error=%s", room_id, exc)
 
         # Tokens: party PCs in this room + REVEALED encounter creatures, onto anchors.
         tokens = _place_tokens_on_anchors(
@@ -367,7 +365,9 @@ def _maybe_emit_tactical_grid(
         # TacticalGridPayload from the mask. Falls through (return)
         # if the world has no procedural dungeon or no mask exists for
         # this room_id — the existing static-path absence is non-fatal.
-        runtime_payload = _maybe_build_runtime_cavern_payload(sd=sd, room_id=room_id, snapshot=snapshot)
+        runtime_payload = _maybe_build_runtime_cavern_payload(
+            sd=sd, room_id=room_id, snapshot=snapshot
+        )
         if runtime_payload is not None:
             payload = runtime_payload
             source = "runtime"
@@ -1197,6 +1197,7 @@ def _maybe_emit_cartography_map(
         location,
         player_id=getattr(sd, "player_id", ""),
         discovered_regions=snapshot.discovered_regions,
+        genre_slug=getattr(sd, "genre_slug", ""),
     )
     if msg is None:
         # Off-region-mode (the common case) OR region-mode with no resolvable
@@ -1240,4 +1241,22 @@ def _maybe_emit_cartography_map(
         location,
         len(msg.payload.explored),
     )
+    # Spec §5: the main-map treatment seam is a lie-detector target — when the
+    # world ships a map.yaml treatment, the GM panel must see it engaged rather
+    # than silently skipped. Fires only when the payload actually carries a
+    # treatment block (absent map.yaml -> None -> no span, the dag fallback).
+    if msg.payload.treatment is not None:
+        _watcher_publish(
+            "map.treatment_emitted",
+            {
+                "world": getattr(sd, "world_slug", ""),
+                "treatment_kind": msg.payload.treatment.kind,
+                "region_count": len(msg.payload.cartography.get("regions", {}))
+                if msg.payload.cartography
+                else 0,
+                "anchor_count": len(msg.payload.treatment.node_anchors),
+                "has_image": bool(msg.payload.treatment.image_url),
+            },
+            component="location",
+        )
     emit_fn(msg, "MAP_UPDATE")  # type: ignore[operator]

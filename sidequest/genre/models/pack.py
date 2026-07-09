@@ -58,7 +58,7 @@ from sidequest.genre.models.scenario import ScenarioPack
 from sidequest.genre.models.theme import GenreTheme
 from sidequest.genre.models.tropes import SeedTrope, TropeDefinition
 from sidequest.genre.models.visibility import VisibilityBaseline
-from sidequest.genre.models.world import CartographyConfig, WorldConfig
+from sidequest.genre.models.world import CartographyConfig, MapTreatmentConfig, WorldConfig
 from sidequest.genre.models.wwn_spell import WwnSpellCatalog
 from sidequest.mutation.models import MutationCatalog
 from sidequest.mutation.saints import SaintRegistry
@@ -196,6 +196,7 @@ class World(BaseModel):
     lore: WorldLore
     legends: list[Legend] = Field(default_factory=list)
     cartography: CartographyConfig
+    map_treatment: MapTreatmentConfig | None = None
     is_cluster: bool = False
     """Multi-system cluster flag (Story 104-1 / M-A). Loader-computed at load
     time via ``detect_is_cluster(world_path)`` — True iff the world declares more

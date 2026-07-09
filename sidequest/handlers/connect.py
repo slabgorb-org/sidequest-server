@@ -2018,6 +2018,12 @@ class ConnectHandler:
                     # discovered_regions so the Map tab paints the visited
                     # set correctly on reload (ui #330 / ping-pong #329).
                     discovered_regions=snapshot.discovered_regions,
+                    # Track A (163-1): thread genre_slug so a raster map.yaml
+                    # treatment resolves its image URL correctly on the FIRST
+                    # (connect/resume) frame — without it the builder emits a
+                    # genre_packs//worlds/... double-slash URL (404). Mirrors
+                    # the per-turn producer in map_emit._maybe_emit_cartography_map.
+                    genre_slug=row.genre_slug,
                 )
                 if cart_map_msg is not None:
                     bootstrap_msgs.append(cart_map_msg)

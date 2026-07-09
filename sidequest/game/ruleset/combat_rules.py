@@ -143,16 +143,24 @@ def resolve_weapon_range_band_from_beat_and_actor(
     pack: GenrePack | None,
     world_slug: str | None = None,
 ) -> str | None:
-    """Resolve the equipped weapon's ``range_band`` for a strike beat (165-3,
-    ADR-096 v2 Track C2), or ``None`` for a melee / natural / unarmed attack.
+    """Resolve a strike beat's weapon ``range_band`` (165-3, ADR-096 v2 Track C2),
+    or ``None`` for a melee / natural / unarmed attack.
+
+    Returns the ``range_band`` of the FIRST inventory item that carries one. It
+    does NOT (yet) consult the item's ``equipped`` flag or the ``beat`` argument to
+    pick *which* weapon the strike uses — a mixed-loadout actor holding an
+    unequipped ranged weapon reads as ranged. This mirrors the same first-weapon
+    ambiguity in ``resolve_damage_spec_from_beat_and_actor`` and errs toward not
+    blocking a legitimate strike; a precise fix needs the beat to name the weapon
+    (tracked as a Delivery Finding). ``beat`` is accepted for signature parity with
+    ``resolve_damage_spec_from_beat_and_actor`` but is currently unused.
 
     ``range_band`` lives only on ``CatalogItem`` (not ``DamageSpec``), so this
     mirrors the priority-3 catalog lookup in
     ``resolve_damage_spec_from_beat_and_actor`` — a beat-override / natural /
     unarmed attack has no catalog item and is melee (``None``). Feeding this to
     ``WithoutNumberRulesetModule.weapon_range_cells`` lets the reach gate use the
-    real SRD range for a ranged weapon instead of assuming melee (which would
-    false-deny a ranged strike once the grid is live)."""
+    real SRD range for a ranged weapon instead of assuming melee."""
     inventory_items: list[dict] = getattr(getattr(actor_core, "inventory", None), "items", [])
     if not inventory_items or pack is None:
         return None

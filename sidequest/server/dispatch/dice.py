@@ -363,8 +363,12 @@ def _enforce_tactical_reach(
     ``tactical.enforcement.skipped`` (NOT a silent fallback — the GM panel sees the
     deliberate no-grid boundary). An in-range verdict emits
     ``tactical.move.validated``; an out-of-range verdict emits
-    ``tactical.move.denied`` and the caller aborts the strike with the legible
-    ``verdict.reason`` (never silently retargets — SOUL: The Test)."""
+    ``tactical.move.denied``. In v1 the gate is OBSERVABILITY-ONLY: it EMITS the
+    denied span for the GM panel, but the caller does NOT read the returned verdict
+    or abort the strike (no player-move verb exists yet to resolve a denial —
+    aborting would softlock; Keith ruling 2026-07-09). The returned verdict is dead
+    at the sole call site today; the enforcement-abort that consumes it ships later
+    WITH the move verb."""
     from sidequest.game.ruleset.without_number import WithoutNumberRulesetModule
     from sidequest.telemetry.spans.tactical import (
         tactical_enforcement_skipped_span,
@@ -819,13 +823,19 @@ def dispatch_dice_throw(
 
     # 165-3 (ADR-096 v2, Track C2): reach enforcement — C1's production wiring
     # into the confrontation-resolution chokepoint. On a live tactical grid a
-    # physical COMBAT strike is gated on the weapon's reach/range; an out-of-reach
-    # strike aborts with a legible refusal (never silently retargets — SOUL: The
-    # Test). Skipped as a deliberate no-grid no-op (with an OTEL breadcrumb) when
-    # there is no mask or an actor carries no cell. Scoped to hp_depletion combat
-    # (a social/chase skill check is not a strike); cast/Program throws carry their
-    # own range logic and are not reach-gated. The weapon's real range_band is
-    # resolved so a RANGED weapon uses its SRD band instead of being melee-gated.
+    # physical COMBAT strike runs the weapon's reach/range gate for OBSERVABILITY-
+    # ONLY (v1): the gate emits the validated/denied/skipped spans so the GM panel
+    # sees reach, but it does NOT abort the strike. There is no player-move verb yet
+    # to close distance (seat_actor_cells is the only writer of a cell; narration
+    # can't budge a token), so aborting an out-of-reach strike would softlock combat
+    # on turn one — seating places the melee PC at the entrance and the monster
+    # across the room. Enforcement-abort ships in a later story WITH the move verb
+    # that resolves a denial. (Keith ruling 2026-07-09; sprint/epic-165.yaml.)
+    # Skipped as a deliberate no-grid no-op (with an OTEL breadcrumb) when there is
+    # no mask or an actor carries no cell. Scoped to hp_depletion combat (a social/
+    # chase skill check is not a strike); cast/Program throws carry their own range
+    # logic and are not reach-gated. The weapon's real range_band is resolved so a
+    # RANGED weapon uses its SRD band instead of being melee-gated.
     if (
         encounter is not None
         and payload.spell_id is None
@@ -844,7 +854,9 @@ def dispatch_dice_throw(
             pack=pack,
             world_slug=snapshot.world_slug,
         )
-        _reach_verdict = _enforce_tactical_reach(
+        # Run the gate for its spans (observability); do NOT act on the verdict —
+        # no abort until a move verb exists to resolve a denial (block comment above).
+        _enforce_tactical_reach(
             ruleset=ruleset,
             encounter=encounter,
             actor=actor,
@@ -853,8 +865,6 @@ def dispatch_dice_throw(
             mask=_resolve_room_mask(snapshot, dungeon_store, character_name),
             snapshot=snapshot,
         )
-        if _reach_verdict is not None and not _reach_verdict.in_range:
-            raise DiceDispatchError(_reach_verdict.reason)
 
     # Opposed-check fork (combat fairness, 2026-04-26).
     # When the active confrontation declares ``resolution_mode:

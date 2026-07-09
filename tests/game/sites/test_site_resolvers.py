@@ -181,6 +181,41 @@ def test_enter_site_falls_back_to_graph_entrance_for_legacy_frontier() -> None:
     assert snap.pc_regions["Rux"] == ENTRANCE_ID
 
 
+def test_enter_site_span_stamps_coarse_player_intent(monkeypatch) -> None:
+    """AC4 (Story 164-3, forward-seeded from 164-2): the ``site.enter`` span carries
+    the player's COARSE intent (``intent.direction`` / ``intent.exit_descriptor``)
+    the way ``movement.resolved`` does — so the GM panel sees WHAT the player did to
+    cross, not just that a crossing happened. RED: the resolver omits these today."""
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    import sidequest.telemetry.spans as spans_module
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    local = provider.get_tracer("test-enter-site-intent")
+    monkeypatch.setattr(spans_module, "tracer", lambda: local)
+
+    snap = _snapshot("the_dropmouth")
+    resolve_enter_site(
+        snapshot=snap,
+        player_name="Rux",
+        site=_FRONTIER,
+        dungeon_repository=_SiteStore(entrance_present=True),
+        resolved_via="site_enter",
+        direction="deeper",
+        exit_descriptor="down into the deep",
+    )
+
+    spans = [s for s in exporter.get_finished_spans() if s.name == "site.enter"]
+    assert len(spans) == 1, "expected exactly one site.enter span"
+    attrs = spans[0].attributes or {}
+    assert attrs.get("intent.direction") == "deeper", attrs
+    assert attrs.get("intent.exit_descriptor") == "down into the deep", attrs
+
+
 # ---------------------------------------------------------------------------
 # exit_site — binds the PC back to the site's owning cartography region.
 # ---------------------------------------------------------------------------

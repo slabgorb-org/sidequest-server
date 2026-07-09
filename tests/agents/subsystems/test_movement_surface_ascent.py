@@ -1,20 +1,26 @@
-"""Reverse seam — leaving the Deep: entrance→surface ascent (Story 105-3).
+"""Reverse crossing — leaving the Deep: entrance→surface ASCENT, migrated to the
+SITE model (Story 105-3 → Task 6, Story 164-3).
 
-The mirror of test_movement_seam_crossing.py. 105-2 wired the surface→deep
-crossing (a PC at ``the_dropmouth`` descending binds to the dungeon entrance
-node). 105-3 wires the RETURN: a PC standing on the dungeon entrance node who
-intends back/up/toward_exit with NO deeper in-graph candidate edge resolves to
-the cartography region that OWNS the seam route (``seam_route_for`` from_id, i.e.
-``the_dropmouth``) via the same per-PC ``pc_region`` patch path — never narrator
-improvisation.
+105-2 wired the surface→deep crossing; 105-3 wired the RETURN. Task 6 REMOVED the
+five-rung inlined seam ladder and REPLACED it with SITE crossings (SiteRegistry ×
+enter_site/exit_site resolvers). The ascent is now the site EXIT crossing: a PC
+standing on the site's (legacy) ``entrance`` node with a non-``deeper`` intent
+resolves to the region that OWNS the site (``site.attached_to`` == ``the_dropmouth``)
+via ``resolve_exit_site`` and the same per-PC ``pc_region`` patch path — never
+narrator improvisation. Membership of the un-namespaced ``entrance`` node is
+detected via the legacy ``is_procedural_region_id`` shim → the default frontier
+site, so the DESTINATION (``to_region``) is UNCHANGED from the ladder it replaces.
 
-Span contract (story-authoritative): the crossing is the SAME bidirectional seam
-route, so ``movement.resolved`` carries ``seam_kind="deep_descent"`` (unchanged)
-and the new direction discriminator ``resolved_via="surface_ascent"``.
+Span contract: a solo acting-PC crossing now emits a ``site.exit`` span (name
+``site.exit``, attrs incl. ``resolved_via="site_exit"``, ``site_id="frontier"``,
+``to_region``) — there is NO ``movement.resolved`` span and NO ``seam_kind`` for a
+solo site crossing.
 
-These tests are RED until 105-3 lands. Today the entrance-node back intent
-fail-louds via ``movement.unresolved`` (no_candidate_edges), which is honest but
-strands the party below.
+The malformed-authoring guards (a fat-fingered site owner) retarget from the
+retired ``surface_owner_for_entrance`` route machinery to ``resolve_exit_site``
+raising ``SeamCrossingError(dangling_site_owner)`` — caught in
+``run_movement_dispatch`` (never an uncaught raise) and surfaced loud through
+``movement.unresolved``; the PC is never bound to a null/phantom surface region.
 """
 
 from __future__ import annotations
@@ -37,6 +43,7 @@ from sidequest.genre.models.world import (
     NavigationMode,
     Region,
     Route,
+    SiteDecl,
 )
 from sidequest.protocol.dispatch import SubsystemDispatch, VisibilityTag
 
@@ -65,15 +72,18 @@ def _movement(direction: str, descriptor: str = "") -> SubsystemDispatch:
 
 
 class _StoreWithEntrance:
-    """DungeonStore double: load_map returns a graph with ONLY the entrance node.
-
-    No in-graph edges, so an exit-ward intent at the entrance has no in-graph
-    candidate — the case the reverse seam must catch.
+    """DungeonRepository double modeling the LEGACY Sünden frontier store: its
+    graph is keyed on the bare ``ENTRANCE_ID`` (not the site-namespaced
+    ``frontier:entrance`` the descriptor declares), so ``site_owning_node`` misses
+    and the ``is_procedural_region_id`` shim binds the frontier site. ``load_map``
+    accepts the ``site_id`` the resolver threads. Only the entrance node exists —
+    no in-graph edges, so a deeper intent at the entrance has no in-graph
+    candidate.
     """
 
-    def load_map(self, *, entrance_id):
-        g = RegionGraph(entrance_id=entrance_id)
-        g.add_node(RegionNode(id=entrance_id, expansion_id=0, theme="shaft_collar"))
+    def load_map(self, *, entrance_id: str, site_id: str = "frontier") -> RegionGraph:
+        g = RegionGraph(entrance_id=ENTRANCE_ID)
+        g.add_node(RegionNode(id=ENTRANCE_ID, expansion_id=0, theme="shaft_collar"))
         return g
 
 
@@ -94,11 +104,13 @@ class _FakePalette:
 
 
 def _hybrid_cartography() -> CartographyConfig:
-    """beneath_sunden-shaped: region-mode with a registered seam route.
+    """beneath_sunden-shaped: region-mode declaring a ``frontier`` SITE.
 
-    ``the_dropmouth`` owns the one-way descent route to ``deep_descent`` (a
-    registered seam kind). The seam is bidirectional at the threshold: the same
-    route is the surface owner a PC at the entrance node ascends back to.
+    ``the_dropmouth`` OWNS the site; ``ropefoot`` (the surface camp) is one step
+    adjacent to it. Standing on the site's (legacy) ``entrance`` node, a
+    non-``deeper`` intent EXITS back to the owning region (``the_dropmouth``). The
+    inert legacy ``deep_descent`` route rides along for shape-fidelity — the site
+    registry, not the route, drives the crossing now.
     """
     return CartographyConfig(
         starting_region="ropefoot",
@@ -108,11 +120,13 @@ def _hybrid_cartography() -> CartographyConfig:
                 name="Ropefoot",
                 summary="Surface camp.",
                 description="The waiting camp above the shaft.",
+                adjacent=["the_dropmouth"],
             ),
             "the_dropmouth": Region(
                 name="The Dropmouth",
                 summary="The lip of the shaft.",
                 description="The mouth of the descent.",
+                adjacent=["ropefoot"],
             ),
         },
         routes=[
@@ -121,6 +135,15 @@ def _hybrid_cartography() -> CartographyConfig:
                 description="The one-way descent.",
                 from_id="the_dropmouth",
                 to_id="deep_descent",
+            ),
+        ],
+        sites=[
+            SiteDecl(
+                site_id="frontier",
+                name="The Deep",
+                archetype="megadungeon",
+                attached_to="the_dropmouth",
+                extent="frontier",
             ),
         ],
     )
@@ -149,16 +172,16 @@ def _oz_cartography() -> CartographyConfig:
     )
 
 
-def _null_from_id_cartography() -> CartographyConfig:
-    """Malformed seam: a registered-kind (``deep_descent``) route whose
-    ``from_id`` is null — the exact homebrew fat-finger the reviewer's Devil's
-    Advocate flagged (Jade authors packs now; ``Route.from_id`` is
-    ``str | None = None`` with NO validator, so this loads and plays fine on the
-    surface and on descent — the bomb only goes off on the way back up).
+def _null_owner_site_cartography() -> CartographyConfig:
+    """Malformed SITE: a ``frontier`` site whose ``attached_to`` is EMPTY — the
+    site-model analog of the retired null-``from_id`` seam (the exact homebrew
+    fat-finger the reviewer's Devil's Advocate flagged; Jade authors packs now,
+    and ``SiteDecl.attached_to`` is a bare ``str`` with no non-empty validator, so
+    this loads and plays fine until the way back up).
 
-    ``surface_owner_for_entrance`` returns this route (its distinct-from_id set
-    is ``{None}``, length 1), so the ascent branch reaches ``resolve_surface_ascent``
-    with a null surface owner.
+    Standing on the site's legacy ``entrance`` node, the exit branch reaches
+    ``resolve_exit_site`` with an empty owner, which fails loud
+    (``dangling_site_owner``) rather than binding the PC to a null surface.
     """
     return CartographyConfig(
         starting_region="the_dropmouth",
@@ -170,22 +193,24 @@ def _null_from_id_cartography() -> CartographyConfig:
                 description="The mouth of the descent.",
             ),
         },
-        routes=[
-            Route(
-                name="Down the Rope",
-                description="A descent whose surface owner was never wired.",
-                from_id=None,  # the wiring fault
-                to_id="deep_descent",
+        sites=[
+            SiteDecl(
+                site_id="frontier",
+                name="The Deep",
+                archetype="megadungeon",
+                attached_to="",  # the wiring fault: no owning region
+                extent="frontier",
             ),
         ],
     )
 
 
-def _dangling_from_id_cartography() -> CartographyConfig:
-    """Malformed seam: the registered-kind route's ``from_id`` names a surface
-    region that does NOT exist in ``cartography.regions`` (a typo'd id). The
-    descent guards its target (``entrance_id in graph.nodes``); the ascent must
-    guard symmetrically, or it binds the PC to a phantom region.
+def _dangling_owner_site_cartography() -> CartographyConfig:
+    """Malformed SITE: a ``frontier`` site whose ``attached_to`` names a region
+    that does NOT exist in ``cartography.regions`` (a typo'd id) — the site-model
+    analog of the retired dangling-``from_id`` seam. ``resolve_exit_site`` guards
+    ``attached_to in regions`` and fails loud (``dangling_site_owner``), so it
+    never binds the PC to a phantom region.
     """
     return CartographyConfig(
         starting_region="the_dropmouth",
@@ -197,12 +222,13 @@ def _dangling_from_id_cartography() -> CartographyConfig:
                 description="The mouth of the descent.",
             ),
         },
-        routes=[
-            Route(
-                name="Down the Rope",
-                description="A descent that returns to a region that isn't mapped.",
-                from_id="ghost_dropmouth",  # NOT present in regions
-                to_id="deep_descent",
+        sites=[
+            SiteDecl(
+                site_id="frontier",
+                name="The Deep",
+                archetype="megadungeon",
+                attached_to="ghost_dropmouth",  # NOT present in regions
+                extent="frontier",
             ),
         ],
     )
@@ -278,8 +304,8 @@ def deep_oz_kit():
 
 @pytest.fixture
 def deep_null_owner_kit():
-    """PC ``Groucho`` is deep, but the seam route has a null ``from_id``."""
-    cart = _null_from_id_cartography()
+    """PC ``Groucho`` is deep; the frontier site's ``attached_to`` is EMPTY."""
+    cart = _null_owner_site_cartography()
     pack = _pack_with_cartography("beneath_sunden", cart)
     snap = _snapshot({"Groucho": ENTRANCE_ID}, {"p1": "Groucho"})
     return _HybridKit(snap, pack, _StoreWithEntrance(), _FakePalette())
@@ -287,8 +313,8 @@ def deep_null_owner_kit():
 
 @pytest.fixture
 def deep_dangling_owner_kit():
-    """PC ``Groucho`` is deep; the seam route's ``from_id`` names an unmapped region."""
-    cart = _dangling_from_id_cartography()
+    """PC ``Groucho`` is deep; the frontier site's ``attached_to`` names an unmapped region."""
+    cart = _dangling_owner_site_cartography()
     pack = _pack_with_cartography("beneath_sunden", cart)
     snap = _snapshot({"Groucho": ENTRANCE_ID}, {"p1": "Groucho"})
     return _HybridKit(snap, pack, _StoreWithEntrance(), _FakePalette())
@@ -310,9 +336,10 @@ def deep_dangling_owner_kit():
     ],
 )
 def test_entrance_node_ascends_to_surface(capture_spans, deep_world_kit, direction, descriptor):
-    """AC1 + AC2: from the entrance node, a back/up/toward_exit intent with no
-    deeper in-graph candidate resolves the PC to the seam-owning cartography
-    region (the_dropmouth) via the per-PC patch path — no improvisation."""
+    """AC1 + AC2 (site model): from the site's (legacy) entrance node, a
+    non-``deeper`` intent EXITS to the region that OWNS the site
+    (``site.attached_to`` == ``the_dropmouth``) via the per-PC patch path — no
+    improvisation."""
     kit = deep_world_kit
     out = _run(
         run_movement_dispatch(
@@ -324,29 +351,31 @@ def test_entrance_node_ascends_to_surface(capture_spans, deep_world_kit, directi
             pack=kit.pack,
         )
     )
-    assert out.data.get("resolved_via") == "surface_ascent", (
-        f"expected surface_ascent crossing, got: {out.data}"
+    assert out.data.get("resolved_via") == "site_exit", (
+        f"expected a site_exit crossing, got: {out.data}"
     )
     assert out.data.get("to_region") == "the_dropmouth", (
-        f"expected to_region='the_dropmouth' (the seam owner), got: {out.data.get('to_region')!r}"
+        f"expected to_region='the_dropmouth' (the site owner), got: {out.data.get('to_region')!r}"
     )
     assert kit.snapshot.region_for(perspective="Groucho") == "the_dropmouth", (
         f"PC not rebound to surface; still at {kit.snapshot.region_for(perspective='Groucho')!r}"
     )
-    # OTEL proof the ascent was the seam resolver, not improvisation. The seam is
-    # the SAME bidirectional route, so seam_kind is unchanged ("deep_descent");
-    # resolved_via is the new direction discriminator.
-    resolved = [s for s in capture_spans.get_finished_spans() if s.name == "movement.resolved"]
-    assert len(resolved) == 1, "expected exactly one movement.resolved span for the ascent"
-    attrs = resolved[0].attributes or {}
-    assert attrs.get("resolved_via") == "surface_ascent"
-    assert attrs.get("seam_kind") == "deep_descent"
+    # OTEL proof the ascent was the site EXIT resolver, not improvisation. A solo
+    # acting-PC crossing emits a site.exit span (there is NO movement.resolved
+    # span and NO seam_kind for a solo site crossing).
+    exits = [s for s in capture_spans.get_finished_spans() if s.name == "site.exit"]
+    assert len(exits) == 1, "expected exactly one site.exit span for the ascent"
+    attrs = exits[0].attributes or {}
+    assert attrs.get("resolved_via") == "site_exit"
+    assert attrs.get("site_id") == "frontier"
+    assert attrs.get("to_region") == "the_dropmouth"
 
 
 def test_deeper_from_entrance_does_not_ascend(capture_spans, deep_world_kit):
-    """AC4 discrimination: ``deeper`` at the entrance with no in-graph candidate
-    must NOT hijack into an ascent — the reverse seam is for exit-ward intents
-    only. The party can't go deeper (no node), so this stays unresolved."""
+    """AC4 discrimination (site model): ``deeper`` at the site entrance must NOT
+    hijack into a site EXIT — the exit crossing is for non-``deeper`` intents
+    only. With only the entrance node materialized there is no deeper in-graph
+    candidate, so this stays unresolved and the PC does not leave the site."""
     kit = deep_world_kit
     out = _run(
         run_movement_dispatch(
@@ -358,18 +387,18 @@ def test_deeper_from_entrance_does_not_ascend(capture_spans, deep_world_kit):
             pack=kit.pack,
         )
     )
-    assert out.data.get("resolved_via") != "surface_ascent", (
-        f"'deeper' must not trigger an ascent, got: {out.data}"
+    assert out.data.get("resolved_via") != "site_exit", (
+        f"'deeper' must not trigger a site exit, got: {out.data}"
     )
     assert kit.snapshot.region_for(perspective="Groucho") == ENTRANCE_ID, (
-        "a non-ascending intent must not move the PC off the entrance node"
+        "a non-exiting intent must not move the PC off the entrance node (not bound to surface)"
     )
 
 
 def test_no_seam_world_does_not_invent_surface(capture_spans, deep_oz_kit):
-    """No silent fallback: in a region-mode world with NO registered seam route,
-    a back intent at the entrance must NOT resolve to a fabricated surface region
-    via ascent. The ascent fires only when a real seam route owns the crossing."""
+    """No silent fallback: a region-mode world with NO declared site (its
+    cartography carries no ``sites:`` block) must NOT exit to a fabricated surface
+    region. The site EXIT fires only when a real site owns the PC's node."""
     kit = deep_oz_kit
     out = _run(
         run_movement_dispatch(
@@ -381,8 +410,8 @@ def test_no_seam_world_does_not_invent_surface(capture_spans, deep_oz_kit):
             pack=kit.pack,
         )
     )
-    assert out.data.get("resolved_via") != "surface_ascent", (
-        f"no-seam world must not ascend via the seam path, got: {out.data}"
+    assert out.data.get("resolved_via") != "site_exit", (
+        f"no-site world must not exit via the site path, got: {out.data}"
     )
     assert kit.snapshot.region_for(perspective="Dorothy") == ENTRANCE_ID, (
         "PC must not be moved to an invented surface region"
@@ -390,32 +419,33 @@ def test_no_seam_world_does_not_invent_surface(capture_spans, deep_oz_kit):
 
 
 # ---------------------------------------------------------------------------
-# Reviewer rework (REJECTED 2026-06-13): the error geometry is asymmetric with
-# the descent it claims to mirror. A registered-kind (deep_descent) route IS a
-# seam — a MALFORMED one is a wiring fault that must fail LOUD through
-# movement.unresolved (the OTEL lie-detector), never an uncaught raise and never
-# a silent region_mode defer (which would hand a confabulated 'way up' to the
-# narrator — the exact "convincing narration, zero mechanical backing" the OTEL
-# principle exists to catch). These pin findings #1 (null from_id) and #3
-# (dangling from_id). Finding #2 (pyright str|None) is a static-type fix covered
-# by `uv run pyright`, not a runtime behavior — no test here.
+# Reviewer rework (REJECTED 2026-06-13), RETARGETED to the site model (Task 6,
+# Story 164-3): the retired seam-route machinery is GONE, so a malformed
+# seam-route ``from_id`` has no direct equivalent — the site-model analog is a
+# malformed SITE owner (``SiteDecl.attached_to`` empty or unmapped).
+# ``resolve_exit_site`` raises ``SeamCrossingError(dangling_site_owner)``, which
+# ``run_movement_dispatch`` catches and surfaces LOUD through
+# ``movement.unresolved`` (the OTEL lie-detector) — never an uncaught raise,
+# never a silent region_mode defer (which would hand a confabulated 'way up' to
+# the narrator — the exact "convincing narration, zero mechanical backing" the
+# OTEL principle exists to catch), never a bind to a null/phantom surface. These
+# pin the same two findings against the new resolver: #1 (empty owner) and #3
+# (unmapped owner).
 # ---------------------------------------------------------------------------
 
 
-def test_null_from_id_seam_fails_loud_not_raises(capture_spans, deep_null_owner_kit):
-    """Reviewer finding #1 (HIGH): a registered-kind (``deep_descent``) route with
-    a null ``from_id`` must NOT crash the turn.
+def test_empty_site_owner_fails_loud_not_raises(capture_spans, deep_null_owner_kit):
+    """Reviewer finding #1 (HIGH), site model: a ``frontier`` site whose
+    ``attached_to`` is EMPTY must NOT crash the turn.
 
-    ``surface_owner_for_entrance`` returns it (its distinct-from_id set is
-    ``{None}``, length 1), and today ``resolve_surface_ascent`` raises
-    ``SeamCrossingError(no_surface_owner)`` uncaught out of
-    ``run_movement_dispatch`` — skipping the mandated span and blinding the GM
-    panel. The descent twin wraps its resolver in ``try/except SeamCrossingError
-    → _unresolved``; the ascent must too. The malformed seam fails LOUD via
-    ``movement.unresolved``, never an uncaught raise, never a silent defer.
+    ``resolve_exit_site`` raises ``SeamCrossingError(dangling_site_owner)`` on the
+    empty owner; ``run_movement_dispatch`` wraps the resolver in ``try/except
+    SeamCrossingError → _unresolved``, so the malformed site fails LOUD via
+    ``movement.unresolved`` — never an uncaught raise, never a silent bind to a
+    null surface, never a silent region defer.
     """
     kit = deep_null_owner_kit
-    # The bug IS the uncaught SeamCrossingError on this call — it must not raise.
+    # The point of the guard: the SeamCrossingError must be caught — no raise.
     out = _run(
         run_movement_dispatch(
             _movement("back"),
@@ -426,35 +456,40 @@ def test_null_from_id_seam_fails_loud_not_raises(capture_spans, deep_null_owner_
             pack=kit.pack,
         )
     )
+    assert out.data.get("error") == "dangling_site_owner", (
+        f"an empty site owner must fail loud with dangling_site_owner, got: {out.data}"
+    )
     # PC never bound to a null/phantom surface — stays put on the entrance node.
-    assert out.data.get("resolved_via") != "surface_ascent", (
-        f"a null-from_id seam must not complete an ascent, got: {out.data}"
+    assert out.data.get("resolved_via") != "site_exit", (
+        f"a malformed site owner must not complete an exit, got: {out.data}"
     )
     assert kit.snapshot.region_for(perspective="Groucho") == ENTRANCE_ID, (
-        "a malformed seam must not move the PC off the entrance node; still at "
+        "a malformed site owner must not move the PC off the entrance node; still at "
         f"{kit.snapshot.region_for(perspective='Groucho')!r}"
     )
-    # Fail LOUD: a registered-kind route IS a seam, so a malformed one is a
-    # wiring fault the GM panel must see — movement.unresolved, NOT a silent
-    # region_mode defer.
+    # Fail LOUD: the GM panel must see the wiring fault — movement.unresolved, NOT
+    # a silent region_mode defer, and no false site.exit / movement.resolved span
+    # (resolve_exit_site raises BEFORE opening its span, so no PC was moved).
     span_names = [s.name for s in capture_spans.get_finished_spans()]
     unresolved = [s for s in capture_spans.get_finished_spans() if s.name == "movement.unresolved"]
     assert len(unresolved) == 1, (
-        f"expected exactly one movement.unresolved span for the malformed seam; "
+        f"expected exactly one movement.unresolved span for the malformed site owner; "
         f"spans seen: {span_names}"
     )
-    # And no false movement.resolved span (no PC was actually moved).
     assert "movement.resolved" not in span_names, (
-        "a malformed seam must not emit a movement.resolved span"
+        "a malformed site owner must not emit a movement.resolved span"
+    )
+    assert "site.exit" not in span_names, (
+        "a malformed site owner must not emit a site.exit span (it raised before the span)"
     )
 
 
-def test_dangling_from_id_does_not_bind_phantom_region(capture_spans, deep_dangling_owner_kit):
-    """Reviewer finding #3 (MEDIUM): the ascent binds the PC to ``route.from_id``
-    without verifying it names a real cartography region.
+def test_dangling_site_owner_does_not_bind_phantom_region(capture_spans, deep_dangling_owner_kit):
+    """Reviewer finding #3 (MEDIUM), site model: the exit must not bind the PC to
+    ``site.attached_to`` without verifying it names a real cartography region.
 
-    The descent guards its target (``entrance_id in graph.nodes``) and fails loud
-    otherwise; the ascent must guard symmetrically. A route whose ``from_id`` is a
+    ``resolve_exit_site`` guards ``attached_to in cartography.regions`` and raises
+    ``SeamCrossingError(dangling_site_owner)`` otherwise. A site whose owner is a
     typo'd / unmapped id must NOT strand the PC in a phantom region — it fails
     loud via ``movement.unresolved``.
     """
@@ -469,8 +504,11 @@ def test_dangling_from_id_does_not_bind_phantom_region(capture_spans, deep_dangl
             pack=kit.pack,
         )
     )
-    assert out.data.get("resolved_via") != "surface_ascent", (
-        f"ascent must not bind to an unmapped surface region, got: {out.data}"
+    assert out.data.get("error") == "dangling_site_owner", (
+        f"an unmapped site owner must fail loud with dangling_site_owner, got: {out.data}"
+    )
+    assert out.data.get("resolved_via") != "site_exit", (
+        f"exit must not bind to an unmapped surface region, got: {out.data}"
     )
     assert kit.snapshot.region_for(perspective="Groucho") == ENTRANCE_ID, (
         "PC bound to a phantom region "
@@ -480,5 +518,8 @@ def test_dangling_from_id_does_not_bind_phantom_region(capture_spans, deep_dangl
     span_names = [s.name for s in capture_spans.get_finished_spans()]
     unresolved = [s for s in capture_spans.get_finished_spans() if s.name == "movement.unresolved"]
     assert len(unresolved) == 1, (
-        f"expected movement.unresolved for the dangling surface id; spans seen: {span_names}"
+        f"expected movement.unresolved for the dangling site owner; spans seen: {span_names}"
+    )
+    assert "site.exit" not in span_names, (
+        "a dangling site owner must not emit a site.exit span (it raised before the span)"
     )

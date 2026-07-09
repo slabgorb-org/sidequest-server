@@ -1,26 +1,24 @@
-"""Track B, Task 3 (Story 164-2): CHARACTERIZATION GUARD.
+"""Track B, Task 3 (Story 164-2) → RETARGETED for Task 6 (Story 164-3).
 
-Pin the CURRENT observable Sünden movement/seam behavior BEFORE the risky Task 6
-ladder cutover (movement.py's five-rung inlined seam ladder → SiteRegistry ×
-enter_site/exit_site resolvers). These tests PASS on ``develop`` today — a
-characterization guard has no RED phase; it locks existing behavior so the Task 6
-rewrite can be proven behavior-preserving.
+Pins the observable Sünden movement behavior ACROSS the risky Task 6 ladder
+cutover (movement.py's five-rung inlined seam ladder → SiteRegistry ×
+enter_site/exit_site resolvers). Story 164-2 authored this as a green guard on the
+seam ladder; Story 164-3 retargeted it to the site model — the ``resolved_via``
+names migrated to ``site_enter`` / ``site_exit`` while every ``to_region``
+DESTINATION is UNCHANGED (the load-bearing invariant: same destination, new
+internal path). The dispatch stays ``direction``-keyed here (the dual-trigger
+movement path still crosses on the legacy direction vocabulary); the store doubles
+model the LEGACY frontier store (graph keyed on the bare ``ENTRANCE_ID``), so the
+``resolve_enter_site`` entrance fallback binds the PC to ``entrance``.
 
 They assert on the OBSERVABLE outcome only (``SubsystemOutput.data`` —
-``resolved_via`` / ``to_region``), never on internal rung names. After Task 6 the
-seam rungs' ``resolved_via`` migrates to ``site_enter`` / ``site_exit`` while the
-destination (``to_region``) is UNCHANGED — this file will be retargeted then, but
-until it is, it is the safety net that catches an accidental behavior change.
+``resolved_via`` / ``to_region``), never on internal rung names. Five rungs:
 
-Modeled on the proven beneath_sunden-shaped doubles in
-``tests/agents/subsystems/test_movement_party_split_158_7.py`` (single-PC form
-here — no co-mover fan-out). Five rungs:
-
-  1. owned-seam descent   (the_dropmouth → entrance)  resolved_via surface_descent
-  2. adjacent-seam descent(ropefoot      → entrance)  resolved_via surface_descent_adjacent
-  3. entrance ascent      (entrance → the_dropmouth)  resolved_via surface_ascent
-  4. in-dungeon navigation(entrance → exp001.r0)      to_region exp001.r0, no error
-  5. region-mode lateral  (unmatched descriptor)      resolved_via region_mode_deferred
+  1. owned descent    (the_dropmouth → entrance)  resolved_via site_enter
+  2. adjacent descent (ropefoot      → entrance)  resolved_via site_enter
+  3. entrance ascent  (entrance → the_dropmouth)  resolved_via site_exit
+  4. in-dungeon nav   (entrance → exp001.r0)      to_region exp001.r0, no error
+  5. region-mode lateral (unmatched descriptor)   resolved_via region_mode_deferred
 """
 
 from __future__ import annotations
@@ -37,6 +35,7 @@ from sidequest.genre.models.world import (
     NavigationMode,
     Region,
     Route,
+    SiteDecl,
 )
 from sidequest.protocol.dispatch import SubsystemDispatch, VisibilityTag
 
@@ -60,26 +59,30 @@ def _movement(direction: str, descriptor: str = "") -> SubsystemDispatch:
 
 
 class _StoreWithEntrance:
-    """DungeonStore double: load_map returns a graph with just the entrance node."""
+    """DungeonRepository double modeling the LEGACY Sünden frontier store: its graph
+    is keyed on the bare ``ENTRANCE_ID`` (not the site-namespaced
+    ``frontier:entrance`` the descriptor declares), so ``resolve_enter_site``'s
+    entrance fallback binds the PC to ``entrance``. Accepts the ``site_id`` the
+    resolver threads."""
 
-    def load_map(self, *, entrance_id: str) -> RegionGraph:
-        g = RegionGraph(entrance_id=entrance_id)
-        g.add_node(RegionNode(id=entrance_id, expansion_id=0, theme="shaft_collar"))
+    def load_map(self, *, entrance_id: str, site_id: str = "frontier") -> RegionGraph:
+        g = RegionGraph(entrance_id=ENTRANCE_ID)
+        g.add_node(RegionNode(id=ENTRANCE_ID, expansion_id=0, theme="shaft_collar"))
         return g
 
 
 class _StoreWithDeepGraph:
-    """DungeonStore double: entrance + one materialized deep region below it."""
+    """Legacy frontier store + one materialized deep region below the entrance."""
 
-    def load_map(self, *, entrance_id: str) -> RegionGraph:
-        g = RegionGraph(entrance_id=entrance_id)
+    def load_map(self, *, entrance_id: str, site_id: str = "frontier") -> RegionGraph:
+        g = RegionGraph(entrance_id=ENTRANCE_ID)
         g.add_node(
-            RegionNode(id=entrance_id, expansion_id=0, theme="shaft_collar", depth_score=0.0)
+            RegionNode(id=ENTRANCE_ID, expansion_id=0, theme="shaft_collar", depth_score=0.0)
         )
         g.add_node(
             RegionNode(id="exp001.r0", expansion_id=1, theme="shaft_collar", depth_score=7.9)
         )
-        g.add_edge(RegionEdge(a=entrance_id, b="exp001.r0", kind="shaft"))
+        g.add_edge(RegionEdge(a=ENTRANCE_ID, b="exp001.r0", kind="shaft"))
         return g
 
 
@@ -123,6 +126,15 @@ def _hybrid_cartography() -> CartographyConfig:
                 description="The one-way descent.",
                 from_id="the_dropmouth",
                 to_id="deep_descent",
+            ),
+        ],
+        sites=[
+            SiteDecl(
+                site_id="frontier",
+                name="The Deep",
+                archetype="megadungeon",
+                attached_to="the_dropmouth",
+                extent="frontier",
             ),
         ],
     )
@@ -187,7 +199,7 @@ def test_owned_seam_descent_from_dropmouth() -> None:
             pack=_pack_with_cartography("beneath_sunden", _hybrid_cartography()),
         )
     )
-    assert out.data.get("resolved_via") == "surface_descent", out.data
+    assert out.data.get("resolved_via") == "site_enter", out.data
     assert out.data.get("to_region") == ENTRANCE_ID, out.data
     assert snap.pc_regions["Rux"] == ENTRANCE_ID
 
@@ -211,7 +223,7 @@ def test_adjacent_seam_descent_from_ropefoot() -> None:
             pack=_pack_with_cartography("beneath_sunden", _hybrid_cartography()),
         )
     )
-    assert out.data.get("resolved_via") == "surface_descent_adjacent", out.data
+    assert out.data.get("resolved_via") == "site_enter", out.data
     assert out.data.get("to_region") == ENTRANCE_ID, out.data
     assert snap.pc_regions["Rux"] == ENTRANCE_ID
 
@@ -235,7 +247,7 @@ def test_entrance_ascent_returns_to_seam_owner() -> None:
             pack=_pack_with_cartography("beneath_sunden", _hybrid_cartography()),
         )
     )
-    assert out.data.get("resolved_via") == "surface_ascent", out.data
+    assert out.data.get("resolved_via") == "site_exit", out.data
     assert out.data.get("to_region") == "the_dropmouth", out.data
     assert snap.pc_regions["Rux"] == "the_dropmouth"
 

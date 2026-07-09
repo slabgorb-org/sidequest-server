@@ -71,6 +71,11 @@ def resolve_enter_site(
         span.set_attribute("resolved_via", resolved_via)
         span.set_attribute("extent", site.extent)
         span.set_attribute("archetype", site.archetype)
+        # Coarse player intent (Story 164-3): what the player did to cross, the way
+        # movement.resolved stamps it — so the GM panel sees the intent, not just
+        # the outcome.
+        span.set_attribute("intent.direction", direction)
+        span.set_attribute("intent.exit_descriptor", exit_descriptor)
     logger.debug(
         "site.enter pc=%s site=%s from=%s to=%s via=%s",
         player_name,

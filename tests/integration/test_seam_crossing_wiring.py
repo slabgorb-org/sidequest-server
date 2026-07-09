@@ -41,6 +41,7 @@ from sidequest.genre.models.world import (
     NavigationMode,
     Region,
     Route,
+    SiteDecl,
 )
 from sidequest.protocol.dispatch import (
     DispatchPackage,
@@ -62,11 +63,16 @@ ENTRANCE_ROOM_NAME = "Under the Rope"
 
 
 class _StoreWithEntrance:
-    """DungeonStore double: load_map returns a graph with the entrance node."""
+    """DungeonStore double modeling the LEGACY Sünden frontier store: its graph is
+    keyed on the bare ``ENTRANCE_ID`` (not the site-namespaced ``frontier:entrance``
+    the ``frontier`` SiteDecl declares), so ``resolve_enter_site``'s entrance
+    fallback binds the PC to ``entrance``. Accepts the ``site_id`` the site resolver
+    threads AND the site-less ``entrance_id``-only call the old ``deep_descent`` seam
+    (Door 2) still makes."""
 
-    def load_map(self, *, entrance_id):
-        g = RegionGraph(entrance_id=entrance_id)
-        g.add_node(RegionNode(id=entrance_id, expansion_id=0, theme="shaft_collar"))
+    def load_map(self, *, entrance_id, site_id: str = "frontier"):
+        g = RegionGraph(entrance_id=ENTRANCE_ID)
+        g.add_node(RegionNode(id=ENTRANCE_ID, expansion_id=0, theme="shaft_collar"))
         return g
 
 
@@ -118,6 +124,15 @@ def _hybrid_cartography() -> CartographyConfig:
                 description="The one-way descent.",
                 from_id="the_dropmouth",
                 to_id="deep_descent",
+            ),
+        ],
+        sites=[
+            SiteDecl(
+                site_id="frontier",
+                name="The Deep",
+                archetype="megadungeon",
+                attached_to="the_dropmouth",
+                extent="frontier",
             ),
         ],
     )
@@ -208,7 +223,12 @@ def test_deep_descent_registered_at_import():
 async def test_dispatch_bank_reaches_the_crossing():
     """Through ``run_dispatch_bank`` — the production bank ``movement.py`` is
     registered into — not ``run_movement_dispatch`` directly. The PC ends at
-    the procedural entrance, proving the bank threaded the seam context."""
+    the procedural entrance, proving the bank threaded the SITE crossing context.
+
+    The dispatch still carries the legacy ``direction="deeper"`` vocabulary (the
+    dual-trigger site-enter path crosses on it), so ``resolved_via`` is now the
+    SITE resolver's ``site_enter`` while the DESTINATION (ENTRANCE_ID) is
+    unchanged from the seam ladder it replaces."""
     snapshot = _hybrid_snapshot()
     pack = _pack_with_cartography("beneath_sunden", _hybrid_cartography())
 
@@ -230,8 +250,8 @@ async def test_dispatch_bank_reaches_the_crossing():
         f"outputs={list(result.outputs_by_key)} errors={result.errors}"
     )
     out = result.outputs_by_key["seam-wiring-mv"]
-    assert out.data.get("resolved_via") == "surface_descent", (
-        f"expected surface_descent crossing through the bank, got: {out.data}"
+    assert out.data.get("resolved_via") == "site_enter", (
+        f"expected site_enter crossing through the bank, got: {out.data}"
     )
     assert out.data.get("to_region") == ENTRANCE_ID, (
         f"expected to_region={ENTRANCE_ID!r}, got: {out.data.get('to_region')!r}"
@@ -300,11 +320,12 @@ async def test_apply_pipeline_reaches_the_guard(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_dispatch_bank_crossing_emits_seam_resolved_span(otel_capture):  # noqa: F811
-    """The lie-detector check: the bank crossing emits exactly one
-    ``movement.resolved`` span carrying ``resolved_via=surface_descent`` and
-    ``seam_kind=deep_descent`` — proof the seam resolver fired, not a narrator
-    improvisation. Mirrors the span assertion in the Task 1 movement suite,
-    captured one production layer up (through the bank)."""
+    """The lie-detector check: the bank crossing emits exactly one ``site.enter``
+    span carrying ``resolved_via=site_enter``, ``site_id=frontier``, and the real
+    ``from_region``/``to_region`` — proof the SITE resolver fired inside the bank,
+    not a narrator improvisation. (The retired seam ladder's ``movement.resolved`` /
+    ``seam_kind=deep_descent`` span is gone for a solo acting-PC crossing.) Captured
+    one production layer up, through the dispatch bank."""
     snapshot = _hybrid_snapshot()
     pack = _pack_with_cartography("beneath_sunden", _hybrid_cartography())
 
@@ -319,15 +340,21 @@ async def test_dispatch_bank_crossing_emits_seam_resolved_span(otel_capture):  #
         },
     )
 
-    resolved = [s for s in otel_capture.get_finished_spans() if s.name == "movement.resolved"]
-    assert len(resolved) == 1, (
-        f"expected exactly one movement.resolved span for the bank crossing, "
-        f"got {len(resolved)}: {[s.name for s in otel_capture.get_finished_spans()]}"
+    entered = [s for s in otel_capture.get_finished_spans() if s.name == "site.enter"]
+    assert len(entered) == 1, (
+        f"expected exactly one site.enter span for the bank crossing, "
+        f"got {len(entered)}: {[s.name for s in otel_capture.get_finished_spans()]}"
     )
-    attrs = resolved[0].attributes or {}
-    assert attrs.get("resolved_via") == "surface_descent", (
-        f"span must carry resolved_via=surface_descent; got {attrs.get('resolved_via')!r}"
+    attrs = entered[0].attributes or {}
+    assert attrs.get("resolved_via") == "site_enter", (
+        f"span must carry resolved_via=site_enter; got {attrs.get('resolved_via')!r}"
     )
-    assert attrs.get("seam_kind") == "deep_descent", (
-        f"span must carry seam_kind=deep_descent; got {attrs.get('seam_kind')!r}"
+    assert attrs.get("site_id") == "frontier", (
+        f"span must carry site_id=frontier; got {attrs.get('site_id')!r}"
+    )
+    assert attrs.get("from_region") == "the_dropmouth", (
+        f"span must carry the seam-owner from_region; got {attrs.get('from_region')!r}"
+    )
+    assert attrs.get("to_region") == ENTRANCE_ID, (
+        f"span must carry to_region={ENTRANCE_ID!r}; got {attrs.get('to_region')!r}"
     )

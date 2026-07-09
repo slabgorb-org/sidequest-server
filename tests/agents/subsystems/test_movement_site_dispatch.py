@@ -194,13 +194,16 @@ def test_enter_site_from_owner_region_resolves_site_enter() -> None:
 
 
 def test_enter_site_from_adjacent_camp_resolves_site_enter() -> None:
-    """The one-action reach survives the cutover: ``action=enter_site`` from
-    ``ropefoot`` (adjacent to the owner) still crosses — ``sites_for_node`` includes
-    adjacent-owned sites, so the camp can descend in one deliberate action."""
+    """The one-action reach survives the cutover: ``action=enter_site`` naming the
+    site from ``ropefoot`` (adjacent to the owner) still crosses — ``sites_for_node``
+    includes adjacent-owned sites, so the camp can descend in one deliberate action.
+    The descriptor NAMES the site ("the deep") — the enter_site contract is a strict
+    match (a way-name like "down the rope" refuses honestly; see the legacy
+    direction=deeper path + the sole-site robustness finding)."""
     snap = _snapshot("ropefoot")
     out = _run(
         run_movement_dispatch(
-            _site_move("enter_site", "down the rope"),
+            _site_move("enter_site", "the deep"),
             snapshot=snap,
             player_name="Rux",
             dungeon_store=_LegacyFrontierStore(),

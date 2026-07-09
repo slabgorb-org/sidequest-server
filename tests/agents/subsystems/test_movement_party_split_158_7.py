@@ -50,6 +50,7 @@ from sidequest.genre.models.world import (
     NavigationMode,
     Region,
     Route,
+    SiteDecl,
 )
 from sidequest.protocol.dispatch import (
     DispatchPackage,
@@ -78,26 +79,30 @@ def _movement(direction: str, descriptor: str = "") -> SubsystemDispatch:
 
 
 class _StoreWithEntrance:
-    """DungeonStore double: load_map returns a graph with the entrance node."""
+    """DungeonStore double modeling the LEGACY Sünden frontier store: its graph is
+    keyed on the bare ``ENTRANCE_ID`` (not the site-namespaced ``frontier:entrance``
+    the descriptor declares), so ``resolve_enter_site``'s entrance fallback binds
+    the acting PC to ``entrance``. Accepts the ``site_id`` the resolver threads AND
+    the site-less ``entrance_id``-only call the ``_in_dungeon`` probe makes."""
 
-    def load_map(self, *, entrance_id: str) -> RegionGraph:
-        g = RegionGraph(entrance_id=entrance_id)
-        g.add_node(RegionNode(id=entrance_id, expansion_id=0, theme="shaft_collar"))
+    def load_map(self, *, entrance_id: str, site_id: str = "frontier") -> RegionGraph:
+        g = RegionGraph(entrance_id=ENTRANCE_ID)
+        g.add_node(RegionNode(id=ENTRANCE_ID, expansion_id=0, theme="shaft_collar"))
         return g
 
 
 class _StoreWithDeepGraph:
-    """DungeonStore double: entrance + one materialized deep region below it."""
+    """Legacy frontier store + one materialized deep region below the entrance."""
 
-    def load_map(self, *, entrance_id: str) -> RegionGraph:
-        g = RegionGraph(entrance_id=entrance_id)
+    def load_map(self, *, entrance_id: str, site_id: str = "frontier") -> RegionGraph:
+        g = RegionGraph(entrance_id=ENTRANCE_ID)
         g.add_node(
-            RegionNode(id=entrance_id, expansion_id=0, theme="shaft_collar", depth_score=0.0)
+            RegionNode(id=ENTRANCE_ID, expansion_id=0, theme="shaft_collar", depth_score=0.0)
         )
         g.add_node(
             RegionNode(id="exp001.r0", expansion_id=1, theme="shaft_collar", depth_score=7.9)
         )
-        g.add_edge(RegionEdge(a=entrance_id, b="exp001.r0", kind="shaft"))
+        g.add_edge(RegionEdge(a=ENTRANCE_ID, b="exp001.r0", kind="shaft"))
         return g
 
 
@@ -113,11 +118,14 @@ class _FakePalette:
 
 
 def _hybrid_cartography() -> CartographyConfig:
-    """beneath_sunden-shaped: region-mode with a registered seam route.
+    """beneath_sunden-shaped: region-mode with a declared ``frontier`` SITE.
 
-    ``the_dropmouth`` owns a route to ``deep_descent`` (a registered seam
-    kind); ``ropefoot`` (the surface camp where the party spawns) is one step
-    adjacent to it. A descent from EITHER crosses the seam onto ``entrance``.
+    ``the_dropmouth`` OWNS the frontier site (``attached_to``); ``ropefoot`` (the
+    surface camp where the party spawns) is one step adjacent to it, so
+    ``sites_for_node`` reaches the site from EITHER — a descent (``direction="deeper"``)
+    from both crosses onto ``entrance`` via ``site_enter``. The legacy ``deep_descent``
+    route is retained as inert cartography (the site model, not the retired seam
+    ladder, now owns the crossing).
     """
     return CartographyConfig(
         starting_region="ropefoot",
@@ -142,6 +150,15 @@ def _hybrid_cartography() -> CartographyConfig:
                 description="The one-way descent.",
                 from_id="the_dropmouth",
                 to_id="deep_descent",
+            ),
+        ],
+        sites=[
+            SiteDecl(
+                site_id="frontier",
+                name="The Deep",
+                archetype="megadungeon",
+                attached_to="the_dropmouth",
+                extent="frontier",
             ),
         ],
     )
@@ -230,8 +247,8 @@ def test_colocated_party_descends_together_surface_adjacent(capture_spans):
         )
     )
 
-    assert out.data.get("resolved_via") == "surface_descent_adjacent", (
-        f"expected an adjacent-seam crossing, got: {out.data}"
+    assert out.data.get("resolved_via") == "site_enter", (
+        f"expected an adjacent site_enter crossing, got: {out.data}"
     )
     assert snap.pc_regions["Groucho"] == ENTRANCE_ID, "acting PC must cross to entrance"
     assert snap.pc_regions["Harpo"] == ENTRANCE_ID, (
@@ -261,7 +278,9 @@ def test_colocated_party_descends_together_owned_seam(capture_spans):
         )
     )
 
-    assert out.data.get("resolved_via") == "surface_descent", f"expected seam crossing: {out.data}"
+    assert out.data.get("resolved_via") == "site_enter", (
+        f"expected an owned site_enter crossing: {out.data}"
+    )
     assert snap.pc_regions["Groucho"] == ENTRANCE_ID
     assert snap.pc_regions["Harpo"] == ENTRANCE_ID, (
         f"co-located peer left behind at {snap.pc_regions.get('Harpo')!r}"
@@ -299,13 +318,13 @@ def test_colocated_party_advances_together_in_dungeon(capture_spans):
 
 
 def test_colocated_party_ascends_together(capture_spans):
-    """Reverse seam (Story 105-3 surface_ascent): both PCs co-located ON the
-    dungeon entrance node leave together with a non-``deeper`` intent. The
-    acting PC ascends to the surface region that OWNS the deep crossing
-    (``the_dropmouth``, the seam route's ``from_id``) — and the co-located
-    peer must ascend WITH the party, not be stranded below.
+    """Reverse crossing (``site_exit``): both PCs co-located ON the dungeon
+    entrance node leave together with a non-``deeper`` intent. The acting PC
+    exits to the surface region that OWNS the frontier site (``the_dropmouth``,
+    the site's ``attached_to``) — and the co-located peer must exit WITH the
+    party, not be stranded below.
 
-    158-13 coverage: ``surface_ascent`` is one of the two ``_advance_colocated_peers``
+    158-13 coverage: ``site_exit`` is one of the two ``_advance_colocated_peers``
     call sites the 158-7 suite never exercised."""
     snap = _party_snapshot(
         {"Groucho": ENTRANCE_ID, "Harpo": ENTRANCE_ID},
@@ -325,14 +344,12 @@ def test_colocated_party_ascends_together(capture_spans):
         )
     )
 
-    assert out.data.get("resolved_via") == "surface_ascent", (
-        f"expected the reverse seam crossing, got: {out.data}"
+    assert out.data.get("resolved_via") == "site_exit", (
+        f"expected the reverse site_exit crossing, got: {out.data}"
     )
-    assert snap.pc_regions["Groucho"] == "the_dropmouth", (
-        "acting PC must ascend to the surface owner"
-    )
+    assert snap.pc_regions["Groucho"] == "the_dropmouth", "acting PC must exit to the surface owner"
     assert snap.pc_regions["Harpo"] == "the_dropmouth", (
-        "co-located peer must ascend WITH the party, not lag at the entrance; "
+        "co-located peer must exit WITH the party, not lag at the entrance; "
         f"Harpo is at {snap.pc_regions.get('Harpo')!r}"
     )
 
@@ -496,9 +513,13 @@ def test_non_colocated_peer_is_not_dragged(capture_spans):
 
 def test_party_advance_emits_per_pc_movement_span(capture_spans):
     """OTEL Observability Principle + the per-PC span doctrine: the GM panel
-    must see EACH PC's advance independently. A shared descent of two
-    co-located PCs emits one ``movement.resolved`` span per advanced PC, each
-    carrying the same destination — so the party-advance decision is legible
+    must see EACH PC's advance independently. Post-site-cutover a shared descent
+    of two co-located PCs emits, per advanced PC, exactly one span carrying the
+    shared destination — but the SPANS DIFFER BY ROLE: the acting/anchor PC
+    crosses through the site resolver and emits a ``site.enter`` span (there is
+    NO ``movement.resolved`` span for the anchor), while each fanned-out peer
+    still emits its own ``movement.resolved`` span via ``_advance_colocated_peers``.
+    Both are visible on the panel — so the party-advance decision stays legible
     (which PCs advanced together, to where)."""
     snap = _party_snapshot(
         {"Groucho": "ropefoot", "Harpo": "ropefoot"},
@@ -518,26 +539,42 @@ def test_party_advance_emits_per_pc_movement_span(capture_spans):
         )
     )
 
-    resolved = _resolved_spans(capture_spans)
-    pc_names = {(s.attributes or {}).get("pc_name") for s in resolved}
-    assert pc_names == {"Groucho", "Harpo"}, (
-        "expected one movement.resolved span per advanced PC (per-PC span "
-        f"doctrine); got pc_names={pc_names} across {len(resolved)} span(s)"
+    # The acting/anchor PC (Groucho) crosses via the site resolver → exactly one
+    # ``site.enter`` span carrying the shared destination (NOT a movement.resolved
+    # span — the anchor's crossing is a site crossing now).
+    enter_spans = [s for s in capture_spans.get_finished_spans() if s.name == "site.enter"]
+    assert len(enter_spans) == 1, (
+        f"expected exactly one site.enter span for the acting PC; got {len(enter_spans)}"
     )
-    to_regions = {(s.attributes or {}).get("to_region") for s in resolved}
-    assert to_regions == {ENTRANCE_ID}, (
-        f"every advanced PC's span must record the shared destination; got {to_regions}"
+    enter_attrs = enter_spans[0].attributes or {}
+    assert enter_attrs.get("pc_name") == "Groucho", (
+        "the acting PC's crossing must emit its own site.enter span (per-PC span "
+        f"doctrine); got pc_name={enter_attrs.get('pc_name')!r}"
     )
+    assert enter_attrs.get("to_region") == ENTRANCE_ID, (
+        f"the acting PC's site.enter must record the shared destination; got {dict(enter_attrs)!r}"
+    )
+    assert enter_attrs.get("resolved_via") == "site_enter", dict(enter_attrs)
 
-    # AC-4 lie-detector: the FANNED-OUT peer span (Harpo) must carry the
-    # party-advance attributes so the GM panel sees WHICH PCs advanced together
-    # and WHO anchored the beat — not merely that each PC has a span. The acting
-    # PC's span is emitted by the seam resolver and does NOT carry these (it is
-    # the anchor, not a fanned-out peer); only ``_advance_colocated_peers``
-    # stamps them.
+    # AC-4 lie-detector: the FANNED-OUT peer span (Harpo) is still a
+    # ``movement.resolved`` span (peer co-movement is UNCHANGED) and must carry the
+    # party-advance attributes so the GM panel sees WHICH PCs advanced together and
+    # WHO anchored the beat — not merely that each PC has a span. Only
+    # ``_advance_colocated_peers`` stamps these; the anchor's site.enter does not.
+    resolved = _resolved_spans(capture_spans)
     peer_spans = [s for s in resolved if (s.attributes or {}).get("pc_name") == "Harpo"]
-    assert len(peer_spans) == 1, f"expected exactly one peer span for Harpo; got {len(peer_spans)}"
+    assert len(peer_spans) == 1, (
+        f"expected exactly one peer movement.resolved span for Harpo; got {len(peer_spans)}"
+    )
     peer_attrs = peer_spans[0].attributes or {}
+    assert peer_attrs.get("to_region") == ENTRANCE_ID, (
+        "the fanned-out peer span must record the SAME shared destination as the "
+        f"anchor; got {dict(peer_attrs)!r}"
+    )
+    assert peer_attrs.get("resolved_via") == "site_enter", (
+        "the peer span's resolved_via must track the anchor's site crossing; "
+        f"got {dict(peer_attrs)!r}"
+    )
     assert peer_attrs.get("party_advance") is True, (
         "the fanned-out peer span must mark party_advance=True so the GM panel "
         f"reads it as a co-located party advance; got {dict(peer_attrs)!r}"
@@ -545,6 +582,14 @@ def test_party_advance_emits_per_pc_movement_span(capture_spans):
     assert peer_attrs.get("anchor_pc") == "Groucho", (
         "the peer span must name the acting PC as the anchor of the shared beat; "
         f"got anchor_pc={peer_attrs.get('anchor_pc')!r}"
+    )
+
+    # Both PCs are independently legible on the panel: Groucho via site.enter,
+    # Harpo via movement.resolved — no PC advanced without leaving a span.
+    advanced_pc_names = {(s.attributes or {}).get("pc_name") for s in (*enter_spans, *resolved)}
+    assert advanced_pc_names == {"Groucho", "Harpo"}, (
+        "expected each advanced PC independently legible (Groucho via site.enter, "
+        f"Harpo via movement.resolved); got {advanced_pc_names}"
     )
 
 

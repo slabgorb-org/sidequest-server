@@ -41,6 +41,7 @@ from sidequest.genre.models.world import (
     NavigationMode,
     Region,
     Route,
+    SiteDecl,
 )
 from sidequest.protocol.dispatch import (
     DispatchPackage,
@@ -57,16 +58,19 @@ ENTRANCE_ROOM_NAME = "Under the Rope"
 
 
 # ---------------------------------------------------------------------------
-# Store / palette doubles (same shape as the Task 1-5 suites)
+# Store / palette doubles (same shape as the Task 1-5 suites) — model Sünden's
+# frontier-legacy graph: the entrance is the un-namespaced legacy ENTRANCE_ID.
 # ---------------------------------------------------------------------------
 
 
 class _StoreWithEntrance:
-    """DungeonStore double: load_map returns a graph with the entrance node."""
+    """DungeonStore/Repository double: graph anchored on the legacy ENTRANCE_ID.
+    Accepts both the bare narration-recovery signature and the site-keyed
+    resolver signature (resolve_enter_site binds to graph.entrance_id)."""
 
-    def load_map(self, *, entrance_id):
-        g = RegionGraph(entrance_id=entrance_id)
-        g.add_node(RegionNode(id=entrance_id, expansion_id=0, theme="shaft_collar"))
+    def load_map(self, *, entrance_id=ENTRANCE_ID, site_id="frontier"):
+        g = RegionGraph(entrance_id=ENTRANCE_ID)
+        g.add_node(RegionNode(id=ENTRANCE_ID, expansion_id=0, theme="shaft_collar"))
         return g
 
 
@@ -119,6 +123,15 @@ def _hybrid_cartography() -> CartographyConfig:
                 from_id="the_dropmouth",
                 to_id="deep_descent",
             ),
+        ],
+        sites=[
+            SiteDecl(
+                site_id="frontier",
+                name="The Deep",
+                archetype="megadungeon",
+                attached_to="the_dropmouth",
+                extent="frontier",
+            )
         ],
     )
 
@@ -173,7 +186,9 @@ def _movement_package() -> DispatchPackage:
                 dispatch=[
                     SubsystemDispatch(
                         subsystem="movement",
-                        params={"direction": "deeper", "exit_descriptor": "down the rope"},
+                        # Story 164-3: the descent is now a site enter dispatched
+                        # by kind, not the direction-driven seam ladder.
+                        params={"action": "enter_site", "site_descriptor": "the deep"},
                         idempotency_key="seam-wiring-mv",
                         confidence=1.0,
                         visibility=VisibilityTag(visible_to="all"),
@@ -230,8 +245,8 @@ async def test_dispatch_bank_reaches_the_crossing():
         f"outputs={list(result.outputs_by_key)} errors={result.errors}"
     )
     out = result.outputs_by_key["seam-wiring-mv"]
-    assert out.data.get("resolved_via") == "surface_descent", (
-        f"expected surface_descent crossing through the bank, got: {out.data}"
+    assert out.data.get("resolved_via") == "site_enter", (
+        f"expected site_enter crossing through the bank, got: {out.data}"
     )
     assert out.data.get("to_region") == ENTRANCE_ID, (
         f"expected to_region={ENTRANCE_ID!r}, got: {out.data.get('to_region')!r}"
@@ -300,11 +315,10 @@ async def test_apply_pipeline_reaches_the_guard(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_dispatch_bank_crossing_emits_seam_resolved_span(otel_capture):  # noqa: F811
-    """The lie-detector check: the bank crossing emits exactly one
-    ``movement.resolved`` span carrying ``resolved_via=surface_descent`` and
-    ``seam_kind=deep_descent`` — proof the seam resolver fired, not a narrator
-    improvisation. Mirrors the span assertion in the Task 1 movement suite,
-    captured one production layer up (through the bank)."""
+    """The lie-detector check (retargeted): the bank crossing emits exactly one
+    ``site.enter`` span carrying ``resolved_via=site_enter`` and the site id —
+    proof the site resolver fired through the bank, not a narrator improvisation.
+    (Was a ``movement.resolved`` + seam_kind assertion pre-cutover.)"""
     snapshot = _hybrid_snapshot()
     pack = _pack_with_cartography("beneath_sunden", _hybrid_cartography())
 
@@ -319,15 +333,16 @@ async def test_dispatch_bank_crossing_emits_seam_resolved_span(otel_capture):  #
         },
     )
 
-    resolved = [s for s in otel_capture.get_finished_spans() if s.name == "movement.resolved"]
-    assert len(resolved) == 1, (
-        f"expected exactly one movement.resolved span for the bank crossing, "
-        f"got {len(resolved)}: {[s.name for s in otel_capture.get_finished_spans()]}"
+    enter = [s for s in otel_capture.get_finished_spans() if s.name == "site.enter"]
+    assert len(enter) == 1, (
+        f"expected exactly one site.enter span for the bank crossing, "
+        f"got {len(enter)}: {[s.name for s in otel_capture.get_finished_spans()]}"
     )
-    attrs = resolved[0].attributes or {}
-    assert attrs.get("resolved_via") == "surface_descent", (
-        f"span must carry resolved_via=surface_descent; got {attrs.get('resolved_via')!r}"
+    attrs = enter[0].attributes or {}
+    assert attrs.get("resolved_via") == "site_enter", (
+        f"span must carry resolved_via=site_enter; got {attrs.get('resolved_via')!r}"
     )
-    assert attrs.get("seam_kind") == "deep_descent", (
-        f"span must carry seam_kind=deep_descent; got {attrs.get('seam_kind')!r}"
+    assert attrs.get("site_id") == "frontier", (
+        f"span must carry site_id=frontier; got {attrs.get('site_id')!r}"
     )
+    assert attrs.get("to_region") == ENTRANCE_ID

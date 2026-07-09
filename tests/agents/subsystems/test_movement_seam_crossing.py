@@ -1,9 +1,14 @@
-"""Hybrid-world movement: region-mode + seam route crosses; seam-less defers.
+"""Hybrid-world movement: region-mode SITE enter/exit crosses; siteless defers.
 
-Story 105-2 AC1 + AC5. Root cause #1: de4f85c8's region_mode_deferred
-early-return dead-coded the 59-12 handoff for beneath_sunden. These tests
-pin the fix: a region-mode world WITH a seam route + live store crosses;
-oz-shaped worlds (no seam route) defer exactly as before.
+Story 105-2 AC1 + AC5, RETARGETED for the Track B Story 164-3 cutover: the
+region-mode seam LADDER (direction-driven surface_descent / surface_ascent) is
+replaced by SITE enter/exit dispatched BY KIND (``action=enter_site`` /
+``action=exit_site``) through the SiteRegistry × the enter_site/exit_site
+resolvers. The DESTINATION is unchanged — a region-mode world WITH a frontier
+site + live store crosses onto the site entrance; oz-shaped worlds (no site)
+defer exactly as before. Only the trigger (action, not direction) and the
+``resolved_via`` name (``site_enter``/``site_exit``, spanned as ``site.enter`` /
+``site.exit``, not ``movement.resolved`` + seam_kind) differ.
 """
 
 from __future__ import annotations
@@ -26,6 +31,7 @@ from sidequest.genre.models.world import (
     NavigationMode,
     Region,
     Route,
+    SiteDecl,
 )
 from sidequest.protocol.dispatch import SubsystemDispatch, VisibilityTag
 
@@ -48,24 +54,49 @@ def _movement(direction: str, descriptor: str = "") -> SubsystemDispatch:
     )
 
 
+def _enter(descriptor: str = "the deep") -> SubsystemDispatch:
+    """Router enter_site shape (Story 164-3, Task 5)."""
+    return SubsystemDispatch(
+        subsystem="movement",
+        params={"action": "enter_site", "site_descriptor": descriptor},
+        idempotency_key="mv-seam-enter",
+        confidence=1.0,
+        visibility=VisibilityTag(visible_to="all"),
+    )
+
+
+def _exit() -> SubsystemDispatch:
+    return SubsystemDispatch(
+        subsystem="movement",
+        params={"action": "exit_site"},
+        idempotency_key="mv-seam-exit",
+        confidence=1.0,
+        visibility=VisibilityTag(visible_to="all"),
+    )
+
+
 # ---------------------------------------------------------------------------
-# Store doubles (content-free) — same shape as test_seam_deep_descent.py.
+# Store doubles (content-free) — model Sünden's frontier-legacy graph: the
+# entrance is the un-namespaced legacy ENTRANCE_ID, and load_map accepts the
+# site-keyed resolver signature.
 # ---------------------------------------------------------------------------
 
 
 class _StoreWithEntrance:
-    """DungeonStore double: load_map returns a graph with the entrance node."""
+    """DungeonStore/Repository double: graph anchored on the legacy ENTRANCE_ID
+    (Sünden frontier keeps un-namespaced node ids for B1 — resolve_enter_site
+    binds to graph.entrance_id via the frontier-legacy fallback)."""
 
-    def load_map(self, *, entrance_id):
-        g = RegionGraph(entrance_id=entrance_id)
-        g.add_node(RegionNode(id=entrance_id, expansion_id=0, theme="shaft_collar"))
+    def load_map(self, *, entrance_id=ENTRANCE_ID, site_id="frontier"):
+        g = RegionGraph(entrance_id=ENTRANCE_ID)
+        g.add_node(RegionNode(id=ENTRANCE_ID, expansion_id=0, theme="shaft_collar"))
         return g
 
 
 class _EmptyStore:
     """DungeonStore double: load_map returns a graph with NO nodes (corrupt seed)."""
 
-    def load_map(self, *, entrance_id):
+    def load_map(self, *, entrance_id=ENTRANCE_ID, site_id="frontier"):
         return RegionGraph(entrance_id=entrance_id)
 
 
@@ -136,6 +167,15 @@ def _hybrid_cartography() -> CartographyConfig:
                 from_id="the_dropmouth",
                 to_id="deep_descent",
             ),
+        ],
+        sites=[
+            SiteDecl(
+                site_id="frontier",
+                name="The Deep",
+                archetype="megadungeon",
+                attached_to="the_dropmouth",
+                extent="frontier",
+            )
         ],
     )
 
@@ -264,25 +304,22 @@ def oz_shaped_kit():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "direction,descriptor",
-    [
-        ("deeper", ""),
-        ("toward_exit", ""),
-        ("deeper", "down the rope"),
-        # Empty direction, descriptor-only intent: when the region owns a
-        # seam route, ANY movement intent except ``back`` crosses it.
-        ("", "follow the rope down"),
-    ],
-)
-def test_seam_region_movement_crosses_to_entrance(
-    capture_spans, hybrid_world_kit, direction, descriptor
-):
-    """AC1: a region-mode world with a seam route + live store crosses (not defers)."""
+# The descriptor must reference the SITE ("The Deep") — resolve_descriptor
+# substring-matches the site name (164-1), so seam-route phrasings like "down the
+# rope" no longer resolve (that's the router's job to phrase site-ward; see the
+# descriptor-matching Delivery Finding). An empty descriptor also resolves when
+# there is a single enterable site.
+@pytest.mark.parametrize("descriptor", ["the deep", "the Deep", "down into the deep", ""])
+def test_seam_region_movement_crosses_to_entrance(capture_spans, hybrid_world_kit, descriptor):
+    """AC1 (retargeted): a region-mode world with a frontier site + live store
+    crosses onto the site entrance via ``enter_site`` (not defers). The
+    destination (ENTRANCE_ID, via the frontier-legacy graph.entrance_id fallback)
+    is unchanged; the trigger is ``action=enter_site`` and the observability is
+    the ``site.enter`` span."""
     kit = hybrid_world_kit
     out = _run(
         run_movement_dispatch(
-            _movement(direction, descriptor),
+            _enter(descriptor),
             snapshot=kit.snapshot,
             player_name="Groucho",
             dungeon_store=kit.store,
@@ -290,8 +327,8 @@ def test_seam_region_movement_crosses_to_entrance(
             pack=kit.pack,
         )
     )
-    assert out.data["resolved_via"] == "surface_descent", (
-        f"expected surface_descent crossing, got: {out.data}"
+    assert out.data["resolved_via"] == "site_enter", (
+        f"expected site_enter crossing, got: {out.data}"
     )
     assert out.data["to_region"] == ENTRANCE_ID, (
         f"expected to_region={ENTRANCE_ID!r}, got: {out.data.get('to_region')!r}"
@@ -299,22 +336,24 @@ def test_seam_region_movement_crosses_to_entrance(
     assert kit.snapshot.region_for(perspective="Groucho") == ENTRANCE_ID, (
         f"PC not rebound to entrance; still at {kit.snapshot.region_for(perspective='Groucho')!r}"
     )
-    # OTEL proof the crossing was the seam resolver, not improvisation:
-    # the consumer-layer movement.resolved span carries the seam_kind.
-    resolved = [s for s in capture_spans.get_finished_spans() if s.name == "movement.resolved"]
-    assert len(resolved) == 1, "expected exactly one movement.resolved span for the crossing"
-    assert (resolved[0].attributes or {})["seam_kind"] == "deep_descent"
+    # OTEL proof the crossing was the site resolver, not improvisation: the
+    # site.enter span carries the destination + resolution.
+    enter = [s for s in capture_spans.get_finished_spans() if s.name == "site.enter"]
+    assert len(enter) == 1, "expected exactly one site.enter span for the crossing"
+    attrs = enter[0].attributes or {}
+    assert attrs["site_id"] == "frontier"
+    assert attrs["to_region"] == ENTRANCE_ID
 
 
 def test_surface_adjacent_descent_crosses_to_entrance(capture_spans, surface_adjacent_kit):
-    """sq-playtest 2026-06-21: a PC on the surface camp (ropefoot), one step from
-    the seam-owner (the_dropmouth), descends in ONE deliberate action. The party
-    starts here, never on the_dropmouth — so without this the dungeon was
-    unreachable (three descents, still current_region='ropefoot')."""
+    """sq-playtest 2026-06-21 (retargeted): a PC on the surface camp (ropefoot),
+    one step from the site owner (the_dropmouth), enters in ONE action. The party
+    starts here, never on the_dropmouth — SiteRegistry.sites_for_node surfaces the
+    site via adjacency, so ``enter_site`` resolves it (was surface_descent_adjacent)."""
     kit = surface_adjacent_kit
     out = _run(
         run_movement_dispatch(
-            _movement("deeper", "down the rope"),
+            _enter("the deep"),
             snapshot=kit.snapshot,
             player_name="Groucho",
             dungeon_store=kit.store,
@@ -322,16 +361,16 @@ def test_surface_adjacent_descent_crosses_to_entrance(capture_spans, surface_adj
             pack=kit.pack,
         )
     )
-    assert out.data["resolved_via"] == "surface_descent_adjacent", (
-        f"expected adjacent-seam crossing, got: {out.data}"
+    assert out.data["resolved_via"] == "site_enter", (
+        f"expected site_enter crossing from the adjacent camp, got: {out.data}"
     )
     assert out.data["to_region"] == ENTRANCE_ID
     assert kit.snapshot.region_for(perspective="Groucho") == ENTRANCE_ID, (
         f"PC not rebound to entrance; still at {kit.snapshot.region_for(perspective='Groucho')!r}"
     )
-    resolved = [s for s in capture_spans.get_finished_spans() if s.name == "movement.resolved"]
-    assert len(resolved) == 1, "expected exactly one movement.resolved span for the crossing"
-    assert (resolved[0].attributes or {})["seam_kind"] == "deep_descent"
+    enter = [s for s in capture_spans.get_finished_spans() if s.name == "site.enter"]
+    assert len(enter) == 1, "expected exactly one site.enter span for the crossing"
+    assert (enter[0].attributes or {})["site_id"] == "frontier"
 
 
 @pytest.mark.parametrize("direction", ["back", "toward_exit", ""])
@@ -448,11 +487,16 @@ def test_in_dungeon_back_traverses_toward_entrance(capture_spans, in_dungeon_kit
 
 
 def test_seam_region_with_dead_store_fails_loud(capture_spans, hybrid_world_kit_empty_store):
-    """Hybrid world + live seam route + CORRUPT store (no entrance node) → fail loud."""
+    """Hybrid world + frontier site + CORRUPT store (no entrance node) → fail loud.
+
+    Retargeted: an ``enter_site`` whose store yields no entrance (and no usable
+    graph.entrance_id) raises ``no_site_entrance`` from resolve_enter_site; the
+    movement catcher owns the failure span (site.enter_unresolved) and surfaces
+    the truth through movement.unresolved. The PC does not move."""
     kit = hybrid_world_kit_empty_store
     out = _run(
         run_movement_dispatch(
-            _movement("deeper"),
+            _enter("the deep"),
             snapshot=kit.snapshot,
             player_name="Groucho",
             dungeon_store=kit.store,
@@ -460,9 +504,15 @@ def test_seam_region_with_dead_store_fails_loud(capture_spans, hybrid_world_kit_
             pack=kit.pack,
         )
     )
-    assert out.data.get("error") == "no_dungeon_entrance", (
-        f"dead store must fail loud with no_dungeon_entrance, got: {out.data}"
+    assert out.data.get("error") == "no_site_entrance", (
+        f"dead store must fail loud with no_site_entrance, got: {out.data}"
     )
     assert kit.snapshot.region_for(perspective="Groucho") == "the_dropmouth", (
-        "PC must not move on a seam-crossing failure"
+        "PC must not move on a site-crossing failure"
     )
+    # The catcher owns the failure span — the GM panel sees the fail-loud.
+    unresolved = [
+        s for s in capture_spans.get_finished_spans() if s.name == "site.enter_unresolved"
+    ]
+    assert len(unresolved) == 1, "the movement catcher must emit site.enter_unresolved"
+    assert (unresolved[0].attributes or {})["reason"] == "no_site_entrance"

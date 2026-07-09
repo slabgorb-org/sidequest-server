@@ -189,39 +189,47 @@ For each player action:
          params={"npc_name": "<name>"} (optional "situation").
        - distinctive_detail_hint: name a referent by its distinctive detail.
          params={"target": "<entity id>", "hint": "<detail>"}.
-       - movement: the party physically relocates between dungeon regions
-         (descend, ascend, go through an exit, retreat). params={
-           "direction": "<one of: deeper | back | toward_exit>",
-           "exit_descriptor": "<the way the player named, IN THEIR OWN
-                               WORDS, e.g. 'the iron stair', 'the crack
-                               in the east wall', 'south'>"
-         }.
-         Emit movement ONLY for genuine region relocation, not look-around /
+       - movement: the party physically relocates. params take ONE of two
+         shapes — an enter/exit of a whole SITE, or in-scene navigation:
+         * ENTER / EXIT A SITE — when game_state.current_sites lists
+           enterable sub-locations (a tavern, a vault, the deep below a
+           shaft) and the player heads INTO one, or is already inside a
+           site and LEAVES:
+             {"action": "enter_site",
+              "site_descriptor": "<the site the player named, IN THEIR OWN
+                                  WORDS — 'the tavern', 'the gilded boar',
+                                  'down into the deep'>"}
+           or, leaving a site the party is already inside:
+             {"action": "exit_site"}
+           Name the site by descriptor only; the engine matches it against
+           game_state.current_sites and refuses honestly if nothing matches.
+         * IN-SCENE NAVIGATION — moving between rooms WITHIN a site, or
+           between adjacent cartography regions:
+             {"direction": "<one of: deeper | back | toward_exit>",
+              "exit_descriptor": "<the way the player named, IN THEIR OWN
+                                  WORDS — 'the iron stair', 'the crack in
+                                  the east wall', 'south'>"}
+         Emit movement ONLY for genuine relocation, not look-around /
          search / examine. NEVER emit a region id — you do not know the
-         graph. Describe WHICH exit by exit_descriptor only; the engine
-         resolves it.
+         graph. "Enter the tavern" / "down into the deep" is enter_site;
+         "go through the archway to the next room" is in-scene navigation.
          Confidence scores WHETHER the player intends to relocate — NOT
-         whether you can map their words onto a listed exit. "I go
-         south", "I head through the archway", "I press on" are
-         unambiguous relocation: score them HIGH and pass the player's
-         own words (even a compass direction) through exit_descriptor
-         verbatim. The engine matches the descriptor against the real
-         exits and refuses honestly when nothing matches — that loud
-         refusal is the correct outcome for an unmappable way; a
-         low-confidence dispatch is not, because it degrades to prose
-         and the move silently becomes fiction.
-         When game_state.current_region_exits is present it lists the
-         REAL exits from where the party stands; an action that takes,
-         descends, or follows one of them IS movement — name it in
-         exit_descriptor. A "seam" exit is the threshold between the surface
-         and the underworld. From the surface, crossing it goes DOWN —
-         direction "deeper". From the dungeon entrance, the seam exit named in
-         current_region_exits leads back UP to the surface — climbing or
-         heading back out it is direction "back" (or "toward_exit").
-         Exits of kind "corridor", "stairs", "shaft", or "chute" are
-         passages WITHIN the underworld: pressing on, descending, or
-         heading through one IS movement (direction "deeper" to push on
-         down, "back" to retreat the way the party came).
+         whether you can map their words onto a listed site/exit. "I go
+         into the tavern", "I climb down into the deep", "I head south",
+         "I press on" are unambiguous relocation: score them HIGH and pass
+         the player's own words (even a compass direction) through
+         site_descriptor / exit_descriptor verbatim. The engine matches the
+         descriptor against the real sites/exits and refuses honestly when
+         nothing matches — that loud refusal is the correct outcome for an
+         unmappable way; a low-confidence dispatch is not, because it
+         degrades to prose and the move silently becomes fiction.
+         When game_state.current_region_exits is present it lists the REAL
+         in-scene exits from where the party stands; when
+         game_state.current_sites is present it lists the sub-locations the
+         party can ENTER from here. Exits of kind "corridor", "stairs",
+         "shaft", or "chute" are passages WITHIN the underworld: pressing
+         on or heading through one is IN-SCENE navigation (direction
+         "deeper"/"back"), NOT enter_site.
        - reflect_absence: player addresses someone/something not present.
        - witnessed_act: the player commits an EARNED, PUBLIC act that
          contradicts a belief-powered authority or shows a cowed population

@@ -46,16 +46,28 @@ def resolve_enter_site(
             ),
         )
     graph = dungeon_repository.load_map(entrance_id=site.entrance_node_id, site_id=site.site_id)
-    if site.entrance_node_id not in graph.nodes:
-        raise SeamCrossingError(
-            reason="no_site_entrance",
-            surface=f"The interior of {site.name} has not yet formed.",
-        )
-    snapshot.apply_world_patch(WorldStatePatch(pc_region={player_name: site.entrance_node_id}))
+    entrance_node = site.entrance_node_id
+    if entrance_node not in graph.nodes:
+        # Frontier-legacy fallback (Track B Task 6): the frontier site declares a
+        # namespaced entrance ('frontier:entrance'), but the bootstrapped Sünden
+        # store keyed its graph on the bare ENTRANCE_ID ('entrance'). Bind to the
+        # graph's REAL entrance when the declared node is absent — a single LOUD
+        # fallback, correct for the frontier-legacy case and harmless for bounded
+        # sites (whose entrance IS the namespaced id, so this branch never fires).
+        # Full node-id namespacing is a B4 follow-up; storage isolation is already
+        # (session, site_id)-keyed, so the node id need not be namespaced for B1.
+        if graph.entrance_id and graph.entrance_id in graph.nodes:
+            entrance_node = graph.entrance_id
+        else:
+            raise SeamCrossingError(
+                reason="no_site_entrance",
+                surface=f"The interior of {site.name} has not yet formed.",
+            )
+    snapshot.apply_world_patch(WorldStatePatch(pc_region={player_name: entrance_node}))
     with site_enter_span(
         pc_name=player_name, site_id=site.site_id, from_region=from_region
     ) as span:
-        span.set_attribute("to_region", site.entrance_node_id)
+        span.set_attribute("to_region", entrance_node)
         span.set_attribute("resolved_via", resolved_via)
         span.set_attribute("extent", site.extent)
         span.set_attribute("archetype", site.archetype)
@@ -64,7 +76,7 @@ def resolve_enter_site(
         player_name,
         site.site_id,
         from_region,
-        site.entrance_node_id,
+        entrance_node,
         resolved_via,
     )
-    return SeamCrossingResult(to_region=site.entrance_node_id)
+    return SeamCrossingResult(to_region=entrance_node)

@@ -200,6 +200,21 @@ For each player action:
          search / examine. NEVER emit a region id — you do not know the
          graph. Describe WHICH exit by exit_descriptor only; the engine
          resolves it.
+         ENTER / EXIT A SITE: when game_state.current_sites lists enterable
+         sub-locations (a tavern, a vault, the deep below a shaft) and the
+         player heads INTO or OUT of one, use the site param shape instead of
+         direction:
+           {"action": "enter_site",
+            "site_descriptor": "<the site the player named, in their own words
+                                — 'the tavern', 'the gilded boar', 'down into
+                                the deep'>"}
+         or, when the party is already INSIDE a site and leaves:
+           {"action": "exit_site"}
+         Name the site by descriptor only; the engine matches it against
+         game_state.current_sites and refuses honestly if nothing matches.
+         "Enter the tavern" / "climb down into the deep" is enter_site; "go
+         through the archway to the next room" is in-scene navigation
+         (direction). Emit exactly ONE of the two param shapes.
          Confidence scores WHETHER the player intends to relocate — NOT
          whether you can map their words onto a listed exit. "I go
          south", "I head through the archway", "I press on" are

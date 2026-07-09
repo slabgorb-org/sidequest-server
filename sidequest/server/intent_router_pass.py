@@ -58,6 +58,7 @@ from sidequest.game.seams import (
     surface_owner_for_entrance,
 )
 from sidequest.game.session import GameSnapshot
+from sidequest.game.sites import SiteRegistry
 from sidequest.genre.models.pack import GenrePack
 from sidequest.protocol.dispatch import (
     DispatchPackage,
@@ -625,6 +626,19 @@ def _build_state_summary(
                         genre_slug=snapshot.genre_slug or "",
                     ):
                         pass
+                # Track B Task 5: enterable SITES at this cartography region
+                # (owned + adjacent-owned — the "down the rope at the camp"
+                # one-action reach that SiteRegistry.sites_for_node preserves).
+                # This is the router's cue to classify "into the tavern / down
+                # into the deep" as an enter_site movement (same lexical-bridge
+                # principle as current_region_exits above). Only set when
+                # non-empty — no empty-list noise in the router payload.
+                _enterable = SiteRegistry.from_cartography(_cart).sites_for_node(_region_id)
+                if _enterable:
+                    summary["current_sites"] = [
+                        {"site_id": s.site_id, "name": s.name, "archetype": s.archetype}
+                        for s in _enterable
+                    ]
             elif _region_id:
                 # Pingpong 2026-06-12: the PC's region is NOT a cartography
                 # region — post seam-crossing it is a dungeon graph node

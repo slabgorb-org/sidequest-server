@@ -694,6 +694,54 @@ class TestMapTreatmentValidation:
         errors, _ = validate_pack_structure(pack_dir, schema_path_real)
         assert not any("map.yaml" in e for e in errors), errors
 
+    def test_raster_map_non_dict_cartography_does_not_crash(self, tmp_path: Path) -> None:
+        """A malformed (non-dict) cartography.yaml must not crash the validator —
+        parity with `_validate_weather_zones`'s dict guard. The raster image/
+        provenance rules still evaluate; anchor coverage is skipped because there
+        are no readable regions in a non-mapping cartography."""
+        pack_dir = tmp_path / "p"
+        pack_dir.mkdir()
+        _minimal_pack(pack_dir)
+        world_dir = pack_dir / "worlds" / "w"
+        world_dir.mkdir(parents=True)
+        _minimal_world(world_dir)
+        # cartography.yaml parses to a list, not a mapping.
+        (world_dir / "cartography.yaml").write_text("- not\n- a\n- mapping\n", encoding="utf-8")
+        (world_dir / "map.yaml").write_text(
+            "treatment: raster\nimage: sheet.jpg\n"
+            "provenance: {source: OS, date: '1900', archive: NLS, pd_basis: expired}\n"
+            "node_anchors:\n  r1: [1, 2]\n",
+            encoding="utf-8",
+        )
+        # Must not raise; a valid raster block over an unreadable cartography
+        # yields no anchor-coverage errors (no regions to check).
+        errors, _ = validate_pack_structure(pack_dir, schema_path_real)
+        assert not any("node_anchor" in e for e in errors), errors
+
+    def test_raster_map_list_node_anchors_not_silently_covered(self, tmp_path: Path) -> None:
+        """A bare-list `node_anchors` (region ids with no coordinates) must NOT
+        count as anchor coverage — a list-membership check would falsely mark a
+        region 'anchored'. Every region still needs a real mapping anchor."""
+        pack_dir = tmp_path / "p"
+        pack_dir.mkdir()
+        _minimal_pack(pack_dir)
+        world_dir = pack_dir / "worlds" / "w"
+        world_dir.mkdir(parents=True)
+        _minimal_world(world_dir)
+        (world_dir / "cartography.yaml").write_text(
+            "navigation_mode: region\nstarting_region: r1\n"
+            "regions:\n  r1: {name: R1, summary: s, description: d}\n",
+            encoding="utf-8",
+        )
+        (world_dir / "map.yaml").write_text(
+            "treatment: raster\nimage: sheet.jpg\n"
+            "provenance: {source: OS, date: '1900', archive: NLS, pd_basis: expired}\n"
+            "node_anchors: [r1]\n",  # a bare list, not a mapping of id -> coords
+            encoding="utf-8",
+        )
+        errors, _ = validate_pack_structure(pack_dir, schema_path_real)
+        assert any("r1" in e and "anchor" in e.lower() for e in errors), errors
+
 
 class TestWeatherZoneValidation:
     """Story 163-3 / plan Task 18: every region ``weather_zone`` must resolve to a

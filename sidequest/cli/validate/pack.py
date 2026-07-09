@@ -1074,13 +1074,17 @@ def _validate_map_treatment(world_dir: Path, label: str) -> list[str]:
     # Anchor coverage: every cartography region needs a node_anchor. cartography
     # is a required world file so it is normally present; guard the read anyway
     # (parity with every sibling validator — _read_yaml does not guard existence).
+    # Shape-guard both cartography and node_anchors: a non-mapping cartography
+    # would crash `.get`, and a non-mapping node_anchors (e.g. a bare list of ids)
+    # would make `in` a silently-wrong membership check.
     cart_path = world_dir / "cartography.yaml"
     if cart_path.is_file():
         cart_data, cart_err = _read_yaml(cart_path, label)
         if cart_err is not None:
             return errors + [cart_err]
-        regions = (cart_data or {}).get("regions") or {}
-        anchors = data.get("node_anchors") or {}
+        regions = cart_data.get("regions") if isinstance(cart_data, dict) else None
+        anchors = data.get("node_anchors")
+        anchors = anchors if isinstance(anchors, dict) else {}
         if isinstance(regions, dict):
             for region_id in regions:
                 if region_id not in anchors:
@@ -1110,9 +1114,9 @@ def _validate_weather_zones(world_dir: Path, label: str) -> list[str]:
     if not isinstance(regions, dict):
         return []
     declared = {
-        rid: (r or {}).get("weather_zone")
+        rid: r.get("weather_zone")
         for rid, r in regions.items()
-        if isinstance(r, dict) and (r or {}).get("weather_zone")
+        if isinstance(r, dict) and r.get("weather_zone")
     }
     if not declared:
         return []

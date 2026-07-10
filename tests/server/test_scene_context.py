@@ -293,6 +293,45 @@ def test_legacy_entrance_node_is_the_frontier_site_scene() -> None:
     assert ctx.site_id == "frontier"
 
 
+def test_world_scene_when_seated_pc_has_no_region() -> None:
+    """Seated PC with no ``pc_regions`` entry: world scene, never a crash.
+    (Coverage test, passes on GREEN — ported from the abandoned 2026-07-09
+    164-4 branch ``d57a24ce`` so its extra pin isn't lost.)"""
+    snap = GameSnapshot(
+        genre_slug="spaghetti_western",
+        world_slug="gilded_reach",
+        turn_manager=TurnManager(),
+    )
+    snap.player_seats = {"p1": "Tex"}  # seated, but pc_regions stays empty
+    ctx = resolve_scene_context(sd=_tavern_world_sd(), snapshot=snap, player_id="p1")
+    assert ctx == SceneContext(kind="world", site_id=None)
+
+
+def test_world_scene_without_dungeon_repository_attr() -> None:
+    """An sd that lacks the ``dungeon_repository`` attribute ENTIRELY (not
+    just None) must resolve the legacy-frontier branch to the world scene —
+    the 165-3 dead-attribute trap shape: ``getattr(sd, ..., None)`` on a
+    real object, no store probe, no crash. (Coverage test, passes on GREEN —
+    ported from the abandoned 2026-07-09 164-4 branch ``d57a24ce``.)"""
+    sd = SimpleNamespace(
+        genre_pack=_sunden_sd(None).genre_pack,
+        world_slug="beneath_sunden",
+        genre_slug="caverns_and_claudes",
+        player_id="p1",
+        # deliberately NO dungeon_repository field
+    )
+    ctx = resolve_scene_context(
+        sd=sd,
+        snapshot=_snapshot(
+            genre_slug="caverns_and_claudes",
+            world_slug="beneath_sunden",
+            pc_region="exp001.r2",
+        ),
+        player_id="p1",
+    )
+    assert ctx == SceneContext(kind="world", site_id=None)
+
+
 # ---------------------------------------------------------------------------
 # model invariants
 # ---------------------------------------------------------------------------

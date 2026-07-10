@@ -1635,18 +1635,22 @@ class CharacterIncapacitatedMessage(ProtocolBase):
 
 
 # ---------------------------------------------------------------------------
-# DUNGEON_MAP — Beneath Sünden BETTER fix (seam 3). ADR-019 MAP_UPDATE was
-# deleted in the Rust→Python port; this is the NEW ADR-055 map frame (do
-# NOT revive MAP_UPDATE). Shapes mirror the UI ``MapState`` /
-# ``ExploredLocation`` (sidequest-ui/src/components/MapOverlay.tsx) so the
-# MapWidget's Automapper region-graph path consumes it with no adapter:
-# ``id`` is the EXACT region-graph node id (the join key the narrator's
-# constrained move vocabulary also uses), ``room_exits`` makes the widget
-# pick the graph layout, ``is_current_room`` marks the party's region.
+# SITE_MAP — Track B site-map frame (story 164-4; was DUNGEON_MAP, the
+# Beneath Sünden BETTER-fix seam-3 message — renamed in the Task 8 cutover,
+# no alias). ADR-019 MAP_UPDATE was deleted in the Rust→Python port; this is
+# the ADR-055 map frame (do NOT revive MAP_UPDATE). Shapes mirror the UI
+# ``MapState`` / ``ExploredLocation`` (sidequest-ui/src/components/
+# MapOverlay.tsx) so the MapWidget's Automapper region-graph path consumes
+# it with no adapter: ``id`` is the EXACT region-graph node id (the join key
+# the narrator's constrained move vocabulary also uses), ``room_exits``
+# makes the widget pick the graph layout, ``is_current_room`` marks the
+# party's region. The payload adds the owning site's descriptor fields
+# (site_id/site_name/archetype/extent) so the UI can key per-scene map state
+# and render the "inside ⟨site⟩" breadcrumb (Task 9 / story 164-5).
 # ---------------------------------------------------------------------------
 
 
-class DungeonMapExit(ProtocolBase):
+class SiteMapExit(ProtocolBase):
     """One typed adjacency. ``target`` is the EXACT region-graph node id;
     ``exit_type`` is the edge kind (corridor|stairs|shaft|chute|secret).
     ``bearing`` is the stable, distinct direction this exit leaves the
@@ -1658,14 +1662,14 @@ class DungeonMapExit(ProtocolBase):
     bearing: str = ""
 
 
-class DungeonMapLocation(ProtocolBase):
+class SiteMapLocation(ProtocolBase):
     """One discovered region, in the UI ``ExploredLocation`` shape.
 
-    ``x``/``y`` are 0 — the procedural megadungeon has no cartesian
-    coordinates (spec: keyed by region id, never by floor); the
-    Automapper's layered BFS layout takes over when exit directions are
-    absent. ``room_exits`` (not ``connections``) is what makes the
-    MapWidget choose the graph renderer over the coordinate SVG.
+    ``x``/``y`` are 0 — a site graph has no cartesian coordinates (spec:
+    keyed by region id, never by floor); the Automapper's layered BFS
+    layout takes over when exit directions are absent. ``room_exits``
+    (not ``connections``) is what makes the MapWidget choose the graph
+    renderer over the coordinate SVG.
     """
 
     id: str
@@ -1674,37 +1678,46 @@ class DungeonMapLocation(ProtocolBase):
     y: float = 0.0
     type: str = "region"
     connections: list[str] = Field(default_factory=list)
-    room_exits: list[DungeonMapExit] = Field(default_factory=list)
+    room_exits: list[SiteMapExit] = Field(default_factory=list)
     room_type: str = "normal"
     is_current_room: bool = False
 
 
-class DungeonMapPayload(ProtocolBase):
-    """The discovered region graph projected for the UI Map tab.
+class SiteMapPayload(ProtocolBase):
+    """The active site's discovered region graph projected for the UI Map tab.
 
     Fog-of-war: ``explored`` carries only regions in
     ``snapshot.discovered_regions`` (undiscovered neighbors stay hidden;
     an edge toward one still renders as a way that direction, exactly as
     a hand-drawn dungeon map works).
+
+    The four site fields identify the owning site (Track B, Task 8) so the
+    UI can key map state per scene and render the breadcrumb. Empty-string
+    defaults keep the payload constructible field-by-field.
     """
 
     current_location: str
     region: str
-    explored: list[DungeonMapLocation] = Field(default_factory=list)
+    explored: list[SiteMapLocation] = Field(default_factory=list)
     fog_bounds: dict[str, int] = Field(default_factory=lambda: {"width": 0, "height": 0})
+    site_id: str = ""
+    site_name: str = ""
+    archetype: str = ""
+    extent: str = ""
 
 
-class DungeonMapMessage(ProtocolBase):
-    """GameMessage::DungeonMap — procedural megadungeon map frame.
+class SiteMapMessage(ProtocolBase):
+    """GameMessage::SiteMap — per-site region-graph map frame.
 
-    Emitted every narration turn of a beneath_sunden session (idempotent;
-    the UI just replaces its MapState). Cures the 2026-05-17 "No map data
-    yet" defect — the materialized dungeon was never projected to the UI
-    after ADR-019 MAP_UPDATE was deleted in the port.
+    Emitted every narration turn a connection's PC is in a site scene
+    (idempotent; the UI just replaces its MapState). Was DungeonMapMessage
+    (the beneath_sunden-only frame that cured the 2026-05-17 "No map data
+    yet" defect); the Track B Task 8 cutover generalized it to ANY declared
+    site — one cutover, no alias (story 164-4).
     """
 
-    type: Literal[MessageType.DUNGEON_MAP] = MessageType.DUNGEON_MAP
-    payload: DungeonMapPayload
+    type: Literal[MessageType.SITE_MAP] = MessageType.SITE_MAP
+    payload: SiteMapPayload
     player_id: str = ""
 
 
@@ -1860,7 +1873,7 @@ _Phase1Variant = Annotated[
     | FateStateMessage
     | FateRollMessage
     | CharacterIncapacitatedMessage
-    | DungeonMapMessage
+    | SiteMapMessage
     | JournalRequestMessage
     | JournalResponseMessage
     | YieldMessage,
@@ -1928,11 +1941,12 @@ _KIND_TO_MESSAGE_CLS: dict[str, type] = {
     # event-sourced (no replay on reconnect — room payloads are re-emitted on
     # the next room transition; the initial room is emitted at chargen time).
     "TACTICAL_GRID": TacticalGridMessage,
-    # Beneath Sünden BETTER fix (seam 3). Procedural megadungeon map
-    # frame; not event-sourced (re-emitted every narration turn — the UI
-    # just replaces its MapState, so reconnect repopulates on the next
-    # turn). The NEW ADR-055 map message (ADR-019 MAP_UPDATE is dead).
-    "DUNGEON_MAP": DungeonMapMessage,
+    # Track B site-map frame (was DUNGEON_MAP — renamed in the story 164-4
+    # Task 8 cutover, no alias); not event-sourced (re-emitted every
+    # narration turn — the UI just replaces its MapState, so reconnect
+    # repopulates on the next turn). The ADR-055 map message shape
+    # (ADR-019 MAP_UPDATE is dead).
+    "SITE_MAP": SiteMapMessage,
     # ADR-136 (RELATIONSHIPS) is deliberately ABSENT here. Like its transient
     # sibling LOCATION_DESCRIPTION, the relationship roster is emitted via the
     # non-durable _emit_shared_world_frame broadcast path (not _emit_event), so

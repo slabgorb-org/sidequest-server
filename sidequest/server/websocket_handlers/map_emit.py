@@ -1,9 +1,10 @@
-"""Tactical-grid, location-description, and dungeon-map emit helpers.
+"""Tactical-grid, location-description, and site-map emit helpers.
 
 Extracted from ``websocket_session_handler`` (module-level free functions).
 Each emits a typed WebSocket message off the live snapshot when the party
 enters / changes rooms: TACTICAL_GRID (ADR-096), LOCATION_DESCRIPTION and
-LOCATION_OVERLAY_CHANGED (ADR-109), and DUNGEON_MAP (ADR-055/§Q-map). The
+LOCATION_OVERLAY_CHANGED (ADR-109), and SITE_MAP (ADR-055/§Q-map — was
+DUNGEON_MAP before the story 164-4 Task 8 cutover). The
 ``handler``/``emit_fn`` seam lets the turn-dispatch loop pass its broadcast
 closure without these helpers knowing about the SessionRoom.
 
@@ -19,14 +20,17 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from sidequest.game.sites.registry import SiteRegistry
 from sidequest.protocol.messages import TacticalGridMessage, TacticalGridPayload
+from sidequest.server.scene_context import cartography_for, resolve_scene_context
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
 
 if TYPE_CHECKING:
     from sidequest.dungeon.region_graph.model import RegionGraph
     from sidequest.dungeon.themes import ThemePalette
     from sidequest.game.session import GameSnapshot
-    from sidequest.protocol.messages import DungeonMapPayload
+    from sidequest.game.sites.models import SiteDescriptor
+    from sidequest.protocol.messages import SiteMapPayload
     from sidequest.protocol.models import EncounterLocationOverlay, LocationEntity
     from sidequest.server.session_state import _SessionData
 
@@ -943,104 +947,99 @@ def _resolve_connection_pc_region(
     return pc_name, snapshot.region_for(perspective=pc_name)
 
 
-def _load_dungeon_map_context(
-    sd: _SessionData,
-) -> tuple[RegionGraph, ThemePalette, str] | None:
-    """Load the live region graph + theme palette for the dungeon-map emit.
+class _EmptyPalette:
+    """Null palette for site worlds without an authored ``themes/`` dir:
+    every lookup misses, so ``_build_site_map_payload``'s fail-soft path
+    labels regions by their graph id. A missing palette is a NORMAL state
+    for a non-dungeon site world (themes are beneath_sunden dungeon
+    flavor), not a config gap — never a loud skip."""
 
-    The single content/IO seam (DungeonStore.load_map, GenreLoader,
-    load_theme_palette). Returns ``(graph, palette, entrance_id)`` or
-    ``None`` for a clean skip:
-      - other-world no-op (``applies_to`` False) — silent (the per-turn
-        ``dungeon.region_projection`` span already records it);
-      - missing schema / empty map — emits ``dungeon.map_skipped`` (loud).
+    def get(self, theme_id: str) -> object:
+        raise KeyError(theme_id)
+
+
+def _load_site_map_context(
+    sd: _SessionData, site: SiteDescriptor
+) -> tuple[RegionGraph, ThemePalette, str] | None:
+    """Load ``site``'s stored region graph + theme palette for the site-map
+    emit.
+
+    The single content/IO seam (DungeonRepository.load_map, GenreLoader,
+    load_theme_palette) — the site-scene successor of the retired
+    ``_load_dungeon_map_context`` (story 164-4: the scene-context gate in the
+    callers replaced its ``region_projection.applies_to`` fence). Returns
+    ``(graph, palette, entrance_id)`` or ``None`` for a clean skip:
+      - empty site store — emits ``dungeon.map_skipped`` (loud).
 
     Lazy imports: ``sidequest.dungeon`` depends on game models (the
     frontier-hook lazy-import precedent)."""
-    from sidequest.dungeon.region_projection import applies_to
     from sidequest.dungeon.seed_bootstrap import ENTRANCE_ID
-    from sidequest.dungeon.themes import load_theme_palette
+    from sidequest.dungeon.themes import ThemePaletteMissingError, load_theme_palette
     from sidequest.server.session_state import session_world_dir
 
-    if not applies_to(sd.genre_slug, sd.world_slug):
-        return None  # the per-turn dungeon.region_projection span already
-        # records the other-world no-op; a second event here is noise.
-
-    graph = sd.dungeon_repository.load_map(entrance_id=ENTRANCE_ID)
+    graph = sd.dungeon_repository.load_map(entrance_id=site.entrance_node_id, site_id=site.site_id)
     if not graph.nodes:
         _watcher_publish(
             "dungeon.map_skipped",
-            {"world": sd.world_slug, "reason": "empty_map"},
+            {"world": sd.world_slug, "site_id": site.site_id, "reason": "empty_map"},
             component="dungeon",
             severity="warning",
         )
-        logger.warning("dungeon.map_skipped empty dungeon_map")
+        logger.warning("dungeon.map_skipped empty site map site=%s", site.site_id)
         return None
 
     world_dir = session_world_dir(sd)
     # ADR-140 (story 113-1): themes/ is world-tier — resolve from the world dir,
     # not the genre-pack root (world_dir.parent.parent).
-    palette = load_theme_palette(world_dir)
-    return graph, palette, ENTRANCE_ID
+    try:
+        palette = cast("ThemePalette", load_theme_palette(world_dir))
+    except ThemePaletteMissingError:
+        # LOUD degrade (reviewer HIGH, 2026-07-10): the null palette itself is
+        # correct for a themeless site world, but the GM panel must be able to
+        # tell "themeless tavern, working as intended" from "Sünden's themes/
+        # dir vanished" — never a silent fallback.
+        _watcher_publish(
+            "dungeon.theme_palette_missing",
+            {"world": sd.world_slug, "site_id": site.site_id},
+            component="dungeon",
+        )
+        logger.info(
+            "dungeon.theme_palette_missing world=%s site=%s (id-label degrade)",
+            sd.world_slug,
+            site.site_id,
+        )
+        palette = cast("ThemePalette", _EmptyPalette())
+
+    # The legacy frontier store (pre-namespacing Sünden deep) anchors on the
+    # bare ``entrance`` id; namespaced site stores anchor on
+    # ``<site_id>:entrance``. The marker follows whichever the graph holds.
+    entrance_id = site.entrance_node_id if site.entrance_node_id in graph.nodes else ENTRANCE_ID
+    return graph, palette, entrance_id
 
 
-def _descent_phase(sd: _SessionData, snapshot: GameSnapshot) -> str:
-    """Which map projection owns THIS connection's turn for a hybrid
-    surface+deep world (beneath_sunden).
-
-    beneath_sunden carries TWO region graphs that both project to the UI's
-    single ``mapData`` slot every turn: the authored surface cartography
-    (``ropefoot``/``the_dropmouth``, region-mode MAP_UPDATE) and the ADR-106
-    procedural deep (``entrance``/``expNNN.rN``, DUNGEON_MAP). The cartography
-    emit is dispatched second, so without a gate it CLOBBERS the DUNGEON_MAP and
-    the player sees the surface no matter how deep they stand (playtest
-    2026-06-22, session ``697cbc14``). This phase makes the two emits mutually
-    exclusive — exactly one map per connection per turn.
-
-    Per-connection (§Q-map): the phase reads THIS connection's PC region, so a
-    split party (one PC on the surface, one in the deep) gets the right map each.
-
-      - ``"n/a"``     — not a dungeon world (or empty/unloadable dungeon map);
-                        ``_load_dungeon_map_context`` returns ``None``. Cartography
-                        owns the map exactly as before and the dungeon emit no-ops
-                        the same way. EVERY non-beneath_sunden world lands here
-                        (``applies_to`` is a pure slug check — no IO).
-      - ``"deep"``    — the PC's region is a node in the procedural graph:
-                        DUNGEON_MAP owns the map, cartography stands down.
-      - ``"surface"`` — dungeon world, PC above the rope (a cartography region,
-                        not a dungeon node) or PC unresolved: cartography owns the
-                        map, the dungeon emit stands down rather than ship a
-                        0-discovered frame the cartography emit would overwrite.
-    """
-    ctx = _load_dungeon_map_context(sd)
-    if ctx is None:
-        return "n/a"
-    graph, _palette, _entrance = ctx
-    _pc_name, pc_region = _resolve_connection_pc_region(snapshot, getattr(sd, "player_id", ""))
-    if pc_region and pc_region in graph.nodes:
-        return "deep"
-    return "surface"
-
-
-def _build_dungeon_map_payload(
+def _build_site_map_payload(
     *,
     graph: RegionGraph,
     palette: ThemePalette,
     pc_region: str,
     discovered_regions: list[str],
     entrance_id: str,
-) -> DungeonMapPayload:
-    """Build a ``DungeonMapPayload`` with a per-PC YOU-ARE-HERE marker.
+    site: SiteDescriptor | None = None,
+) -> SiteMapPayload:
+    """Build a ``SiteMapPayload`` with a per-PC YOU-ARE-HERE marker.
 
     ``pc_region`` is THIS connection's PC region (§Q-map). ``discovered_regions``
     is the SHARED fog-of-war set — a region any PC entered is on the whole
     table's map; only the YOU-ARE-HERE marker (``is_current_room`` /
-    ``current_location`` / ``region``) is per-PC."""
+    ``current_location`` / ``region``) is per-PC. ``site`` stamps the owning
+    site's descriptor fields onto the payload (Track B, Task 8) so the UI can
+    key per-scene map state; ``None`` leaves the additive fields at their
+    empty-string defaults (payload-shape unit tests)."""
     from sidequest.dungeon.region_projection import assign_bearings
     from sidequest.protocol.messages import (
-        DungeonMapExit,
-        DungeonMapLocation,
-        DungeonMapPayload,
+        SiteMapExit,
+        SiteMapLocation,
+        SiteMapPayload,
     )
 
     nodes = graph.nodes
@@ -1052,7 +1051,7 @@ def _build_dungeon_map_payload(
     if not discovered and pc_region in nodes:
         discovered = [pc_region]
 
-    explored: list[DungeonMapLocation] = []
+    explored: list[SiteMapLocation] = []
     for rid in discovered:
         node = nodes[rid]
         try:
@@ -1063,7 +1062,7 @@ def _build_dungeon_map_payload(
         # source (assign_bearings), so the map agrees with the prose.
         bearings = assign_bearings(graph, rid)
         room_exits = [
-            DungeonMapExit(
+            SiteMapExit(
                 target=(target := (e.b if e.a == rid else e.a)),
                 exit_type=e.kind,
                 bearing=bearings.get(target, ""),
@@ -1072,7 +1071,7 @@ def _build_dungeon_map_payload(
             if rid in (e.a, e.b) and not e.hidden  # secrets stay off the map
         ]
         explored.append(
-            DungeonMapLocation(
+            SiteMapLocation(
                 id=rid,
                 name=display,
                 type="region",
@@ -1083,10 +1082,14 @@ def _build_dungeon_map_payload(
             )
         )
 
-    return DungeonMapPayload(
+    return SiteMapPayload(
         current_location=pc_region,
         region=pc_region,
         explored=explored,
+        site_id=site.site_id if site else "",
+        site_name=site.name if site else "",
+        archetype=site.archetype if site else "",
+        extent=str(site.extent) if site else "",
     )
 
 
@@ -1097,19 +1100,23 @@ def _maybe_emit_dungeon_map(
     snapshot: GameSnapshot,
     emit_fn: object,
 ) -> None:
-    """Emit a DUNGEON_MAP frame for a beneath_sunden session (BETTER fix
-    seam 3). Projects the live region graph (discovered regions only —
-    fog of war) to the UI Map tab in the ``MapState``/``ExploredLocation``
-    shape so the MapWidget's Automapper region-graph path renders it with
-    no adapter. Cures the 2026-05-17 "No map data yet" defect: the
-    materialized dungeon was never projected to the UI after ADR-019
-    MAP_UPDATE was deleted in the port (this is the NEW ADR-055 message).
+    """Emit a SITE_MAP frame when THIS connection's PC is in a site scene.
+
+    Story 164-4 (Track B Tasks 7+8) generalized the beneath_sunden-only
+    DUNGEON_MAP emit: the ``region_projection.applies_to`` fence dissolved —
+    ANY world with a declared site projects that site's stored region graph
+    (discovered regions only — fog of war) to the UI Map tab in the
+    ``MapState``/``ExploredLocation`` shape, keyed by the owning site's
+    descriptor fields. Scene arbitration is ``resolve_scene_context``: the
+    world scene belongs to the cartography MAP_UPDATE, a site scene to this
+    frame — exactly one map per connection per turn.
 
     Called every narration turn (idempotent — the UI just replaces its
-    MapState). Clean no-op for every other world. OTEL: emits
+    MapState). Clean, silent no-op for a site-less world. OTEL: emits
     ``dungeon.map_emitted`` on success / ``dungeon.map_skipped`` (with a
     reason) otherwise, so the GM panel sees the UI seam engaged — never a
-    silent skip. A live turn never hard-fails on a dungeon defect.
+    silent skip on a site world. A live turn never hard-fails on a dungeon
+    defect.
 
     Per-PC (Movement subsystem §Q-map / OP1): the YOU-ARE-HERE marker is
     THIS connection's PC region (``player_id`` -> seat -> PC ->
@@ -1117,7 +1124,7 @@ def _maybe_emit_dungeon_map(
     A connection with no seated PC / no ``pc_regions`` entry emits
     ``dungeon.map_skipped(no_pc_region)`` — loud, NEVER a silent fall-through
     to the stale ``current_region``. ``discovered_regions`` stays SHARED."""
-    from sidequest.protocol.messages import DungeonMapMessage
+    from sidequest.protocol.messages import SiteMapMessage
 
     player_id = getattr(sd, "player_id", "")
 
@@ -1143,45 +1150,64 @@ def _maybe_emit_dungeon_map(
         )
         return
 
-    ctx = _load_dungeon_map_context(sd)
-    if ctx is None:
-        return  # other-world no-op or map_skipped already emitted by loader.
-    graph, palette, entrance_id = ctx
+    registry = SiteRegistry.from_cartography(cartography_for(sd))
+    scene = resolve_scene_context(sd=sd, snapshot=snapshot, player_id=player_id)
+    if scene.kind != "site":
+        # World scene: the cartography MAP_UPDATE owns the map. Loud on a
+        # site world so the GM panel shows which emit owns the turn (the
+        # 2026-06-22 frozen-surface bug's mutual-exclusion invariant);
+        # silent for the every-other-world case — a world with no sites is
+        # not "skipping" anything and a span every turn would be noise.
+        if registry.has_sites:
+            _watcher_publish(
+                "dungeon.map_skipped",
+                {
+                    "world": sd.world_slug,
+                    "reason": "world_scene",
+                    "pc_name": pc_name or "",
+                    "pc_region": pc_region,
+                },
+                component="dungeon",
+            )
+            logger.info("dungeon.map_skipped world_scene pc=%s region=%s", pc_name, pc_region)
+        return
 
-    # Descent-phase gate (mirror of _descent_phase, reusing the graph + pc_region
-    # already in hand): the PC is ABOVE the rope — their region is an authored
-    # surface cartography region (ropefoot/the_dropmouth), not a node in the
-    # procedural graph. The surface map is the cartography MAP_UPDATE's job; a
-    # 0-discovered dungeon frame here would just be overwritten by it and orient
-    # nobody. Stand down loudly so the GM panel shows the cartography emit owns
-    # this turn (playtest 2026-06-22 frozen-surface bug). Not a warning — a PC on
-    # the surface is a normal, expected state.
-    if pc_region not in graph.nodes:
+    site = registry.by_id(scene.site_id or "")
+    if site is None:
+        # Unreachable by construction (the scene's site_id came from this
+        # registry) — but a live turn never hard-fails on a dungeon defect.
         _watcher_publish(
             "dungeon.map_skipped",
             {
                 "world": sd.world_slug,
-                "reason": "surface_phase",
-                "pc_name": pc_name or "",
-                "pc_region": pc_region,
+                "reason": "unknown_site",
+                "site_id": scene.site_id or "",
             },
             component="dungeon",
+            severity="warning",
         )
-        logger.info("dungeon.map_skipped surface_phase pc=%s region=%s", pc_name, pc_region)
+        logger.warning("dungeon.map_skipped unknown_site site_id=%s", scene.site_id)
         return
 
-    payload = _build_dungeon_map_payload(
+    ctx = _load_site_map_context(sd, site)
+    if ctx is None:
+        return  # empty-store skip already emitted by the loader.
+    graph, palette, entrance_id = ctx
+
+    payload = _build_site_map_payload(
         graph=graph,
         palette=palette,
         pc_region=pc_region,
         discovered_regions=list(snapshot.discovered_regions),
         entrance_id=entrance_id,
+        site=site,
     )
-    msg = DungeonMapMessage(payload=payload, player_id=player_id)
+    msg = SiteMapMessage(payload=payload, player_id=player_id)
     _watcher_publish(
         "dungeon.map_emitted",
         {
             "world": sd.world_slug,
+            "site_id": site.site_id,
             "pc_name": pc_name,
             "pc_region": pc_region,
             "discovered_regions": len(payload.explored),
@@ -1190,13 +1216,14 @@ def _maybe_emit_dungeon_map(
         component="dungeon",
     )
     logger.info(
-        "dungeon.map_emitted pc=%s region=%s discovered=%d/%d",
+        "dungeon.map_emitted site=%s pc=%s region=%s discovered=%d/%d",
+        site.site_id,
         pc_name,
         pc_region,
         len(payload.explored),
         len(graph.nodes),
     )
-    emit_fn(msg, "DUNGEON_MAP")  # type: ignore[operator]
+    emit_fn(msg, "SITE_MAP")  # type: ignore[operator]
 
 
 def _maybe_emit_cartography_map(
@@ -1229,18 +1256,21 @@ def _maybe_emit_cartography_map(
     success / ``cartography.map_skipped`` (with a reason) otherwise, so the GM
     panel sees the Map-tab seam engaged — never a silent skip (CLAUDE.md OTEL
     principle; the prior inline emit carried no span at all)."""
-    # Descent-phase gate: for a hybrid surface+deep world (beneath_sunden) this
-    # connection's PC is BELOW the rope, inside the ADR-106 procedural graph. The
-    # DUNGEON_MAP emit owns the map there; the authored surface cartography would
-    # clobber it in the UI's single mapData slot (the 2026-06-22 frozen-surface
-    # bug — both emits fire every turn and this one is dispatched second). Stand
-    # down loudly. Clean no-op for every non-dungeon world (_descent_phase "n/a").
-    if _descent_phase(sd, snapshot) == "deep":
+    # Scene-context gate (story 164-4, was the beneath_sunden-only descent
+    # phase): this connection's PC is inside a site's graph. The SITE_MAP
+    # emit owns the map there; the authored surface cartography would
+    # clobber it in the UI's single mapData slot (the 2026-06-22
+    # frozen-surface bug — both emits fire every turn and this one is
+    # dispatched second). Stand down loudly. Clean no-op for every
+    # site-less world (the resolver answers "world" without store IO).
+    scene = resolve_scene_context(sd=sd, snapshot=snapshot, player_id=getattr(sd, "player_id", ""))
+    if scene.kind == "site":
         _watcher_publish(
             "cartography.map_skipped",
             {
                 "world": getattr(sd, "world_slug", ""),
-                "reason": "deep_phase",
+                "reason": "site_scene",
+                "site_id": scene.site_id or "",
                 "current_region": snapshot.current_region or "",
             },
             component="location",

@@ -2008,7 +2008,7 @@ class ConnectHandler:
                     )
                 # Region-mode cartography map: emit MAP_UPDATE so the Map tab
                 # shows the pack's region list on connect/resume. Room-graph
-                # worlds (beneath_sunden etc.) use DUNGEON_MAP instead.
+                # worlds (beneath_sunden etc.) use SITE_MAP instead.
                 cart_map_msg = _build_cartography_map_message(
                     session._session_data.genre_pack if session._session_data is not None else None,
                     row.world_slug,

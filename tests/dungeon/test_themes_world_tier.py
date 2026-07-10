@@ -121,15 +121,18 @@ def test_world_tier_palette_loads_via_resolver_and_genre_root_is_empty(
 # ---------------------------------------------------------------------------
 
 
-def test_load_dungeon_map_context_reads_world_tier_palette(
+def test_load_site_map_context_reads_world_tier_palette(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``map_emit._load_dungeon_map_context`` must load the palette from the
-    world dir. Drives the real production function with a duck-typed
-    ``_SessionData`` (only ``genre_slug``/``world_slug``/``dungeon_repository``
-    are read before the theme load) — no DB needed."""
+    """``map_emit._load_site_map_context`` must load the palette from the
+    world dir (was ``_load_dungeon_map_context`` before the story 164-4
+    scene-context cutover — same content/IO seam, now keyed per site).
+    Drives the real production function with a duck-typed ``_SessionData``
+    (only ``genre_slug``/``world_slug``/``dungeon_repository`` are read
+    before the theme load) — no DB needed."""
     import sidequest.genre.loader as loader_mod
-    from sidequest.server.websocket_handlers.map_emit import _load_dungeon_map_context
+    from sidequest.game.sites.models import SiteDescriptor
+    from sidequest.server.websocket_handlers.map_emit import _load_site_map_context
 
     pack = tmp_path / "content" / "caverns_and_claudes"
     _write_theme(pack / "themes", "old.yaml", _theme_yaml("old_root_theme"))
@@ -144,11 +147,20 @@ def test_load_dungeon_map_context_reads_world_tier_palette(
         genre_slug="caverns_and_claudes",
         world_slug="beneath_sunden",
         dungeon_repository=SimpleNamespace(
-            load_map=lambda entrance_id: SimpleNamespace(nodes={"entrance": object()})
+            load_map=lambda *, entrance_id, site_id="frontier": SimpleNamespace(
+                nodes={"entrance": object()}
+            )
         ),
     )
+    site = SiteDescriptor(
+        site_id="frontier",
+        name="The Deep",
+        archetype="megadungeon",
+        attached_to="the_dropmouth",
+        extent="frontier",
+    )
 
-    result = _load_dungeon_map_context(sd)  # type: ignore[arg-type]
+    result = _load_site_map_context(sd, site)  # type: ignore[arg-type]
     assert result is not None
     _graph, palette, _entrance = result
     assert "new_world_theme" in palette.themes, "map emit must read world-tier themes/"

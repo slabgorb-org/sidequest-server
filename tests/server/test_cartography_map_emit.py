@@ -122,7 +122,7 @@ def test_emits_lie_detector_span(otel_capture):
 
 
 def test_room_graph_world_is_a_noop():
-    """A room_graph world uses DUNGEON_MAP, not MAP_UPDATE — the cartography
+    """A room_graph world uses SITE_MAP, not MAP_UPDATE — the cartography
     helper must be a clean no-op (no MAP_UPDATE, no skip span churn)."""
     sent, emit_fn = _emits()
     snap = _snapshot()

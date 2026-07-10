@@ -2626,7 +2626,7 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                     # covers turn 1 + intra-region moves + resume, curing "No map
                     # data yet"; EH-2 burning_peace 2026-06-05). Idempotent (the
                     # UI replaces its MapState); no-op for room_graph worlds (they
-                    # use DUNGEON_MAP). Mirrors the dungeon-map / relationships /
+                    # use SITE_MAP). Mirrors the site-map / relationships /
                     # quests projections above, which already fire unconditionally.
                     _maybe_emit_cartography_map(
                         self,

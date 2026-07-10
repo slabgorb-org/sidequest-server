@@ -74,37 +74,14 @@ def _tavern_archetype() -> Any:
     )
 
 
-def _real_bundle_palette_snapshot_pack() -> tuple[Any, Any, Any, Any]:
-    """Real materialize dependencies, reusing the materializer suite's honest
-    helpers (real cookbook load, real ThemePalette, real GameSnapshot, real
-    trope pack) — no mocking of the dungeon layer."""
-    from tests.dungeon.test_materializer import (
-        _attach_pack,
-        _commit_palette,
-        _fresh_snapshot,
-        _real_cookbook_bundle,
-    )
-
-    bundle = _real_cookbook_bundle()
-    palette = _commit_palette("tavern_interior")
-    snapshot = _fresh_snapshot()
-    pack = _attach_pack("cave_in")
-    return bundle, palette, snapshot, pack
-
-
 async def _materialize_site(repo: Any, *, base_seed: int = 12345) -> None:
     from sidequest.dungeon.bounded_site import ensure_bounded_site_materialized
 
     repo.set_campaign_seed(base_seed)
-    bundle, palette, snapshot, pack = _real_bundle_palette_snapshot_pack()
     await ensure_bounded_site_materialized(
         site=_tavern_descriptor(),
         archetype=_tavern_archetype(),
         dungeon_repository=repo,
-        snapshot=snapshot,
-        pack=pack,
-        bundle=bundle,
-        palette=palette,
     )
 
 
@@ -114,42 +91,27 @@ async def _materialize_site(repo: Any, *, base_seed: int = 12345) -> None:
 
 
 def test_module_exposes_ensure_bounded_site_materialized() -> None:
-    """The public entry point is an async function with the keyword-only
-    signature the movement dispatch (Task 6/12) calls."""
+    """Cookbook-free (ADR-157): the entry point is an async function whose ONLY
+    keyword params are site/archetype/dungeon_repository — no bundle/palette."""
     from sidequest.dungeon.bounded_site import ensure_bounded_site_materialized
 
     assert inspect.iscoroutinefunction(ensure_bounded_site_materialized)
     params = inspect.signature(ensure_bounded_site_materialized).parameters
-    for name in (
-        "site",
-        "archetype",
-        "dungeon_repository",
-        "snapshot",
-        "pack",
-        "bundle",
-        "palette",
-    ):
-        assert name in params, f"missing keyword param {name!r}"
+    assert set(params) == {"site", "archetype", "dungeon_repository"}
+    for name in params:
         assert params[name].kind is inspect.Parameter.KEYWORD_ONLY
 
 
 @pytest.mark.asyncio
 async def test_missing_store_fails_loud() -> None:
-    """No Silent Fallbacks: a bounded site with no dungeon store raises
-    SeamCrossingError — never a quiet no-op that leaves the player stuck."""
     from sidequest.dungeon.bounded_site import ensure_bounded_site_materialized
     from sidequest.game.seams.base import SeamCrossingError
 
-    bundle, palette, snapshot, pack = _real_bundle_palette_snapshot_pack()
     with pytest.raises(SeamCrossingError):
         await ensure_bounded_site_materialized(
             site=_tavern_descriptor(),
             archetype=_tavern_archetype(),
             dungeon_repository=None,
-            snapshot=snapshot,
-            pack=pack,
-            bundle=bundle,
-            palette=palette,
         )
 
 
@@ -195,15 +157,10 @@ async def test_idempotent_second_entry_skips(monkeypatch: Any, migrated_db: str)
     # so re-run the call directly (the base seed is already committed).
     from sidequest.dungeon.bounded_site import ensure_bounded_site_materialized
 
-    bundle, palette, snapshot, pack = _real_bundle_palette_snapshot_pack()
     await ensure_bounded_site_materialized(
         site=_tavern_descriptor(),
         archetype=_tavern_archetype(),
         dungeon_repository=repo,
-        snapshot=snapshot,
-        pack=pack,
-        bundle=bundle,
-        palette=palette,
     )
     count2 = len(repo.load_map(entrance_id=entrance, site_id=_SITE_ID).nodes)
     assert count1 == count2
@@ -267,15 +224,10 @@ async def test_missing_base_seed_is_minted_not_defaulted_to_zero(
     _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
     # Deliberately do NOT set a base campaign seed (unlike _materialize_site).
     assert repo.get_campaign_seed() is None
-    bundle, palette, snapshot, pack = _real_bundle_palette_snapshot_pack()
     await ensure_bounded_site_materialized(
         site=_tavern_descriptor(),
         archetype=_tavern_archetype(),
         dungeon_repository=repo,
-        snapshot=snapshot,
-        pack=pack,
-        bundle=bundle,
-        palette=palette,
     )
     # A real base seed was established — not left None, not a silent 0.
     assert repo.get_campaign_seed() is not None

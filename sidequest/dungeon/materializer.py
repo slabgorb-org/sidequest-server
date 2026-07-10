@@ -2471,16 +2471,18 @@ async def materialize_bounded(
         existing_frontier = dungeon_repository.load_frontier(site_id=request.site_id)
         is_fresh_save = not existing_map.nodes and not existing_frontier
 
-        with dungeon_repository.transaction() as tx:
-            with dungeon_materialize_commit_span(expansion_id=request.expansion_id) as commit_span:
-                _commit_bounded(
-                    request,
-                    graph=graph,
-                    expansion=expansion,
-                    fill_result=fill_result,
-                    tactical=tactical,
-                    room_identities=room_identities,
-                    is_fresh_save=is_fresh_save,
-                    tx=tx,
-                    span=commit_span,
-                )
+        with (
+            dungeon_repository.transaction() as tx,
+            dungeon_materialize_commit_span(expansion_id=request.expansion_id) as commit_span,
+        ):
+            _commit_bounded(
+                request,
+                graph=graph,
+                expansion=expansion,
+                fill_result=fill_result,
+                tactical=tactical,
+                room_identities=room_identities,
+                is_fresh_save=is_fresh_save,
+                tx=tx,
+                span=commit_span,
+            )

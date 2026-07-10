@@ -88,3 +88,45 @@ def test_none_cartography_falls_back_to_genre_default() -> None:
 
     zone = _select_zone_for_region(_RULES, None, genre_slug="tea_and_murder")
     assert zone == "glen_floor"
+
+
+def test_select_zone_for_region_emits_bootstrap_span(monkeypatch) -> None:
+    """Rework (Reviewer, OTEL Observability): the bootstrap zone-selection
+    decision must be observable.
+
+    The region-CHANGE path emits ``weather.zone_changed``; the bootstrap-time
+    region-vs-genre-default selection currently emits nothing of its own (only
+    the resulting zone rides the generic ``weather_proposed`` span, which can't
+    tell you WHICH strategy chose it). The GM panel can't verify Task-17 fired
+    vs. silently fell back. RED until ``_select_zone_for_region`` emits a
+    ``weather.bootstrap_zone_selected`` watcher event (``component="location"``)
+    carrying ``{zone, strategy}`` with ``strategy`` in {``region``,
+    ``genre_default``}."""
+    import sidequest.game.world_grounding_bootstrap as wgb
+
+    captured: list[dict] = []
+    monkeypatch.setattr(
+        wgb,
+        "_watcher_publish",
+        lambda et, fields, **k: captured.append({"event_type": et, "fields": fields, **k}),
+        raising=False,
+    )
+
+    # Region override wins → strategy="region".
+    cart = _Cart("castle_ross", {"castle_ross": _Region("highland_pass")})
+    wgb._select_zone_for_region(_RULES, cart, genre_slug="tea_and_murder")
+    region_hits = [e for e in captured if e["event_type"] == "weather.bootstrap_zone_selected"]
+    assert len(region_hits) == 1, (
+        "no weather.bootstrap_zone_selected span on the region-override path"
+    )
+    assert region_hits[0]["fields"]["zone"] == "highland_pass"
+    assert region_hits[0]["fields"]["strategy"] == "region"
+    assert region_hits[0]["component"] == "location"
+
+    # No region zone → genre-default fallback → strategy="genre_default".
+    captured.clear()
+    cart2 = _Cart("the_bridge", {"the_bridge": _Region(None)})
+    wgb._select_zone_for_region(_RULES, cart2, genre_slug="tea_and_murder")
+    default_hits = [e for e in captured if e["event_type"] == "weather.bootstrap_zone_selected"]
+    assert len(default_hits) == 1
+    assert default_hits[0]["fields"]["strategy"] == "genre_default"

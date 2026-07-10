@@ -130,6 +130,44 @@ def test_regenerate_weather_noops_without_generator(
     assert sd.weather_state is before
 
 
+def test_regenerate_weather_seed_varies_by_region(
+    two_zone_generator: WeatherGenerator,
+) -> None:
+    """Rework (Reviewer): the seed must actually DERIVE from the region.
+
+    ``test_regenerate_weather_is_deterministic_by_region`` only proves
+    same-region reproducibility — it passes even if ``region_id`` is dropped from
+    the seed entirely (mutation-verified in review). This pins the other half:
+    two DIFFERENT regions in the SAME zone must get DIFFERENT seeds, or "a party
+    that returns to a region sees THAT region's weather" is a false promise."""
+    from sidequest.game.world_grounding_bootstrap import regenerate_weather_for_region
+
+    sd_a = _regen_sd(two_zone_generator)
+    sd_b = _regen_sd(two_zone_generator)
+    regenerate_weather_for_region(sd_a, "castle_ross", "highland_pass")
+    regenerate_weather_for_region(sd_b, "the_long_pass", "highland_pass")
+    assert sd_a.weather_state.seed != sd_b.weather_state.seed, (
+        "two different regions in the same zone produced the same seed — region_id "
+        "does not participate in the seed derivation"
+    )
+
+
+def test_regenerate_weather_requires_game_slug(
+    two_zone_generator: WeatherGenerator,
+) -> None:
+    """Rework (Reviewer, No Silent Fallbacks): a ``None`` game_slug must fail
+    loud, not silently seed from the literal string ``"None:<region>"``.
+
+    ``_SessionData.game_slug`` is typed ``str | None``; the seed interpolates it
+    unguarded. Today a None slug yields a valid-looking but wrong/non-unique seed
+    instead of raising. RED until the helper guards the invariant."""
+    from sidequest.game.world_grounding_bootstrap import regenerate_weather_for_region
+
+    sd = _regen_sd(two_zone_generator, game_slug=None)  # type: ignore[arg-type]
+    with pytest.raises((ValueError, AssertionError, TypeError)):
+        regenerate_weather_for_region(sd, "castle_ross", "highland_pass")
+
+
 # ---------------------------------------------------------------------------
 # Emit wiring: _maybe_regenerate_weather_on_region_change fires the span
 # ---------------------------------------------------------------------------
@@ -154,11 +192,6 @@ def _emit_sd_snapshot(
     )
     snapshot = SimpleNamespace(current_region="castle_ross")
     return sd, snapshot
-
-
-def test_weather_zone_change_helper_is_importable() -> None:
-    """The extracted emit helper must exist on the production module."""
-    assert callable(map_emit._maybe_regenerate_weather_on_region_change)
 
 
 def test_zone_change_emits_weather_zone_changed(
@@ -294,6 +327,36 @@ def test_zone_change_skips_loud_when_new_zone_lacks_season(
     assert skips[0]["component"] == "location"
     # Weather is left untouched — no silent substitution of a default.
     assert sd.weather_state is before
+
+
+def test_zone_change_skips_with_unknown_zone_reason(
+    two_zone_generator: WeatherGenerator, monkeypatch
+) -> None:
+    """Rework (Reviewer): the OTHER catch branch — an unknown climate zone.
+
+    The helper catches BOTH ``UnknownWeatherSeason`` and ``UnknownWeatherZone``
+    and stamps distinct ``reason`` codes; only the season path was tested. Here a
+    region binds a zone the generator doesn't know (e.g. a cartography typo that
+    slipped past the bootstrap-only ``_select_zone_for_region`` validation) →
+    ``UnknownWeatherZone`` → contained skip with ``reason == "unknown_zone"``."""
+    captured: list[dict] = []
+    monkeypatch.setattr(
+        map_emit,
+        "_watcher_publish",
+        lambda et, fields, **k: captured.append({"event_type": et, "fields": fields, **k}),
+    )
+    sd, snapshot = _emit_sd_snapshot(
+        two_zone_generator, region_zone="atlantis", current_zone="glen_floor"
+    )
+
+    map_emit._maybe_regenerate_weather_on_region_change(object(), sd=sd, snapshot=snapshot)
+
+    assert not [e for e in captured if e["event_type"] == "weather.zone_changed"]
+    skips = [e for e in captured if e["event_type"] == "weather.zone_change_skipped"]
+    assert len(skips) == 1
+    assert skips[0]["fields"]["to_zone"] == "atlantis"
+    assert skips[0]["fields"]["reason"] == "unknown_zone"
+    assert skips[0]["component"] == "location"
 
 
 # ---------------------------------------------------------------------------

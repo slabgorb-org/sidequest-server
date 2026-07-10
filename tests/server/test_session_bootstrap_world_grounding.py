@@ -102,6 +102,38 @@ def grounded_pack(tmp_path: Path) -> tuple[Path, str]:
 
 
 @pytest.fixture
+def region_override_pack(tmp_path: Path) -> tuple[Path, str]:
+    """Story 163-6 (rework): like ``grounded_pack``, but bind the STARTING
+    region to ``highland_pass`` — the SECOND climate zone in glenross's
+    weather.yaml, NOT the genre default (``_select_zone_season`` falls back to
+    the FIRST zone, ``glen_floor``, for a genre not in ``_BOOTSTRAP_SELECTION``).
+
+    This makes the region-override observable: a working cartography wire →
+    bootstrap weather is ``highland_pass``; a severed wire (``cartography=None``)
+    collapses to ``glen_floor``. glenross itself can't discriminate (its starting
+    region's zone IS the default), which is exactly why this fixture exists."""
+    slug = "region_override_pack"
+    pack_dir = _clone_test_genre(tmp_path, slug)
+
+    real_pack = CONTENT_GENRE_PACKS / "tea_and_murder"
+    real_world = real_pack / "worlds" / "glenross"
+    world_dir = pack_dir / "worlds" / _WORLD
+    shutil.copy(real_pack / "weather.yaml", world_dir / "weather.yaml")
+    shutil.copy(real_world / "demographics.yaml", world_dir / "demographics.yaml")
+    shutil.copy(real_world / "calendar.yaml", world_dir / "calendar.yaml")
+
+    # Bind the starting region to the non-default zone.
+    cart_path = world_dir / "cartography.yaml"
+    cart = yaml.safe_load(cart_path.read_text(encoding="utf-8"))
+    start = cart["starting_region"]
+    cart["regions"][start]["weather_zone"] = "highland_pass"
+    cart_path.write_text(
+        yaml.dump(cart, default_flow_style=False, sort_keys=False), encoding="utf-8"
+    )
+    return tmp_path, slug
+
+
+@pytest.fixture
 def bare_pack(tmp_path: Path) -> tuple[Path, str]:
     """A clone of test_genre WITHOUT grounding YAML — represents the
     legitimate "pack declares no world-grounding" branch (AC7).
@@ -330,6 +362,46 @@ async def test_bootstrap_populates_session_data_grounding_fields(
         "worlds/<world>/calendar.yaml — loader not called"
     )
     assert isinstance(sd.world_calendar, dict)
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_region_weather_zone_overrides_genre_default(
+    region_override_pack: tuple[Path, str],
+    tmp_path: Path,
+) -> None:
+    """Story 163-6 (rework, Reviewer HIGH): the connect-time cartography wire.
+
+    This is the ONLY test that drives the real ConnectHandler through
+    ``connect.py``'s ``genre_pack.worlds[world].cartography`` →
+    ``load_world_grounding(cartography=)`` → ``_select_zone_for_region`` thread
+    with a world whose starting-region ``weather_zone`` DIFFERS from the genre
+    default. The starting region is bound to ``highland_pass`` (glenross's 2nd
+    climate zone); the genre-default fallback is ``glen_floor`` (the 1st). So:
+
+      * wire intact → ``sd.weather_state.zone == "highland_pass"`` (region wins)
+      * wire severed (``cartography=None``, a wrong key, an inverted guard) →
+        ``glen_floor`` → this assertion fails.
+
+    The pre-existing wiring suite used a fixture pack with no ``weather_zone`` on
+    any region, so it only ever exercised the no-op fallback branch — a severed
+    wire left all 309 tests green (mutation-verified in review). This closes that
+    gap for the Task-17 bootstrap seam."""
+    search_root, genre_slug = region_override_pack
+    save_dir = tmp_path / "saves"
+    save_dir.mkdir()
+    _seed_solo_save(save_dir, genre_slug)
+
+    handler, _queue = _build_handler(save_dir, search_root)
+    await handler.handle_message(_connect_msg())
+
+    sd = handler._session_data
+    assert sd is not None, "_session_data not populated after connect"
+    assert sd.weather_state is not None, "weather_state is None after grounded bootstrap"
+    assert sd.weather_state.zone == "highland_pass", (
+        f"bootstrap weather must reflect the starting region's weather_zone override "
+        f"(highland_pass), not the genre-default first zone (glen_floor); got "
+        f"{sd.weather_state.zone!r} — the connect.py cartography wire is not engaged."
+    )
 
 
 # ---------------------------------------------------------------------------

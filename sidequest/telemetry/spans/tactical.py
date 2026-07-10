@@ -25,6 +25,8 @@ SPAN_TACTICAL_MOVE_DENIED = "tactical.move.denied"
 SPAN_TACTICAL_AOE_CELLS = "tactical.aoe.cells"
 SPAN_TACTICAL_ENFORCEMENT_SKIPPED = "tactical.enforcement.skipped"
 SPAN_TACTICAL_POSITIONS_SEATED = "tactical.positions.seated"
+SPAN_TACTICAL_ZONE_PROJECTED = "tactical.zone.projected"
+SPAN_TACTICAL_ZONE_MOVE = "tactical.zone.move"
 
 
 def _attr(field: str):
@@ -87,6 +89,29 @@ SPAN_ROUTES[SPAN_TACTICAL_POSITIONS_SEATED] = SpanRoute(
         "op": "tactical.positions.seated",
         "seated_count": _attr("seated_count")(s),
         "room_id": _attr("room_id")(s),
+    },
+)
+SPAN_ROUTES[SPAN_TACTICAL_ZONE_PROJECTED] = SpanRoute(
+    event_type="state_transition",
+    component="tactical",
+    extract=lambda s: {
+        "field": "encounter",
+        "op": "tactical.zone.projected",
+        "zone_count": _attr("zone_count")(s),
+        "room_id": _attr("room_id")(s),
+    },
+)
+SPAN_ROUTES[SPAN_TACTICAL_ZONE_MOVE] = SpanRoute(
+    event_type="state_transition",
+    component="tactical",
+    extract=lambda s: {
+        "field": "encounter",
+        "op": "tactical.zone.move",
+        "actor": _attr("actor")(s),
+        "from_zone": _attr("from_zone")(s),
+        "to_zone": _attr("to_zone")(s),
+        "free": _attr("free")(s),
+        "requires_overcome": _attr("requires_overcome")(s),
     },
 )
 
@@ -217,15 +242,63 @@ def tactical_positions_seated_span(
     _mirror(SPAN_TACTICAL_POSITIONS_SEATED, span)
 
 
+@contextmanager
+def tactical_zone_projected_span(
+    *,
+    zone_count: int,
+    room_id: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    with Span.open(
+        SPAN_TACTICAL_ZONE_PROJECTED,
+        {"zone_count": zone_count, "room_id": room_id, **attrs},
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+    _mirror(SPAN_TACTICAL_ZONE_PROJECTED, span)
+
+
+@contextmanager
+def tactical_zone_move_span(
+    *,
+    actor: str,
+    from_zone: str,
+    to_zone: str,
+    free: bool,
+    requires_overcome: bool,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    with Span.open(
+        SPAN_TACTICAL_ZONE_MOVE,
+        {
+            "actor": actor,
+            "from_zone": from_zone,
+            "to_zone": to_zone,
+            "free": free,
+            "requires_overcome": requires_overcome,
+            **attrs,
+        },
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+    _mirror(SPAN_TACTICAL_ZONE_MOVE, span)
+
+
 __all__ = [
     "SPAN_TACTICAL_AOE_CELLS",
     "SPAN_TACTICAL_ENFORCEMENT_SKIPPED",
     "SPAN_TACTICAL_MOVE_DENIED",
     "SPAN_TACTICAL_MOVE_VALIDATED",
     "SPAN_TACTICAL_POSITIONS_SEATED",
+    "SPAN_TACTICAL_ZONE_MOVE",
+    "SPAN_TACTICAL_ZONE_PROJECTED",
     "tactical_aoe_cells_span",
     "tactical_enforcement_skipped_span",
     "tactical_move_denied_span",
     "tactical_move_validated_span",
     "tactical_positions_seated_span",
+    "tactical_zone_move_span",
+    "tactical_zone_projected_span",
 ]

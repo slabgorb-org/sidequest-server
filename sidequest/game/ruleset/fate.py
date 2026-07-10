@@ -42,6 +42,7 @@ from sidequest.telemetry.spans.fate import (
 
 if TYPE_CHECKING:
     from sidequest.game.encounter import StructuredEncounter
+    from sidequest.game.tactical.zones import ZoneMoveAdjudication, ZoneProjection
 
 _NO_D20_SURFACE = (
     "the 'fate' ruleset resolves via the Fate conflict engine (4dF + ladder), "
@@ -524,6 +525,80 @@ class FateRulesetModule(RulesetModule):
         slot.aspect = Aspect(text=aspect_text, kind="consequence", free_invokes=1)
         fate_consequence_taken_span(actor=actor, level=level, aspect=aspect_text, _tracer=_tracer)
         return slot.value
+
+    # --- Fate zones over the tactical mask (ADR-096 v2, Track C3) ---
+
+    def project_conflict_zones(
+        self,
+        *,
+        encounter: StructuredEncounter,
+        mask: str,
+        room_id: str = "",
+        _tracer: trace.Tracer | None = None,
+    ) -> dict[str, str]:
+        """Project the tactical mask into Fate zones, populate ``encounter.zones``
+        and each cell-seated actor's ``per_actor_state['zone']`` (from its cell),
+        and emit ``tactical.zone.projected``. Returns name->zone. The Fate binding
+        consuming the C3 projection — the inert ADR-144 slots become live. An
+        actor with no seated cell is skipped: absence stays visible as absence
+        (No Silent Fallbacks), never a fabricated position."""
+        from sidequest.game.tactical.zones import project_zones
+        from sidequest.telemetry.spans.tactical import tactical_zone_projected_span
+
+        proj = project_zones(mask)
+        encounter.zones = sorted(proj.zones)
+        placed: dict[str, str] = {}
+        for actor in encounter.actors:
+            cell = actor.per_actor_state.get("cell")
+            if cell is None:
+                continue
+            zid = proj.cell_to_zone.get((int(cell[0]), int(cell[1])))
+            if zid is not None:
+                actor.per_actor_state["zone"] = zid
+                placed[actor.name] = zid
+        with tactical_zone_projected_span(
+            zone_count=len(proj.zones), room_id=room_id, _tracer=_tracer
+        ):
+            pass
+        return placed
+
+    def adjudicate_zone_move(
+        self,
+        *,
+        from_zone: str,
+        to_zone: str,
+        projection: ZoneProjection,
+        actor: str = "",
+        _tracer: trace.Tracer | None = None,
+    ) -> ZoneMoveAdjudication:
+        """Fate Core RAW zone move: same/adjacent zone is a FREE supplemental
+        move; a non-adjacent (2+) zone move REQUIRES an Overcome action. Emits
+        ``tactical.zone.move``. This classifies legality only — it does not add
+        a Fate 'move' verb (Fate's action set is overcome/create_advantage/
+        attack/concede); a costed move surfaces via the existing Overcome. An
+        unknown zone id classifies as requires_overcome — never a free teleport."""
+        from sidequest.game.tactical.zones import ZoneMoveAdjudication
+        from sidequest.telemetry.spans.tactical import tactical_zone_move_span
+
+        adjacent = to_zone == from_zone or to_zone in projection.adjacency.get(
+            from_zone, frozenset()
+        )
+        verdict = ZoneMoveAdjudication(
+            free=adjacent,
+            requires_overcome=not adjacent,
+            from_zone=from_zone,
+            to_zone=to_zone,
+        )
+        with tactical_zone_move_span(
+            actor=actor,
+            from_zone=from_zone,
+            to_zone=to_zone,
+            free=verdict.free,
+            requires_overcome=verdict.requires_overcome,
+            _tracer=_tracer,
+        ):
+            pass
+        return verdict
 
     # --- d20/beat surface: not Fate's paradigm (fail loud until F5 re-cut) ---
 

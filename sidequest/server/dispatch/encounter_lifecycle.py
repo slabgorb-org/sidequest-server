@@ -1703,13 +1703,21 @@ def instantiate_table_encounter(
     )
 
 
-def _seat_tactical_cells(*, encounter, snapshot, dungeon_store, player_name: str) -> None:
+def _seat_tactical_cells(
+    *, encounter, snapshot, dungeon_store, player_name: str, pack: GenrePack | None
+) -> None:
     """Task 8 (ADR-096 v2, Track C2): seat durable per-actor grid cells from the
     seating room's ``RegionTactical`` anchors so the reach gate (Task 7) has cells
     to adjudicate. A ``dungeon_store``-less (region-mode) session is a clean no-op.
     When the store is present but the room carries no tactical block, the
     ``tactical.positions.seated`` span fires with ``seated_count=0`` (honest:
-    seating ran, grid absent) and nothing is placed."""
+    seating ran, grid absent) and nothing is placed.
+
+    Task 13 (Track C3): when the pack binds FATE, the seated grid is additionally
+    projected into Fate zones right here — ``encounter.zones`` + each actor's
+    ``per_actor_state['zone']`` populate and ``tactical.zone.projected`` fires.
+    Capability-gated on ``isinstance(ruleset, FateRulesetModule)`` so WN/dial
+    packs are untouched."""
     if dungeon_store is None or encounter is None:
         return
     room_id = snapshot.character_locations.get(player_name)
@@ -1731,6 +1739,20 @@ def _seat_tactical_cells(*, encounter, snapshot, dungeon_store, player_name: str
     placed = seat_actor_cells(encounter, tactical.anchors)
     with tactical_positions_seated_span(seated_count=len(placed), room_id=str(room_id)):
         pass
+
+    # Task 13 (ADR-096 v2, C3): the Fate binding consumes the same grid as zones.
+    ruleset_slug = pack.rules.ruleset if pack and pack.rules else None
+    mask_b64 = mask_dict.get("mask_bytes_b64") if mask_dict else None
+    if ruleset_slug is None or not mask_b64:
+        return
+    from sidequest.game.ruleset.fate import FateRulesetModule
+
+    ruleset = get_ruleset_module(ruleset_slug)
+    if isinstance(ruleset, FateRulesetModule):
+        import base64
+
+        mask_text = base64.b64decode(mask_b64).decode("ascii")
+        ruleset.project_conflict_zones(encounter=encounter, mask=mask_text, room_id=str(room_id))
 
 
 def instantiate_encounter_from_trigger(
@@ -2643,6 +2665,7 @@ def instantiate_encounter_from_trigger(
             snapshot=snapshot,
             dungeon_store=dungeon_store,
             player_name=player_name,
+            pack=pack,
         )
         return enc
 

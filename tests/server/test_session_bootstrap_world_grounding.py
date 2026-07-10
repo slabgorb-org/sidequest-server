@@ -402,6 +402,16 @@ async def test_bootstrap_region_weather_zone_overrides_genre_default(
         f"(highland_pass), not the genre-default first zone (glen_floor); got "
         f"{sd.weather_state.zone!r} — the connect.py cartography wire is not engaged."
     )
+    # [re-review r1, HIGH] Guard the cache-field population (connect.py:1205-6).
+    # Without these two assignments, on-move re-sampling no-ops forever
+    # (regenerate_weather_for_region returns early when weather_generator is None)
+    # and the whole Task-19 feature goes dark silently. The reflection tripwire
+    # (test_session_data_has_weather_cache_fields) only proves the fields are
+    # DECLARED; this proves ConnectHandler actually POPULATES them.
+    assert sd.weather_generator is not None, (
+        "connect did not cache weather_generator — on-move weather re-sampling can never fire"
+    )
+    assert sd.weather_season is not None, "connect did not cache weather_season"
 
 
 # ---------------------------------------------------------------------------

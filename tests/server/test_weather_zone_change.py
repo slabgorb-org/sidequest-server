@@ -164,7 +164,7 @@ def test_regenerate_weather_requires_game_slug(
     from sidequest.game.world_grounding_bootstrap import regenerate_weather_for_region
 
     sd = _regen_sd(two_zone_generator, game_slug=None)  # type: ignore[arg-type]
-    with pytest.raises((ValueError, AssertionError, TypeError)):
+    with pytest.raises(ValueError):
         regenerate_weather_for_region(sd, "castle_ross", "highland_pass")
 
 
@@ -357,6 +357,34 @@ def test_zone_change_skips_with_unknown_zone_reason(
     assert skips[0]["fields"]["to_zone"] == "atlantis"
     assert skips[0]["fields"]["reason"] == "unknown_zone"
     assert skips[0]["component"] == "location"
+
+
+def test_zone_change_contains_game_slug_error_as_skip(
+    two_zone_generator: WeatherGenerator, monkeypatch
+) -> None:
+    """Rework (re-review, Reviewer): a broken game_slug invariant must NOT crash
+    the turn/connection. The pure helper raises ValueError on None game_slug, but
+    the emit helper contains it as a loud ``weather.zone_change_skipped``
+    (reason=``no_game_slug``), matching the file's "must not crash a turn"
+    convention — never propagates the raise to the WS loop."""
+    captured: list[dict] = []
+    monkeypatch.setattr(
+        map_emit,
+        "_watcher_publish",
+        lambda et, fields, **k: captured.append({"event_type": et, "fields": fields, **k}),
+    )
+    sd, snapshot = _emit_sd_snapshot(
+        two_zone_generator, region_zone="highland_pass", current_zone="glen_floor"
+    )
+    sd.game_slug = None  # broken invariant
+
+    # Must NOT raise (would otherwise tear down the connection).
+    map_emit._maybe_regenerate_weather_on_region_change(object(), sd=sd, snapshot=snapshot)
+
+    assert not [e for e in captured if e["event_type"] == "weather.zone_changed"]
+    skips = [e for e in captured if e["event_type"] == "weather.zone_change_skipped"]
+    assert len(skips) == 1
+    assert skips[0]["fields"]["reason"] == "no_game_slug"
 
 
 # ---------------------------------------------------------------------------

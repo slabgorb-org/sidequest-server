@@ -147,9 +147,12 @@ def regenerate_weather_for_region(sd: Any, region_id: str, zone: str) -> None:
     auditable by the GM panel. No-ops when the world authored no weather (the
     generator is None) — never substitutes default weather silently.
 
-    ``sd`` is typed ``Any`` to avoid a ``sidequest.game`` → ``sidequest.server``
-    import cycle (it is a ``_SessionData``); it must expose ``weather_generator``,
-    ``weather_season``, ``game_slug``, and a writable ``weather_state``.
+    ``sd`` is typed ``Any`` for layering discipline — it is a ``_SessionData``,
+    but ``sidequest.game`` (this module) must not depend on ``sidequest.server``
+    (the allowed direction is server→game), and importing that type would pull
+    server's heavy transitive deps into a game module. It must expose
+    ``weather_generator``, ``weather_season``, ``game_slug``, and a writable
+    ``weather_state``.
     """
     if sd.weather_generator is None:
         return

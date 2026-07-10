@@ -1368,8 +1368,10 @@ def _maybe_regenerate_weather_on_region_change(
     subsystem (CLAUDE.md OTEL principle). Clean no-op when the world authored no
     weather, the region declares no zone, or the zone is unchanged.
 
-    Region-mode sibling of :func:`_maybe_emit_cartography_map`; called from the
-    same region-change block in the session handler.
+    Region-mode kin of :func:`_maybe_emit_cartography_map` (both are region-mode
+    weather/map projections), but unlike that unconditional every-turn emit this
+    one is gated on ``_region_changed`` and called only from the region-change
+    block in the session handler.
     """
     pack = getattr(sd, "genre_pack", None)
     world = pack.worlds.get(getattr(sd, "world_slug", "")) if pack is not None else None
@@ -1380,15 +1382,23 @@ def _maybe_regenerate_weather_on_region_change(
     if new_zone and new_zone != cur_zone and sd.weather_generator is not None:
         try:
             regenerate_weather_for_region(sd, snapshot.current_region, new_zone)
-        except (UnknownWeatherZone, UnknownWeatherSeason) as exc:
-            # The region binds a real climate zone whose palette can't sample the
-            # session's season (content the task-18 validator can't catch — it
-            # only checks the zone exists, not that it shares the session
-            # season). Skip loudly (GM panel sees the reason), never crash the
-            # whole turn, never substitute default weather silently.
-            reason = (
-                "zone_missing_season" if isinstance(exc, UnknownWeatherSeason) else "unknown_zone"
-            )
+        except (UnknownWeatherZone, UnknownWeatherSeason, ValueError) as exc:
+            # Contain every re-sample failure as a loud SKIP, never a crash — this
+            # helper must not crash a turn (the sibling _maybe_emit_* convention).
+            #  - UnknownWeatherSeason/Zone: the region binds a real zone whose
+            #    palette can't sample the session's season / an unknown zone
+            #    (content the task-18 validator can't fully catch).
+            #  - ValueError: the regenerate precondition fired (e.g. a broken
+            #    game_slug invariant) — degrade to a contained skip instead of
+            #    letting it tear down the whole WebSocket connection.
+            # Skip loudly (GM panel sees the reason), never substitute default
+            # weather silently.
+            if isinstance(exc, UnknownWeatherSeason):
+                reason = "zone_missing_season"
+            elif isinstance(exc, UnknownWeatherZone):
+                reason = "unknown_zone"
+            else:
+                reason = "no_game_slug"
             logger.warning(
                 "weather.zone_change_skipped world=%s region=%s to_zone=%s reason=%s",
                 getattr(sd, "world_slug", ""),

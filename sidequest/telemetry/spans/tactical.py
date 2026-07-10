@@ -98,6 +98,7 @@ SPAN_ROUTES[SPAN_TACTICAL_ZONE_PROJECTED] = SpanRoute(
         "field": "encounter",
         "op": "tactical.zone.projected",
         "zone_count": _attr("zone_count")(s),
+        "placed_count": _attr("placed_count")(s),
         "room_id": _attr("room_id")(s),
     },
 )
@@ -246,13 +247,14 @@ def tactical_positions_seated_span(
 def tactical_zone_projected_span(
     *,
     zone_count: int,
+    placed_count: int,
     room_id: str,
     _tracer: trace.Tracer | None = None,
     **attrs: Any,
 ) -> Iterator[trace.Span]:
     with Span.open(
         SPAN_TACTICAL_ZONE_PROJECTED,
-        {"zone_count": zone_count, "room_id": room_id, **attrs},
+        {"zone_count": zone_count, "placed_count": placed_count, "room_id": room_id, **attrs},
         tracer_override=_tracer,
     ) as span:
         yield span

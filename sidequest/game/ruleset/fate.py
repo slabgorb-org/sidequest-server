@@ -557,7 +557,10 @@ class FateRulesetModule(RulesetModule):
                 actor.per_actor_state["zone"] = zid
                 placed[actor.name] = zid
         with tactical_zone_projected_span(
-            zone_count=len(proj.zones), room_id=room_id, _tracer=_tracer
+            zone_count=len(proj.zones),
+            placed_count=len(placed),
+            room_id=room_id,
+            _tracer=_tracer,
         ):
             pass
         return placed

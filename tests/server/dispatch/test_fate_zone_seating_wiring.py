@@ -193,6 +193,60 @@ def test_fate_zone_projection_span_fires_at_seating(zone_span_capture):
     _, fields, kw = events[0]
     assert kw["component"] == "tactical"
     assert fields["zone_count"] == 2, "the DUMBBELL room projects exactly two zones"
+    # Review round 1 [MEDIUM] B: the outcome count rides the production span too.
+    assert fields["placed_count"] == 2, "both seated actors must be counted as placed"
+
+
+# --- Fail-loud guards: impossible states raise, they don't silently skip ---------------
+# Review round 1 [MEDIUM] K (RED): the Task-13 gate silently `return`ed on two
+# states the codebase's own construction rules make impossible — a tactical
+# block without persisted mask bytes (materializer only merges tactical into a
+# dict that already carries mask_bytes_b64) and a gridded seat with no pack
+# ruleset (GenrePack.rules is required; `_raise_missing_ruleset` doctrine: "a
+# missing ruleset is a configuration error"). Impossible states fail loud — the
+# sibling legitimate state (room with no tactical block) keeps its honest-skip
+# span, unchanged.
+
+
+@_needs_fate_pack
+def test_seating_fails_loud_on_tactical_block_without_mask_bytes():
+    """A persisted mask dict carrying a ``tactical`` block but NO
+    ``mask_bytes_b64`` is a data-integrity violation no write path can produce —
+    reaching it means the store is corrupt, and the seam must raise, not
+    silently skip the projection (No Silent Fallbacks)."""
+    pack, snap, store = _fate_gridded_session()
+    corrupt = store.load_masks()[_ROOM_ID]
+    del corrupt["mask_bytes_b64"]
+    corrupt_store = _FakeDungeonStore({_ROOM_ID: corrupt})
+
+    with pytest.raises(ValueError, match="mask_bytes_b64"):
+        _instantiate_fate_conflict(pack, snap, corrupt_store)
+
+
+def test_seating_fails_loud_on_missing_pack_ruleset():
+    """Once a tactical grid is live, a missing pack/ruleset is a configuration
+    error (`_raise_missing_ruleset` doctrine), never a silent skip. Drives the
+    seating helper directly — the production trigger cannot produce a None pack,
+    which is exactly why the guard must raise if it ever fires."""
+    from sidequest.game.encounter import EncounterActor, EncounterMetric, StructuredEncounter
+    from sidequest.server.dispatch.encounter_lifecycle import _seat_tactical_cells
+
+    _pack, snap, store = _fate_gridded_session()
+    enc = StructuredEncounter(
+        encounter_type="social",
+        player_metric=EncounterMetric(name="advantage", threshold=3),
+        opponent_metric=EncounterMetric(name="advantage", threshold=3),
+        actors=[EncounterActor(name="Sam", role="combatant", side="player")],
+    )
+
+    with pytest.raises(ValueError, match="ruleset"):
+        _seat_tactical_cells(
+            encounter=enc,
+            snapshot=snap,
+            dungeon_store=store,
+            player_name="Sam",
+            pack=None,
+        )
 
 
 # --- Negative gates: WN untouched, no-grid is a clean no-op ----------------------------

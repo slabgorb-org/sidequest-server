@@ -35,13 +35,13 @@ import pytest
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from sidequest.game.tactical.zones import ZoneMoveAdjudication, ZoneProjection
 
 import sidequest.telemetry.spans as spans_module
 import sidequest.telemetry.spans.tactical as tac
 from sidequest.game.encounter import EncounterActor, EncounterMetric, StructuredEncounter
 from sidequest.game.ruleset.fate import FateRulesetModule
 from sidequest.game.ruleset.registry import get_ruleset_module
+from sidequest.game.tactical.zones import ZoneMoveAdjudication, ZoneProjection
 
 DUMBBELL = "#######\n#.....#\n#.#.#.#\n#.....#\n#######"
 
@@ -136,8 +136,63 @@ def test_project_conflict_zones_skips_unseated_actor():
     assert "Bystander" not in placed
     assert "zone" not in enc.actors[2].per_actor_state
     # The seated actors are still projected — one unseated actor must not
-    # abort the whole projection.
-    assert placed["Hero"] and placed["Rival"]
+    # abort the whole projection. Exact zones, not truthiness (review round 1, [LOW] O).
+    assert placed == {"Hero": "z0", "Rival": "z1"}
+
+
+def test_project_conflict_zones_skips_actor_on_unzoned_cell():
+    """Review round 1 [MEDIUM] C: an actor that HAS a seated cell which resolves
+    to no zone (a wall / off-projection coordinate — a coordinate bug or stale
+    room cell) is skipped exactly like an unseated actor: excluded from
+    ``placed``, no ``zone`` key. Regression pin on shipped behavior — this is
+    the SECOND distinct skip path (``zid is None``), separate from the tested
+    ``cell is None`` path; without this pin an off-by-one/x-y-swap bug is
+    indistinguishable from 'correctly unseated'."""
+    fate = _fate()
+    enc = _fate_conflict()
+    enc.actors.append(
+        EncounterActor(
+            name="Ghost",
+            role="combatant",
+            side="opponent",
+            per_actor_state={"cell": [0, 0]},  # (0,0) is a wall in DUMBBELL
+        )
+    )
+    placed = fate.project_conflict_zones(encounter=enc, mask=DUMBBELL)
+
+    assert "Ghost" not in placed
+    assert "zone" not in enc.actors[2].per_actor_state
+    assert placed == {"Hero": "z0", "Rival": "z1"}
+
+
+def test_project_conflict_zones_zones_a_full_table_of_pcs():
+    """Review round 1 [MEDIUM] E: a table of PCs is the common case, not an edge
+    (seating.py doctrine, 165-3 BLOCKER 3 — Keith's playgroup is multiplayer).
+    Two player-side actors plus the Other, all cell-seated, must ALL carry
+    valid zones. Regression pin on shipped behavior."""
+    fate = _fate()
+    enc = StructuredEncounter(
+        encounter_type="social",
+        player_metric=EncounterMetric(name="advantage", threshold=3),
+        opponent_metric=EncounterMetric(name="advantage", threshold=3),
+        actors=[
+            EncounterActor(
+                name="Sam", role="combatant", side="player", per_actor_state={"cell": [1, 1]}
+            ),
+            EncounterActor(
+                name="Miller", role="combatant", side="player", per_actor_state={"cell": [3, 1]}
+            ),
+            EncounterActor(
+                name="Silas", role="combatant", side="opponent", per_actor_state={"cell": [5, 3]}
+            ),
+        ],
+    )
+    placed = fate.project_conflict_zones(encounter=enc, mask=DUMBBELL)
+
+    # Both PCs are in the top lobe (z0), the Other across the pinch (z1).
+    assert placed == {"Sam": "z0", "Miller": "z0", "Silas": "z1"}
+    for actor in enc.actors:
+        assert actor.per_actor_state["zone"] in enc.zones
 
 
 # --- adjudicate_zone_move: Fate Core RAW legality ---------------------------------------
@@ -176,6 +231,28 @@ def test_adjudicate_zone_move_unknown_zone_is_never_free():
     assert verdict.requires_overcome
 
 
+def test_adjudicate_zone_move_unknown_same_zone_is_not_free():
+    """Review round 1 [MEDIUM] H (RED): the same-zone shortcut must not
+    short-circuit ahead of membership validation — ``z99 -> z99`` for a zone the
+    projection has never heard of returned ``free=True`` (a free verdict about a
+    position that does not exist), contradicting the docstring's own 'never a
+    free teleport'. An unknown zone id yields requires_overcome even when
+    from_zone == to_zone."""
+    fate = _fate()
+    verdict = fate.adjudicate_zone_move(from_zone="z99", to_zone="z99", projection=_LINE_PROJECTION)
+    assert not verdict.free, "an unknown zone id must never produce a free verdict"
+    assert verdict.requires_overcome
+
+
+def test_adjudicate_zone_move_known_same_zone_is_free():
+    """The legitimate stay-put: a KNOWN zone moving to itself stays free — the
+    unknown-zone fix must not break the real same-zone supplemental move."""
+    fate = _fate()
+    verdict = fate.adjudicate_zone_move(from_zone="z1", to_zone="z1", projection=_LINE_PROJECTION)
+    assert verdict.free
+    assert not verdict.requires_overcome
+
+
 # --- OTEL: the GM panel is the lie detector --------------------------------------------
 
 
@@ -200,6 +277,38 @@ def test_zone_projected_span_mirrors_to_sink(monkeypatch, capture_spans):
     assert event_type == "state_transition"
     assert kw["component"] == "tactical"
     assert fields["zone_count"] == 2
+    # Review round 1 [MEDIUM] B: the outcome count must be pinned, not just the
+    # input count — placed_count is how the GM panel tells "2 zones, both actors
+    # placed" from "2 zones, none placed".
+    assert fields["placed_count"] == 2
+
+
+def test_zone_projected_span_counts_only_placed_actors(monkeypatch, capture_spans):
+    """Review round 1 [MEDIUM] B: with one unseated actor at the table, the span
+    reports zone_count=2 but placed_count=2 (not 3) — the discrepancy between
+    roster size and placed_count is exactly the lie-detector signal the field
+    exists to carry. Regression pin on shipped behavior."""
+    published: list[tuple] = []
+    monkeypatch.setattr(
+        tac, "publish_event", lambda et, fields, **kw: published.append((et, fields, kw))
+    )
+    fate = _fate()
+    enc = _fate_conflict()
+    enc.actors.append(EncounterActor(name="Bystander", role="bystander", side="neutral"))
+    fate.project_conflict_zones(encounter=enc, mask=DUMBBELL)
+
+    zone_events = [
+        (et, fields, kw)
+        for et, fields, kw in published
+        if fields.get("op") == "tactical.zone.projected"
+    ]
+    assert zone_events
+    _, fields, _ = zone_events[0]
+    assert fields["zone_count"] == 2
+    assert fields["placed_count"] == 2, (
+        "placed_count must count zone-seated actors only — an unseated actor "
+        f"must not inflate it; got {fields['placed_count']} for 3 actors, 2 seated"
+    )
 
 
 def test_zone_move_span_mirrors_to_sink(monkeypatch, capture_spans):

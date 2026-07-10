@@ -26,6 +26,7 @@ from __future__ import annotations
 import dataclasses
 
 import pytest
+
 from sidequest.game.tactical.zones import (
     ZoneMoveAdjudication,
     ZoneProjection,
@@ -130,6 +131,46 @@ def test_no_floor_mask_is_empty_projection():
     assert proj.zones == {}
     assert proj.cell_to_zone == {}
     assert proj.adjacency == {}
+
+
+# A cored 3x3 room (left) plus a spatially DISCONNECTED 1-wide all-choke
+# corridor (right, cells (6,1)-(9,1)) — two wall columns (x=4,5 on row 1)
+# separate them even 8-connectedly. 9 + 4 = 13 floor cells.
+SPLIT_CAVERN = "###########\n#...##....#\n#...#######\n#...#######\n###########"
+
+
+def test_disconnected_all_choke_component_is_still_zoned():
+    """Review round 1 [MEDIUM] G (RED): the stated contract — and the plan's —
+    is TOTALITY ('every floor cell gets a home, no orphaned cells'). A floor
+    component that is entirely chokepoints AND disconnected from every cored
+    component was silently orphaned (4 of 13 cells absent from cell_to_zone, no
+    error, no signal) because the degenerate branch only fires when the WHOLE
+    mask lacks cores. Each core-less connected component must become its own
+    zone: total, deterministic, and never adjacent across the wall."""
+    proj = project_zones(SPLIT_CAVERN)
+    floor = _floor_cells(SPLIT_CAVERN)
+
+    # Totality: no orphans, both views agree.
+    assert set(proj.cell_to_zone) == floor
+    covered: set[tuple[int, int]] = set()
+    for cells in proj.zones.values():
+        covered |= cells
+    assert covered == floor
+
+    # The corridor is ONE zone of its own, distinct from the room's zone.
+    room_zone = proj.cell_to_zone[(2, 2)]
+    corridor_zones = {proj.cell_to_zone[c] for c in [(6, 1), (7, 1), (8, 1), (9, 1)]}
+    assert len(corridor_zones) == 1
+    corridor_zone = corridor_zones.pop()
+    assert corridor_zone != room_zone
+
+    # Disconnected components must not read as adjacent — no phantom border.
+    assert corridor_zone not in proj.adjacency[room_zone]
+    assert room_zone not in proj.adjacency[corridor_zone]
+
+    # Still deterministic.
+    again = project_zones(SPLIT_CAVERN)
+    assert again.cell_to_zone == proj.cell_to_zone
 
 
 # --- Adjacency --------------------------------------------------------------------------

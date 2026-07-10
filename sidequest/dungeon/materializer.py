@@ -198,7 +198,9 @@ __all__ = [
     "RegionFill",
     "RegionMask",
     "assemble_region",
+    "build_bounded_palette",
     "materialize",
+    "materialize_bounded",
 ]
 
 # ADR-157: a bounded site materializes from its SiteArchetype alone. The
@@ -2102,6 +2104,80 @@ def _resolve_world_dir(request: MaterializationRequest) -> Path | None:
     return world_dir
 
 
+def _commit_bounded(
+    request: MaterializationRequest,
+    *,
+    graph: RegionGraph,
+    expansion: Expansion,
+    fill_result: Mapping[str, RegionFill],
+    tactical: dict[str, RegionTactical],
+    room_identities: dict[str, dict],
+    is_fresh_save: bool,
+    tx: DungeonTransaction,
+    span: _otel_trace.Span,
+) -> None:
+    """ADR-157 geometry commit for a bounded site — cookbook-free.
+
+    Persists Seed=Expansion-0 (entrance) on a fresh site store, the room
+    expansion + per-room masks (with tactical merged into the mask blob), and
+    one ``room_identity`` mutation per labelled room. Writes NO frontier edges
+    (a bounded site has lookahead_breadth == 0), NO ``region_population`` and NO
+    ``setpiece_state`` (zero engine-placed creatures / set-pieces). Rides the
+    caller's ``tx``; the coordinator's ``with transaction()`` commits/rolls back.
+    """
+    from sidequest.dungeon import persistence as _live_persistence
+
+    generator_version = _live_persistence.GENERATOR_VERSION
+    try:
+        if is_fresh_save:
+            entrance = graph.nodes.get(graph.entrance_id)
+            if entrance is None:
+                raise PersistError(
+                    f"Seed=Expansion-0: entrance {graph.entrance_id!r} is not in "
+                    f"the graph — cannot seed a fresh bounded site (No Silent Fallbacks)"
+                )
+            tx.commit_expansion(
+                Expansion(expansion_id=0, new_nodes=[entrance], new_edges=[]),
+                graph,
+                generator_version=generator_version,
+                site_id=request.site_id,
+            )
+
+        expansion_masks: dict[str, dict] | None = {
+            rid: rf.mask.to_dict() for rid, rf in fill_result.items() if rf.mask is not None
+        } or None
+        if expansion_masks is not None:
+            _tactical_into_mask_dicts(expansion_masks, tactical)
+
+        tx.commit_expansion(
+            expansion,
+            graph,
+            generator_version=generator_version,
+            masks=expansion_masks,
+            site_id=request.site_id,
+        )
+
+        identities_written = 0
+        for node in expansion.new_nodes:
+            payload = room_identities.get(node.id)
+            if payload is None:
+                continue
+            tx.record_mutation(node.id, "room_identity", payload, site_id=request.site_id)
+            identities_written += 1
+    except PersistError as exc:
+        span.set_attribute("error", str(exc))
+        span.set_attribute("reason", f"commit_bounded: {exc}")
+        raise
+
+    span.set_attribute("expansion_id", request.expansion_id)
+    span.set_attribute("seeded_entrance", is_fresh_save)
+    span.set_attribute("regions_committed", len(expansion.new_nodes))
+    span.set_attribute("edges_committed", len(expansion.new_edges))
+    span.set_attribute("room_identities_committed", identities_written)
+    span.set_attribute("frontier_edges_added", 0)
+    span.set_attribute("generator_version", generator_version)
+
+
 # ---------------------------------------------------------------------------
 # Coordinator
 # ---------------------------------------------------------------------------
@@ -2277,3 +2353,94 @@ async def materialize(
                 world_dir=world_dir,
                 composed_by_region=composed_by_region,
             )
+
+
+async def materialize_bounded(
+    request: MaterializationRequest,
+    *,
+    graph: RegionGraph,
+    palette: ThemePalette,
+    dungeon_repository: DungeonRepository,
+    archetype: Any,
+) -> None:
+    """ADR-157: materialize a bounded site's WHOLE interior, cookbook-free.
+
+    A parallel coordinator to ``materialize`` for ``extent: bounded`` sites. It
+    reuses the two already-cookbook-free geometry stages (design + fill), does a
+    STRUCTURAL graph finalize (``attach_expansion`` + ``assign_depth_scores`` —
+    the connectivity/depth primitives, NOT the set-piece/trope/quest attach
+    stage), derives monster-free tactical data, and runs the dedicated geometry
+    commit. There is NO ``CookbookBundle`` in the signature: a bounded site needs
+    no world ``cookbook/``/``corpus/``/``themes/``/``world_register.yaml``.
+
+    Grid dims stay the 49×49 default (per-archetype sizing is Track B4). Zero
+    engine-placed creatures — inhabitants come from the Living World.
+
+    ``async def`` mirrors ``materialize`` (call-site symmetry); it awaits nothing
+    internally.
+    """
+    if graph is None:
+        raise ValueError(
+            "materialize_bounded requires a real RegionGraph — graph=None is not "
+            "valid (No Silent Fallbacks)"
+        )
+
+    with dungeon_materialize_span(
+        expansion_id=request.expansion_id,
+        heading=request.heading,
+        burst_magnitude=request.burst_magnitude,
+    ):
+        with dungeon_materialize_design_span(expansion_id=request.expansion_id) as design_span:
+            expansion, _report = _stage_design(
+                request, graph=graph, palette=palette, span=design_span
+            )
+
+        with dungeon_materialize_fill_span(expansion_id=request.expansion_id) as fill_span:
+            fill_result = _stage_fill(request, expansion=expansion, palette=palette, span=fill_span)
+
+        # STRUCTURAL graph finalize (NOT the set-piece attach stage): add the
+        # new nodes/edges to the graph and freeze depth scores so the committed
+        # graph is connected + depth-scored exactly like the frontier path's,
+        # minus the monster content. attach_expansion re-verifies the global
+        # connected+loopful invariants (loud raise aborts the whole run).
+        attach_expansion(graph, expansion)
+        assign_depth_scores(graph, campaign_seed=request.campaign_seed)
+
+        # Monster-free tactical: no set-piece hazards, no creature tokens.
+        tactical: dict[str, RegionTactical] = {}
+        for node in expansion.new_nodes:
+            fill = fill_result.get(node.id)
+            if fill is None or fill.mask is None:
+                continue
+            tactical[node.id] = derive_region_tactical(
+                region_id=node.id,
+                grid=fill.grid,
+                theme_key=node.theme,
+                neighbor_ids=list(graph.neighbors(node.id)),
+                hazard_setpieces=[],
+                creature_count=0,
+            )
+
+        # Task 3 populates room_identities from the archetype vocabulary; empty
+        # here keeps the commit contract stable across the two tasks.
+        room_identities: dict[str, dict] = {}
+
+        existing_map = dungeon_repository.load_map(
+            entrance_id=graph.entrance_id, site_id=request.site_id
+        )
+        existing_frontier = dungeon_repository.load_frontier(site_id=request.site_id)
+        is_fresh_save = not existing_map.nodes and not existing_frontier
+
+        with dungeon_repository.transaction() as tx:
+            with dungeon_materialize_commit_span(expansion_id=request.expansion_id) as commit_span:
+                _commit_bounded(
+                    request,
+                    graph=graph,
+                    expansion=expansion,
+                    fill_result=fill_result,
+                    tactical=tactical,
+                    room_identities=room_identities,
+                    is_fresh_save=is_fresh_save,
+                    tx=tx,
+                    span=commit_span,
+                )

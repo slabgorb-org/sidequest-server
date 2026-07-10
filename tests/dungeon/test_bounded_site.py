@@ -303,3 +303,78 @@ def test_non_default_site_id_requires_zero_lookahead() -> None:
             lookahead_breadth=1,
             site_id="gilded_boar",
         )
+
+
+# ---------------------------------------------------------------------------
+# ADR-157 — cookbook-free coordinator (materialize_bounded, story 164-10)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_materialize_bounded_commits_whole_graph_with_masks(
+    monkeypatch: Any, migrated_db: str
+) -> None:
+    """materialize_bounded() commits the entrance + rooms whole, WITH per-room
+    masks, using a synthetic archetype palette and NO cookbook."""
+    from sidequest.dungeon.bounded_site import _derive_site_seed
+    from sidequest.dungeon.materializer import (
+        MaterializationRequest,
+        build_bounded_palette,
+        materialize_bounded,
+    )
+    from sidequest.dungeon.persistence import FrontierEdge
+    from sidequest.dungeon.region_graph.model import RegionGraph, RegionNode
+    from sidequest.dungeon.seed_bootstrap import select_entrance_theme_id
+    from sidequest.game.sites.namespacing import site_entrance_id
+    from tests.dungeon.conftest import build_pg_dungeon_repo
+
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    repo.set_campaign_seed(4242)
+    seed = _derive_site_seed(base_seed=4242, site_id=_SITE_ID)
+    repo.set_campaign_seed(seed, site_id=_SITE_ID)
+
+    archetype = _tavern_archetype()
+    palette = build_bounded_palette(archetype)
+    entrance = site_entrance_id(_SITE_ID)
+    entrance_theme = select_entrance_theme_id(palette)
+    graph = RegionGraph(entrance_id=entrance)
+    graph.add_node(RegionNode(id=entrance, expansion_id=0, theme=entrance_theme))
+    fe = FrontierEdge(
+        frontier_edge_id=f"{_SITE_ID}:seed_fe1",
+        from_region_id=entrance,
+        heading="in",
+        spawn_depth_score=0.0,
+    )
+    request = MaterializationRequest.build(
+        campaign_seed=seed,
+        expansion_id=1,
+        frontier_edge=fe,
+        frontier=[fe],
+        attach_region_ids=[entrance],
+        heading="in",
+        burst_magnitude=archetype.room_count_max,
+        lookahead_breadth=0,
+        site_id=_SITE_ID,
+    )
+    await materialize_bounded(
+        request,
+        graph=graph,
+        palette=palette,
+        dungeon_repository=repo,
+        archetype=archetype,
+    )
+
+    committed = repo.load_map(entrance_id=entrance, site_id=_SITE_ID)
+    assert entrance in committed.nodes
+    assert archetype.room_count_min <= len(committed.nodes) <= archetype.room_count_max + 1
+    # Bounded → no frontier edges left for a lookahead worker.
+    assert repo.load_frontier(site_id=_SITE_ID) == []
+    # Per-room masks were persisted (the TACTICAL_GRID source).
+    masks = repo.load_masks(site_id=_SITE_ID)
+    room_ids = [n for n in committed.nodes if n != entrance]
+    assert room_ids, "expected at least one procedural room"
+    assert all(rid in masks for rid in room_ids)
+    # Cookbook-free: NO monster population mutations written.
+    kinds = {m.kind for m in repo.load_mutations(site_id=_SITE_ID)}
+    assert "region_population" not in kinds
+    assert "setpiece_state" not in kinds

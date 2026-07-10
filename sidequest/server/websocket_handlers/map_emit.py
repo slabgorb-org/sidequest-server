@@ -994,6 +994,20 @@ def _load_site_map_context(
     try:
         palette = cast("ThemePalette", load_theme_palette(world_dir))
     except ThemePaletteMissingError:
+        # LOUD degrade (reviewer HIGH, 2026-07-10): the null palette itself is
+        # correct for a themeless site world, but the GM panel must be able to
+        # tell "themeless tavern, working as intended" from "Sünden's themes/
+        # dir vanished" — never a silent fallback.
+        _watcher_publish(
+            "dungeon.theme_palette_missing",
+            {"world": sd.world_slug, "site_id": site.site_id},
+            component="dungeon",
+        )
+        logger.info(
+            "dungeon.theme_palette_missing world=%s site=%s (id-label degrade)",
+            sd.world_slug,
+            site.site_id,
+        )
         palette = cast("ThemePalette", _EmptyPalette())
 
     # The legacy frontier store (pre-namespacing Sünden deep) anchors on the

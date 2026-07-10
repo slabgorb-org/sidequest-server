@@ -269,9 +269,7 @@ def bind_player_identity(
     )
 
 
-def bind_companion_bond(
-    room: SessionRoom, player_id: str, payload: SessionEventPayload
-) -> None:
+def bind_companion_bond(room: SessionRoom, player_id: str, payload: SessionEventPayload) -> None:
     """Register an AI companion's bond from the connect handshake (Story 159-3).
 
     A no-op for ordinary players (no ``companion_of``). For a companion, the
@@ -662,10 +660,16 @@ class ConnectHandler:
             # rather than a silent None and a downstream "weather grounding
             # mysteriously absent" symptom three turns in.
             try:
+                # Spec §2 A2: pass the world's cartography so the starting
+                # region's weather_zone can drive the bootstrap climate zone.
+                _world_obj = (
+                    genre_pack.worlds.get(row.world_slug) if genre_pack is not None else None
+                )
                 world_grounding = load_world_grounding(
                     world_dir=world_dir,
                     genre_slug=row.genre_slug,
                     seed_source=slug,
+                    cartography=getattr(_world_obj, "cartography", None),
                 )
             except Exception as exc:
                 logger.error(
@@ -1196,6 +1200,10 @@ class ConnectHandler:
             # onto the session. _build_turn_context reads these every turn
             # and passes them through to the get_world_grounding ToolContext.
             session._session_data.weather_state = world_grounding.weather_state
+            # Spec §2 A2: cache the generator + season for per-region-change
+            # re-sampling on the hot turn path (regenerate_weather_for_region).
+            session._session_data.weather_generator = world_grounding.weather_generator
+            session._session_data.weather_season = world_grounding.weather_season
             session._session_data.world_demographics = world_grounding.demographics
             session._session_data.world_calendar = world_grounding.calendar
             # OTEL lie-detector: prove the grounding wiring engaged at

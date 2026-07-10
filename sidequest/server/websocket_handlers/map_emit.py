@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from sidequest.game.sites.registry import SiteRegistry
+from sidequest.game.world_grounding_bootstrap import regenerate_weather_for_region
 from sidequest.protocol.messages import TacticalGridMessage, TacticalGridPayload
 from sidequest.server.scene_context import cartography_for, resolve_scene_context
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
@@ -1349,3 +1350,41 @@ def _maybe_emit_cartography_map(
             component="location",
         )
     emit_fn(msg, "MAP_UPDATE")  # type: ignore[operator]
+
+
+def _maybe_regenerate_weather_on_region_change(
+    handler: object,
+    *,
+    sd: _SessionData,
+    snapshot: GameSnapshot,
+) -> None:
+    """Spec §2 A2: re-sample per-zone weather as the party changes regions.
+
+    When the party's current region declares a ``weather_zone`` that differs
+    from the live ``sd.weather_state.zone``, re-sample the weather (deterministic
+    per region, via :func:`regenerate_weather_for_region`) and emit
+    ``weather.zone_changed`` — the GM panel's lie-detector for the weather
+    subsystem (CLAUDE.md OTEL principle). Clean no-op when the world authored no
+    weather, the region declares no zone, or the zone is unchanged.
+
+    Region-mode sibling of :func:`_maybe_emit_cartography_map`; called from the
+    same region-change block in the session handler.
+    """
+    pack = getattr(sd, "genre_pack", None)
+    world = pack.worlds.get(getattr(sd, "world_slug", "")) if pack is not None else None
+    cart = getattr(world, "cartography", None) if world is not None else None
+    region = cart.regions.get(snapshot.current_region) if cart is not None else None
+    new_zone = getattr(region, "weather_zone", None) if region is not None else None
+    cur_zone = getattr(sd.weather_state, "zone", None)
+    if new_zone and new_zone != cur_zone and sd.weather_generator is not None:
+        regenerate_weather_for_region(sd, snapshot.current_region, new_zone)
+        _watcher_publish(
+            "weather.zone_changed",
+            {
+                "world": getattr(sd, "world_slug", ""),
+                "region": snapshot.current_region or "",
+                "from_zone": cur_zone or "",
+                "to_zone": new_zone,
+            },
+            component="location",
+        )

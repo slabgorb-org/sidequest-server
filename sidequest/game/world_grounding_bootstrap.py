@@ -25,7 +25,11 @@ from sidequest.game.world_grounding_loader import (
     load_world_demographics,
 )
 
-__all__ = ["WorldGroundingBootstrap", "load_world_grounding"]
+__all__ = [
+    "WorldGroundingBootstrap",
+    "load_world_grounding",
+    "regenerate_weather_for_region",
+]
 
 # Per-genre bootstrap (zone, season) selection — the visible, documented
 # playtest hardcode (24-10). tea_and_murder opens in autumn at glen_floor
@@ -51,6 +55,12 @@ class WorldGroundingBootstrap:
     weather_state: WeatherState | None
     demographics: dict[str, Any] | None
     calendar: dict[str, Any] | None
+    # Spec §2 A2: the generator + selected season are cached on the session so
+    # per-region-change re-sampling (regenerate_weather_for_region) needs no
+    # world-dir resolution on the hot turn path. Both None when the world
+    # authored no weather.yaml.
+    weather_generator: WeatherGenerator | None = None
+    weather_season: str | None = None
 
 
 def _select_zone_season(rules: ClimateRulesFile, genre_slug: str) -> tuple[str, str]:
@@ -83,11 +93,49 @@ def _select_zone_season(rules: ClimateRulesFile, genre_slug: str) -> tuple[str, 
     return zone, season
 
 
+def _select_zone_for_region(rules: ClimateRulesFile, cartography: Any, genre_slug: str) -> str:
+    """Spec §2 A2: bind weather to geography at bootstrap.
+
+    Prefer the STARTING region's ``weather_zone`` over the genre hardcode; a
+    declared-but-unknown region zone fails loud (No Silent Fallbacks), mirroring
+    ``_select_zone_season``'s stale-override check. Absent a region zone (or any
+    cartography), defer to the existing genre-override / first-zone selection.
+    """
+    start = getattr(cartography, "starting_region", None) if cartography else None
+    regions = getattr(cartography, "regions", {}) if cartography else {}
+    region = regions.get(start) if isinstance(regions, dict) else None
+    wz = getattr(region, "weather_zone", None) if region is not None else None
+    if wz is not None:
+        if wz not in rules.climate_zones:
+            raise ValueError(
+                f"region {start!r} declares weather_zone {wz!r}, not in weather.yaml "
+                f"(zones: {sorted(rules.climate_zones)})"
+            )
+        return wz
+    zone, _season = _select_zone_season(rules, genre_slug)
+    return zone
+
+
+def regenerate_weather_for_region(sd: Any, region_id: str, zone: str) -> None:
+    """Spec §2 A2: re-sample ``sd.weather_state`` for a newly-entered region.
+
+    The seed is derived from the region (``crc32(game_slug:region_id)``), so the
+    same region always yields the same weather — reproducible across restarts,
+    auditable by the GM panel. No-ops when the world authored no weather (the
+    generator is None) — never substitutes default weather silently.
+    """
+    if sd.weather_generator is None:
+        return
+    seed = zlib.crc32(f"{sd.game_slug}:{region_id}".encode())
+    sd.weather_state = sd.weather_generator.generate(zone, sd.weather_season, seed)
+
+
 def load_world_grounding(
     *,
     world_dir: Path | str,
     genre_slug: str,
     seed_source: str,
+    cartography: Any | None = None,
 ) -> WorldGroundingBootstrap:
     """Assemble the session's world-grounding state at connect time.
 
@@ -115,8 +163,14 @@ def load_world_grounding(
     # ``weather.yaml``, so repointing it to world_dir is the whole change.
     weather_rules = load_pack_weather(world_dir)
     weather_state: WeatherState | None = None
+    generator: WeatherGenerator | None = None
+    season: str | None = None
     if weather_rules is not None:
-        zone, season = _select_zone_season(weather_rules, genre_slug)
+        # Spec §2 A2: geography drives the zone (starting region's weather_zone
+        # wins), but the season binding stays with _select_zone_season — season
+        # is out of A2 scope.
+        _, season = _select_zone_season(weather_rules, genre_slug)
+        zone = _select_zone_for_region(weather_rules, cartography, genre_slug)
         seed = zlib.crc32(seed_source.encode("utf-8"))
         generator = WeatherGenerator(Path(world_dir) / "weather.yaml")
         # generate() fires the world_grounding.weather_proposed OTEL span
@@ -130,4 +184,6 @@ def load_world_grounding(
         weather_state=weather_state,
         demographics=demographics,
         calendar=calendar,
+        weather_generator=generator,
+        weather_season=season,
     )

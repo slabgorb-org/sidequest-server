@@ -138,6 +138,11 @@ class Region(BaseModel):
     settlements: list[Any] = Field(default_factory=list)
     terrain: str | None = None
     controlled_by: str | None = None
+    # Spec §2 A2: binds this cartography region to a climate zone declared in
+    # the world's weather.yaml. Typed (not just an extra="allow" bag entry) so
+    # it is accessible/documentable and the validator + bootstrap can consume
+    # it. Absent → the genre bootstrap default drives the opening weather.
+    weather_zone: str | None = None
 
 
 class Route(BaseModel):

@@ -270,3 +270,48 @@ def test_unseated_connection_skips_loudly(monkeypatch: pytest.MonkeyPatch) -> No
     skipped = [e for e in events if e["type"] == "dungeon.map_skipped"]
     assert skipped, f"expected dungeon.map_skipped, got {[e['type'] for e in events]}"
     assert skipped[-1]["fields"]["reason"] == "no_pc_region"
+
+
+# ---------------------------------------------------------------------------
+# REWORK RED (Reviewer HIGH, 2026-07-10): the palette degrade must be LOUD
+# ---------------------------------------------------------------------------
+
+
+def test_missing_theme_palette_degrade_is_loud(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A site world without an authored ``themes/`` dir degrades to id-labels
+    (the null palette — correct, kept) but the degrade must be LOUD: a
+    ``dungeon.theme_palette_missing`` watcher event with world + site_id, so
+    the GM panel can tell "themeless tavern world, working as intended" from
+    "Sünden's themes/ dir silently vanished" (No Silent Fallbacks;
+    ``ThemePaletteMissingError``'s own fail-loud contract). RED until Dev
+    adds the span — today the ``except ThemePaletteMissingError`` branch in
+    ``_load_site_map_context`` emits nothing at all."""
+    from sidequest.game.sites.models import SiteDescriptor
+
+    events = _capture_events(monkeypatch)
+    sd = _tavern_world_sd()
+    site = SiteDescriptor(
+        site_id="gilded_boar",
+        name="The Gilded Boar",
+        archetype="tavern",
+        attached_to="dustcross",
+        extent="bounded",
+    )
+
+    ctx = h._load_site_map_context(cast("Any", sd), site)
+
+    # The degrade itself stays: graph loads, a null palette comes back (every
+    # lookup misses -> the payload builder's fail-soft id-label path).
+    assert ctx is not None, "a missing palette must degrade, never skip the frame"
+    _graph, palette, _entrance = ctx
+    with pytest.raises(KeyError):
+        palette.get("any_theme")
+
+    # The RED driver: the degrade must be observable.
+    missing = [e for e in events if e["type"] == "dungeon.theme_palette_missing"]
+    assert missing, (
+        "the ThemePaletteMissingError -> null-palette degrade must emit a "
+        f"dungeon.theme_palette_missing watcher event, got {[e['type'] for e in events]}"
+    )
+    assert missing[-1]["fields"]["world"] == "gilded_reach"
+    assert missing[-1]["fields"]["site_id"] == "gilded_boar"

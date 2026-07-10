@@ -160,7 +160,13 @@ from sidequest.dungeon.region_graph import (
 from sidequest.dungeon.setpiece_attach import AttachReport, attach_set_piece
 from sidequest.dungeon.tactical import RegionTactical, derive_region_tactical
 from sidequest.dungeon.theme_resolution import resolve_themes_for_final_depth
-from sidequest.dungeon.themes import ThemePalette
+from sidequest.dungeon.themes import (
+    DepthBand,
+    DungeonTheme,
+    InteriorSpec,
+    NarratorFlavor,
+    ThemePalette,
+)
 from sidequest.game.cookbook.assemble import assemble_region
 from sidequest.game.cookbook.loader import CookbookBundle
 from sidequest.game.cookbook.models import GeneratedRoomDescription, RegionContentManifest
@@ -194,6 +200,45 @@ __all__ = [
     "assemble_region",
     "materialize",
 ]
+
+# ADR-157: a bounded site materializes from its SiteArchetype alone. The
+# archetype's interior_algorithm reverse-maps to a generator_class (the inverse
+# of themes._CLASS_ALGORITHM — total over interiors.ALGORITHMS) so we can mint a
+# one-theme in-memory palette with NO world themes/ tree.
+_ALGORITHM_GENERATOR_CLASS = {
+    "cellular": "organic",
+    "depthfirst": "labyrinthine",
+    "prim": "structured",
+    "roomcorridor": "built",
+}
+
+
+def build_bounded_palette(archetype: Any) -> ThemePalette:
+    """Synthesize a single-theme ThemePalette from a bounded SiteArchetype.
+
+    Cookbook-free (ADR-157): the archetype's interior_algorithm drives the whole
+    interior; the theme is eligible at every depth (a bounded site has no depth
+    gradient) and carries no creature/loot/set-piece tables. The archetype's
+    interior_algorithm is already validated against interiors.ALGORITHMS by the
+    SiteArchetype model, so the reverse map is total — a KeyError here would be
+    an unreachable authoring-validator gap, not a silent fallback.
+    """
+    algorithm = archetype.interior_algorithm
+    generator_class = _ALGORITHM_GENERATOR_CLASS[algorithm]
+    theme_id = f"bounded_{archetype.archetype_id}"
+    theme = DungeonTheme(
+        id=theme_id,
+        display_name=archetype.archetype_id.replace("_", " ").title(),
+        generator_class=generator_class,
+        interior=InteriorSpec(algorithm=algorithm, params={}, braid_ratio=0.0),
+        depth_band=DepthBand(min=0.0, max=None),
+        narrator=NarratorFlavor(
+            register="bounded-site",
+            flavor=f"a bounded {archetype.archetype_id.replace('_', ' ')} interior",
+        ),
+    )
+    return ThemePalette(themes={theme_id: theme})
+
 
 # ---------------------------------------------------------------------------
 # §12-style tunable knobs (Plan 7 Task 3)

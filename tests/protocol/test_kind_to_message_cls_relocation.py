@@ -42,11 +42,11 @@ def test_kind_to_message_cls_exported_from_protocol_tier() -> None:
     import sidequest.protocol as protocol
     from sidequest.protocol.messages import (
         ConfrontationMessage,
-        DungeonMapMessage,
         NarrationMessage,
         NarrationSegmentMessage,
         ScrapbookEntryMessage,
         SecretNoteMessage,
+        SiteMapMessage,
         TacticalGridMessage,
     )
 
@@ -63,7 +63,7 @@ def test_kind_to_message_cls_exported_from_protocol_tier() -> None:
         "SECRET_NOTE": SecretNoteMessage,
         "SCRAPBOOK_ENTRY": ScrapbookEntryMessage,
         "TACTICAL_GRID": TacticalGridMessage,
-        "DUNGEON_MAP": DungeonMapMessage,
+        "SITE_MAP": SiteMapMessage,
     }, (
         "relocation must preserve the EXACT kind->class mapping (no drift); "
         "RELATIONSHIPS and LOCATION_DESCRIPTION must remain absent"

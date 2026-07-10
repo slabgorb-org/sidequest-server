@@ -780,7 +780,7 @@ If nothing new is revealed and nothing prior is referenced, omit the footnotes a
         # sq-playtest 2026-06-13: directions are now FIRST-CLASS, not banned.
         # Each exit above carries a real bearing (assign_bearings, stable +
         # distinct per region), the engine resolves a player's "I go north" /
-        # "down the shaft" against it, and the DUNGEON_MAP renders it. The
+        # "down the shaft" against it, and the SITE_MAP renders it. The
         # earlier guard that forbade the narrator from naming directions was
         # backwards (the Zork Problem in reverse — narrowing the player's
         # natural language instead of resolving it): a player WILL say "north",

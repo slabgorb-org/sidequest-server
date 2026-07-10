@@ -45,6 +45,18 @@ class SiteRegistry:
     def by_id(self, site_id: str) -> SiteDescriptor | None:
         return self._by_id.get(site_id)
 
+    @property
+    def has_sites(self) -> bool:
+        """True iff the world declares any sites (an inert registry is falsy —
+        lets callers keep every-turn skip spans quiet on site-less worlds)."""
+        return bool(self._sites)
+
+    def frontier_sites(self) -> list[SiteDescriptor]:
+        """Sites whose stored graphs may hold LEGACY un-namespaced node ids
+        (the pre-namespacing Sünden deep, ``entrance``/``expNNN.rN``) — the
+        store-membership fallback in scene resolution (story 164-4)."""
+        return [s for s in self._sites if s.extent == "frontier"]
+
     def sites_for_node(self, region_id: str) -> list[SiteDescriptor]:
         """Sites the PC can enter from ``region_id``: those OWNED by this node
         plus those owned by an ADJACENT node (the "down the rope at the camp"

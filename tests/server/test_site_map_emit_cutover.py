@@ -107,7 +107,9 @@ def _tavern_world_sd() -> Any:
     )
 
 
-def _snapshot(*, pc_region: str | None, discovered: tuple[str, ...], seated: bool = True) -> GameSnapshot:
+def _snapshot(
+    *, pc_region: str | None, discovered: tuple[str, ...], seated: bool = True
+) -> GameSnapshot:
     snap = GameSnapshot(
         genre_slug="spaghetti_western",
         world_slug="gilded_reach",

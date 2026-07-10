@@ -159,7 +159,7 @@ def assign_bearings(graph: RegionGraph, region_id: str) -> dict[str, str]:
 
     Pure function of the graph (region id + neighbor id + kind + depth), so
     it needs no persistence and is identical across loads — narrator prompt,
-    DUNGEON_MAP frame, and movement resolver all derive the same labels.
+    SITE_MAP frame, and movement resolver all derive the same labels.
 
     Returns ``{to_region_id: bearing}``. A region with more horizontal exits
     than compass slots (>8 — vanishingly rare) gives the overflow exits a
@@ -234,7 +234,7 @@ class RegionProjection:
     """The party's current region, projected for one turn.
 
     Sourced from the live ``RegionGraph`` + curated ``ThemePalette``;
-    consumed by the narrator-prompt region section and the DUNGEON_MAP
+    consumed by the narrator-prompt region section and the SITE_MAP
     wire frame. ``exits`` is the authoritative move vocabulary.
     """
 

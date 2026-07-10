@@ -69,9 +69,7 @@ def test_explored_shape_preserved_through_rename() -> None:
     loc = SiteMapLocation(
         id="gilded_boar:entrance",
         name="Taproom",
-        room_exits=[
-            SiteMapExit(target="gilded_boar:r2", exit_type="corridor", bearing="north")
-        ],
+        room_exits=[SiteMapExit(target="gilded_boar:r2", exit_type="corridor", bearing="north")],
         room_type="entrance",
         is_current_room=True,
     )

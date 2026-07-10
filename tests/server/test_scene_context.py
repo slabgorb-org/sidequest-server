@@ -135,9 +135,7 @@ def _tavern_world_sd(repo: Any = None) -> Any:
     return _sd(
         world_slug="gilded_reach",
         genre_slug="spaghetti_western",
-        cartography=_cartography(
-            {"dustcross": _region("Dustcross", [])}, sites=[_TAVERN_SITE]
-        ),
+        cartography=_cartography({"dustcross": _region("Dustcross", [])}, sites=[_TAVERN_SITE]),
         repo=repo,
     )
 
@@ -169,9 +167,7 @@ def _sunden_sd(repo: Any) -> Any:
 
 
 def _frontier_repo() -> _StubDungeonRepo:
-    return _StubDungeonRepo(
-        {"frontier": _graph("entrance", extra=("exp001.r2",))}
-    )
+    return _StubDungeonRepo({"frontier": _graph("entrance", extra=("exp001.r2",))})
 
 
 # ---------------------------------------------------------------------------

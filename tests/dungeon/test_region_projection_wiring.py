@@ -12,7 +12,7 @@ LLM client is canned — exactly as the keystone prompt test does):
        constrained move vocabulary that stops geography improvisation)
     -> _project_current_region emits the dungeon.region_projection span
        (seam 4 — the GM-panel lie detector)
-    -> _maybe_emit_dungeon_map emits a DUNGEON_MAP frame to the UI
+    -> _maybe_emit_dungeon_map emits a SITE_MAP frame to the UI
        (seam 3 — cures "No map data yet")
 
 The 2026-05-17 playtest proved the dungeon materializes but is orphaned
@@ -612,10 +612,10 @@ async def test_dungeon_map_frame_is_emitted_to_ui(
     migrated_db: str,
 ) -> None:
     """Seam 3: _maybe_emit_dungeon_map projects the live graph to a
-    DUNGEON_MAP frame in MapState shape — curing 'No map data yet'."""
+    SITE_MAP frame in MapState shape — curing 'No map data yet'."""
     from sidequest.dungeon import session_integration
     from sidequest.game.session import GameSnapshot
-    from sidequest.protocol.messages import DungeonMapMessage
+    from sidequest.protocol.messages import SiteMapMessage
     from sidequest.server.websocket_session_handler import _maybe_emit_dungeon_map
     from tests.dungeon.conftest import build_pg_dungeon_repo
 
@@ -639,10 +639,10 @@ async def test_dungeon_map_frame_is_emitted_to_ui(
         snap.pc_regions = {"Rux": "entrance"}
         _maybe_emit_dungeon_map(None, sd=sd, snapshot=snap, emit_fn=_emit)
 
-        dmaps = [m for m, k in captured if k == "DUNGEON_MAP"]
+        dmaps = [m for m, k in captured if k == "SITE_MAP"]
         assert len(dmaps) == 1
         msg = dmaps[0]
-        assert isinstance(msg, DungeonMapMessage)
+        assert isinstance(msg, SiteMapMessage)
         assert msg.payload.current_location == "entrance"
         assert msg.payload.explored, "no discovered regions projected"
         entrance = next(loc for loc in msg.payload.explored if loc.id == "entrance")

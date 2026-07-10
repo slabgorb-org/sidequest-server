@@ -2355,6 +2355,43 @@ async def materialize(
             )
 
 
+def _bounded_room_identities(
+    archetype: Any,
+    *,
+    campaign_seed: int,
+    site_id: str,
+    region_ids: list[str],
+) -> dict[str, dict]:
+    """Deterministically label each bounded room from the archetype vocabulary.
+
+    ADR-157: the archetype's ``room_vocabulary`` gives each generated room an
+    identity ("common room", "cellar") and up to two ``feature_palette`` props —
+    Diamonds-and-Coal, not anonymous cells. Seeded by ``blake2b(campaign_seed,
+    site_id, region_id)`` (the house mixer) so re-entry reproduces the same
+    labels. An archetype with an empty ``room_vocabulary`` yields ``{}`` (a valid
+    label-less site, not a silent default).
+    """
+    vocab = list(archetype.room_vocabulary)
+    if not vocab:
+        return {}
+    features = list(archetype.feature_palette)
+    out: dict[str, dict] = {}
+    for rid in region_ids:
+        digest = hashlib.blake2b(
+            f"roomid|{campaign_seed}|{site_id}|{rid}".encode(), digest_size=8
+        ).digest()
+        mix = int.from_bytes(digest, "big")
+        label = vocab[mix % len(vocab)]
+        chosen: list[str] = []
+        if features:
+            # Deterministic, stable subset (up to 2), no RNG.
+            start = mix % len(features)
+            take = min(2, len(features))
+            chosen = [features[(start + i) % len(features)] for i in range(take)]
+        out[rid] = {"region_id": rid, "label": label, "features": chosen}
+    return out
+
+
 async def materialize_bounded(
     request: MaterializationRequest,
     *,
@@ -2421,9 +2458,12 @@ async def materialize_bounded(
                 creature_count=0,
             )
 
-        # Task 3 populates room_identities from the archetype vocabulary; empty
-        # here keeps the commit contract stable across the two tasks.
-        room_identities: dict[str, dict] = {}
+        room_identities = _bounded_room_identities(
+            archetype,
+            campaign_seed=request.campaign_seed,
+            site_id=request.site_id,
+            region_ids=[node.id for node in expansion.new_nodes],
+        )
 
         existing_map = dungeon_repository.load_map(
             entrance_id=graph.entrance_id, site_id=request.site_id

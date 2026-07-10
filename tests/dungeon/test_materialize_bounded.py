@@ -60,3 +60,29 @@ def test_build_bounded_palette_maps_each_algorithm_to_its_class() -> None:
         theme = next(iter(palette.themes.values()))
         assert theme.generator_class == generator_class
         assert theme.interior.algorithm == algorithm
+
+
+def test_bounded_room_identities_are_deterministic_and_from_vocabulary() -> None:
+    from sidequest.dungeon.materializer import _bounded_room_identities
+
+    arch = _tavern_archetype()
+    ids = ["gilded_boar:r1", "gilded_boar:r2", "gilded_boar:r3"]
+    a = _bounded_room_identities(arch, campaign_seed=777, site_id="gilded_boar", region_ids=ids)
+    b = _bounded_room_identities(arch, campaign_seed=777, site_id="gilded_boar", region_ids=ids)
+    assert a == b  # deterministic
+    assert set(a) == set(ids)
+    for rid in ids:
+        assert a[rid]["region_id"] == rid
+        assert a[rid]["label"] in arch.room_vocabulary
+        assert set(a[rid]["features"]).issubset(set(arch.feature_palette))
+    # A different seed can change assignments (no constant fallback).
+    c = _bounded_room_identities(arch, campaign_seed=778, site_id="gilded_boar", region_ids=ids)
+    assert c != a or len(arch.room_vocabulary) == 1
+
+
+def test_bounded_room_identities_empty_vocabulary_is_no_op() -> None:
+    from sidequest.dungeon.materializer import _bounded_room_identities
+
+    arch = _tavern_archetype(room_vocabulary=[], feature_palette=[])
+    out = _bounded_room_identities(arch, campaign_seed=1, site_id="s", region_ids=["s:r1"])
+    assert out == {}

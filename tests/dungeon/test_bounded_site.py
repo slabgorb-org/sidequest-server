@@ -69,6 +69,8 @@ def _tavern_archetype() -> Any:
         grid_width=15,
         grid_height=20,
         cell_scale_feet=5,
+        room_vocabulary=["common room", "cellar", "kitchen", "private booth"],
+        feature_palette=["hearth", "long bar", "ale barrels"],
     )
 
 
@@ -378,3 +380,60 @@ async def test_materialize_bounded_commits_whole_graph_with_masks(
     kinds = {m.kind for m in repo.load_mutations(site_id=_SITE_ID)}
     assert "region_population" not in kinds
     assert "setpiece_state" not in kinds
+
+
+@pytest.mark.asyncio
+async def test_materialize_bounded_writes_room_identities(
+    monkeypatch: Any, migrated_db: str
+) -> None:
+    """Each procedural room gets a room_identity mutation labelled from the
+    archetype's room_vocabulary (ADR-157 room identities)."""
+    from sidequest.dungeon.bounded_site import _derive_site_seed
+    from sidequest.dungeon.materializer import (
+        MaterializationRequest,
+        build_bounded_palette,
+        materialize_bounded,
+    )
+    from sidequest.dungeon.persistence import FrontierEdge
+    from sidequest.dungeon.region_graph.model import RegionGraph, RegionNode
+    from sidequest.dungeon.seed_bootstrap import select_entrance_theme_id
+    from sidequest.game.sites.namespacing import site_entrance_id
+    from tests.dungeon.conftest import build_pg_dungeon_repo
+
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    repo.set_campaign_seed(4242)
+    seed = _derive_site_seed(base_seed=4242, site_id=_SITE_ID)
+    repo.set_campaign_seed(seed, site_id=_SITE_ID)
+
+    archetype = _tavern_archetype()
+    palette = build_bounded_palette(archetype)
+    entrance = site_entrance_id(_SITE_ID)
+    graph = RegionGraph(entrance_id=entrance)
+    graph.add_node(
+        RegionNode(id=entrance, expansion_id=0, theme=select_entrance_theme_id(palette))
+    )
+    fe = FrontierEdge(
+        frontier_edge_id=f"{_SITE_ID}:seed_fe1",
+        from_region_id=entrance,
+        heading="in",
+        spawn_depth_score=0.0,
+    )
+    request = MaterializationRequest.build(
+        campaign_seed=seed,
+        expansion_id=1,
+        frontier_edge=fe,
+        frontier=[fe],
+        attach_region_ids=[entrance],
+        heading="in",
+        burst_magnitude=archetype.room_count_max,
+        lookahead_breadth=0,
+        site_id=_SITE_ID,
+    )
+    await materialize_bounded(
+        request, graph=graph, palette=palette, dungeon_repository=repo, archetype=archetype
+    )
+
+    identities = [m for m in repo.load_mutations(site_id=_SITE_ID) if m.kind == "room_identity"]
+    assert identities, "expected room_identity mutations"
+    for m in identities:
+        assert m.payload["label"] in archetype.room_vocabulary

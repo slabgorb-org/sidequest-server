@@ -1703,13 +1703,28 @@ def instantiate_table_encounter(
     )
 
 
-def _seat_tactical_cells(*, encounter, snapshot, dungeon_store, player_name: str) -> None:
+def _seat_tactical_cells(
+    *, encounter, snapshot, dungeon_store, player_name: str, pack: GenrePack | None
+) -> None:
     """Task 8 (ADR-096 v2, Track C2): seat durable per-actor grid cells from the
     seating room's ``RegionTactical`` anchors so the reach gate (Task 7) has cells
     to adjudicate. A ``dungeon_store``-less (region-mode) session is a clean no-op.
     When the store is present but the room carries no tactical block, the
     ``tactical.positions.seated`` span fires with ``seated_count=0`` (honest:
-    seating ran, grid absent) and nothing is placed."""
+    seating ran, grid absent) and nothing is placed.
+
+    Task 13 (Track C3): when the pack binds FATE, the seated grid is additionally
+    projected into Fate zones right here — ``encounter.zones`` + each actor's
+    ``per_actor_state['zone']`` populate and ``tactical.zone.projected`` fires.
+    Capability-gated on ``isinstance(ruleset, FateRulesetModule)`` so WN/dial
+    packs are untouched. Two states the codebase's construction rules make
+    impossible fail LOUD here rather than silently skip (No Silent Fallbacks):
+    a gridded seat with no pack ruleset (``GenrePack.rules`` is required — the
+    ``_raise_missing_ruleset`` doctrine) and a tactical block missing its
+    ``mask_bytes_b64`` (the materializer only merges a tactical block into a mask
+    dict that already carries the bytes, so its absence means a corrupt store).
+    The legitimate no-tactical-block state keeps its honest ``seated_count=0``
+    skip span above."""
     if dungeon_store is None or encounter is None:
         return
     room_id = snapshot.character_locations.get(player_name)
@@ -1731,6 +1746,31 @@ def _seat_tactical_cells(*, encounter, snapshot, dungeon_store, player_name: str
     placed = seat_actor_cells(encounter, tactical.anchors)
     with tactical_positions_seated_span(seated_count=len(placed), room_id=str(room_id)):
         pass
+
+    # Task 13 (ADR-096 v2, C3): the Fate binding consumes the same grid as zones.
+    # Both branches below are impossible states the codebase's construction rules
+    # forbid (see docstring) — they fail loud, they do NOT silently skip
+    # (No Silent Fallbacks, review 165-5 round 1, [MEDIUM] K).
+    ruleset_slug = (
+        pack.rules.ruleset
+        if pack and pack.rules
+        else _raise_missing_ruleset("fate_zone_projection")
+    )
+    mask_b64 = mask_dict.get("mask_bytes_b64") if mask_dict else None
+    if not mask_b64:
+        raise ValueError(
+            f"fate_zone_projection: room {room_id!r} carries a tactical block but no "
+            f"mask_bytes_b64 — the persisted mask is corrupt (every write path that "
+            f"merges a tactical block also carries the mask bytes). No Silent Fallbacks."
+        )
+    from sidequest.game.ruleset.fate import FateRulesetModule
+
+    ruleset = get_ruleset_module(ruleset_slug)
+    if isinstance(ruleset, FateRulesetModule):
+        import base64
+
+        mask_text = base64.b64decode(mask_b64).decode("ascii")
+        ruleset.project_conflict_zones(encounter=encounter, mask=mask_text, room_id=str(room_id))
 
 
 def instantiate_encounter_from_trigger(
@@ -2643,6 +2683,7 @@ def instantiate_encounter_from_trigger(
             snapshot=snapshot,
             dungeon_store=dungeon_store,
             player_name=player_name,
+            pack=pack,
         )
         return enc
 

@@ -22,6 +22,11 @@ from sidequest.game.ruleset.fate_resolution import (
     resolve_action,
     resolve_action_from_faces,
 )
+from sidequest.game.tactical.zones import (
+    ZoneMoveAdjudication,
+    ZoneProjection,
+    project_zones,
+)
 from sidequest.telemetry.spans.fate import (
     fate_action_resolved_span,
     fate_aspect_invoked_span,
@@ -38,6 +43,10 @@ from sidequest.telemetry.spans.fate import (
     fate_consequence_taken_span,
     fate_point_delta_span,
     fate_stress_applied_span,
+)
+from sidequest.telemetry.spans.tactical import (
+    tactical_zone_move_span,
+    tactical_zone_projected_span,
 )
 
 if TYPE_CHECKING:
@@ -524,6 +533,88 @@ class FateRulesetModule(RulesetModule):
         slot.aspect = Aspect(text=aspect_text, kind="consequence", free_invokes=1)
         fate_consequence_taken_span(actor=actor, level=level, aspect=aspect_text, _tracer=_tracer)
         return slot.value
+
+    # --- Fate zones over the tactical mask (ADR-096 v2, Track C3) ---
+
+    def project_conflict_zones(
+        self,
+        *,
+        encounter: StructuredEncounter,
+        mask: str,
+        room_id: str = "",
+        _tracer: trace.Tracer | None = None,
+    ) -> dict[str, str]:
+        """Project the tactical mask into Fate zones, populate ``encounter.zones``
+        and each cell-seated actor's ``per_actor_state['zone']`` (from its cell),
+        and emit ``tactical.zone.projected``. Returns name->zone. The Fate binding
+        consuming the C3 projection — the inert ADR-144 slots become live.
+
+        Two distinct skip paths, both keeping absence visible as absence (No
+        Silent Fallbacks), never a fabricated position — the actor is excluded
+        from the returned map and grows no ``zone`` key:
+        1. no seated ``cell`` at all (``cell is None``); and
+        2. a seated cell that resolves to no zone (``zid is None`` — an off-floor
+           / wall coordinate, a stale-room or coordinate bug).
+        ``placed_count`` on the span counts only actors that cleared both."""
+        proj = project_zones(mask)
+        encounter.zones = sorted(proj.zones)
+        placed: dict[str, str] = {}
+        for actor in encounter.actors:
+            cell = actor.per_actor_state.get("cell")
+            if cell is None:
+                continue
+            zid = proj.cell_to_zone.get((int(cell[0]), int(cell[1])))
+            if zid is not None:
+                actor.per_actor_state["zone"] = zid
+                placed[actor.name] = zid
+        with tactical_zone_projected_span(
+            zone_count=len(proj.zones),
+            placed_count=len(placed),
+            room_id=room_id,
+            _tracer=_tracer,
+        ):
+            pass
+        return placed
+
+    def adjudicate_zone_move(
+        self,
+        *,
+        from_zone: str,
+        to_zone: str,
+        projection: ZoneProjection,
+        actor: str = "",
+        _tracer: trace.Tracer | None = None,
+    ) -> ZoneMoveAdjudication:
+        """Fate Core RAW zone move: same/adjacent zone is a FREE supplemental
+        move; a non-adjacent (2+) zone move REQUIRES an Overcome action. Emits
+        ``tactical.zone.move``. This classifies legality only — it does not add
+        a Fate 'move' verb (Fate's action set is overcome/create_advantage/
+        attack/concede); a costed move surfaces via the existing Overcome. An
+        unknown zone id classifies as requires_overcome — never a free teleport."""
+        # Validate membership BEFORE the same-zone shortcut: an unknown zone id
+        # (a broken caller, a stale zone id) must never mint a free verdict about
+        # a position the projection has never heard of — not even when
+        # from_zone == to_zone (review 165-5 round 1, [MEDIUM] H).
+        known = from_zone in projection.zones and to_zone in projection.zones
+        adjacent = known and (
+            to_zone == from_zone or to_zone in projection.adjacency.get(from_zone, frozenset())
+        )
+        verdict = ZoneMoveAdjudication(
+            free=adjacent,
+            requires_overcome=not adjacent,
+            from_zone=from_zone,
+            to_zone=to_zone,
+        )
+        with tactical_zone_move_span(
+            actor=actor,
+            from_zone=from_zone,
+            to_zone=to_zone,
+            free=verdict.free,
+            requires_overcome=verdict.requires_overcome,
+            _tracer=_tracer,
+        ):
+            pass
+        return verdict
 
     # --- d20/beat surface: not Fate's paradigm (fail loud until F5 re-cut) ---
 

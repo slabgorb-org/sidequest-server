@@ -225,6 +225,77 @@ def test_no_emit_when_region_has_no_weather_zone(
     assert not [e for e in captured if e["event_type"] == "weather.zone_changed"]
 
 
+@pytest.fixture
+def mismatched_season_generator(tmp_path: Path) -> WeatherGenerator:
+    """glen_floor defines autumn; tundra defines ONLY winter — so the session's
+    bootstrap season (autumn) is absent from tundra."""
+    yaml_path = tmp_path / "weather.yaml"
+    yaml_path.write_text(
+        """
+climate_zones:
+  glen_floor:
+    seasons:
+      autumn:
+        temp_range: [5, 12]
+        conditions: [smirr]
+        weights: [1]
+  tundra:
+    seasons:
+      winter:
+        temp_range: [-20, -5]
+        conditions: [whiteout]
+        weights: [1]
+""",
+        encoding="utf-8",
+    )
+    return WeatherGenerator(yaml_path)
+
+
+def test_zone_change_skips_loud_when_new_zone_lacks_season(
+    mismatched_season_generator: WeatherGenerator, monkeypatch
+) -> None:
+    """Entering a zone that does not define the session's season must NOT crash
+    the turn. It skips the re-sample and emits ``weather.zone_change_skipped``
+    (loud + observable) — never an uncaught raise, never a silent default.
+
+    A content author can bind a region to a real climate zone whose season set
+    doesn't overlap the session season; the pack validator (task 18) only checks
+    the zone exists, so this only surfaces at runtime and must be contained."""
+    captured: list[dict] = []
+    monkeypatch.setattr(
+        map_emit,
+        "_watcher_publish",
+        lambda et, fields, **k: captured.append({"event_type": et, "fields": fields, **k}),
+    )
+    region = SimpleNamespace(weather_zone="tundra")
+    cart = SimpleNamespace(regions={"castle_ross": region})
+    pack = SimpleNamespace(worlds={"glenross": SimpleNamespace(cartography=cart)})
+    before = mismatched_season_generator.generate("glen_floor", "autumn", seed=1)
+    sd = SimpleNamespace(
+        genre_pack=pack,
+        world_slug="glenross",
+        genre_slug="tea_and_murder",
+        player_id="",
+        game_slug="glenross_test",
+        weather_generator=mismatched_season_generator,
+        weather_season="autumn",
+        weather_state=before,
+    )
+    snapshot = SimpleNamespace(current_region="castle_ross")
+
+    # Must not raise (the reviewer's reproduced turn-crash).
+    map_emit._maybe_regenerate_weather_on_region_change(object(), sd=sd, snapshot=snapshot)
+
+    assert not [e for e in captured if e["event_type"] == "weather.zone_changed"]
+    skips = [e for e in captured if e["event_type"] == "weather.zone_change_skipped"]
+    assert len(skips) == 1, f"expected 1 skip span, got {[e['event_type'] for e in captured]}"
+    assert skips[0]["fields"]["to_zone"] == "tundra"
+    assert skips[0]["fields"]["reason"] == "zone_missing_season"
+    assert skips[0]["component"] == "location"
+    # Weather is left untouched — no silent substitution of a default.
+    assert sd.weather_state is before
+
+
 # ---------------------------------------------------------------------------
 # DB-readback WIRING test (mandatory production-reachability, CLAUDE.md)
 # ---------------------------------------------------------------------------

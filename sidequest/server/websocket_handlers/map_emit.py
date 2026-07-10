@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from sidequest.game.sites.registry import SiteRegistry
+from sidequest.game.weather import UnknownWeatherSeason, UnknownWeatherZone
 from sidequest.game.world_grounding_bootstrap import regenerate_weather_for_region
 from sidequest.protocol.messages import TacticalGridMessage, TacticalGridPayload
 from sidequest.server.scene_context import cartography_for, resolve_scene_context
@@ -1377,7 +1378,31 @@ def _maybe_regenerate_weather_on_region_change(
     new_zone = getattr(region, "weather_zone", None) if region is not None else None
     cur_zone = getattr(sd.weather_state, "zone", None)
     if new_zone and new_zone != cur_zone and sd.weather_generator is not None:
-        regenerate_weather_for_region(sd, snapshot.current_region, new_zone)
+        try:
+            regenerate_weather_for_region(sd, snapshot.current_region, new_zone)
+        except (UnknownWeatherZone, UnknownWeatherSeason) as exc:
+            # The region binds a real climate zone whose palette can't sample the
+            # session's season (content the task-18 validator can't catch — it
+            # only checks the zone exists, not that it shares the session
+            # season). Skip loudly (GM panel sees the reason), never crash the
+            # whole turn, never substitute default weather silently.
+            reason = (
+                "zone_missing_season" if isinstance(exc, UnknownWeatherSeason) else "unknown_zone"
+            )
+            _watcher_publish(
+                "weather.zone_change_skipped",
+                {
+                    "world": getattr(sd, "world_slug", ""),
+                    "region": snapshot.current_region or "",
+                    "from_zone": cur_zone or "",
+                    "to_zone": new_zone,
+                    "reason": reason,
+                    "detail": str(exc),
+                },
+                component="location",
+                severity="warning",
+            )
+            return
         _watcher_publish(
             "weather.zone_changed",
             {
@@ -1385,6 +1410,7 @@ def _maybe_regenerate_weather_on_region_change(
                 "region": snapshot.current_region or "",
                 "from_zone": cur_zone or "",
                 "to_zone": new_zone,
+                "condition": getattr(sd.weather_state, "condition", ""),
             },
             component="location",
         )

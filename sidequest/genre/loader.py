@@ -71,6 +71,7 @@ from sidequest.genre.models.rules import (
     WinCondition,
 )
 from sidequest.genre.models.scenario import ScenarioNpc, ScenarioPack
+from sidequest.genre.models.site_archetype import SiteArchetype
 from sidequest.genre.models.theme import GenreTheme
 from sidequest.genre.models.tropes import SeedTrope, TropeDefinition
 from sidequest.genre.models.world import (
@@ -144,6 +145,7 @@ GENRE_PACK_ROOT_EXTENSION_FILES: frozenset[str] = frozenset(
         "witnessed_acts.yaml",  # WitnessedActsFile vocabulary
         "mutations.yaml",  # AWN mutation catalog
         "disciplines_psionic.yaml",  # PsionicDisciplineCatalog (story 102-6)
+        "site_archetypes.yaml",  # SiteArchetype catalog (Track B, task 10)
     }
 )
 
@@ -2593,6 +2595,27 @@ def load_genre_pack(path: Path | str) -> GenrePack:
     # seeding an empty encounters pool.
     bestiary = _load_yaml_optional(path / "bestiary.yaml", Bestiary)
 
+    # Genre-root site_archetypes.yaml (Track B, task 10) — OPTIONAL, additive.
+    # A YAML list of archetype dicts, keyed by archetype_id into
+    # GenrePack.site_archetypes. Absent file → empty dict (the packs that
+    # author no sites are unaffected); a malformed entry still fails loud via
+    # SiteArchetype validation.
+    site_archetypes: dict[str, SiteArchetype] = {}
+    _raw_site_archetypes = _load_yaml_raw_optional(path / "site_archetypes.yaml")
+    if _raw_site_archetypes is not None:
+        try:
+            for entry in _raw_site_archetypes:
+                archetype = SiteArchetype.model_validate(entry)
+                if archetype.archetype_id in site_archetypes:
+                    # No Silent Fallbacks: a duplicate archetype_id would silently
+                    # last-win in a dict comprehension — fail loud instead.
+                    raise ValueError(f"duplicate site archetype_id {archetype.archetype_id!r}")
+                site_archetypes[archetype.archetype_id] = archetype
+        except (KeyError, TypeError, ValueError) as exc:
+            # pydantic ValidationError subclasses ValueError — one clause covers
+            # both a malformed list shape and a failed archetype validation.
+            raise GenreLoadError(path=path / "site_archetypes.yaml", detail=str(exc)) from exc
+
     # Fail loud: every starting_prepared spell id on every class must resolve
     # against the loaded catalog.  Unknown ids are authoring bugs.
     _validate_wwn_starting_prepared_refs(classes_list, wwn_catalog)
@@ -2902,6 +2925,7 @@ def load_genre_pack(path: Path | str) -> GenrePack:
         wwn_spell_catalog=wwn_catalog,
         psionic_discipline_catalog=genre_psionic_catalog,
         bestiary=bestiary,
+        site_archetypes=site_archetypes,
         mutations=mutations,
         backgrounds=genre_backgrounds,
         foci=genre_foci,

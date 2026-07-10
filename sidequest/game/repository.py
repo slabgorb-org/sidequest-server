@@ -48,6 +48,16 @@ if TYPE_CHECKING:
     from sidequest.game.world_save import WorldSave
 
 
+# Per-site storage key (Track B, Story 164-1). Every dungeon table is keyed
+# ``(session_id, site_id, …)``; a repository call that omits ``site_id`` lands
+# under this legacy default, so Sünden's existing single-dungeon path is
+# unchanged. Must match alembic 0003's ``_SITE``. Defined here (on the protocol
+# module, a runtime leaf) as the single source of truth so both the
+# PgDungeonRepository implementation and the materializer can import it without
+# a circular import through the concrete pg module.
+DEFAULT_SITE_ID = "frontier"
+
+
 @runtime_checkable
 class SaveTransaction(Protocol):
     """A unit of work. Operations do NOT commit individually; the owning

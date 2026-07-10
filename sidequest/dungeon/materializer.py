@@ -165,7 +165,7 @@ from sidequest.game.cookbook.assemble import assemble_region
 from sidequest.game.cookbook.loader import CookbookBundle
 from sidequest.game.cookbook.models import GeneratedRoomDescription, RegionContentManifest
 from sidequest.game.creature_core import HpPool, hp_pool_from_hp
-from sidequest.game.repository import DungeonRepository, DungeonTransaction
+from sidequest.game.repository import DEFAULT_SITE_ID, DungeonRepository, DungeonTransaction
 from sidequest.game.session import GameSnapshot
 from sidequest.telemetry.spans.dungeon_materialize import (
     dungeon_curate_authored_bind_failed_span,
@@ -579,6 +579,11 @@ class MaterializationRequest:
     # need to wire genre/world" contract).
     genre_slug: str = ""
     world_slug: str = ""
+    # Track B (task 11): which per-``(session, site_id)`` dungeon store this run
+    # writes into. Defaults to the frontier store (``DEFAULT_SITE_ID``) so every
+    # existing frontier/lookahead caller is unchanged; a bounded-site request
+    # threads its own ``site_id`` so its whole graph lands in that site's store.
+    site_id: str = DEFAULT_SITE_ID
 
     @classmethod
     def build(
@@ -594,6 +599,7 @@ class MaterializationRequest:
         frontier: list[FrontierEdge],
         genre_slug: str = "",
         world_slug: str = "",
+        site_id: str = DEFAULT_SITE_ID,
     ) -> MaterializationRequest:
         """Validate then build a frozen request. No silent defaults.
 
@@ -616,6 +622,18 @@ class MaterializationRequest:
                 f"burst_magnitude must be >= 1 (a zero/negative burst is "
                 f"incoherent); got {burst_magnitude!r}"
             )
+        if site_id != DEFAULT_SITE_ID and lookahead_breadth > 0:
+            # Track B invariant (No Silent Fallbacks): only the frontier store
+            # (DEFAULT_SITE_ID) runs a lookahead worker. A per-site store is
+            # materialized WHOLE (lookahead_breadth == 0, no open frontier), so
+            # a non-default site_id with lookahead > 0 is incoherent — the
+            # commit stage's put_frontier writes to DEFAULT_SITE_ID and would
+            # silently cross-contaminate the frontier store. Reject it loudly.
+            raise ValueError(
+                f"site_id {site_id!r} (non-frontier) requires lookahead_breadth == 0 "
+                f"(a bounded site materializes whole, no frontier worker); "
+                f"got lookahead_breadth={lookahead_breadth!r}"
+            )
         frontier_ids = frozenset(fe.frontier_edge_id for fe in frontier)
         if frontier_edge.frontier_edge_id not in frontier_ids:
             raise ValueError(
@@ -633,6 +651,7 @@ class MaterializationRequest:
             lookahead_breadth,
             genre_slug,
             world_slug,
+            site_id,
         )
 
 
@@ -1780,7 +1799,15 @@ def _stage_commit(
     # exactly one pooled connection for its lifetime (no transient second borrow
     # inside the with-block).
 
-    new_frontier = _new_frontier_edges(request, expansion=expansion, graph=graph)
+    # A bounded site (lookahead_breadth == 0) leaves NO open frontier edges —
+    # it is materialized WHOLE, with no lookahead worker to expand it later
+    # (Track B task 11). The frontier path (breadth >= 1) derives its edges as
+    # before.
+    new_frontier = (
+        _new_frontier_edges(request, expansion=expansion, graph=graph)
+        if request.lookahead_breadth > 0
+        else []
+    )
 
     # Resolve the generator version at COMMIT time, not at import time.
     # commit_expansion's `generator_version=GENERATOR_VERSION` default is
@@ -1808,6 +1835,7 @@ def _stage_commit(
                 Expansion(expansion_id=0, new_nodes=[entrance], new_edges=[]),
                 graph,
                 generator_version=generator_version,
+                site_id=request.site_id,
             )
 
         # Story 52-3 — thread fill-stage masks into the generated
@@ -1849,6 +1877,7 @@ def _stage_commit(
             graph,
             generator_version=generator_version,
             masks=expansion_masks,
+            site_id=request.site_id,
         )
 
         # RECONCILE SEAM A: persist the spec §7 freeze target
@@ -1865,6 +1894,7 @@ def _stage_commit(
                     "region_id": report.region_id,
                     "rolled": dict(report.rolled.slots),
                 },
+                site_id=request.site_id,
             )
             rolled_persisted += 1
 
@@ -1886,10 +1916,15 @@ def _stage_commit(
                     "creatures": [_curated_to_payload(c) for c in roster],
                     "big_bad": _curated_to_payload(big_bad) if big_bad is not None else None,
                 },
+                site_id=request.site_id,
             )
             pop_persisted += 1
 
         for fe in new_frontier:
+            # Only the frontier path (lookahead_breadth > 0) ever reaches here —
+            # a bounded site's new_frontier is empty (gated above), so it writes
+            # no frontier edges. The frontier path is the DEFAULT_SITE_ID store,
+            # so put_frontier's default site_id is correct and unthreaded.
             tx.put_frontier(fe)
         # The coordinator's ``with dungeon_repository.transaction()`` commits on
         # clean exit (after _stage_attach + _stage_commit) and rolls back on any
@@ -2137,8 +2172,10 @@ async def materialize(
         # connection for its lifetime — the seed race is still caught loudly by
         # the Expansion-0 freeze PersistError, and per-session materialization
         # is already serialized.
-        existing_map = dungeon_repository.load_map(entrance_id=graph.entrance_id)
-        existing_frontier = dungeon_repository.load_frontier()
+        existing_map = dungeon_repository.load_map(
+            entrance_id=graph.entrance_id, site_id=request.site_id
+        )
+        existing_frontier = dungeon_repository.load_frontier(site_id=request.site_id)
         is_fresh_save = not existing_map.nodes and not existing_frontier
 
         # ADR-115 D6: ONE transaction spans BOTH _stage_attach (which opens

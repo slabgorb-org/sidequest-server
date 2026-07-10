@@ -197,6 +197,31 @@ async def apply_world_patch(args: ApplyWorldPatchArgs, ctx: ToolContext) -> Tool
                 recoverable=True,
             )
 
+        # Track B (Story 164-6, task 12): the engine also owns navigation INSIDE
+        # a site scene — the site's interior graph is single-writer. When the
+        # acting PC stands on a site-owned node, deny the /current_region write
+        # the same way (recoverable — the narrator re-plans). Scoped to worlds
+        # that actually declare ``sites:`` (no sites -> no site scene possible),
+        # so the region-mode/no-site escape hatch is unchanged.
+        if getattr(cart, "sites", None):
+            from sidequest.game.sites import SiteRegistry
+
+            pc_region = snapshot.region_for(perspective=ctx.perspective_pc)
+            owning_site = (
+                SiteRegistry.from_cartography(cart).site_owning_node(pc_region)
+                if pc_region is not None
+                else None
+            )
+            if owning_site is not None:
+                ctx.otel_span.set_attribute("tool.world_patch.region_write_denied", True)
+                return ToolResult.error(
+                    f"path '/current_region' is engine-owned inside the site "
+                    f"{owning_site.name!r} — the site's interior graph is "
+                    "single-writer (Track B). Narrate movement within the site "
+                    "in prose instead.",
+                    recoverable=True,
+                )
+
     if field_name is None:
         return ToolResult.error(
             f"path {args.path!r} not supported by v1 apply_world_patch escape hatch; "

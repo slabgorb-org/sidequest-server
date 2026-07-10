@@ -86,6 +86,7 @@ from sidequest.game.session import (
     RoomState,
     upsert_quest_status,
 )
+from sidequest.game.sites import SiteRegistry
 from sidequest.game.table.types import TableCommit
 from sidequest.genre.models.inventory import DamageSpec
 from sidequest.genre.models.pack import GenrePack
@@ -285,20 +286,44 @@ def _honors_same_turn_seam_crossing(
 
     A pure re-title (no crossing this turn) fails the entrance/receipt clauses, so
     the drift-strip / latch keep owning that case (AC5 fail-loud unchanged).
+
+    Track B (Story 164-6, task 12): the same guard is parameterized for SITE
+    entrances. A same-turn crossing onto a bounded/frontier site's entrance node
+    (``<site>:entrance``) is honored exactly as the legacy frontier entrance is —
+    the PC stands on the site's entrance, a this-turn receipt records the
+    crossing there, and ``known_region_id`` is that site's ``attached_to`` owner.
+    The legacy global-``ENTRANCE_ID`` frontier path is unchanged.
     """
     if not is_region_mode_world:
         return False
-    if snapshot.region_for(perspective=player_name) != ENTRANCE_ID:
+    pc_region = snapshot.region_for(perspective=player_name)
+    if pc_region is None:
         return False
     this_turn = snapshot.turn_manager.interaction
-    has_receipt = any(
-        t.to_region == ENTRANCE_ID and t.turn == this_turn and t.pc_name == player_name
-        for t in snapshot.region_transitions
-    )
-    if not has_receipt:
+
+    def _has_this_turn_receipt(to_region: str) -> bool:
+        return any(
+            t.to_region == to_region and t.turn == this_turn and t.pc_name == player_name
+            for t in snapshot.region_transitions
+        )
+
+    # Legacy frontier-entrance crossing (the original global ENTRANCE_ID path).
+    if pc_region == ENTRANCE_ID:
+        if not _has_this_turn_receipt(ENTRANCE_ID):
+            return False
+        owner = surface_owner_for_entrance(region_cart)
+        return owner is not None and owner.from_id == known_region_id
+
+    # Site-entrance crossing (Track B): the PC is on a site's entrance node, a
+    # this-turn receipt lands them there, and the known region is the site's
+    # surface owner. Keyed per-site off the SiteRegistry — never the single
+    # global entrance constant.
+    site = SiteRegistry.from_cartography(region_cart).site_owning_node(pc_region)
+    if site is None or site.entrance_node_id != pc_region:
         return False
-    owner = surface_owner_for_entrance(region_cart)
-    return owner is not None and owner.from_id == known_region_id
+    if not _has_this_turn_receipt(pc_region):
+        return False
+    return known_region_id == site.attached_to
 
 
 def _resolve_innate_cast_for_beat(

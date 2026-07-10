@@ -72,6 +72,7 @@ from sidequest.game.persistence import (
     SerializationError,
 )
 from sidequest.game.pg._conn import session_tx
+from sidequest.game.repository import DEFAULT_SITE_ID
 from sidequest.telemetry.spans.dungeon_persist import (
     dungeon_persist_commit_span,
     ledger_add_span,
@@ -80,12 +81,11 @@ from sidequest.telemetry.spans.dungeon_persist import (
     mask_write_span,
 )
 
-# Per-site storage key (Track B, Story 164-1). Every dungeon table is keyed
-# ``(session_id, site_id, …)``; a call that omits ``site_id`` lands under this
-# legacy default, so Sünden's existing single-dungeon path is unchanged.
-# Must match alembic 0003's ``_SITE``.
-DEFAULT_SITE_ID = "frontier"
-
+# DEFAULT_SITE_ID is the single-source per-site storage key, defined on the
+# repository protocol module (``sidequest.game.repository``) and imported above
+# so both this concrete implementation and the materializer can reference it
+# without a circular import. Re-exported here for back-compat with callers that
+# import it from this module.
 __all__ = ["DEFAULT_SITE_ID", "PgDungeonRepository", "PgDungeonTransaction"]
 
 

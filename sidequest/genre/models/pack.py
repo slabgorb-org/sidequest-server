@@ -55,6 +55,7 @@ from sidequest.genre.models.psionics import PsionicDisciplineCatalog
 from sidequest.genre.models.rigs_world import ChassisInstanceConfig
 from sidequest.genre.models.rules import FateHintSeed, RulesConfig, SavingThrowsTable
 from sidequest.genre.models.scenario import ScenarioPack
+from sidequest.genre.models.site_archetype import SiteArchetype
 from sidequest.genre.models.theme import GenreTheme
 from sidequest.genre.models.tropes import SeedTrope, TropeDefinition
 from sidequest.genre.models.visibility import VisibilityBaseline
@@ -464,6 +465,11 @@ class GenrePack(BaseModel):
     blocks for ruleset-module packs. None when the file is absent — encountergen
     fails loud when the bound ruleset is non-native and this is None (the
     bestiary is REQUIRED for ruleset-module packs; native packs ignore it)."""
+    site_archetypes: dict[str, SiteArchetype] = Field(default_factory=dict)
+    """Genre-root ``site_archetypes.yaml`` (Track B, task 10): the site catalog
+    (interior algorithm, room counts, grid dims) keyed by ``archetype_id``.
+    Additive — empty dict when the file is absent (the ten packs that author no
+    sites are unaffected). Consumed by bounded materialization (task 11)."""
     mutations: MutationCatalog | None = None
     """Genre-tier ``mutations.yaml`` (AWN Plan 2): the mutation catalog the
     awn ruleset's mutation subsystem resolves against. None = the pack has

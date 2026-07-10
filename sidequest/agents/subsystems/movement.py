@@ -29,10 +29,13 @@ import re
 from typing import TYPE_CHECKING
 
 from sidequest.agents.subsystems import SubsystemOutput
+from sidequest.dungeon.bounded_site import ensure_bounded_site_materialized
 from sidequest.dungeon.region_graph.model import RegionGraph
 from sidequest.dungeon.region_projection import RegionExit, project_region, requested_bearing
 from sidequest.dungeon.seed_bootstrap import ENTRANCE_ID as _ENTRANCE_ID
 from sidequest.dungeon.seed_bootstrap import is_procedural_region_id
+from sidequest.dungeon.themes import load_theme_palette
+from sidequest.game.cookbook.loader import load_cookbook
 from sidequest.game.seams import SeamCrossingError
 from sidequest.game.seams.deep_descent import resolve_deep_descent
 from sidequest.game.session import GameSnapshot, WorldStatePatch
@@ -521,21 +524,59 @@ async def run_movement_dispatch(
                     direction=direction,
                     exit_descriptor=site_descriptor,
                 )
-            # Bounded sites materialize their WHOLE graph before the bind (Tasks
-            # 11/12). B1 lands the frontier path only — a bounded target fails
-            # loud as pending until the materializer exists (Sünden is frontier,
-            # so the live path never reaches this guard).
+            # Bounded sites materialize their WHOLE graph before the bind (Task
+            # 11): entrance + every room in one committed transaction, so
+            # resolve_enter_site binds the PC onto a live entrance node. The
+            # bundle/palette come from the site's world dir; a missing archetype
+            # or store fails loud (No Silent Fallbacks). The end-to-end proof
+            # (enter -> SITE_MAP + TACTICAL_GRID -> exit) lands in story 164-7
+            # (plan task 13); here we wire the materialize call.
             if site.extent == "bounded":
-                return _unresolved(
-                    snapshot=snapshot,
-                    player_name=player_name,
-                    reason="bounded_site_pending",
-                    from_region=from_region,
-                    direction=direction,
-                    exit_descriptor=site_descriptor,
-                    available=[],
-                    surface="That door isn't ready yet.",
+                archetype = pack.site_archetypes.get(site.archetype) if pack is not None else None
+                world_dir = (
+                    pack.source_dir / "worlds" / snapshot.world_slug
+                    if pack is not None and pack.source_dir is not None
+                    else None
                 )
+                if archetype is None or world_dir is None:
+                    return _unresolved(
+                        snapshot=snapshot,
+                        player_name=player_name,
+                        reason="unknown_archetype",
+                        from_region=from_region,
+                        direction=direction,
+                        exit_descriptor=site_descriptor,
+                        available=[],
+                        surface=f"{site.name} cannot be opened.",
+                    )
+                try:
+                    await ensure_bounded_site_materialized(
+                        site=site,
+                        archetype=archetype,
+                        dungeon_repository=dungeon_store,
+                        snapshot=snapshot,
+                        pack=pack,
+                        bundle=load_cookbook(world_dir),
+                        palette=palette if palette is not None else load_theme_palette(world_dir),
+                    )
+                except SeamCrossingError as err:
+                    with site_enter_unresolved_span(
+                        pc_name=player_name,
+                        from_region=from_region,
+                        reason=err.reason,
+                        descriptor=site_descriptor,
+                    ):
+                        pass
+                    return _unresolved(
+                        snapshot=snapshot,
+                        player_name=player_name,
+                        reason=err.reason,
+                        from_region=from_region,
+                        direction=direction,
+                        exit_descriptor=site_descriptor,
+                        available=[],
+                        surface=err.surface,
+                    )
             try:
                 crossing = resolve_enter_site(
                     snapshot=snapshot,

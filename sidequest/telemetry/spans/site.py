@@ -32,6 +32,9 @@ SPAN_SITE_ENTER = "site.enter"
 SPAN_SITE_EXIT = "site.exit"
 SPAN_SITE_ENTER_UNRESOLVED = "site.enter_unresolved"
 SPAN_SITE_EXIT_UNRESOLVED = "site.exit_unresolved"
+SPAN_SITE_MATERIALIZE_BEGIN = "site.materialize.begin"
+SPAN_SITE_MATERIALIZE_COMMIT = "site.materialize.commit"
+SPAN_SITE_MATERIALIZE_SKIP = "site.materialize.skip"
 
 
 def _attr(field: str):
@@ -89,6 +92,43 @@ SPAN_ROUTES[SPAN_SITE_EXIT_UNRESOLVED] = SpanRoute(
         "pc_name": _attr("pc_name")(s),
         "from_region": _attr("from_region")(s),
         "reason": _attr("reason")(s),
+    },
+)
+
+
+SPAN_ROUTES[SPAN_SITE_MATERIALIZE_BEGIN] = SpanRoute(
+    event_type="state_transition",
+    component="sites",
+    extract=lambda s: {
+        "field": "site_graph",
+        "op": "site.materialize.begin",
+        "site_id": _attr("site_id")(s),
+        "archetype": _attr("archetype")(s),
+        "seed": _attr("seed")(s),
+        "room_count_max": _attr("room_count_max")(s),
+    },
+)
+
+SPAN_ROUTES[SPAN_SITE_MATERIALIZE_COMMIT] = SpanRoute(
+    event_type="state_transition",
+    component="sites",
+    extract=lambda s: {
+        "field": "site_graph",
+        "op": "site.materialize.commit",
+        "site_id": _attr("site_id")(s),
+        "archetype": _attr("archetype")(s),
+        "node_count": _attr("node_count")(s),
+    },
+)
+
+SPAN_ROUTES[SPAN_SITE_MATERIALIZE_SKIP] = SpanRoute(
+    event_type="state_transition",
+    component="sites",
+    extract=lambda s: {
+        "field": "site_graph",
+        "op": "site.materialize.skip",
+        "site_id": _attr("site_id")(s),
+        "archetype": _attr("archetype")(s),
     },
 )
 
@@ -196,13 +236,77 @@ def site_exit_unresolved_span(
     _mirror(SPAN_SITE_EXIT_UNRESOLVED, span)
 
 
+@contextmanager
+def site_materialize_begin_span(
+    *,
+    site_id: str,
+    archetype: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Opens as a bounded site starts materializing (before the one committed
+    transaction). Carries seed + room_count_max once the caller sets them so the
+    GM panel can prove the burst size."""
+    with Span.open(
+        SPAN_SITE_MATERIALIZE_BEGIN,
+        {"site_id": site_id, "archetype": archetype, **attrs},
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+    _mirror(SPAN_SITE_MATERIALIZE_BEGIN, span)
+
+
+@contextmanager
+def site_materialize_commit_span(
+    *,
+    site_id: str,
+    archetype: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Fires after the whole bounded site is committed. ``node_count`` is the
+    GM-panel proof the site actually materialized (not narrator prose)."""
+    with Span.open(
+        SPAN_SITE_MATERIALIZE_COMMIT,
+        {"site_id": site_id, "archetype": archetype, **attrs},
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+    _mirror(SPAN_SITE_MATERIALIZE_COMMIT, span)
+
+
+@contextmanager
+def site_materialize_skip_span(
+    *,
+    site_id: str,
+    archetype: str,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> Iterator[trace.Span]:
+    """Fires when re-entry finds the site already materialized (idempotent
+    skip) — distinguishes a genuine no-op from a missing materialization."""
+    with Span.open(
+        SPAN_SITE_MATERIALIZE_SKIP,
+        {"site_id": site_id, "archetype": archetype, **attrs},
+        tracer_override=_tracer,
+    ) as span:
+        yield span
+    _mirror(SPAN_SITE_MATERIALIZE_SKIP, span)
+
+
 __all__ = [
     "SPAN_SITE_ENTER",
     "SPAN_SITE_ENTER_UNRESOLVED",
     "SPAN_SITE_EXIT",
     "SPAN_SITE_EXIT_UNRESOLVED",
+    "SPAN_SITE_MATERIALIZE_BEGIN",
+    "SPAN_SITE_MATERIALIZE_COMMIT",
+    "SPAN_SITE_MATERIALIZE_SKIP",
     "site_enter_span",
     "site_enter_unresolved_span",
     "site_exit_span",
     "site_exit_unresolved_span",
+    "site_materialize_begin_span",
+    "site_materialize_commit_span",
+    "site_materialize_skip_span",
 ]

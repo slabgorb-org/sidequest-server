@@ -203,11 +203,14 @@ def test_message_type_narration_segment_wire_string() -> None:
     assert MessageType.NARRATION_SEGMENT == "NARRATION_SEGMENT"
 
 
-def test_message_type_dungeon_map_wire_string() -> None:
-    """Beneath Sünden BETTER fix (seam 3) — the NEW ADR-055 procedural
-    megadungeon map frame. Distinct from the port-deleted ADR-019
-    MAP_UPDATE (which is NOT revived)."""
-    assert MessageType.DUNGEON_MAP == "DUNGEON_MAP"
+def test_message_type_site_map_wire_string() -> None:
+    """Track B Task 8 (story 164-4) renamed DUNGEON_MAP -> SITE_MAP: the map
+    frame is now the generalized per-site projection (the ADR-055 shape,
+    kept). One cutover, no alias — the old wire string must be GONE.
+    Distinct from the port-deleted ADR-019 MAP_UPDATE (which is NOT
+    revived)."""
+    assert MessageType.SITE_MAP == "SITE_MAP"
+    assert not hasattr(MessageType, "DUNGEON_MAP")
 
 
 def test_message_type_character_incapacitated_wire_string() -> None:
@@ -233,7 +236,9 @@ def test_message_type_complete_count() -> None:
     the broadcast-layer perception firewall); bumped 45 → 46.
     Beneath Sünden BETTER fix (seam 3) added DUNGEON_MAP — the NEW
     ADR-055 procedural-megadungeon map frame (NOT a revival of the
-    port-deleted ADR-019 MAP_UPDATE); bumped 46 → 47.
+    port-deleted ADR-019 MAP_UPDATE); bumped 46 → 47. Track B Task 8
+    (story 164-4) renamed it DUNGEON_MAP → SITE_MAP — a RENAME, not an
+    addition; the count is unchanged.
     Playtest 2026-05-17 added PLAYER_SPEECH — verbatim PC dialogue
     surfaced to the MP party (the narrator can't echo player speech per
     SOUL.md Agency, and ACTION_REVEAL is wiped on barrier-fire); bumped

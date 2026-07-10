@@ -241,6 +241,7 @@ from sidequest.server.websocket_handlers.map_emit import (  # noqa: E402
     _maybe_emit_location_description,
     _maybe_emit_location_overlay_changed,
     _maybe_emit_tactical_grid,
+    _maybe_regenerate_weather_on_region_change,
 )
 from sidequest.server.websocket_handlers.quests_emit import (  # noqa: E402
     _maybe_emit_quests,
@@ -2572,6 +2573,15 @@ class WebSocketSessionHandler(AudioDispatchMixin, CharGenMixin):
                                 actor=None,
                                 emit_fn=_emit_shared_world_frame,
                                 room_id_override=snapshot.current_region,
+                            )
+                            # Spec §2 A2: crossing into a region of a different
+                            # climate zone re-samples per-zone weather and fires
+                            # weather.zone_changed. Internally no-ops when the
+                            # zone is unchanged / the world has no weather.
+                            _maybe_regenerate_weather_on_region_change(
+                                self,
+                                sd=sd,
+                                snapshot=snapshot,
                             )
                     # Beneath Sünden seam 3: project the live region graph to the
                     # UI Map tab every turn (NOT gated on result.location — covers

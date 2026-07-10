@@ -40,7 +40,7 @@ from sidequest.game.repository import DungeonRepository, SaveRepository, Telemet
 from sidequest.game.session import GameSnapshot
 from sidequest.game.shared_world_delta import SharedWorldDelta
 from sidequest.game.tension_tracker import TensionTracker
-from sidequest.game.weather import WeatherState
+from sidequest.game.weather import WeatherGenerator, WeatherState
 from sidequest.genre.models.pack import GenrePack
 from sidequest.genre.models.scenario import ScenarioPack
 from sidequest.protocol.enums import NarratorVerbosity, NarratorVocabulary
@@ -428,6 +428,12 @@ class _SessionData:
     # surface, no silent fallback). Same Phase-E lifecycle as ``lore_store``
     # / ``monster_manual``: in-memory, NOT persisted to the SQLite save.
     weather_state: WeatherState | None = None
+    # Spec §2 A2: the generator + selected season are cached here at bootstrap
+    # so per-region-change re-sampling (regenerate_weather_for_region) needs no
+    # world-dir resolution on the hot turn path. Both None for a world with no
+    # weather.yaml. Same in-memory, non-persisted lifecycle as weather_state.
+    weather_generator: WeatherGenerator | None = None
+    weather_season: str | None = None
     world_demographics: dict[str, Any] | None = None
     world_calendar: dict[str, Any] | None = None
 

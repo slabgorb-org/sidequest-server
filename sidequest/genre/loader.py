@@ -2604,10 +2604,13 @@ def load_genre_pack(path: Path | str) -> GenrePack:
     _raw_site_archetypes = _load_yaml_raw_optional(path / "site_archetypes.yaml")
     if _raw_site_archetypes is not None:
         try:
-            site_archetypes = {
-                entry["archetype_id"]: SiteArchetype.model_validate(entry)
-                for entry in _raw_site_archetypes
-            }
+            for entry in _raw_site_archetypes:
+                archetype = SiteArchetype.model_validate(entry)
+                if archetype.archetype_id in site_archetypes:
+                    # No Silent Fallbacks: a duplicate archetype_id would silently
+                    # last-win in a dict comprehension — fail loud instead.
+                    raise ValueError(f"duplicate site archetype_id {archetype.archetype_id!r}")
+                site_archetypes[archetype.archetype_id] = archetype
         except (KeyError, TypeError, ValueError) as exc:
             # pydantic ValidationError subclasses ValueError — one clause covers
             # both a malformed list shape and a failed archetype validation.

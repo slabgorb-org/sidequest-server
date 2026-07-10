@@ -202,9 +202,7 @@ def _snapshot_double_on_site_entrance() -> Any:
     this-turn region_transitions receipt landing her there (the movement
     receipt for a site.enter crossing)."""
     this_turn = 5
-    transition = SimpleNamespace(
-        turn=this_turn, pc_name="Alice", to_region=_SITE_ENTRANCE
-    )
+    transition = SimpleNamespace(turn=this_turn, pc_name="Alice", to_region=_SITE_ENTRANCE)
     return SimpleNamespace(
         region_for=lambda *, perspective=None: _SITE_ENTRANCE,
         turn_manager=SimpleNamespace(interaction=this_turn),

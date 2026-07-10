@@ -118,7 +118,15 @@ def test_module_exposes_ensure_bounded_site_materialized() -> None:
 
     assert inspect.iscoroutinefunction(ensure_bounded_site_materialized)
     params = inspect.signature(ensure_bounded_site_materialized).parameters
-    for name in ("site", "archetype", "dungeon_repository", "snapshot", "pack", "bundle", "palette"):
+    for name in (
+        "site",
+        "archetype",
+        "dungeon_repository",
+        "snapshot",
+        "pack",
+        "bundle",
+        "palette",
+    ):
         assert name in params, f"missing keyword param {name!r}"
         assert params[name].kind is inspect.Parameter.KEYWORD_ONLY
 
@@ -242,3 +250,56 @@ async def test_materialize_emits_commit_span(monkeypatch: Any, migrated_db: str)
     assert any("site.materialize.commit" in n for n in names), (
         f"site.materialize.commit span not emitted; saw {names}"
     )
+
+
+@pytest.mark.asyncio
+async def test_missing_base_seed_is_minted_not_defaulted_to_zero(
+    monkeypatch: Any, migrated_db: str
+) -> None:
+    """No Silent Fallbacks: a world with no bootstrapped frontier base seed
+    (every non-beneath_sunden world) MINTS + persists a fresh base seed on first
+    bounded entry — never silently coalesces a missing seed to 0."""
+    from sidequest.dungeon.bounded_site import ensure_bounded_site_materialized
+    from tests.dungeon.conftest import build_pg_dungeon_repo
+
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    # Deliberately do NOT set a base campaign seed (unlike _materialize_site).
+    assert repo.get_campaign_seed() is None
+    bundle, palette, snapshot, pack = _real_bundle_palette_snapshot_pack()
+    await ensure_bounded_site_materialized(
+        site=_tavern_descriptor(),
+        archetype=_tavern_archetype(),
+        dungeon_repository=repo,
+        snapshot=snapshot,
+        pack=pack,
+        bundle=bundle,
+        palette=palette,
+    )
+    # A real base seed was established — not left None, not a silent 0.
+    assert repo.get_campaign_seed() is not None
+    entrance = site_entrance_id(_SITE_ID)
+    assert entrance in repo.load_map(entrance_id=entrance, site_id=_SITE_ID).nodes
+
+
+def test_non_default_site_id_requires_zero_lookahead() -> None:
+    """Track B invariant: a non-frontier site_id with lookahead_breadth > 0 is
+    incoherent (a bounded site has no frontier worker) and fails loud, so
+    put_frontier can never cross-contaminate the frontier store."""
+    from sidequest.dungeon.materializer import MaterializationRequest
+    from sidequest.dungeon.persistence import FrontierEdge
+
+    fe = FrontierEdge(
+        frontier_edge_id="fe1", from_region_id="e", heading="in", spawn_depth_score=0.0
+    )
+    with pytest.raises(ValueError, match="lookahead_breadth"):
+        MaterializationRequest.build(
+            campaign_seed=1,
+            expansion_id=1,
+            frontier_edge=fe,
+            frontier=[fe],
+            attach_region_ids=["e"],
+            heading="in",
+            burst_magnitude=3,
+            lookahead_breadth=1,
+            site_id="gilded_boar",
+        )

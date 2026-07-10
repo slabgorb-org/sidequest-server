@@ -14,6 +14,7 @@ Track B, plan task 11. Consumed by the movement dispatch (task 6/12): on
 from __future__ import annotations
 
 import hashlib
+import secrets
 from typing import TYPE_CHECKING, Any
 
 from sidequest.dungeon.materializer import MaterializationRequest, materialize
@@ -83,7 +84,17 @@ async def ensure_bounded_site_materialized(
     # base seed with site_id and persist it (write-once) so re-entry is stable.
     seed = dungeon_repository.get_campaign_seed(site_id=site.site_id)
     if seed is None:
-        base = dungeon_repository.get_campaign_seed() or 0
+        base = dungeon_repository.get_campaign_seed()
+        if base is None:
+            # No Silent Fallbacks: a non-beneath_sunden world (e.g. a region-mode
+            # world with a bounded site) never bootstraps the frontier base seed
+            # (session_integration.attach_dungeon_to_session is gated to
+            # caverns/beneath_sunden). MINT + persist a fresh session-scoped base
+            # seed exactly as session_integration.py:169-172 does — never coalesce
+            # a missing seed to a constant, which would make every session's site
+            # byte-identical.
+            base = secrets.randbits(_SEED_BITS)
+            dungeon_repository.set_campaign_seed(base)
         seed = _derive_site_seed(base_seed=base, site_id=site.site_id)
         dungeon_repository.set_campaign_seed(seed, site_id=site.site_id)
 

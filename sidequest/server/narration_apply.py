@@ -4538,7 +4538,26 @@ def _apply_narration_result_to_snapshot(
                                 actor_for_location=actor_for_location,
                             )
                             result.location = _canonical_display
-                if _is_region_mode_world and snapshot.current_region != known_region_id:
+                # Track B (164-6) single-writer: the engine owns navigation
+                # inside a site interior. If the PC currently stands on a
+                # site-owned node, the narrator must NOT clobber current_region /
+                # pc_regions here — a site->surface move goes through
+                # resolve_exit_site (movement dispatch), not this heading-driven
+                # advance. No-op for every world without a bounded site
+                # (site_owning_node returns None), so region-mode travel in
+                # oz/wonderland/gulliver is unchanged.
+                _pc_region_now = (
+                    snapshot.region_for(perspective=player_name) or snapshot.current_region or ""
+                )
+                _in_site_scene = (
+                    SiteRegistry.from_cartography(_region_cart).site_owning_node(_pc_region_now)
+                    is not None
+                )
+                if (
+                    _is_region_mode_world
+                    and snapshot.current_region != known_region_id
+                    and not _in_site_scene
+                ):
                     _prior_region = snapshot.current_region
                     snapshot.current_region = known_region_id
                     snapshot.pc_regions[player_name] = known_region_id

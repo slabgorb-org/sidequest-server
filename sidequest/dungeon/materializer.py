@@ -622,6 +622,18 @@ class MaterializationRequest:
                 f"burst_magnitude must be >= 1 (a zero/negative burst is "
                 f"incoherent); got {burst_magnitude!r}"
             )
+        if site_id != DEFAULT_SITE_ID and lookahead_breadth > 0:
+            # Track B invariant (No Silent Fallbacks): only the frontier store
+            # (DEFAULT_SITE_ID) runs a lookahead worker. A per-site store is
+            # materialized WHOLE (lookahead_breadth == 0, no open frontier), so
+            # a non-default site_id with lookahead > 0 is incoherent — the
+            # commit stage's put_frontier writes to DEFAULT_SITE_ID and would
+            # silently cross-contaminate the frontier store. Reject it loudly.
+            raise ValueError(
+                f"site_id {site_id!r} (non-frontier) requires lookahead_breadth == 0 "
+                f"(a bounded site materializes whole, no frontier worker); "
+                f"got lookahead_breadth={lookahead_breadth!r}"
+            )
         frontier_ids = frozenset(fe.frontier_edge_id for fe in frontier)
         if frontier_edge.frontier_edge_id not in frontier_ids:
             raise ValueError(

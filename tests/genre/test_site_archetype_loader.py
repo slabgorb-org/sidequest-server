@@ -198,3 +198,18 @@ def test_loader_omits_field_when_file_absent(tmp_path: Path) -> None:
     # deliberately do NOT write site_archetypes.yaml
     pack = load_genre_pack(pack_dir)
     assert pack.site_archetypes == {}
+
+
+@_needs_content
+def test_loader_duplicate_archetype_id_fails_loud(tmp_path: Path) -> None:
+    """No Silent Fallbacks: two entries sharing an archetype_id must raise a
+    GenreLoadError, not silently last-win in a dict comprehension."""
+    from sidequest.genre.error import GenreLoadError
+    from sidequest.genre.loader import load_genre_pack
+
+    pack_dir = _clone_pack(_CAVERNS_PACK_DIR, tmp_path / "caverns_dup_sites")
+    dup = [_TAVERN_YAML[0], {**_TAVERN_YAML[0], "grid_width": 20}]
+    with (pack_dir / "site_archetypes.yaml").open("w", encoding="utf-8") as f:
+        yaml.dump(dup, f, sort_keys=False)
+    with pytest.raises(GenreLoadError):
+        load_genre_pack(pack_dir)

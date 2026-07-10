@@ -42,6 +42,7 @@ from sidequest.game.session import GameSnapshot, WorldStatePatch
 from sidequest.game.sites import SiteRegistry
 from sidequest.game.sites.enter_site import resolve_enter_site
 from sidequest.game.sites.exit_site import resolve_exit_site
+from sidequest.genre.error import GenreLoadError
 from sidequest.genre.models.world import NavigationMode, Route
 from sidequest.protocol.dispatch import NarratorDirective, SubsystemDispatch, VisibilityTag
 from sidequest.telemetry.spans import (
@@ -538,6 +539,15 @@ async def run_movement_dispatch(
                     if pack is not None and pack.source_dir is not None
                     else None
                 )
+                # CWE-22: snapshot.world_slug is unsanitized session input
+                # (CreateGameRequest.world_slug), and pathlib does NOT strip
+                # ".." — confirm the resolved world dir stays inside the pack's
+                # worlds/ root before ANY filesystem read. A traversal attempt
+                # drops world_dir to None → fail-loud "cannot be opened" below.
+                if world_dir is not None and pack is not None and pack.source_dir is not None:
+                    worlds_root = (pack.source_dir / "worlds").resolve()
+                    if not world_dir.resolve().is_relative_to(worlds_root):
+                        world_dir = None
                 if archetype is None or world_dir is None:
                     return _unresolved(
                         snapshot=snapshot,
@@ -550,14 +560,20 @@ async def run_movement_dispatch(
                         surface=f"{site.name} cannot be opened.",
                     )
                 try:
+                    # Loads inside the try so a content gap (missing cookbook /
+                    # themes for a bounded-site world) surfaces as a RECOVERABLE
+                    # movement failure — run_movement_dispatch's contract is to
+                    # return recoverable failures, never to re-raise.
+                    site_bundle = load_cookbook(world_dir)
+                    site_palette = palette if palette is not None else load_theme_palette(world_dir)
                     await ensure_bounded_site_materialized(
                         site=site,
                         archetype=archetype,
                         dungeon_repository=dungeon_store,
                         snapshot=snapshot,
                         pack=pack,
-                        bundle=load_cookbook(world_dir),
-                        palette=palette if palette is not None else load_theme_palette(world_dir),
+                        bundle=site_bundle,
+                        palette=site_palette,
                     )
                 except SeamCrossingError as err:
                     with site_enter_unresolved_span(
@@ -576,6 +592,24 @@ async def run_movement_dispatch(
                         exit_descriptor=site_descriptor,
                         available=[],
                         surface=err.surface,
+                    )
+                except GenreLoadError:
+                    with site_enter_unresolved_span(
+                        pc_name=player_name,
+                        from_region=from_region,
+                        reason="site_content_missing",
+                        descriptor=site_descriptor,
+                    ):
+                        pass
+                    return _unresolved(
+                        snapshot=snapshot,
+                        player_name=player_name,
+                        reason="site_content_missing",
+                        from_region=from_region,
+                        direction=direction,
+                        exit_descriptor=site_descriptor,
+                        available=[],
+                        surface=f"{site.name} isn't ready yet.",
                     )
             try:
                 crossing = resolve_enter_site(

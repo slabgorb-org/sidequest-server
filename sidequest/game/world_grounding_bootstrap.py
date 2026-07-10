@@ -5,10 +5,12 @@ one-shot weather sample, keeping that policy OUT of the pure YAML loaders
 in :mod:`sidequest.game.world_grounding_loader` (story-context guardrail:
 "the seed-pick ... somewhere visible ... NOT inline in the loader").
 
-Scope (24-10): a single bootstrap-time WeatherState per session, plus the
-two authored YAML dicts loaded verbatim. Per-turn weather re-roll,
-calendar-driven seasonal advancement, and location-graph zone selection
-are explicitly OUT of scope — future stories.
+Scope (24-10 + 163-6 spec §2 A2): a bootstrap-time WeatherState per session,
+now geography-aware — the starting region's ``weather_zone`` selects the zone
+(``_select_zone_for_region``) — plus the two authored YAML dicts loaded
+verbatim, and per-region-change re-sampling (``regenerate_weather_for_region``).
+Mid-scene per-turn weather re-roll and calendar-driven seasonal advancement
+remain OUT of scope — future stories.
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ from __future__ import annotations
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sidequest.game.weather import ClimateRulesFile, WeatherGenerator, WeatherState
 from sidequest.game.world_grounding_loader import (
@@ -24,6 +26,10 @@ from sidequest.game.world_grounding_loader import (
     load_world_calendar,
     load_world_demographics,
 )
+from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
+
+if TYPE_CHECKING:
+    from sidequest.genre.models.world import CartographyConfig
 
 __all__ = [
     "WorldGroundingBootstrap",
@@ -46,10 +52,13 @@ _BOOTSTRAP_SELECTION: dict[str, tuple[str, str]] = {
 
 @dataclass(frozen=True)
 class WorldGroundingBootstrap:
-    """The three world-grounding values assembled at session bootstrap.
+    """The world-grounding values assembled at session bootstrap.
 
-    Any field may be ``None`` — that is the legitimate "pack/world authored
-    no grounding for this surface" state, NOT an error.
+    ``weather_state`` + the ``weather_generator``/``weather_season`` cache (the
+    latter two exist only to support post-bootstrap per-region re-sampling, not
+    as independent grounding surfaces), plus ``demographics`` and ``calendar``.
+    Any field may be ``None`` — that is the legitimate "pack/world authored no
+    grounding for this surface" state, NOT an error.
     """
 
     weather_state: WeatherState | None
@@ -111,8 +120,22 @@ def _select_zone_for_region(rules: ClimateRulesFile, cartography: Any, genre_slu
                 f"region {start!r} declares weather_zone {wz!r}, not in weather.yaml "
                 f"(zones: {sorted(rules.climate_zones)})"
             )
+        # OTEL (spec §2 A2): record WHICH strategy chose the bootstrap zone so
+        # the GM panel can verify the region override fired rather than silently
+        # falling back — the bootstrap sibling of the region-change
+        # ``weather.zone_changed`` span.
+        _watcher_publish(
+            "weather.bootstrap_zone_selected",
+            {"zone": wz, "strategy": "region", "region": start or ""},
+            component="location",
+        )
         return wz
     zone, _season = _select_zone_season(rules, genre_slug)
+    _watcher_publish(
+        "weather.bootstrap_zone_selected",
+        {"zone": zone, "strategy": "genre_default", "region": start or ""},
+        component="location",
+    )
     return zone
 
 
@@ -123,9 +146,22 @@ def regenerate_weather_for_region(sd: Any, region_id: str, zone: str) -> None:
     same region always yields the same weather — reproducible across restarts,
     auditable by the GM panel. No-ops when the world authored no weather (the
     generator is None) — never substitutes default weather silently.
+
+    ``sd`` is typed ``Any`` to avoid a ``sidequest.game`` → ``sidequest.server``
+    import cycle (it is a ``_SessionData``); it must expose ``weather_generator``,
+    ``weather_season``, ``game_slug``, and a writable ``weather_state``.
     """
     if sd.weather_generator is None:
         return
+    if sd.game_slug is None:
+        # No Silent Fallbacks: the seed needs a stable session id. regenerate is
+        # only called on the active-session region-change path where game_slug is
+        # always set — a None here is a broken invariant, not normal content, so
+        # refuse rather than silently seed from the literal "None:<region>".
+        raise ValueError(
+            "regenerate_weather_for_region requires sd.game_slug for a stable "
+            f"per-region seed, but it is None (region={region_id!r})"
+        )
     seed = zlib.crc32(f"{sd.game_slug}:{region_id}".encode())
     sd.weather_state = sd.weather_generator.generate(zone, sd.weather_season, seed)
 
@@ -135,7 +171,7 @@ def load_world_grounding(
     world_dir: Path | str,
     genre_slug: str,
     seed_source: str,
-    cartography: Any | None = None,
+    cartography: CartographyConfig | None = None,
 ) -> WorldGroundingBootstrap:
     """Assemble the session's world-grounding state at connect time.
 

@@ -1389,6 +1389,13 @@ def _maybe_regenerate_weather_on_region_change(
             reason = (
                 "zone_missing_season" if isinstance(exc, UnknownWeatherSeason) else "unknown_zone"
             )
+            logger.warning(
+                "weather.zone_change_skipped world=%s region=%s to_zone=%s reason=%s",
+                getattr(sd, "world_slug", ""),
+                snapshot.current_region or "",
+                new_zone,
+                reason,
+            )
             _watcher_publish(
                 "weather.zone_change_skipped",
                 {

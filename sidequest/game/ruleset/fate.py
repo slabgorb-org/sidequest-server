@@ -22,6 +22,11 @@ from sidequest.game.ruleset.fate_resolution import (
     resolve_action,
     resolve_action_from_faces,
 )
+from sidequest.game.tactical.zones import (
+    ZoneMoveAdjudication,
+    ZoneProjection,
+    project_zones,
+)
 from sidequest.telemetry.spans.fate import (
     fate_action_resolved_span,
     fate_aspect_invoked_span,
@@ -39,10 +44,13 @@ from sidequest.telemetry.spans.fate import (
     fate_point_delta_span,
     fate_stress_applied_span,
 )
+from sidequest.telemetry.spans.tactical import (
+    tactical_zone_move_span,
+    tactical_zone_projected_span,
+)
 
 if TYPE_CHECKING:
     from sidequest.game.encounter import StructuredEncounter
-    from sidequest.game.tactical.zones import ZoneMoveAdjudication, ZoneProjection
 
 _NO_D20_SURFACE = (
     "the 'fate' ruleset resolves via the Fate conflict engine (4dF + ladder), "
@@ -539,12 +547,15 @@ class FateRulesetModule(RulesetModule):
         """Project the tactical mask into Fate zones, populate ``encounter.zones``
         and each cell-seated actor's ``per_actor_state['zone']`` (from its cell),
         and emit ``tactical.zone.projected``. Returns name->zone. The Fate binding
-        consuming the C3 projection — the inert ADR-144 slots become live. An
-        actor with no seated cell is skipped: absence stays visible as absence
-        (No Silent Fallbacks), never a fabricated position."""
-        from sidequest.game.tactical.zones import project_zones
-        from sidequest.telemetry.spans.tactical import tactical_zone_projected_span
+        consuming the C3 projection — the inert ADR-144 slots become live.
 
+        Two distinct skip paths, both keeping absence visible as absence (No
+        Silent Fallbacks), never a fabricated position — the actor is excluded
+        from the returned map and grows no ``zone`` key:
+        1. no seated ``cell`` at all (``cell is None``); and
+        2. a seated cell that resolves to no zone (``zid is None`` — an off-floor
+           / wall coordinate, a stale-room or coordinate bug).
+        ``placed_count`` on the span counts only actors that cleared both."""
         proj = project_zones(mask)
         encounter.zones = sorted(proj.zones)
         placed: dict[str, str] = {}
@@ -580,11 +591,13 @@ class FateRulesetModule(RulesetModule):
         a Fate 'move' verb (Fate's action set is overcome/create_advantage/
         attack/concede); a costed move surfaces via the existing Overcome. An
         unknown zone id classifies as requires_overcome — never a free teleport."""
-        from sidequest.game.tactical.zones import ZoneMoveAdjudication
-        from sidequest.telemetry.spans.tactical import tactical_zone_move_span
-
-        adjacent = to_zone == from_zone or to_zone in projection.adjacency.get(
-            from_zone, frozenset()
+        # Validate membership BEFORE the same-zone shortcut: an unknown zone id
+        # (a broken caller, a stale zone id) must never mint a free verdict about
+        # a position the projection has never heard of — not even when
+        # from_zone == to_zone (review 165-5 round 1, [MEDIUM] H).
+        known = from_zone in projection.zones and to_zone in projection.zones
+        adjacent = known and (
+            to_zone == from_zone or to_zone in projection.adjacency.get(from_zone, frozenset())
         )
         verdict = ZoneMoveAdjudication(
             free=adjacent,

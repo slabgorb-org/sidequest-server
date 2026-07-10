@@ -7,9 +7,13 @@ multi-source flood — a cavern's own 1-wide chokepoints are the zone borders (a
 Fate zone is a 'room/area'; a neck is exactly the border between two areas).
 Non-chokepoint core cells (>2 orthogonal floor neighbours) form zone seeds via
 8-connected components; a multi-source BFS over the FULL floor graph then
-assigns EVERY floor cell (chokes included) to its nearest seed, ties breaking
-to the lowest zone id — total, no orphaned cells. Degenerates cleanly to one
-zone for an all-choke corridor or an open room.
+assigns every seed-reachable floor cell (chokes included) to its nearest seed,
+ties breaking to the lexicographically-smallest zone-id string (deterministic;
+note ``z10`` sorts before ``z2`` — room-scale grids stay under 10 zones).
+Any floor component left with no cored seed (an isolated all-choke pocket or
+corridor) then becomes its own zone, one per connected component — the
+projection is TOTAL: every floor cell gets a home, no orphaned cells, and an
+all-choke corridor or an open room degenerates cleanly to one zone.
 """
 
 from __future__ import annotations
@@ -79,18 +83,11 @@ def project_zones(mask: str) -> ZoneProjection:
                 seed_zone[nb] = name
                 stack.append(nb)
 
-    # Degenerate: an all-choke cavern (1-wide corridor / tiny room) has no cores.
-    # Treat the whole floor as one zone so no cell is orphaned.
-    if not seed_zone:
-        one = {c: "z0" for c in floor}
-        return ZoneProjection(
-            zones={"z0": frozenset(floor)}, cell_to_zone=one, adjacency={"z0": frozenset()}
-        )
-
-    # Assign EVERY floor cell to its nearest seed-zone via multi-source BFS over
-    # the full floor graph. All seeds start at layer 0; FIFO layering gives the
-    # nearest zone, and seeding the frontier in (zone-id, y, x) order makes ties
-    # break to the lowest zone id — deterministic and total.
+    # Assign every seed-reachable floor cell to its nearest seed-zone via
+    # multi-source BFS over the full floor graph. All seeds start at layer 0;
+    # FIFO layering gives the nearest zone, and seeding the frontier in
+    # (zone-id-string, y, x) order makes ties break to the lexicographically-
+    # smallest zone id — deterministic.
     zone_of: dict[Cell, str] = dict(seed_zone)
     frontier: deque[Cell] = deque(sorted(seed_zone, key=lambda c: (seed_zone[c], c[1], c[0])))
     while frontier:
@@ -99,6 +96,24 @@ def project_zones(mask: str) -> ZoneProjection:
             if nb not in zone_of:
                 zone_of[nb] = zone_of[cur]
                 frontier.append(nb)
+
+    # TOTALITY: a floor component with no cored seed (an all-choke corridor or
+    # an isolated all-choke pocket) is unreachable from every seed — flood each
+    # remaining component as its own zone, in scan order, so no cell is ever
+    # silently orphaned (review 165-5 round 1, [MEDIUM] G).
+    for start in floor:
+        if start in zone_of:
+            continue
+        name = f"z{zid}"
+        zid += 1
+        zone_of[start] = name
+        stack = [start]
+        while stack:
+            cur = stack.pop()
+            for nb in neighbors(rows, cur):
+                if nb not in zone_of:
+                    zone_of[nb] = name
+                    stack.append(nb)
 
     zones: dict[str, set[Cell]] = {}
     for c, z in zone_of.items():

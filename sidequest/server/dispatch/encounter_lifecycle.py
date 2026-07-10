@@ -1717,7 +1717,14 @@ def _seat_tactical_cells(
     projected into Fate zones right here — ``encounter.zones`` + each actor's
     ``per_actor_state['zone']`` populate and ``tactical.zone.projected`` fires.
     Capability-gated on ``isinstance(ruleset, FateRulesetModule)`` so WN/dial
-    packs are untouched."""
+    packs are untouched. Two states the codebase's construction rules make
+    impossible fail LOUD here rather than silently skip (No Silent Fallbacks):
+    a gridded seat with no pack ruleset (``GenrePack.rules`` is required — the
+    ``_raise_missing_ruleset`` doctrine) and a tactical block missing its
+    ``mask_bytes_b64`` (the materializer only merges a tactical block into a mask
+    dict that already carries the bytes, so its absence means a corrupt store).
+    The legitimate no-tactical-block state keeps its honest ``seated_count=0``
+    skip span above."""
     if dungeon_store is None or encounter is None:
         return
     room_id = snapshot.character_locations.get(player_name)
@@ -1741,10 +1748,21 @@ def _seat_tactical_cells(
         pass
 
     # Task 13 (ADR-096 v2, C3): the Fate binding consumes the same grid as zones.
-    ruleset_slug = pack.rules.ruleset if pack and pack.rules else None
+    # Both branches below are impossible states the codebase's construction rules
+    # forbid (see docstring) — they fail loud, they do NOT silently skip
+    # (No Silent Fallbacks, review 165-5 round 1, [MEDIUM] K).
+    ruleset_slug = (
+        pack.rules.ruleset
+        if pack and pack.rules
+        else _raise_missing_ruleset("fate_zone_projection")
+    )
     mask_b64 = mask_dict.get("mask_bytes_b64") if mask_dict else None
-    if ruleset_slug is None or not mask_b64:
-        return
+    if not mask_b64:
+        raise ValueError(
+            f"fate_zone_projection: room {room_id!r} carries a tactical block but no "
+            f"mask_bytes_b64 — the persisted mask is corrupt (every write path that "
+            f"merges a tactical block also carries the mask bytes). No Silent Fallbacks."
+        )
     from sidequest.game.ruleset.fate import FateRulesetModule
 
     ruleset = get_ruleset_module(ruleset_slug)

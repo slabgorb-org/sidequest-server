@@ -34,15 +34,12 @@ from sidequest.dungeon.region_graph.model import RegionGraph
 from sidequest.dungeon.region_projection import RegionExit, project_region, requested_bearing
 from sidequest.dungeon.seed_bootstrap import ENTRANCE_ID as _ENTRANCE_ID
 from sidequest.dungeon.seed_bootstrap import is_procedural_region_id
-from sidequest.dungeon.themes import load_theme_palette
-from sidequest.game.cookbook.loader import load_cookbook
 from sidequest.game.seams import SeamCrossingError
 from sidequest.game.seams.deep_descent import resolve_deep_descent
 from sidequest.game.session import GameSnapshot, WorldStatePatch
 from sidequest.game.sites import SiteRegistry
 from sidequest.game.sites.enter_site import resolve_enter_site
 from sidequest.game.sites.exit_site import resolve_exit_site
-from sidequest.genre.error import GenreLoadError
 from sidequest.genre.models.world import NavigationMode, Route
 from sidequest.protocol.dispatch import NarratorDirective, SubsystemDispatch, VisibilityTag
 from sidequest.telemetry.spans import (
@@ -527,28 +524,16 @@ async def run_movement_dispatch(
                 )
             # Bounded sites materialize their WHOLE graph before the bind (Task
             # 11): entrance + every room in one committed transaction, so
-            # resolve_enter_site binds the PC onto a live entrance node. The
-            # bundle/palette come from the site's world dir; a missing archetype
-            # or store fails loud (No Silent Fallbacks). The end-to-end proof
-            # (enter -> SITE_MAP + TACTICAL_GRID -> exit) lands in story 164-7
-            # (plan task 13); here we wire the materialize call.
+            # resolve_enter_site binds the PC onto a live entrance node.
+            # Cookbook-free (ADR-157): the interior is built from the archetype
+            # ALONE — no world-dir cookbook/themes read — so a missing archetype
+            # or store fails loud (No Silent Fallbacks) and any materialize
+            # failure is loud-but-recoverable, never a dispatch re-raise. The
+            # end-to-end proof (enter -> SITE_MAP + TACTICAL_GRID -> exit) lands
+            # in story 164-7; here we wire the materialize call.
             if site.extent == "bounded":
                 archetype = pack.site_archetypes.get(site.archetype) if pack is not None else None
-                world_dir = (
-                    pack.source_dir / "worlds" / snapshot.world_slug
-                    if pack is not None and pack.source_dir is not None
-                    else None
-                )
-                # CWE-22: snapshot.world_slug is unsanitized session input
-                # (CreateGameRequest.world_slug), and pathlib does NOT strip
-                # ".." — confirm the resolved world dir stays inside the pack's
-                # worlds/ root before ANY filesystem read. A traversal attempt
-                # drops world_dir to None → fail-loud "cannot be opened" below.
-                if world_dir is not None and pack is not None and pack.source_dir is not None:
-                    worlds_root = (pack.source_dir / "worlds").resolve()
-                    if not world_dir.resolve().is_relative_to(worlds_root):
-                        world_dir = None
-                if archetype is None or world_dir is None:
+                if archetype is None:
                     return _unresolved(
                         snapshot=snapshot,
                         player_name=player_name,
@@ -560,20 +545,14 @@ async def run_movement_dispatch(
                         surface=f"{site.name} cannot be opened.",
                     )
                 try:
-                    # Loads inside the try so a content gap (missing cookbook /
-                    # themes for a bounded-site world) surfaces as a RECOVERABLE
-                    # movement failure — run_movement_dispatch's contract is to
-                    # return recoverable failures, never to re-raise.
-                    site_bundle = load_cookbook(world_dir)
-                    site_palette = palette if palette is not None else load_theme_palette(world_dir)
+                    # Cookbook-free (ADR-157): a bounded site materializes from
+                    # its archetype ALONE — no load_cookbook / load_theme_palette,
+                    # no world-dir filesystem read. This removes the megadungeon
+                    # FileNotFoundError source entirely for bounded sites.
                     await ensure_bounded_site_materialized(
                         site=site,
                         archetype=archetype,
                         dungeon_repository=dungeon_store,
-                        snapshot=snapshot,
-                        pack=pack,
-                        bundle=site_bundle,
-                        palette=site_palette,
                     )
                 except SeamCrossingError as err:
                     with site_enter_unresolved_span(
@@ -593,18 +572,30 @@ async def run_movement_dispatch(
                         available=[],
                         surface=err.surface,
                     )
-                except GenreLoadError:
+                except Exception as err:
+                    # LOUD-but-recoverable (ADR-157): run_movement_dispatch must
+                    # NEVER re-raise — a site-materialization failure (a content
+                    # gap, a malformed archetype, a PersistError) is surfaced as a
+                    # recoverable movement.unresolved + an ERROR log + a
+                    # site.enter_unresolved span (the lie-detector sees it), not a
+                    # crash that takes down the whole turn.
+                    logger.error(
+                        "bounded site %s materialization failed: %s",
+                        site.site_id,
+                        err,
+                        exc_info=True,
+                    )
                     with site_enter_unresolved_span(
                         pc_name=player_name,
                         from_region=from_region,
-                        reason="site_content_missing",
+                        reason="site_materialize_failed",
                         descriptor=site_descriptor,
                     ):
                         pass
                     return _unresolved(
                         snapshot=snapshot,
                         player_name=player_name,
-                        reason="site_content_missing",
+                        reason="site_materialize_failed",
                         from_region=from_region,
                         direction=direction,
                         exit_descriptor=site_descriptor,

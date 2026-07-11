@@ -389,6 +389,40 @@ class PartyPeer(BaseModel):
 _hp_pool_from_hp = hp_pool_from_hp
 
 
+def emit_npc_spawn_disposition(npc: Npc, *, is_creature: bool) -> None:
+    """Fire the story 72-5 spawn-disposition lie-detector span for a freshly
+    materialized ``Npc``.
+
+    Extracted from ``GameSnapshot._npc_from_patch`` (Green Room Task 2 rework)
+    so the emission can be decoupled from construction: the MM injection seam
+    builds candidate Npcs for EVERY proposed patch before
+    ``green_room.admit()`` decides which ones genuinely spawn, then calls this
+    once per ADMITTED identity — zero spans for merged/dropped/re-proposed
+    candidates, exact parity with the pre-gate behavior where
+    ``apply_world_patch`` only built an Npc when no same-name entry existed.
+    ``_npc_from_patch`` still calls this by default for every other caller.
+    """
+    from sidequest.telemetry.spans import npc_spawn_disposition_span
+
+    with npc_spawn_disposition_span(
+        npc_name=npc.core.name,
+        disposition=int(npc.disposition),
+        manual_origin=npc.manual_origin,
+        provenance="default_creature_hostile" if is_creature else "default_neutral",
+        is_creature=is_creature,
+        pool_origin=None,
+    ):
+        pass
+
+
+def npc_patch_is_creature(patch: NpcPatch) -> bool:
+    """THE creature signal for a materializing patch (ADR-059): presence of
+    any creature-shape field. Shared by ``GameSnapshot._npc_from_patch`` and
+    the MM injection seam's deferred spawn-span emission so the two can never
+    disagree about what spawned hostile."""
+    return patch.creature_id is not None or patch.threat_level is not None or patch.hp is not None
+
+
 class NpcPatch(BaseModel):
     """Patch for NPC upsert — used in npcs_present.
 
@@ -1967,13 +2001,21 @@ class GameSnapshot(BaseModel):
         if npc.origin is None and patch.origin is not None:
             npc.origin = patch.origin
 
-    def _npc_from_patch(self, patch: NpcPatch) -> Npc:
+    def _npc_from_patch(self, patch: NpcPatch, *, emit_spawn_span: bool = True) -> Npc:
         # Creature signal: presence of any creature-shape field flags this
         # as a Monster Manual patch (ADR-059). Translate B/X hp → EdgePool
         # per ADR-078 and default hostile disposition matching encountergen.
-        is_creature = (
-            patch.creature_id is not None or patch.threat_level is not None or patch.hp is not None
-        )
+        #
+        # ``emit_spawn_span=False`` (Green Room Task 2 rework): a caller that
+        # builds candidate Npcs BEFORE green_room.admit() decides which of them
+        # genuinely spawn (monster_manual_inject.inject) opts out of the
+        # spawn-disposition span here and emits it itself — via
+        # :func:`emit_npc_spawn_disposition` — once per ADMITTED identity only.
+        # Emitting per construction would fire the lie-detector every turn for
+        # already-materialized identities (candidates that merge or drop),
+        # which pre-gate apply_world_patch never did (it only built an Npc when
+        # ``existing is None``). Every other caller keeps the default.
+        is_creature = npc_patch_is_creature(patch)
         if patch.hp is not None:
             hp_pool = _hp_pool_from_hp(patch.hp)
         else:
@@ -2016,17 +2058,8 @@ class GameSnapshot(BaseModel):
         # spawned hostile (-20) — the disposition no longer "materializes
         # from nowhere". NpcPatch carries no disposition field, so this seam
         # is always a default (never narrator-explicit).
-        from sidequest.telemetry.spans import npc_spawn_disposition_span
-
-        with npc_spawn_disposition_span(
-            npc_name=npc.core.name,
-            disposition=int(npc.disposition),
-            manual_origin=npc.manual_origin,
-            provenance="default_creature_hostile" if is_creature else "default_neutral",
-            is_creature=is_creature,
-            pool_origin=None,
-        ):
-            pass
+        if emit_spawn_span:
+            emit_npc_spawn_disposition(npc, is_creature=is_creature)
         return npc
 
     def lowest_friendly_hp_ratio(self) -> float:

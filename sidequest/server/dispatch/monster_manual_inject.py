@@ -45,7 +45,7 @@ from sidequest.game import zone_eligibility
 from sidequest.game.green_room import MaterializationCandidate, admit
 from sidequest.game.monster_manual import EntryState, MonsterManual
 from sidequest.game.origin import Origin, OriginKind, identity_key, normalize_name
-from sidequest.game.session import NpcPatch
+from sidequest.game.session import NpcPatch, emit_npc_spawn_disposition, npc_patch_is_creature
 from sidequest.genre.names.generator import sanitize_display_name
 from sidequest.telemetry.spans import Span
 from sidequest.telemetry.spans.monster_manual import (
@@ -405,12 +405,15 @@ def _authored_npc_ids(pack: Any, world_slug: str) -> dict[str, str]:
     ``ManualNpc.authored`` (monster_manual.py:168) marks a row backfilled from
     the world's ``npcs.yaml`` cast, but the Manual entry itself carries no id
     — only ``world_materialization.preload_authored_npcs`` stamps
-    ``authored_id`` today. This mirrors that lookup (exact casefolded name,
-    the same dedup key ``pregen._seed_authored_npcs`` uses) so an
-    authored-backfill row can still resolve a real id at the injection seam.
-    Returns ``{}`` when the pack/world/roster is unavailable — an authored
-    row with no id match still gets ``AUTHORED`` kind (``npc.authored`` is
-    the ground truth), just falls back to the name-keyed identity leg.
+    ``authored_id`` today. This lookup keys on :func:`normalize_name` (the
+    single identity-seam normalization), which is *stricter* than the plain
+    ``.lower()`` exact-match ``pregen._seed_authored_npcs`` /
+    ``find_npc_by_exact_name`` dedup on — equivalent here in practice because
+    the backfill copies ``AuthoredNpc.name`` into ``ManualNpc.name`` verbatim,
+    so both sides of the lookup see the same byte string. Returns ``{}`` when
+    the pack/world/roster is unavailable — an authored row with no id match
+    still gets ``AUTHORED`` kind (``npc.authored`` is the ground truth), just
+    falls back to the name-keyed identity leg.
     """
     worlds = getattr(pack, "worlds", None) if pack is not None else None
     world_obj = worlds.get(world_slug) if worlds is not None and world_slug else None
@@ -1000,7 +1003,23 @@ def inject(
     # for room-binding (see :func:`_candidate`'s docstring for why the
     # encounter/region-population builders' ids are NOT trustworthy
     # per-individual identifiers and must key on name instead).
+    #
+    # ``emit_spawn_span=False`` + ``spawn_is_creature`` (task-2 rework): the
+    # npc.spawn_disposition lie-detector must fire once per GENUINELY spawned
+    # identity — pre-gate, apply_world_patch only built an Npc when no
+    # same-name entry existed, so a re-injected creature never re-fired it.
+    # Candidates are built for every proposed patch (admit() needs real Npcs),
+    # so construction defers the span and we emit it below, only for
+    # ``result.admitted``. ``spawn_is_creature`` carries each candidate's
+    # patch-derived creature signal to that deferred emission.
     candidates: list[MaterializationCandidate] = []
+    spawn_is_creature: dict[int, bool] = {}
+
+    def _build(patch: NpcPatch) -> Npc:
+        npc = snapshot._npc_from_patch(patch, emit_spawn_span=False)
+        spawn_is_creature[id(npc)] = npc_patch_is_creature(patch)
+        return npc
+
     for patch in human_patches:
         human_origin = patch.origin
         if human_origin is None:
@@ -1011,7 +1030,7 @@ def inject(
             )
         candidates.append(
             _candidate(
-                snapshot._npc_from_patch(patch),
+                _build(patch),
                 kind=human_origin.kind,
                 source="mm.available_humans",
                 authored_id=human_origin.authored_id,
@@ -1020,7 +1039,7 @@ def inject(
     for patch in creature_patches:
         candidates.append(
             _candidate(
-                snapshot._npc_from_patch(patch),
+                _build(patch),
                 kind=OriginKind.MANUAL_POOL,
                 source="mm.encounters",
             )
@@ -1028,7 +1047,7 @@ def inject(
     for patch in room_binding_patches:
         candidates.append(
             _candidate(
-                snapshot._npc_from_patch(patch),
+                _build(patch),
                 kind=OriginKind.ROOM_BOUND,
                 source="mm.room_binding",
                 creature_id=patch.creature_id,
@@ -1047,7 +1066,7 @@ def inject(
     for patch in region_population_patches:
         candidates.append(
             _candidate(
-                snapshot._npc_from_patch(patch),
+                _build(patch),
                 kind=OriginKind.REGION_POPULATION,
                 source="mm.region_population",
                 creature_id=patch.creature_id if patch.creature_id in room_bound_ids else None,
@@ -1058,6 +1077,11 @@ def inject(
         return 0
 
     result = admit(snapshot, candidates)
+    # Story 72-5 parity (task-2 rework): the spawn-disposition span fires once
+    # per identity admit() actually seated — never for a candidate that merged
+    # onto an existing entry or folded into a batch-mate (those didn't spawn).
+    for npc in result.admitted:
+        emit_npc_spawn_disposition(npc, is_creature=spawn_is_creature[id(npc)])
     return len(result.admitted) + len(result.merged)
 
 

@@ -85,10 +85,11 @@ from sidequest.game.monster_manual import EntryState, ManualEncounter, ManualNpc
 from sidequest.game.origin import Origin, OriginKind
 from sidequest.game.session import GameSnapshot, NpcPatch
 from sidequest.game.turn import TurnManager
+from sidequest.genre.models.authored_npc import AuthoredNpc
 from sidequest.server.dispatch import monster_manual_inject
 
 
-def _human(name: str) -> ManualNpc:
+def _human(name: str, *, authored: bool = False) -> ManualNpc:
     return ManualNpc(
         data={
             "name": name,
@@ -100,6 +101,7 @@ def _human(name: str) -> ManualNpc:
         role="wanderer",
         culture="Sunden",
         state=EntryState.AVAILABLE,
+        authored=authored,
     )
 
 
@@ -241,3 +243,131 @@ def test_reinject_preserves_wounded_hp(mm_session_fixture: _MMSessionFixture) ->
     )
     assert creature.core.hp.current == hp_after_wound
     assert len([n for n in snap.npcs if n.core.name == creature.core.name]) == 1
+
+
+def test_authored_backfill_human_lands_authored_pregen_lands_manual_pool(otel_capture) -> None:
+    """Task-2 rework (reviewer Finding 1): the AUTHORED + authored_id branch.
+
+    A Manual human backfilled from the world's authored ``npcs.yaml`` cast
+    (``ManualNpc.authored=True``, name matching an ``AuthoredNpc`` on the
+    pack's world so ``_authored_npc_ids`` resolves a real id) must land with
+    ``origin.kind == AUTHORED`` carrying that ``authored_id``, and its
+    ``green_room.materialized`` span must show tier 1 (the ladder's top rung)
+    with source ``mm.available_humans``. A pregen walk-on
+    (``authored=False``) in the SAME inject() still lands MANUAL_POOL /
+    tier 4."""
+    snap = GameSnapshot(
+        genre_slug="caverns_and_claudes",
+        world_slug="beneath_sunden",
+        turn_manager=TurnManager(interaction=3),
+    )
+    snap.character_locations["Kirk"] = "Salt Camp"
+
+    manual = MonsterManual(
+        genre="caverns_and_claudes",
+        world="beneath_sunden",
+        npcs=[
+            _human("Brecca Half-Hand", authored=True),
+            _human("Pregen Wanderer"),
+        ],
+    )
+    pack = SimpleNamespace(
+        worlds={
+            "beneath_sunden": SimpleNamespace(
+                authored_npcs=[
+                    AuthoredNpc(id="brecca_half_hand", name="Brecca Half-Hand", role="camp keeper")
+                ]
+            )
+        },
+        rules=SimpleNamespace(combat_encounters=True),
+    )
+    sd: Any = SimpleNamespace(
+        monster_manual=manual,
+        genre_pack=pack,
+        genre_slug="caverns_and_claudes",
+        world_slug="beneath_sunden",
+    )
+
+    count = monster_manual_inject.inject(sd, snap, current_location="Salt Camp", in_combat=False)
+    assert count == 2
+
+    brecca = next(n for n in snap.npcs if n.core.name == "Brecca Half-Hand")
+    assert brecca.origin is not None
+    assert brecca.origin.kind == OriginKind.AUTHORED
+    assert brecca.origin.authored_id == "brecca_half_hand"
+
+    pregen = next(n for n in snap.npcs if n.core.name == "Pregen Wanderer")
+    assert pregen.origin is not None
+    assert pregen.origin.kind == OriginKind.MANUAL_POOL
+    assert pregen.origin.authored_id is None
+
+    materialized: dict[str, dict[str, Any]] = {}
+    for s in otel_capture.get_finished_spans():
+        if s.name != "green_room.materialized":
+            continue
+        attrs = dict(s.attributes or {})
+        materialized[str(attrs.get("identity_key", ""))] = attrs
+    authored_span = materialized.get("authored:brecca_half_hand")
+    assert authored_span is not None, (
+        f"no materialized span keyed authored:brecca_half_hand — got {sorted(materialized)}"
+    )
+    assert authored_span["canonical_tier"] == 1
+    assert authored_span["canonical_source"] == "mm.available_humans"
+
+    pregen_span = materialized.get("name:pregen wanderer")
+    assert pregen_span is not None, (
+        f"no materialized span keyed name:pregen wanderer — got {sorted(materialized)}"
+    )
+    assert pregen_span["canonical_tier"] == 4
+    assert pregen_span["canonical_source"] == "mm.available_humans"
+
+
+def test_spawn_disposition_fires_once_per_admitted_identity_only(
+    mm_session_fixture: _MMSessionFixture, otel_capture
+) -> None:
+    """Task-2 rework (reviewer Finding 2): the story 72-5 spawn-disposition
+    lie-detector fires once per identity ``admit()`` genuinely seated —
+    NEVER for a candidate that merged onto an already-materialized entry.
+
+    Pre-gate, ``apply_world_patch`` only built an Npc when no same-name entry
+    existed, so re-injection never re-fired the span; routing every candidate
+    through ``_npc_from_patch`` naively would fire it every turn for the
+    whole bench. ``inject()`` therefore builds candidates with
+    ``emit_spawn_span=False`` and emits once per ``result.admitted`` after
+    the gate decides."""
+    from sidequest.telemetry.spans import SPAN_NPC_SPAWN_DISPOSITION
+
+    snap = mm_session_fixture.snapshot
+
+    def spawn_spans() -> list[Any]:
+        return [
+            s for s in otel_capture.get_finished_spans() if s.name == SPAN_NPC_SPAWN_DISPOSITION
+        ]
+
+    count = monster_manual_inject.inject(
+        mm_session_fixture.sd,
+        snap,
+        current_location="Salt Camp",
+        in_combat=False,
+        room_id="toods_dome",
+    )
+    first_pass = spawn_spans()
+    assert len(first_pass) == count == 4, (
+        f"first inject must fire spawn_disposition once per admitted NPC "
+        f"(admitted={count}); got {len(first_pass)} spans"
+    )
+
+    # Second turn: same manual, same room — every candidate merges onto its
+    # existing seat; ZERO additional spawn spans (exact pre-Task-2 parity).
+    monster_manual_inject.inject(
+        mm_session_fixture.sd,
+        snap,
+        current_location="Salt Camp",
+        in_combat=False,
+        room_id="toods_dome",
+    )
+    second_pass = spawn_spans()
+    assert len(second_pass) == len(first_pass), (
+        f"re-injection fired {len(second_pass) - len(first_pass)} extra "
+        f"npc.spawn_disposition spans for already-materialized identities"
+    )

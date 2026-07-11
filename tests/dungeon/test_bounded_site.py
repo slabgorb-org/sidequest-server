@@ -58,10 +58,10 @@ def _tavern_descriptor() -> SiteDescriptor:
     )
 
 
-def _tavern_archetype() -> Any:
+def _tavern_archetype(**over: Any) -> Any:
     from sidequest.genre.models.site_archetype import SiteArchetype
 
-    return SiteArchetype(
+    base = dict(
         archetype_id="tavern",
         interior_algorithm="roomcorridor",
         room_count_min=3,
@@ -72,6 +72,8 @@ def _tavern_archetype() -> Any:
         room_vocabulary=["common room", "cellar", "kitchen", "private booth"],
         feature_palette=["hearth", "long bar", "ale barrels"],
     )
+    base.update(over)
+    return SiteArchetype(**base)
 
 
 async def _materialize_site(repo: Any, *, base_seed: int = 12345) -> None:
@@ -287,7 +289,12 @@ async def test_materialize_bounded_commits_whole_graph_with_masks(
     seed = _derive_site_seed(base_seed=4242, site_id=_SITE_ID)
     repo.set_campaign_seed(seed, site_id=_SITE_ID)
 
-    archetype = _tavern_archetype()
+    # Divergent room budget (8-10) — deliberately disjoint from the generator's
+    # default new_regions_per_expansion (3,6): if the archetype budget were NOT
+    # wired into the design stage (ADR-157), the committed node count would land
+    # in [4,7] and the assertion below would fail. So this proves the wire, not
+    # just a coincidence with the default.
+    archetype = _tavern_archetype(room_count_min=8, room_count_max=10)
     palette = build_bounded_palette(archetype)
     entrance = site_entrance_id(_SITE_ID)
     entrance_theme = select_entrance_theme_id(palette)

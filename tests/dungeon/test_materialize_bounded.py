@@ -86,3 +86,24 @@ def test_bounded_room_identities_empty_vocabulary_is_no_op() -> None:
     arch = _tavern_archetype(room_vocabulary=[], feature_palette=[])
     out = _bounded_room_identities(arch, campaign_seed=1, site_id="s", region_ids=["s:r1"])
     assert out == {}
+
+
+def test_site_archetype_rejects_reversed_room_budget() -> None:
+    """ADR-157: the bounded materializer feeds (room_count_min, room_count_max)
+    into JaquaysConfig.new_regions_per_expansion, which requires hi >= lo. A
+    reversed budget is an authoring bug and must fail loud at model-build time,
+    not as an undiagnosable materialization failure."""
+    import pytest
+    from pydantic import ValidationError
+
+    from sidequest.genre.models.site_archetype import SiteArchetype
+
+    with pytest.raises(ValidationError, match="room_count_max"):
+        SiteArchetype(
+            archetype_id="broken",
+            interior_algorithm="roomcorridor",
+            room_count_min=6,
+            room_count_max=3,
+            grid_width=15,
+            grid_height=20,
+        )

@@ -585,11 +585,17 @@ async def run_movement_dispatch(
                         err,
                         exc_info=True,
                     )
+                    # OTEL lie-detector (CLAUDE.md): carry the exception identity
+                    # onto the span so the GM panel can tell a content gap from an
+                    # engine bug — the reason alone ("site_materialize_failed") is
+                    # the same for both.
                     with site_enter_unresolved_span(
                         pc_name=player_name,
                         from_region=from_region,
                         reason="site_materialize_failed",
                         descriptor=site_descriptor,
+                        error=str(err),
+                        error_type=type(err).__name__,
                     ):
                         pass
                     return _unresolved(

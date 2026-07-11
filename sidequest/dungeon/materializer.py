@@ -713,6 +713,7 @@ def _stage_design(
     graph: RegionGraph | None,
     palette: ThemePalette | None,
     span: _otel_trace.Span,
+    region_count: tuple[int, int] | None = None,
 ) -> tuple[Expansion, GenerationReport]:
     """Plan 7 Task 2: design stage — depth-filtered theme_pool + expansion generation.
 
@@ -720,6 +721,12 @@ def _stage_design(
     (depth_score = ``request.frontier_edge.spawn_depth_score`` per the Seed=Expansion-0
     contract), calls ``generate_expansion``, and sets ``report.as_dict()`` as the
     exact span attribute set (byte-pinned GM-panel contract).
+
+    ``region_count`` (ADR-157): a bounded site passes its archetype's
+    ``(room_count_min, room_count_max)`` so the generated room count honors the
+    archetype's declared budget instead of the frontier default
+    ``new_regions_per_expansion``. ``None`` (the frontier path) leaves the
+    ``JaquaysConfig`` default untouched — byte-identical to the pre-ADR-157 call.
 
     Invariants (No Silent Fallbacks):
     - ``graph`` and ``palette`` must be real objects — ``None`` is rejected loudly.
@@ -749,6 +756,14 @@ def _stage_design(
         )
     theme_pool: list[str] = [t.id for t in eligible_themes]
 
+    config = (
+        JaquaysConfig(connection_burst=request.burst_magnitude)
+        if region_count is None
+        else JaquaysConfig(
+            connection_burst=request.burst_magnitude,
+            new_regions_per_expansion=region_count,
+        )
+    )
     try:
         expansion, report = generate_expansion(
             graph=graph,
@@ -756,7 +771,7 @@ def _stage_design(
             expansion_id=request.expansion_id,
             attach_region_ids=list(request.attach_region_ids),
             theme_pool=theme_pool,
-            config=JaquaysConfig(connection_burst=request.burst_magnitude),
+            config=config,
         )
     except ExpansionGenerationError as exc:
         # Lie-detector: mark the span with the failure before re-raising so the
@@ -2416,20 +2431,21 @@ async def materialize_bounded(
     ``async def`` mirrors ``materialize`` (call-site symmetry); it awaits nothing
     internally.
     """
-    if graph is None:
-        raise ValueError(
-            "materialize_bounded requires a real RegionGraph — graph=None is not "
-            "valid (No Silent Fallbacks)"
-        )
-
     with dungeon_materialize_span(
         expansion_id=request.expansion_id,
         heading=request.heading,
         burst_magnitude=request.burst_magnitude,
     ):
         with dungeon_materialize_design_span(expansion_id=request.expansion_id) as design_span:
+            # ADR-157: honor the archetype's declared room budget instead of the
+            # frontier default new_regions_per_expansion. _stage_design guards a
+            # None graph loudly, so no separate guard is needed here.
             expansion, _report = _stage_design(
-                request, graph=graph, palette=palette, span=design_span
+                request,
+                graph=graph,
+                palette=palette,
+                span=design_span,
+                region_count=(archetype.room_count_min, archetype.room_count_max),
             )
 
         with dungeon_materialize_fill_span(expansion_id=request.expansion_id) as fill_span:

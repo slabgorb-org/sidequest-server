@@ -220,12 +220,19 @@ def run_wn_round(
 ) -> WnRoundResult:
     """Resolve one sealed WN round in descending persisted-initiative order.
 
-    Per slot: a 0-HP actor does not act (§6, mechanically enforced); a
+    Per slot: a 0-HP actor does not act (§6, mechanically enforced — the
+    skip emits ``wn_slot_skipped_downed`` with the blocked ``beat_id`` and,
+    for a player-side commit, a LIVENESS GATE narrator hint, story 166-1); a
     seated opponent attacks the first live player-side actor unless the
     encounter has already resolved (ADR-139 win-condition liveness); a
     player commit whose pinned target is down emits ``{slug}.dead_premise``
     + a narrator hint and does NOT resolve mechanically (no corpse damage,
-    no auto-retarget). Emits ``{slug}.round.committed`` →
+    no auto-retarget); a player commit whose slot arrives after the
+    encounter has already resolved emits ``wn_slot_skipped_encounter_resolved``
+    with the blocked ``beat_id`` + a LIVENESS GATE narrator hint and does
+    NOT resolve mechanically (reachable only for an untargeted commit —
+    a targeted one lands on dead-premise first; story 166-1 rework).
+    Emits ``{slug}.round.committed`` →
     ``{slug}.round.initiative`` → ``{slug}.round.resolved`` with the honest
     binding slug (awn, not cwn) — the GM-panel polygraph for the round.
     """
@@ -296,12 +303,22 @@ def run_wn_round(
                 component="encounter",
             )
             if skipped_commit is not None and enc_actor.side == "player":
+                # Review rework r1 (finding R2): the tail must match the LIVE
+                # encounter state — in an MP partial-down (ADR-139: one downed
+                # PC ≠ party defeat) the fight continues for the survivors, and
+                # an unconditional "the fight's close" would coach the narrator
+                # to end a fight the engine keeps open.
+                _aftermath = (
+                    "narrate their fall and the fight's close instead."
+                    if encounter.resolved
+                    else "narrate their fall; the fight continues around them."
+                )
                 encounter.narrator_hints.append(
                     f"LIVENESS GATE (ADR-139): {token}'s committed "
                     f"{skipped_commit.beat_id} did NOT resolve — {token} was "
                     f"already down (0 HP) when their initiative slot arrived. "
                     f"Do not narrate {token} performing that action or its "
-                    f"outcome; narrate their fall and the fight's close instead."
+                    f"outcome; {_aftermath}"
                 )
             continue
         if enc_actor.withdrawn:

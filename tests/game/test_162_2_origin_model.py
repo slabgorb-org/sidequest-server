@@ -262,6 +262,15 @@ class TestIdentityKey:
         assert identity_key(None, "Rux") == identity_key(invented, "Rux")
 
 
+def test_identity_key_generic_kind_keys_by_name() -> None:
+    """A generics row is a stat DONOR, not an identity (Amendment B): two
+    named persons backed by the same row must not collide on the row id."""
+    from sidequest.game.origin import Origin, OriginKind, identity_key
+    g = Origin(kind=OriginKind.GENERIC, creature_id="wasteland_scavenger")
+    assert identity_key(g, "the Scrapborn") == "name:the scrapborn"
+    assert identity_key(g, "the courier") == "name:the courier"
+
+
 # ---------------------------------------------------------------------------
 # AC1 — Npc.origin / NpcPatch.origin storage + round-trip
 # ---------------------------------------------------------------------------

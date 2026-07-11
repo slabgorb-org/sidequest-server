@@ -218,16 +218,26 @@ class TestGenericOriginKind:
         assert revived.origin.kind == OriginKind.GENERIC
         assert revived.origin.creature_id == "hold_dead"
 
-    def test_identity_key_for_generic_origin_is_creature_keyed(self) -> None:
-        """The dedup/purge/seating key for a generic-seated Other rides the
-        generic row id, not the narrated display name — two prose names over
-        the same generic row are ONE identity (the 162-2 fork-killer applied
-        to the new origin family)."""
+    def test_identity_key_for_generic_origin_is_name_keyed(self) -> None:
+        """SUPERSEDED by ADR-156 Amendment B (Green Room, accepted 2026-07-11):
+        this test originally pinned the generic row id as the identity key —
+        "two prose names over the same generic row are ONE identity". That
+        was wrong: a ``generics:`` bestiary row is a stat DONOR shared by many
+        seatings, not an identity. "Gruk the Smasher" and "The Pale Digger"
+        drawn from the same ``hold_dead`` stat block are two DIFFERENT people
+        who happen to share a chassis — collapsing them into one identity was
+        the two-names-one-enemy fork in reverse (many people, one phantom).
+        GENERIC now keys on the normalized display name, like an id-less
+        origin (see sidequest.game.origin.identity_key and
+        test_162_2_origin_model.py::test_identity_key_generic_kind_keys_by_name)."""
         from sidequest.game.origin import Origin, OriginKind, identity_key
 
         origin = Origin(kind=OriginKind.GENERIC, creature_id="hold_dead")
-        assert identity_key(origin, "Gruk the Smasher") == "creature:hold_dead"
-        assert identity_key(origin, "The Pale Digger") == "creature:hold_dead"
+        assert identity_key(origin, "Gruk the Smasher") == "name:gruk the smasher"
+        assert identity_key(origin, "The Pale Digger") == "name:the pale digger"
+        assert identity_key(origin, "Gruk the Smasher") != identity_key(
+            origin, "The Pale Digger"
+        )
 
     def test_legacy_ephemeral_stub_still_derives_ephemeral_stub(self) -> None:
         """Green guard (must hold through GREEN): 162-3 removes stub MINTING on

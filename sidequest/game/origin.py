@@ -97,12 +97,24 @@ def identity_key(origin: Origin | None, display_name: str) -> str:
     name. ``origin=None`` (a legacy, unstamped entity) keys on the normalized
     name — the same key an id-less stamped origin produces, so legacy and new
     entities dedup against each other.
+
+    GENERIC is a deliberate exception to the creature_id leg (ADR-156 §5,
+    Amendment B): a ``generics:`` bestiary row is a stat DONOR, not an
+    identity — two differently-named persons drawn from the same generic
+    stat block ("the Scrapborn", "the courier") must NOT collide on the
+    row's ``creature_id`` and merge into one NPC. A GENERIC origin therefore
+    keys on the normalized display name, same as an id-less origin — UNLESS
+    it also carries an ``authored_id`` (a generics row is itself authored
+    content; when the row is referenced by its own authored id, that id
+    still dominates).
     """
-    if origin is not None:
+    if origin is not None and origin.kind is not OriginKind.GENERIC:
         if origin.authored_id:
             return f"authored:{origin.authored_id}"
         if origin.creature_id:
             return f"creature:{origin.creature_id}"
+    elif origin is not None and origin.authored_id:
+        return f"authored:{origin.authored_id}"
     return f"name:{normalize_name(display_name)}"
 
 

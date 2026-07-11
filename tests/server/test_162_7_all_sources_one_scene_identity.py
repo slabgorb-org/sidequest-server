@@ -184,16 +184,25 @@ class TestIdentityKeyConvergesAcrossOriginKinds:
         """A creature can be proposed by many feeders under many display names.
         As long as each stamps the ``creature_id``, they collapse to ONE
         identity key regardless of source tier or prose name — the structural
-        cure for §4 conflict #1 (N-source convergence)."""
+        cure for §4 conflict #1 (N-source convergence).
+
+        GENERIC is DELIBERATELY excluded from this kinds list (ADR-156
+        Amendment B, Green Room task 1, 2026-07-11): a ``generics:`` bestiary
+        row is a stat DONOR shared by many seatings, not an identity — "Gruk
+        the Smasher" and "Grave-Thief" both drawn from ``creature_id="thief"``
+        are two DIFFERENT people who happen to share a chassis, and must NOT
+        converge into one identity. ``identity_key`` keys GENERIC by name for
+        exactly this reason (see sidequest.game.origin.identity_key and
+        tests/game/test_162_3_bestiary_generics_schema.py::
+        TestGenericOriginKind::test_identity_key_for_generic_origin_is_name_keyed)."""
         kinds = [
             OriginKind.MANUAL_POOL,
             OriginKind.REGION_POPULATION,
             OriginKind.ROOM_BOUND,
             OriginKind.NARRATOR_INVENTED,
-            OriginKind.GENERIC,
             OriginKind.EPHEMERAL_STUB,
         ]
-        names = ["Thief", "thief", "A Thief", "Molgrath", "Grave-Thief", "x"]
+        names = ["Thief", "thief", "A Thief", "Molgrath", "x"]
         keys = {
             identity_key(Origin(kind=k, creature_id="thief"), display)
             for k, display in zip(kinds, names, strict=True)

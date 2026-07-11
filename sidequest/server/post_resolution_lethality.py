@@ -345,9 +345,12 @@ def apply_post_resolution_lethality(
     # "Downed — dead (mortally wounded)" and player_dead=False. When a LETHAL
     # verdict just took a PC out and NO player-side seated PC remains standing,
     # the player side is dead: set the flag and fire combat.player_dead (the
-    # span + its GM-panel route existed with zero callers). Solo semantics —
-    # one seated PC down flips it; the multi-seat contract is an open design
-    # question logged on the 166-1 session (Delivery Findings).
+    # span + its GM-panel route existed with zero callers). Scope: the check
+    # requires ALL of THIS encounter's seated player-side PCs to be down —
+    # solo (one seat) flips on that PC's death; party members alive but NOT
+    # seated in this encounter are invisible here, and that unseated-PC
+    # multi-seat contract is the open design question logged on the 166-1
+    # session (Delivery Findings).
     if incapacitations:
         any_player_side_standing = any(
             char.core.hp.current > 0

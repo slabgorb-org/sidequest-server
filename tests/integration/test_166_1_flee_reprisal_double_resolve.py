@@ -349,13 +349,20 @@ def test_sealed_walk_skipped_flee_surfaces_mechanical_truth_to_narrator(monkeypa
 
     _assert_kill_preconditions(snap, enc)
 
+    # Review rework R5: key on the structural "LIVENESS GATE" prefix (stable
+    # vocabulary) OR the negation markers, so a legitimate rewording of the
+    # prose tail doesn't false-fail — the load-bearing contract is that the
+    # hint names the actor + the blocked beat and marks it a gate refusal.
     narrator_surface = list(enc.narrator_hints) + list(snap.next_turn_directives)
     truth_lines = [
         t
         for t in narrator_surface
         if PLAYER in t
         and FLEE_BEAT in t.lower()
-        and any(marker in t.lower() for marker in _NOT_RESOLVE_MARKERS)
+        and (
+            "liveness gate" in t.lower()
+            or any(marker in t.lower() for marker in _NOT_RESOLVE_MARKERS)
+        )
     ]
     assert truth_lines, (
         "the narrator surface (encounter.narrator_hints / next_turn_directives) "
@@ -662,4 +669,231 @@ def test_player_victory_clean_path_stays_coherent(monkeypatch):
     assert not contradictions, (
         f"a resolved clean win must not also be described as continuing; "
         f"contradictory directives: {contradictions!r}"
+    )
+
+
+# ===========================================================================
+# Review rework round 1 (Reviewer findings R1–R3, R5 — 2026-07-11).
+#
+# R2 is the round's true RED: the actor_downed LIVENESS GATE hint claims
+# "the fight's close" unconditionally, which is FALSE in an MP partial-down
+# (ADR-139: one downed PC ≠ party defeat — the fight stays live for the
+# survivor). R1 and R3 are labeled COVERAGE PINS on shipped-but-unasserted
+# behavior (the wn_slot_skipped_encounter_resolved branch and the location
+# gate's AND-conjunction boundaries) — sanctioned add-tests-for-existing-code,
+# passing at birth by design, per the 165-5 pins-vs-RED discipline.
+# ===========================================================================
+
+SECOND_PC = "Chico"
+
+
+def _add_second_pc(snap, enc, *, name: str = SECOND_PC, hp_current: int = 10, armed: bool = False):
+    """Seat a second player-side PC beside the fixture's first: a character in
+    the snapshot (so the commit barrier waits on them) and an EncounterActor on
+    the encounter (so the walk gives them a slot)."""
+    from sidequest.game.encounter import EncounterActor
+
+    snap.characters.append(_make_pc(name, hp_current=hp_current, armed=armed))
+    enc.actors.append(EncounterActor(name=name, role="brawler", side="player"))
+
+
+def test_partial_down_hint_must_not_claim_fight_close_while_live(monkeypatch):
+    """R2 (RED this round): MP partial-down — the opponent kills 1-HP Harpo at
+    its slot, but Chico stands, so per ADR-139 the fight does NOT resolve
+    (hp_depletion.partial_down). Harpo's skipped slot still gets the LIVENESS
+    GATE hint — and that hint must not instruct the narrator to 'narrate ...
+    the fight's close' over an encounter the engine keeps LIVE. Today the tail
+    is unconditional → this fails."""
+    from sidequest.protocol.models import InitiativeEntry
+
+    pack = _load_mutant_wasteland()
+    snap = _snapshot_with_pc(hp_current=1)
+    enc = _seat_brawl(snap, pack)
+    _add_second_pc(snap, enc, hp_current=10)
+    # Opponent first (kills Harpo), then the dead man's slot, then Chico.
+    enc.initiative = [
+        InitiativeEntry(token_id=OPPONENT, value=12),
+        InitiativeEntry(token_id=PLAYER, value=9),
+        InitiativeEntry(token_id=SECOND_PC, value=5),
+    ]
+    monkeypatch.setattr(
+        "sidequest.server.dispatch.dice.random.randint", _reprisal_hits_all_else_min
+    )
+
+    # Harpo seals his flee; the barrier stays open until Chico commits, and
+    # Chico's dispatch closes it and walks the round.
+    _dispatch(snap, enc, pack, beat_id=FLEE_BEAT, request_id="mw-166-1-r2-seal-harpo")
+    _dispatch(snap, enc, pack, beat_id=ATTACK_BEAT, request_id="mw-166-1-r2-seal-chico")
+
+    player_core = snap.find_creature_core(PLAYER)
+    assert player_core is not None and player_core.hp.current <= 0, (
+        f"precondition: the reprisal must down 1-HP Harpo; hp={player_core.hp.current}"
+    )
+    assert enc.resolved is False, (
+        "precondition (ADR-139 partial-down): Chico stands, so one downed PC "
+        f"must NOT resolve the fight; resolved={enc.resolved} outcome={enc.outcome!r}"
+    )
+    harpo_gate_hints = [
+        h for h in enc.narrator_hints if "LIVENESS GATE" in h and PLAYER in h
+    ]
+    assert harpo_gate_hints, (
+        f"precondition: the downed fleer's skipped slot must still hint the "
+        f"narrator; hints={list(enc.narrator_hints)!r}"
+    )
+    lying_hints = [h for h in harpo_gate_hints if "fight's close" in h]
+    assert not lying_hints, (
+        "the LIVENESS GATE hint must not claim 'the fight's close' while the "
+        "encounter is LIVE (Chico fights on — ADR-139 one-down≠party-defeat); "
+        f"misdirecting hints: {lying_hints!r}"
+    )
+
+
+def test_resolved_slot_skip_emits_event_and_hint_for_live_pc(monkeypatch):
+    """R1 (coverage pin — passes at birth): the wn_slot_skipped_encounter_resolved
+    branch. Armed Harpo kills the Understory Hand at the FIRST slot
+    (player_victory); live Chico's sealed flee arrives at a later slot in a
+    resolved fight → the liveness gate must block it OBSERVABLY: watcher event
+    with Chico's beat_id + a LIVENESS GATE narrator hint. Pins the branch the
+    first round shipped untested (Reviewer R1)."""
+    from sidequest.protocol.models import InitiativeEntry
+
+    pack = _load_mutant_wasteland()
+    snap = _snapshot_with_pc(hp_current=8, armed=True)
+    enc = _seat_brawl(snap, pack)
+    _add_second_pc(snap, enc, hp_current=10)
+    # Harpo first (kills the Hand), Chico's live slot second, opponent last.
+    enc.initiative = [
+        InitiativeEntry(token_id=PLAYER, value=12),
+        InitiativeEntry(token_id=SECOND_PC, value=9),
+        InitiativeEntry(token_id=OPPONENT, value=5),
+    ]
+    events = _install_watcher_recorder(monkeypatch)
+    monkeypatch.setattr(
+        "sidequest.server.dispatch.dice.random.randint", _reprisal_hits_all_else_min
+    )
+
+    _dispatch(snap, enc, pack, beat_id=ATTACK_BEAT, request_id="mw-166-1-r1-seal-harpo")
+    _dispatch(snap, enc, pack, beat_id=FLEE_BEAT, request_id="mw-166-1-r1-seal-chico")
+
+    assert enc.resolved and enc.outcome == "player_victory", (
+        f"precondition: Harpo's +50 strike must resolve the brawl at his slot; "
+        f"resolved={enc.resolved} outcome={enc.outcome!r}"
+    )
+    chico_core = snap.find_creature_core(SECOND_PC)
+    assert chico_core is not None and chico_core.hp.current == 10, (
+        f"precondition: Chico must be alive and untouched; hp={chico_core.hp.current}"
+    )
+    gate_events = [
+        ev
+        for ev in events
+        if ev.get("op") == "wn_slot_skipped_encounter_resolved"
+        and ev.get("actor") == SECOND_PC
+        and ev.get("beat_id") == FLEE_BEAT
+    ]
+    assert len(gate_events) == 1, (
+        "a LIVE PC's committed beat blocked by prior resolution must emit exactly "
+        "one wn_slot_skipped_encounter_resolved event carrying the blocked "
+        f"beat_id; captured: {[ev for ev in events if ev.get('actor') == SECOND_PC]}"
+    )
+    chico_hints = [
+        h
+        for h in enc.narrator_hints
+        if "LIVENESS GATE" in h and SECOND_PC in h and FLEE_BEAT in h.lower()
+    ]
+    assert chico_hints, (
+        f"the narrator must be told Chico's committed flee did not resolve; "
+        f"hints={list(enc.narrator_hints)!r}"
+    )
+
+
+def test_location_gate_allows_move_for_incapacitated_but_alive_pc():
+    """R3a (coverage pin): the dead-PC location gate requires the DURABLE death
+    state — hp<=0 AND an incapacitating status. An incapacitated-but-ALIVE PC
+    (unconscious, being carried by the party) is a legitimate narrator move and
+    must NOT be refused. Pins the AND against a future loosening to OR."""
+    from sidequest.agents.orchestrator import NarrationTurnResult
+    from sidequest.game.session import GameSnapshot
+    from sidequest.game.status import Status, StatusSeverity
+    from sidequest.game.turn import TurnManager
+    from sidequest.server.narration_apply import _apply_narration_result_to_snapshot
+    from tests._helpers.session_room import room_for
+
+    pack = _load_mutant_wasteland()
+    snap = GameSnapshot(
+        genre_slug=GENRE,
+        world_slug="flickering_reach",
+        turn_manager=TurnManager(interaction=9),
+    )
+    pc = _make_pc(PLAYER, hp_current=8)
+    pc.core.statuses.append(
+        Status(
+            text="Unconscious — knocked out cold",
+            severity=StatusSeverity.Wound,
+            created_turn=9,
+            created_in_encounter=ENCOUNTER_TYPE,
+            incapacitating=True,
+        )
+    )
+    snap.characters.append(pc)
+    snap.character_locations[PLAYER] = "Blind Reach — The Crack"
+
+    _apply_narration_result_to_snapshot(
+        snapshot=snap,
+        result=NarrationTurnResult(
+            narration="The others haul the limp scavenger up over the rim.",
+            location="Blind Reach — Canyon Rim",
+        ),
+        pack=pack,
+        player_name=PLAYER,
+        acting_character_name=PLAYER,
+        room=room_for(snapshot=snap, slug="flickering_reach"),
+    )
+
+    assert snap.character_locations[PLAYER] == "Blind Reach — Canyon Rim", (
+        "an incapacitated-but-ALIVE PC (hp 8/10) may be moved by narrator prose "
+        "(carried by the party) — the death gate must require hp<=0 AND the "
+        f"incapacitating status, not either alone; got "
+        f"{snap.character_locations[PLAYER]!r}"
+    )
+
+
+def test_location_gate_allows_move_for_zero_hp_without_status():
+    """R3b (coverage pin): hp=0 with NO incapacitating status is a transient
+    mid-resolution shape, not the durable death state — every lethal down
+    stamps the incapacitating Downed status in the same dispatch before
+    narration applies, and a non-lethal verdict recovers the PC to the 1-HP
+    floor. The gate must not fire on the transient alone (the conservative AND
+    contract the Reviewer asked pinned)."""
+    from sidequest.agents.orchestrator import NarrationTurnResult
+    from sidequest.game.session import GameSnapshot
+    from sidequest.game.turn import TurnManager
+    from sidequest.server.narration_apply import _apply_narration_result_to_snapshot
+    from tests._helpers.session_room import room_for
+
+    pack = _load_mutant_wasteland()
+    snap = GameSnapshot(
+        genre_slug=GENRE,
+        world_slug="flickering_reach",
+        turn_manager=TurnManager(interaction=9),
+    )
+    snap.characters.append(_make_pc(PLAYER, hp_current=0))
+    snap.character_locations[PLAYER] = "Blind Reach — The Crack"
+
+    _apply_narration_result_to_snapshot(
+        snapshot=snap,
+        result=NarrationTurnResult(
+            narration="You drag yourself over the lip of the crack.",
+            location="Blind Reach — Canyon Rim",
+        ),
+        pack=pack,
+        player_name=PLAYER,
+        acting_character_name=PLAYER,
+        room=room_for(snapshot=snap, slug="flickering_reach"),
+    )
+
+    assert snap.character_locations[PLAYER] == "Blind Reach — Canyon Rim", (
+        "hp=0 with no incapacitating status is a mid-resolution transient, not "
+        "the durable death state — the gate fires only on hp<=0 AND "
+        f"incapacitating (pinned AND contract); got "
+        f"{snap.character_locations[PLAYER]!r}"
     )

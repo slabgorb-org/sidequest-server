@@ -2228,7 +2228,16 @@ def _emit_player_beat_resolution_close(
             f"{encounter.outcome}. Narrate the close of the engagement; do NOT "
             f"continue narrating it as a live, ongoing fight.{_shock_rider}"
         )
-    elif strike_hp_removed + shock_hp_removed > 0:
+    # Story 166-1 (ADR-139): both non-resolving anchors below claim the fight
+    # continues ("STILL STANDING; the fight continues"). On the legacy path the
+    # opponent reprisal runs BEFORE this close and may have resolved the
+    # encounter (opponent_victory, PC dead) — the reprisal close already stamped
+    # the RESOLVED truth, and appending a fight-continues anchor after it puts
+    # two contradictory MECHANICAL TRUTH directives in one narrator prompt (the
+    # flickering_reach 2026-07-10 "You are alive ... wrongly, but alive" prose).
+    # ``encounter.resolved`` is the authoritative post-reprisal state;
+    # ``encounter_resolved`` (the param) is only the player-beat resolution.
+    elif strike_hp_removed + shock_hp_removed > 0 and not encounter.resolved:
         # Kill-overclaim anchor (evropi 2/14 + barsoom 3/10, 2026-06-10): a
         # damaging player hit that does NOT end the fight invites kill prose —
         # twice this playtest the narrator rendered an unambiguous death for
@@ -2277,7 +2286,7 @@ def _emit_player_beat_resolution_close(
                     "STANDING; the fight continues. Narrate a wound, not a kill — do "
                     "NOT describe their death, collapse, or incapacitation."
                 )
-    elif win_condition == "hp_depletion":
+    elif win_condition == "hp_depletion" and not encounter.resolved:
         # Failed-strike anchor (sq-playtest 2026-06-13, beneath_sunden round 8):
         # a 0-damage player beat that does NOT resolve the fight (Fail/CritFail,
         # a Tie, or a hit that ablated nothing) invites KILL prose exactly like

@@ -58,6 +58,7 @@ from sidequest.protocol.messages import (
     CharacterIncapacitatedMessage,
     CharacterIncapacitatedPayload,
 )
+from sidequest.telemetry.spans.combat import combat_player_dead_span
 from sidequest.telemetry.spans.encounter import (
     SPAN_POST_RESOLUTION_LETHALITY,
     post_resolution_lethality_span,
@@ -337,5 +338,32 @@ def apply_post_resolution_lethality(
             hp_after=core.hp.current,
         ):
             pass
+
+    # Story 166-1 (AC-3): the top-level death flag. GameSnapshot.player_dead
+    # ("P1-required: permadeath / death detection") had NO production writer —
+    # the flickering_reach 2026-07-10 save carried a PC with status
+    # "Downed — dead (mortally wounded)" and player_dead=False. When a LETHAL
+    # verdict just took a PC out and NO player-side seated PC remains standing,
+    # the player side is dead: set the flag and fire combat.player_dead (the
+    # span + its GM-panel route existed with zero callers). Solo semantics —
+    # one seated PC down flips it; the multi-seat contract is an open design
+    # question logged on the 166-1 session (Delivery Findings).
+    if incapacitations:
+        any_player_side_standing = any(
+            char.core.hp.current > 0
+            for char in snapshot.characters
+            if char.core.name in player_actor_names
+        )
+        if not any_player_side_standing:
+            snapshot.player_dead = True
+            for event in incapacitations:
+                logger.info(
+                    "combat.player_dead player=%s verdict=%s encounter=%s",
+                    event.actor,
+                    event.verdict,
+                    event.encounter_type,
+                )
+                with combat_player_dead_span(player_name=event.actor):
+                    pass
 
     return incapacitations

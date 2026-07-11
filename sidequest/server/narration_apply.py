@@ -4168,6 +4168,50 @@ def _apply_narration_result_to_snapshot(
                     ):
                         result.location = _candidate
 
+    # Story 166-1 (AC-2, ADR-139 seated-actor HP durability): a mechanically
+    # dead PC (0 HP + an incapacitating status) cannot be relocated by narrator
+    # prose — the flickering_reach 2026-07-10 flee narration walked a corpse out
+    # of the canyon ("Blind Reach — Canyon Rim") after the reprisal kill.
+    # Refuse LOUDLY (log + GM-panel event, No Silent Fallbacks) and clear the
+    # emitted location so no downstream consumer (room entry, cohort follow,
+    # scene-change ladder) treats it as a scene move. Mutating
+    # ``result.location`` is this seam's established repair pattern (see the
+    # drift-repair block above). Placed AFTER drift repair so a repaired
+    # location is gated too.
+    if result.location:
+        _move_actor = acting_character_name or player_name
+        _move_core = snapshot.find_creature_core(_move_actor) if _move_actor else None
+        if (
+            _move_core is not None
+            and _move_core.hp.current <= 0
+            and any(s.incapacitating for s in _move_core.statuses)
+        ):
+            logger.warning(
+                "narrator.location_move_refused_actor_dead character=%s "
+                "refused_location=%r current_location=%r turn=%d",
+                _move_actor,
+                result.location,
+                snapshot.character_locations.get(_move_actor),
+                snapshot.turn_manager.interaction,
+            )
+            _watcher_publish(
+                "state_transition",
+                {
+                    "kind": "location_move_refused_actor_dead",
+                    "character": _move_actor,
+                    "refused_location": result.location,
+                    "current_location": snapshot.character_locations.get(_move_actor),
+                    "rationale": (
+                        "acting PC is mechanically dead (0 HP + incapacitating "
+                        "status) — narrator-emitted location change refused; "
+                        "the corpse stays where it fell (ADR-139)"
+                    ),
+                },
+                component="game",
+                severity="warning",
+            )
+            result.location = None
+
     if result.location:
         # Wave 2B (story 45-48): per-character locations are the only
         # source of truth. The previous "snapshot the global before

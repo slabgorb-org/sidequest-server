@@ -131,6 +131,25 @@ def _make_pc(name: str, *, hp_current: int, hp_max: int = 10, armed: bool = Fals
 _PC_STATS = {"STR": 12, "DEX": 10, "CON": 10, "INT": 10, "WIS": 10, "CHA": 10}
 
 
+def _make_opponent_npc():
+    """The Understory Hand as a ROSTER NPC (the playtest shape: a scene-active
+    antagonist, HP 9 — the session showed 'Them 3/9'). Seating resolves it via
+    ``resolve_roster_npc`` instead of falling through to bestiary generics
+    (flickering_reach authors none) and refusing to fabricate."""
+    from sidequest.game.creature_core import CreatureCore, Inventory
+    from sidequest.game.session import Npc
+
+    core = CreatureCore(
+        name=OPPONENT,
+        description="A tendril-limbed scavenger of the understory.",
+        personality="predatory",
+        inventory=Inventory(),
+        hp={"current": 9, "max": 9, "base_max": 9},
+        armor_class=12,
+    )
+    return Npc(core=core)
+
+
 def _reprisal_hits_all_else_min(a: int, b: int) -> int:
     """(1, 20) → 20 (opponent to-hit always HITS); anything else → minimum."""
     return 20 if (a, b) == (1, 20) else a
@@ -166,6 +185,7 @@ def _snapshot_with_pc(*, hp_current: int, armed: bool = False):
         turn_manager=TurnManager(interaction=9),
     )
     snap.characters.append(_make_pc(PLAYER, hp_current=hp_current, armed=armed))
+    snap.npcs.append(_make_opponent_npc())
     snap.character_locations[PLAYER] = "Blind Reach — The Crack"
     return snap
 

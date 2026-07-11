@@ -755,13 +755,16 @@ def test_partial_down_hint_must_not_claim_fight_close_while_live(monkeypatch):
     )
 
 
-def test_resolved_slot_skip_emits_event_and_hint_for_live_pc(monkeypatch):
-    """R1 (coverage pin — passes at birth): the wn_slot_skipped_encounter_resolved
-    branch. Armed Harpo kills the Understory Hand at the FIRST slot
-    (player_victory); live Chico's sealed flee arrives at a later slot in a
-    resolved fight → the liveness gate must block it OBSERVABLY: watcher event
-    with Chico's beat_id + a LIVENESS GATE narrator hint. Pins the branch the
-    first round shipped untested (Reviewer R1)."""
+def test_targeted_commit_after_kill_lands_on_dead_premise_gate(monkeypatch):
+    """R1a (coverage pin — passes at birth): for a TARGETED commit, the
+    dead-premise check shadows the resolved-encounter skip — Chico's sealed
+    flee pins the Understory Hand as its premise target at commit time
+    (``seal_wn_commit``), Harpo's earlier slot kills the Hand (player_victory),
+    and Chico's slot lands on ``wn_dead_premise``, which already carries the
+    ADR-139 observability contract: watcher event WITH the blocked beat_id and
+    a DEAD PREMISE narrator hint. Discovered while building the resolved-skip
+    pin below — the two gates partition the blocked-slot space by whether the
+    pinned target survived."""
     from sidequest.protocol.models import InitiativeEntry
 
     pack = _load_mutant_wasteland()
@@ -779,13 +782,13 @@ def test_resolved_slot_skip_emits_event_and_hint_for_live_pc(monkeypatch):
         "sidequest.server.dispatch.dice.random.randint", _reprisal_hits_all_else_min
     )
 
-    _dispatch(snap, enc, pack, beat_id=ATTACK_BEAT, request_id="mw-166-1-r1-seal-harpo")
+    _dispatch(snap, enc, pack, beat_id=ATTACK_BEAT, request_id="mw-166-1-r1a-seal-harpo")
     _dispatch(
         snap,
         enc,
         pack,
         beat_id=FLEE_BEAT,
-        request_id="mw-166-1-r1-seal-chico",
+        request_id="mw-166-1-r1a-seal-chico",
         character_name=SECOND_PC,
     )
 
@@ -797,26 +800,100 @@ def test_resolved_slot_skip_emits_event_and_hint_for_live_pc(monkeypatch):
     assert chico_core is not None and chico_core.hp.current == 10, (
         f"precondition: Chico must be alive and untouched; hp={chico_core.hp.current}"
     )
+    premise_events = [
+        ev
+        for ev in events
+        if ev.get("op") == "wn_dead_premise"
+        and ev.get("actor") == SECOND_PC
+        and ev.get("beat_id") == FLEE_BEAT
+    ]
+    assert len(premise_events) == 1, (
+        "a targeted commit whose pinned target died before the slot must emit "
+        "exactly one wn_dead_premise event carrying the blocked beat_id; "
+        f"captured: {[ev for ev in events if ev.get('actor') == SECOND_PC]}"
+    )
+    premise_hints = [
+        h for h in enc.narrator_hints if "DEAD PREMISE" in h and SECOND_PC in h
+    ]
+    assert premise_hints, (
+        f"the narrator must be told Chico's committed action did not resolve "
+        f"(dead premise); hints={list(enc.narrator_hints)!r}"
+    )
+
+
+def test_resolved_slot_skip_emits_event_and_hint_for_untargeted_commit(monkeypatch):
+    """R1b (coverage pin — passes at birth): the
+    ``wn_slot_skipped_encounter_resolved`` branch the first round shipped
+    untested. It is reachable only for an UNTARGETED commit (a targeted one
+    lands on dead-premise first, pinned above): an item-use commit seals with
+    ``target=None`` (you drink at yourself), so when Harpo's earlier slot
+    resolves the fight, Chico's sealed drink is blocked by the resolved-
+    encounter gate — observably: watcher event with the item-use beat_id + a
+    LIVENESS GATE narrator hint, and the potion is NOT consumed."""
+    from sidequest.game.beat_filter import item_use_beat_id
+    from sidequest.protocol.models import InitiativeEntry
+
+    pack = _load_mutant_wasteland()
+    snap = _snapshot_with_pc(hp_current=8, armed=True)
+    enc = _seat_brawl(snap, pack)
+    _add_second_pc(snap, enc, hp_current=10)
+    chico = next(c for c in snap.characters if c.core.name == SECOND_PC)
+    chico.core.inventory.items.append(
+        {
+            "id": "ration_brew",
+            "name": "Ration Brew",
+            "category": "consumable",
+            "heal_amount": 4,
+        }
+    )
+    drink_beat = item_use_beat_id("Ration Brew")
+    enc.initiative = [
+        InitiativeEntry(token_id=PLAYER, value=12),
+        InitiativeEntry(token_id=SECOND_PC, value=9),
+        InitiativeEntry(token_id=OPPONENT, value=5),
+    ]
+    events = _install_watcher_recorder(monkeypatch)
+    monkeypatch.setattr(
+        "sidequest.server.dispatch.dice.random.randint", _reprisal_hits_all_else_min
+    )
+
+    _dispatch(snap, enc, pack, beat_id=ATTACK_BEAT, request_id="mw-166-1-r1b-seal-harpo")
+    _dispatch(
+        snap,
+        enc,
+        pack,
+        beat_id=drink_beat,
+        request_id="mw-166-1-r1b-seal-chico",
+        character_name=SECOND_PC,
+    )
+
+    assert enc.resolved and enc.outcome == "player_victory", (
+        f"precondition: Harpo's +50 strike must resolve the brawl at his slot; "
+        f"resolved={enc.resolved} outcome={enc.outcome!r}"
+    )
     gate_events = [
         ev
         for ev in events
         if ev.get("op") == "wn_slot_skipped_encounter_resolved"
         and ev.get("actor") == SECOND_PC
-        and ev.get("beat_id") == FLEE_BEAT
+        and ev.get("beat_id") == drink_beat
     ]
     assert len(gate_events) == 1, (
-        "a LIVE PC's committed beat blocked by prior resolution must emit exactly "
-        "one wn_slot_skipped_encounter_resolved event carrying the blocked "
-        f"beat_id; captured: {[ev for ev in events if ev.get('actor') == SECOND_PC]}"
+        "an untargeted commit blocked by prior resolution must emit exactly one "
+        "wn_slot_skipped_encounter_resolved event carrying the blocked beat_id; "
+        f"captured: {[ev for ev in events if ev.get('actor') == SECOND_PC]}"
     )
     chico_hints = [
         h
         for h in enc.narrator_hints
-        if "LIVENESS GATE" in h and SECOND_PC in h and FLEE_BEAT in h.lower()
+        if "LIVENESS GATE" in h and SECOND_PC in h and drink_beat in h
     ]
     assert chico_hints, (
-        f"the narrator must be told Chico's committed flee did not resolve; "
+        f"the narrator must be told Chico's committed drink did not resolve; "
         f"hints={list(enc.narrator_hints)!r}"
+    )
+    assert any(i.get("name") == "Ration Brew" for i in chico.core.inventory.items), (
+        "the blocked drink must NOT consume the potion — the slot never resolved"
     )
 
 

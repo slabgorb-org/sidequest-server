@@ -190,7 +190,7 @@ def _snapshot_with_pc(*, hp_current: int, armed: bool = False):
     return snap
 
 
-def _dispatch(snap, enc, pack, *, beat_id: str, request_id: str):
+def _dispatch(snap, enc, pack, *, beat_id: str, request_id: str, character_name: str = PLAYER):
     from sidequest.protocol.dice import DiceThrowPayload, ThrowParams
     from sidequest.server.dispatch.dice import dispatch_dice_throw
 
@@ -205,8 +205,8 @@ def _dispatch(snap, enc, pack, *, beat_id: str, request_id: str):
             face=[20],
             beat_id=beat_id,
         ),
-        rolling_player_id="player-harpo",
-        character_name=PLAYER,
+        rolling_player_id=f"player-{character_name.lower()}",
+        character_name=character_name,
         character_stats=dict(_PC_STATS),
         encounter=enc,
         pack=pack,
@@ -723,7 +723,14 @@ def test_partial_down_hint_must_not_claim_fight_close_while_live(monkeypatch):
     # Harpo seals his flee; the barrier stays open until Chico commits, and
     # Chico's dispatch closes it and walks the round.
     _dispatch(snap, enc, pack, beat_id=FLEE_BEAT, request_id="mw-166-1-r2-seal-harpo")
-    _dispatch(snap, enc, pack, beat_id=ATTACK_BEAT, request_id="mw-166-1-r2-seal-chico")
+    _dispatch(
+        snap,
+        enc,
+        pack,
+        beat_id=ATTACK_BEAT,
+        request_id="mw-166-1-r2-seal-chico",
+        character_name=SECOND_PC,
+    )
 
     player_core = snap.find_creature_core(PLAYER)
     assert player_core is not None and player_core.hp.current <= 0, (
@@ -773,7 +780,14 @@ def test_resolved_slot_skip_emits_event_and_hint_for_live_pc(monkeypatch):
     )
 
     _dispatch(snap, enc, pack, beat_id=ATTACK_BEAT, request_id="mw-166-1-r1-seal-harpo")
-    _dispatch(snap, enc, pack, beat_id=FLEE_BEAT, request_id="mw-166-1-r1-seal-chico")
+    _dispatch(
+        snap,
+        enc,
+        pack,
+        beat_id=FLEE_BEAT,
+        request_id="mw-166-1-r1-seal-chico",
+        character_name=SECOND_PC,
+    )
 
     assert enc.resolved and enc.outcome == "player_victory", (
         f"precondition: Harpo's +50 strike must resolve the brawl at his slot; "

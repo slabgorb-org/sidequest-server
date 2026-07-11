@@ -11,7 +11,10 @@ from ._core import SPAN_ROUTES, SpanRoute
 # either freshly admitted or merged onto a pre-existing snapshot entry.
 # ``canonical_tier`` is the winning candidate's LADDER rank (lower = higher
 # precedence); ``candidates_seen``/``candidates_dropped`` let the GM panel
-# verify a multi-feeder collision actually collapsed to one seat.
+# verify a multi-feeder collision actually collapsed to one seat. Deliberately
+# NOT emitted for a group that folds into a batch-mate's seat admitted earlier
+# in the same admit() call — that identity never materialized; the fold
+# surfaces as green_room.precedence_conflict instead (task-1 rework).
 SPAN_GREEN_ROOM_MATERIALIZED = "green_room.materialized"
 SPAN_ROUTES[SPAN_GREEN_ROOM_MATERIALIZED] = SpanRoute(
     event_type="state_transition",
@@ -28,10 +31,14 @@ SPAN_ROUTES[SPAN_GREEN_ROOM_MATERIALIZED] = SpanRoute(
     },
 )
 
-# Story 166-1: fires only when an identity group has more than one candidate
-# — the origin-precedence ladder had to arbitrate. ``winning_tier`` is the
-# canonical's LADDER rank; ``losing_tiers`` is the sorted set of ranks that
-# lost the seat. The GM panel reads this to confirm the ladder (not arrival
+# Story 166-1: the origin-precedence ladder had to arbitrate. Two shapes:
+# (a) intra-group — an identity group holds more than one candidate;
+# ``identity_key`` is the group's key, ``losing_tiers`` the sorted set of
+# ranks that lost the seat. (b) cross-group fold (task-1 rework) — a group's
+# sole candidate resolved onto a batch-mate's seat admitted earlier in the
+# same admit() call; ``identity_key``/``winning_tier`` are the WINNER's (the
+# seat that absorbed the fold), ``losing_tiers`` the folded group's rank. In
+# both shapes the GM panel reads this to confirm the ladder (not arrival
 # order) decided who stands on stage.
 SPAN_GREEN_ROOM_PRECEDENCE_CONFLICT = "green_room.precedence_conflict"
 SPAN_ROUTES[SPAN_GREEN_ROOM_PRECEDENCE_CONFLICT] = SpanRoute(

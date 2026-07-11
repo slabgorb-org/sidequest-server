@@ -1,6 +1,7 @@
 """Green Room admit() — ADR-156 §4: precedence, additive merge, idempotence."""
 
 import pytest
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from sidequest.game.creature_core import CreatureCore, Inventory, hp_pool_from_hp
 from sidequest.game.disposition import Disposition
@@ -109,3 +110,35 @@ def test_attach_alias_dedups(snapshot: GameSnapshot) -> None:
     assert attach_alias(npc, "Molgrath the Eyeless", from_source="test") is True
     assert attach_alias(npc, "molgrath the eyeless", from_source="test") is False
     assert npc.aliases == ["Molgrath the Eyeless"]
+
+
+def test_cross_group_fold_emits_conflict_not_materialized(
+    snapshot: GameSnapshot, otel_capture: InMemorySpanExporter
+) -> None:
+    """Task-1 rework (reviewer finding): when a group's sole candidate folds
+    into a batch-mate's seat the ladder ranked higher, the folded identity
+    must NOT claim a green_room.materialized span (it never won a seat) —
+    the fold surfaces as green_room.precedence_conflict carrying the
+    WINNER's identity_key/tier, so the GM panel can tell "won a seat" from
+    "was folded into someone else's seat"."""
+    authored = _npc("Molgrath", creature_id="thief",
+                    authored_id="molgrath", kind=OriginKind.AUTHORED)
+    pool = _npc("Molgrath", creature_id="thief", kind=OriginKind.MANUAL_POOL)
+    admit(snapshot, [_cand(pool, "mm.encounters"), _cand(authored, "preload")])
+
+    spans = otel_capture.get_finished_spans()
+    materialized = [s for s in spans if s.name == "green_room.materialized"]
+    conflicts = [s for s in spans if s.name == "green_room.precedence_conflict"]
+
+    winner_key = identity_key(authored.origin, "Molgrath")
+    assert len(materialized) == 1, (
+        f"the folded group claimed a seat it never had: "
+        f"{[dict(s.attributes or {}) for s in materialized]!r}"
+    )
+    assert dict(materialized[0].attributes or {}).get("identity_key") == winner_key
+
+    assert len(conflicts) == 1
+    attrs = dict(conflicts[0].attributes or {})
+    assert attrs.get("identity_key") == winner_key
+    assert attrs.get("winning_tier") == 1
+    assert list(attrs.get("losing_tiers") or []) == [4]

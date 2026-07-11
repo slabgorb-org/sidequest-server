@@ -168,6 +168,7 @@ def admit(
                 alias_count += 1
 
         existing = _find_existing(snapshot, key, canonical.npc.core.name)
+        batch_winner: Npc | None = None
         if existing is not None:
             _fill_absent(existing, canonical.npc)
             if attach_alias(existing, canonical.npc.core.name, from_source=canonical.source):
@@ -181,6 +182,7 @@ def admit(
                 # appended seat. This group's canonical never had one; it
                 # dropped into the earlier seat, not merged onto a prior seat.
                 result.dropped.append(key)
+                batch_winner = existing
             else:
                 result.merged.append(key)
         else:
@@ -190,18 +192,36 @@ def admit(
             admitted_this_batch.add(id(canonical.npc))
         result.aliases_attached += alias_count
 
-        with Span.open(
-            SPAN_GREEN_ROOM_MATERIALIZED,
-            {
-                "identity_key": key,
-                "canonical_tier": LADDER[canonical.origin.kind],
-                "canonical_source": canonical.source,
-                "candidates_seen": len(group),
-                "candidates_dropped": len(group) - 1,
-                "alias_count": alias_count,
-            },
-        ):
-            pass
+        if batch_winner is not None:
+            # Cross-group fold (task-1 rework, reviewer finding): this group's
+            # identity did NOT materialize — it folded into a batch-mate's seat
+            # the ladder ranked higher. Emitting green_room.materialized here
+            # would tell the GM panel this identity won a seat it never had;
+            # the honest record is a precedence_conflict carrying the WINNER's
+            # identity_key/tier and this group's tier as the loser.
+            winner_origin = derive_origin(batch_winner)
+            with Span.open(
+                SPAN_GREEN_ROOM_PRECEDENCE_CONFLICT,
+                {
+                    "identity_key": identity_key(winner_origin, batch_winner.core.name),
+                    "winning_tier": LADDER[winner_origin.kind],
+                    "losing_tiers": [LADDER[canonical.origin.kind]],
+                },
+            ):
+                pass
+        else:
+            with Span.open(
+                SPAN_GREEN_ROOM_MATERIALIZED,
+                {
+                    "identity_key": key,
+                    "canonical_tier": LADDER[canonical.origin.kind],
+                    "canonical_source": canonical.source,
+                    "candidates_seen": len(group),
+                    "candidates_dropped": len(group) - 1,
+                    "alias_count": alias_count,
+                },
+            ):
+                pass
     return result
 
 

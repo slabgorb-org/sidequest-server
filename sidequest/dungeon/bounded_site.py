@@ -15,9 +15,13 @@ from __future__ import annotations
 
 import hashlib
 import secrets
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-from sidequest.dungeon.materializer import MaterializationRequest, materialize
+from sidequest.dungeon.materializer import (
+    MaterializationRequest,
+    build_bounded_palette,
+    materialize_bounded,
+)
 from sidequest.dungeon.persistence import FrontierEdge
 from sidequest.dungeon.region_graph.model import RegionGraph, RegionNode
 from sidequest.dungeon.seed_bootstrap import select_entrance_theme_id
@@ -57,20 +61,15 @@ async def ensure_bounded_site_materialized(
     site: SiteDescriptor,
     archetype: SiteArchetype,
     dungeon_repository: DungeonRepository | None,
-    snapshot: Any,
-    pack: Any,
-    bundle: Any,
-    palette: Any,
 ) -> None:
     """Materialize ``site`` whole on first entry; a no-op on re-entry.
 
-    Idempotent: returns early (emitting ``site.materialize.skip``) if the site's
-    entrance node is already committed. Fail-loud: a missing dungeon store raises
-    ``SeamCrossingError`` (No Silent Fallbacks) rather than opening a hollow site.
+    Cookbook-free (ADR-157): the interior is built from ``archetype`` alone via a
+    synthetic in-memory palette — no world ``cookbook/``/``corpus/``/``themes/``.
+    Idempotent (emits ``site.materialize.skip`` if already committed); fail-loud
+    on a missing store (``SeamCrossingError``, No Silent Fallbacks).
     """
     if dungeon_repository is None:
-        # No Silent Fallbacks: a bounded site with no store cannot be opened —
-        # surface it, never a quiet no-op that strands the player at the door.
         raise SeamCrossingError(reason="no_site_store", surface=f"{site.name} cannot be opened.")
 
     entrance = site_entrance_id(site.site_id)
@@ -80,19 +79,10 @@ async def ensure_bounded_site_materialized(
             pass
         return
 
-    # Deterministic per-site seed: reuse a committed one, else fold the session
-    # base seed with site_id and persist it (write-once) so re-entry is stable.
     seed = dungeon_repository.get_campaign_seed(site_id=site.site_id)
     if seed is None:
         base = dungeon_repository.get_campaign_seed()
         if base is None:
-            # No Silent Fallbacks: a non-beneath_sunden world (e.g. a region-mode
-            # world with a bounded site) never bootstraps the frontier base seed
-            # (session_integration.attach_dungeon_to_session is gated to
-            # caverns/beneath_sunden). MINT + persist a fresh session-scoped base
-            # seed exactly as session_integration.py:169-172 does — never coalesce
-            # a missing seed to a constant, which would make every session's site
-            # byte-identical.
             base = secrets.randbits(_SEED_BITS)
             dungeon_repository.set_campaign_seed(base)
         seed = _derive_site_seed(base_seed=base, site_id=site.site_id)
@@ -102,10 +92,7 @@ async def ensure_bounded_site_materialized(
         span.set_attribute("seed", seed)
         span.set_attribute("room_count_max", archetype.room_count_max)
 
-    # Seed graph: just the entrance node at expansion 0. The one committed
-    # transaction inside materialize() seeds it (Expansion 0) then the whole
-    # room burst (expansion 1) — a bounded burst = room_count_max with
-    # lookahead_breadth=0, so no frontier edges survive.
+    palette = build_bounded_palette(archetype)
     entrance_theme = select_entrance_theme_id(palette)
     seed_graph = RegionGraph(entrance_id=entrance)
     seed_graph.add_node(RegionNode(id=entrance, expansion_id=0, theme=entrance_theme))
@@ -127,15 +114,12 @@ async def ensure_bounded_site_materialized(
         lookahead_breadth=0,
         site_id=site.site_id,
     )
-    await materialize(
+    await materialize_bounded(
         request,
         graph=seed_graph,
-        bundle=bundle,
         palette=palette,
         dungeon_repository=dungeon_repository,
-        snapshot=snapshot,
-        pack_tropes=pack,
-        pack=pack,
+        archetype=archetype,
     )
 
     committed = dungeon_repository.load_map(entrance_id=entrance, site_id=site.site_id)

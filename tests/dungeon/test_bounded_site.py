@@ -58,10 +58,10 @@ def _tavern_descriptor() -> SiteDescriptor:
     )
 
 
-def _tavern_archetype() -> Any:
+def _tavern_archetype(**over: Any) -> Any:
     from sidequest.genre.models.site_archetype import SiteArchetype
 
-    return SiteArchetype(
+    base = dict(
         archetype_id="tavern",
         interior_algorithm="roomcorridor",
         room_count_min=3,
@@ -69,40 +69,21 @@ def _tavern_archetype() -> Any:
         grid_width=15,
         grid_height=20,
         cell_scale_feet=5,
+        room_vocabulary=["common room", "cellar", "kitchen", "private booth"],
+        feature_palette=["hearth", "long bar", "ale barrels"],
     )
-
-
-def _real_bundle_palette_snapshot_pack() -> tuple[Any, Any, Any, Any]:
-    """Real materialize dependencies, reusing the materializer suite's honest
-    helpers (real cookbook load, real ThemePalette, real GameSnapshot, real
-    trope pack) — no mocking of the dungeon layer."""
-    from tests.dungeon.test_materializer import (
-        _attach_pack,
-        _commit_palette,
-        _fresh_snapshot,
-        _real_cookbook_bundle,
-    )
-
-    bundle = _real_cookbook_bundle()
-    palette = _commit_palette("tavern_interior")
-    snapshot = _fresh_snapshot()
-    pack = _attach_pack("cave_in")
-    return bundle, palette, snapshot, pack
+    base.update(over)
+    return SiteArchetype(**base)
 
 
 async def _materialize_site(repo: Any, *, base_seed: int = 12345) -> None:
     from sidequest.dungeon.bounded_site import ensure_bounded_site_materialized
 
     repo.set_campaign_seed(base_seed)
-    bundle, palette, snapshot, pack = _real_bundle_palette_snapshot_pack()
     await ensure_bounded_site_materialized(
         site=_tavern_descriptor(),
         archetype=_tavern_archetype(),
         dungeon_repository=repo,
-        snapshot=snapshot,
-        pack=pack,
-        bundle=bundle,
-        palette=palette,
     )
 
 
@@ -112,42 +93,27 @@ async def _materialize_site(repo: Any, *, base_seed: int = 12345) -> None:
 
 
 def test_module_exposes_ensure_bounded_site_materialized() -> None:
-    """The public entry point is an async function with the keyword-only
-    signature the movement dispatch (Task 6/12) calls."""
+    """Cookbook-free (ADR-157): the entry point is an async function whose ONLY
+    keyword params are site/archetype/dungeon_repository — no bundle/palette."""
     from sidequest.dungeon.bounded_site import ensure_bounded_site_materialized
 
     assert inspect.iscoroutinefunction(ensure_bounded_site_materialized)
     params = inspect.signature(ensure_bounded_site_materialized).parameters
-    for name in (
-        "site",
-        "archetype",
-        "dungeon_repository",
-        "snapshot",
-        "pack",
-        "bundle",
-        "palette",
-    ):
-        assert name in params, f"missing keyword param {name!r}"
+    assert set(params) == {"site", "archetype", "dungeon_repository"}
+    for name in params:
         assert params[name].kind is inspect.Parameter.KEYWORD_ONLY
 
 
 @pytest.mark.asyncio
 async def test_missing_store_fails_loud() -> None:
-    """No Silent Fallbacks: a bounded site with no dungeon store raises
-    SeamCrossingError — never a quiet no-op that leaves the player stuck."""
     from sidequest.dungeon.bounded_site import ensure_bounded_site_materialized
     from sidequest.game.seams.base import SeamCrossingError
 
-    bundle, palette, snapshot, pack = _real_bundle_palette_snapshot_pack()
     with pytest.raises(SeamCrossingError):
         await ensure_bounded_site_materialized(
             site=_tavern_descriptor(),
             archetype=_tavern_archetype(),
             dungeon_repository=None,
-            snapshot=snapshot,
-            pack=pack,
-            bundle=bundle,
-            palette=palette,
         )
 
 
@@ -193,15 +159,10 @@ async def test_idempotent_second_entry_skips(monkeypatch: Any, migrated_db: str)
     # so re-run the call directly (the base seed is already committed).
     from sidequest.dungeon.bounded_site import ensure_bounded_site_materialized
 
-    bundle, palette, snapshot, pack = _real_bundle_palette_snapshot_pack()
     await ensure_bounded_site_materialized(
         site=_tavern_descriptor(),
         archetype=_tavern_archetype(),
         dungeon_repository=repo,
-        snapshot=snapshot,
-        pack=pack,
-        bundle=bundle,
-        palette=palette,
     )
     count2 = len(repo.load_map(entrance_id=entrance, site_id=_SITE_ID).nodes)
     assert count1 == count2
@@ -265,15 +226,10 @@ async def test_missing_base_seed_is_minted_not_defaulted_to_zero(
     _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
     # Deliberately do NOT set a base campaign seed (unlike _materialize_site).
     assert repo.get_campaign_seed() is None
-    bundle, palette, snapshot, pack = _real_bundle_palette_snapshot_pack()
     await ensure_bounded_site_materialized(
         site=_tavern_descriptor(),
         archetype=_tavern_archetype(),
         dungeon_repository=repo,
-        snapshot=snapshot,
-        pack=pack,
-        bundle=bundle,
-        palette=palette,
     )
     # A real base seed was established — not left None, not a silent 0.
     assert repo.get_campaign_seed() is not None
@@ -303,3 +259,140 @@ def test_non_default_site_id_requires_zero_lookahead() -> None:
             lookahead_breadth=1,
             site_id="gilded_boar",
         )
+
+
+# ---------------------------------------------------------------------------
+# ADR-157 — cookbook-free coordinator (materialize_bounded, story 164-10)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_materialize_bounded_commits_whole_graph_with_masks(
+    monkeypatch: Any, migrated_db: str
+) -> None:
+    """materialize_bounded() commits the entrance + rooms whole, WITH per-room
+    masks, using a synthetic archetype palette and NO cookbook."""
+    from sidequest.dungeon.bounded_site import _derive_site_seed
+    from sidequest.dungeon.materializer import (
+        MaterializationRequest,
+        build_bounded_palette,
+        materialize_bounded,
+    )
+    from sidequest.dungeon.persistence import FrontierEdge
+    from sidequest.dungeon.region_graph.model import RegionGraph, RegionNode
+    from sidequest.dungeon.seed_bootstrap import select_entrance_theme_id
+    from sidequest.game.sites.namespacing import site_entrance_id
+    from tests.dungeon.conftest import build_pg_dungeon_repo
+
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    repo.set_campaign_seed(4242)
+    seed = _derive_site_seed(base_seed=4242, site_id=_SITE_ID)
+    repo.set_campaign_seed(seed, site_id=_SITE_ID)
+
+    # Divergent room budget (8-10) — deliberately disjoint from the generator's
+    # default new_regions_per_expansion (3,6): if the archetype budget were NOT
+    # wired into the design stage (ADR-157), the committed node count would land
+    # in [4,7] and the assertion below would fail. So this proves the wire, not
+    # just a coincidence with the default.
+    archetype = _tavern_archetype(room_count_min=8, room_count_max=10)
+    palette = build_bounded_palette(archetype)
+    entrance = site_entrance_id(_SITE_ID)
+    entrance_theme = select_entrance_theme_id(palette)
+    graph = RegionGraph(entrance_id=entrance)
+    graph.add_node(RegionNode(id=entrance, expansion_id=0, theme=entrance_theme))
+    fe = FrontierEdge(
+        frontier_edge_id=f"{_SITE_ID}:seed_fe1",
+        from_region_id=entrance,
+        heading="in",
+        spawn_depth_score=0.0,
+    )
+    request = MaterializationRequest.build(
+        campaign_seed=seed,
+        expansion_id=1,
+        frontier_edge=fe,
+        frontier=[fe],
+        attach_region_ids=[entrance],
+        heading="in",
+        burst_magnitude=archetype.room_count_max,
+        lookahead_breadth=0,
+        site_id=_SITE_ID,
+    )
+    await materialize_bounded(
+        request,
+        graph=graph,
+        palette=palette,
+        dungeon_repository=repo,
+        archetype=archetype,
+    )
+
+    committed = repo.load_map(entrance_id=entrance, site_id=_SITE_ID)
+    assert entrance in committed.nodes
+    assert archetype.room_count_min <= len(committed.nodes) <= archetype.room_count_max + 1
+    # Bounded → no frontier edges left for a lookahead worker.
+    assert repo.load_frontier(site_id=_SITE_ID) == []
+    # Per-room masks were persisted (the TACTICAL_GRID source).
+    masks = repo.load_masks(site_id=_SITE_ID)
+    room_ids = [n for n in committed.nodes if n != entrance]
+    assert room_ids, "expected at least one procedural room"
+    assert all(rid in masks for rid in room_ids)
+    # Cookbook-free: NO monster population mutations written.
+    kinds = {m.kind for m in repo.load_mutations(site_id=_SITE_ID)}
+    assert "region_population" not in kinds
+    assert "setpiece_state" not in kinds
+
+
+@pytest.mark.asyncio
+async def test_materialize_bounded_writes_room_identities(
+    monkeypatch: Any, migrated_db: str
+) -> None:
+    """Each procedural room gets a room_identity mutation labelled from the
+    archetype's room_vocabulary (ADR-157 room identities)."""
+    from sidequest.dungeon.bounded_site import _derive_site_seed
+    from sidequest.dungeon.materializer import (
+        MaterializationRequest,
+        build_bounded_palette,
+        materialize_bounded,
+    )
+    from sidequest.dungeon.persistence import FrontierEdge
+    from sidequest.dungeon.region_graph.model import RegionGraph, RegionNode
+    from sidequest.dungeon.seed_bootstrap import select_entrance_theme_id
+    from sidequest.game.sites.namespacing import site_entrance_id
+    from tests.dungeon.conftest import build_pg_dungeon_repo
+
+    _pool, repo, _sid = build_pg_dungeon_repo(monkeypatch, migrated_db)
+    repo.set_campaign_seed(4242)
+    seed = _derive_site_seed(base_seed=4242, site_id=_SITE_ID)
+    repo.set_campaign_seed(seed, site_id=_SITE_ID)
+
+    archetype = _tavern_archetype()
+    palette = build_bounded_palette(archetype)
+    entrance = site_entrance_id(_SITE_ID)
+    graph = RegionGraph(entrance_id=entrance)
+    graph.add_node(
+        RegionNode(id=entrance, expansion_id=0, theme=select_entrance_theme_id(palette))
+    )
+    fe = FrontierEdge(
+        frontier_edge_id=f"{_SITE_ID}:seed_fe1",
+        from_region_id=entrance,
+        heading="in",
+        spawn_depth_score=0.0,
+    )
+    request = MaterializationRequest.build(
+        campaign_seed=seed,
+        expansion_id=1,
+        frontier_edge=fe,
+        frontier=[fe],
+        attach_region_ids=[entrance],
+        heading="in",
+        burst_magnitude=archetype.room_count_max,
+        lookahead_breadth=0,
+        site_id=_SITE_ID,
+    )
+    await materialize_bounded(
+        request, graph=graph, palette=palette, dungeon_repository=repo, archetype=archetype
+    )
+
+    identities = [m for m in repo.load_mutations(site_id=_SITE_ID) if m.kind == "room_identity"]
+    assert identities, "expected room_identity mutations"
+    for m in identities:
+        assert m.payload["label"] in archetype.room_vocabulary

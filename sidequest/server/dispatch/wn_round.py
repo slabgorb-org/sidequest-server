@@ -220,12 +220,19 @@ def run_wn_round(
 ) -> WnRoundResult:
     """Resolve one sealed WN round in descending persisted-initiative order.
 
-    Per slot: a 0-HP actor does not act (§6, mechanically enforced); a
+    Per slot: a 0-HP actor does not act (§6, mechanically enforced — the
+    skip emits ``wn_slot_skipped_downed`` with the blocked ``beat_id`` and,
+    for a player-side commit, a LIVENESS GATE narrator hint, story 166-1); a
     seated opponent attacks the first live player-side actor unless the
     encounter has already resolved (ADR-139 win-condition liveness); a
     player commit whose pinned target is down emits ``{slug}.dead_premise``
     + a narrator hint and does NOT resolve mechanically (no corpse damage,
-    no auto-retarget). Emits ``{slug}.round.committed`` →
+    no auto-retarget); a player commit whose slot arrives after the
+    encounter has already resolved emits ``wn_slot_skipped_encounter_resolved``
+    with the blocked ``beat_id`` + a LIVENESS GATE narrator hint and does
+    NOT resolve mechanically (reachable only for an untargeted commit —
+    a targeted one lands on dead-premise first; story 166-1 rework).
+    Emits ``{slug}.round.committed`` →
     ``{slug}.round.initiative`` → ``{slug}.round.resolved`` with the honest
     binding slug (awn, not cwn) — the GM-panel polygraph for the round.
     """
@@ -270,10 +277,19 @@ def run_wn_round(
         core = snapshot.find_creature_core(token)
         if core is not None and core.hp.current <= 0:
             # §6: an actor at 0 HP before its slot does not act this round.
+            # Story 166-1 (ADR-139): the skip must be OBSERVABLE against the
+            # sealed commit it refused — the GM-panel event carries the blocked
+            # beat_id, and a player-side commit gets a narrator hint (the
+            # dead_premise contract, below): without it the dispatch replay
+            # text ("Flee → CritSuccess") reaches the narrator unopposed and
+            # the prose narrates an escape over a corpse (flickering_reach
+            # playtest 2026-07-10).
+            skipped_commit = commits.get(token)
             logger.info(
-                "wn_round.slot_skipped reason=actor_downed token=%s hp=0/%s",
+                "wn_round.slot_skipped reason=actor_downed token=%s hp=0/%s beat_id=%s",
                 token,
                 core.hp.max,
+                skipped_commit.beat_id if skipped_commit is not None else "",
             )
             _watcher_publish(
                 "state_transition",
@@ -281,10 +297,29 @@ def run_wn_round(
                     "field": "encounter",
                     "op": "wn_slot_skipped_downed",
                     "actor": token,
+                    "beat_id": skipped_commit.beat_id if skipped_commit is not None else "",
                     "source": "wn_round",
                 },
                 component="encounter",
             )
+            if skipped_commit is not None and enc_actor.side == "player":
+                # Review rework r1 (finding R2): the tail must match the LIVE
+                # encounter state — in an MP partial-down (ADR-139: one downed
+                # PC ≠ party defeat) the fight continues for the survivors, and
+                # an unconditional "the fight's close" would coach the narrator
+                # to end a fight the engine keeps open.
+                _aftermath = (
+                    "narrate their fall and the fight's close instead."
+                    if encounter.resolved
+                    else "narrate their fall; the fight continues around them."
+                )
+                encounter.narrator_hints.append(
+                    f"LIVENESS GATE (ADR-139): {token}'s committed "
+                    f"{skipped_commit.beat_id} did NOT resolve — {token} was "
+                    f"already down (0 HP) when their initiative slot arrived. "
+                    f"Do not narrate {token} performing that action or its "
+                    f"outcome; {_aftermath}"
+                )
             continue
         if enc_actor.withdrawn:
             logger.info("wn_round.slot_skipped reason=withdrawn token=%s", token)
@@ -362,7 +397,33 @@ def run_wn_round(
             continue
 
         if encounter.resolved:
-            logger.info("wn_round.slot_skipped reason=encounter_resolved token=%s", token)
+            # Story 166-1 (ADR-139 win-condition liveness): a fight that
+            # resolved at an earlier slot blocks this player's committed beat —
+            # observably (GM-panel event with the blocked beat_id) and with the
+            # narrator told the action never resolved, mirroring the
+            # actor_downed skip above.
+            logger.info(
+                "wn_round.slot_skipped reason=encounter_resolved token=%s beat_id=%s",
+                token,
+                commit.beat_id,
+            )
+            _watcher_publish(
+                "state_transition",
+                {
+                    "field": "encounter",
+                    "op": "wn_slot_skipped_encounter_resolved",
+                    "actor": token,
+                    "beat_id": commit.beat_id,
+                    "source": "wn_round",
+                },
+                component="encounter",
+            )
+            encounter.narrator_hints.append(
+                f"LIVENESS GATE (ADR-139): {token}'s committed {commit.beat_id} "
+                f"did NOT resolve — the confrontation had already resolved "
+                f"({encounter.outcome}) before {token}'s initiative slot. Do not "
+                f"narrate that action succeeding; narrate the fight's close."
+            )
             continue
 
         # Story 106-4 Part C: an item-use commit ("Drink <potion>") is

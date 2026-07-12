@@ -235,9 +235,7 @@ class TestGenericOriginKind:
         origin = Origin(kind=OriginKind.GENERIC, creature_id="hold_dead")
         assert identity_key(origin, "Gruk the Smasher") == "name:gruk the smasher"
         assert identity_key(origin, "The Pale Digger") == "name:the pale digger"
-        assert identity_key(origin, "Gruk the Smasher") != identity_key(
-            origin, "The Pale Digger"
-        )
+        assert identity_key(origin, "Gruk the Smasher") != identity_key(origin, "The Pale Digger")
 
     def test_legacy_ephemeral_stub_still_derives_ephemeral_stub(self) -> None:
         """Green guard (must hold through GREEN): 162-3 removes stub MINTING on

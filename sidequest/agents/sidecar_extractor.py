@@ -91,7 +91,7 @@ _TOOL_DESCRIPTION = (
     "PLACE or location (a hold, cavern, town, region), set that entry's is_place "
     "to true so it is not mistaken for a person. "
     "For each NPC present, classify their stance toward the player characters in "
-    "this narration as that entry's role: 'hostile' (attacks, threatens, or "
+    "this narration as that entry's stance: 'hostile' (attacks, threatens, or "
     "opposes the party), 'friendly' (aids or sides with it), 'bystander' "
     "(present but uninvolved), or 'neutral' (no stance stated). "
     "Report only what the prose states; never invent. An empty field is correct "
@@ -138,16 +138,20 @@ _ITEMS_GAINED_ITEM_SCHEMA: dict[str, Any] = {
 # ``side`` is deliberately undocumented — it is ENGINE-owned
 # (merge_sidecar_extraction_npcs_present), not a thing the reader should claim.
 #
-# ADR-156 §6 (task-5 review fix): ``role`` is documented as a stance enum so the
-# attach-before-mint hostile gate (`narration_apply._mention_is_hostile`, which
-# reads ``mention.role in ("hostile", "enemy", "opponent")``) receives a REAL
-# signal on real traffic. Pre-fix, role was read free-form by ``from_value`` but
-# never prompted — the extractor structurally never emitted it, so the
-# seated-Other attach leg could not fire outside hand-built tests. Distinct from
-# ``side``: side is the engine's ADJUDICATED seat membership (exact-name match
-# against already-seated actors — a NEW prose epithet always resolves "neutral");
-# role is the reader's PROSE-stance classification, which is exactly the signal
-# a first-mention hostile epithet carries.
+# ADR-156 §6 (task-5 review fix, round 2): ``stance`` is documented as its OWN
+# enum so the attach-before-mint hostile gate
+# (`narration_apply._mention_is_hostile`) receives a REAL signal on real
+# traffic. Pre-fix, no stance-shaped field was ever prompted — the extractor
+# structurally never emitted one, so the seated-Other attach leg could not fire
+# outside hand-built tests. It is deliberately NOT ``role``: role carries
+# OCCUPATION semantics downstream (pool-member ``role="doctor"``, the drift
+# detector, the state projection) and routing stance words through it would
+# overwrite descriptive roles and fire false ``npc_reinvented`` drift warnings
+# on every cite — ``role`` stays unrequested/free-form exactly as before.
+# Also distinct from ``side``: side is the engine's ADJUDICATED seat membership
+# (exact-name match against already-seated actors — a NEW prose epithet always
+# resolves "neutral"); stance is the reader's PROSE classification, which is
+# exactly the signal a first-mention hostile epithet carries.
 _NPCS_PRESENT_ITEM_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -155,7 +159,7 @@ _NPCS_PRESENT_ITEM_SCHEMA: dict[str, Any] = {
             "type": "string",
             "description": "The NPC's name, as the prose states it.",
         },
-        "role": {
+        "stance": {
             "type": "string",
             "enum": ["hostile", "friendly", "bystander", "neutral"],
             "description": (

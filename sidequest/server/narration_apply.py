@@ -2602,18 +2602,33 @@ def _mention_is_hostile(mention: Any) -> bool:
     """True when a mention marks its subject as the hostile Other.
 
     ADR-156 §6 (Amendment B) — the seated-Other attach gate in
-    :func:`_attach_before_mint` only opens for a hostile cite. Checked via
-    ``getattr`` with an empty-string default so a caller passing something
-    that isn't an ``NpcMention`` (the prose-extraction site hands this a bare
-    ``role_token`` string, which has no ``.side``/``.role`` attributes at
-    all) degrades to "not hostile" instead of raising — prose-extracted
+    :func:`_attach_before_mint` only opens for a hostile cite. Three legs,
+    any one suffices:
+
+    * ``side == "opponent"`` — the engine's adjudicated seat membership
+      (only ever set for an already-seated exact-name match);
+    * ``stance == "hostile"`` — the sidecar extractor's prose-stance
+      classification (task-5 review fix round 2: the signal that actually
+      EXISTS on real traffic for a first-mention epithet — requested via
+      ``_NPCS_PRESENT_ITEM_SCHEMA``'s stance enum and carried through
+      ``NpcMention.from_value``);
+    * ``role in ("hostile", "enemy", "opponent")`` — the brief's original
+      contract, kept for internal constructors that stamp stance-words into
+      role (subsystems/confrontation.py, dogfight.py). ``role``'s PRIMARY
+      semantics remain occupation ("doctor", "guard") — the extractor is
+      never asked to put stance words here.
+
+    Checked via ``getattr`` with an empty-string default so a caller passing
+    something that isn't an ``NpcMention`` (the prose-extraction site hands
+    this a bare ``role_token`` string, which has none of these attributes)
+    degrades to "not hostile" instead of raising — prose-extracted
     honorifics/roles (Mrs. Gow, the doctor, ...) are never combat opponents
     by construction, so that degrade is correct, not a swallow.
     """
-    return getattr(mention, "side", "") == "opponent" or getattr(mention, "role", "") in (
-        "hostile",
-        "enemy",
-        "opponent",
+    return (
+        getattr(mention, "side", "") == "opponent"
+        or getattr(mention, "stance", "") == "hostile"
+        or getattr(mention, "role", "") in ("hostile", "enemy", "opponent")
     )
 
 

@@ -366,55 +366,75 @@ def test_green_room_mint_span_fires_on_genuine_prose_extraction_mint(
 
 
 # ---------------------------------------------------------------------------
-# Task-5 review fix (Important): the hostile signal must EXIST on real traffic.
-# `_mention_is_hostile` reads mention.side / mention.role — but `side` is
-# ENGINE-owned and name-keyed off already-seated actors (a NEW epithet like
-# "Ihnsch of the Rusted Works" always resolves "neutral"), and `role` was read
-# free-form by NpcMention.from_value yet never REQUESTED from the extractor LLM
-# (_NPCS_PRESENT_ITEM_SCHEMA documented only name + is_place). So the
-# seated-Other attach leg was correct-when-triggered but structurally starved
-# of its trigger. Fix: the extractor schema now documents `role` as a stance
-# enum. These two tests pin (a) the schema contract and (b) the REAL pipeline
-# end-to-end — extraction dict -> merge_sidecar_extraction_npcs_present ->
-# _apply_npc_mentions -> alias on the seated Other, no hand-built NpcMention.
+# Task-5 review fix (Important, two rounds): the hostile signal must EXIST on
+# real traffic — and must not collide with `role`'s occupation semantics.
+#
+# Round 1: `_mention_is_hostile` reads mention.side / mention.role — but
+# `side` is ENGINE-owned and name-keyed off already-seated actors (a NEW
+# epithet like "Ihnsch of the Rusted Works" always resolves "neutral"), and
+# nothing stance-shaped was ever REQUESTED from the extractor LLM
+# (_NPCS_PRESENT_ITEM_SCHEMA documented only name + is_place). The
+# seated-Other attach leg was correct-when-triggered but structurally starved.
+#
+# Round 2: routing stance words through the shared `role` field collided with
+# role's established OCCUPATION semantics downstream — the pool-hit upsert
+# would overwrite descriptive roles ("doctor") with stance words ("friendly"),
+# and `_detect_npc_identity_drift` would fire false npc.reinvented warnings on
+# essentially every pool-member cite. Fix: stance moves to its OWN
+# NpcMention.stance field + `stance` schema enum; `role` reverts to
+# unrequested/free-form. These tests pin (a) the schema contract (stance
+# requested, role NOT), (b) the REAL pipeline end-to-end — extraction dict ->
+# merge_sidecar_extraction_npcs_present -> _apply_npc_mentions -> alias on the
+# seated Other, no hand-built NpcMention — and (c) the collision regression
+# (an occupation role survives a stance-classified re-cite, no drift span).
 # ---------------------------------------------------------------------------
 
 
-def test_npcs_present_extractor_schema_documents_role_stance_enum() -> None:
-    """`role` must be present in `_NPCS_PRESENT_ITEM_SCHEMA` with the exact
-    stance enum, AND carry through to the emitted tool schema
+def test_npcs_present_extractor_schema_documents_stance_enum_not_role() -> None:
+    """`stance` must be present in `_NPCS_PRESENT_ITEM_SCHEMA` with the exact
+    enum, AND carry through to the emitted tool schema
     (`SidecarExtraction.model_json_schema()` is the forced tool's
-    input_schema — the contract the extractor LLM actually sees). Without
-    the enum in the emitted schema the reader is never told to classify
-    stance, and the attach-before-mint hostile gate starves."""
+    input_schema — the contract the extractor LLM actually sees). `role`
+    must NOT be a requested property — pinning the round-2 collision fix
+    (stance words routed through role clobber occupation roles downstream)."""
     expected_enum = ["hostile", "friendly", "bystander", "neutral"]
 
-    role = _NPCS_PRESENT_ITEM_SCHEMA["properties"].get("role")
-    assert role is not None, (
-        "_NPCS_PRESENT_ITEM_SCHEMA must document `role` — without it the "
-        "extractor LLM never emits the stance signal _mention_is_hostile reads"
+    stance = _NPCS_PRESENT_ITEM_SCHEMA["properties"].get("stance")
+    assert stance is not None, (
+        "_NPCS_PRESENT_ITEM_SCHEMA must document `stance` — without it the "
+        "extractor LLM never emits the signal _mention_is_hostile reads"
     )
-    assert role.get("type") == "string"
-    assert role.get("enum") == expected_enum, (
-        f"role enum must be exactly {expected_enum!r} (the 'hostile' member is "
-        f"what _mention_is_hostile matches on); got {role.get('enum')!r}"
+    assert stance.get("type") == "string"
+    assert stance.get("enum") == expected_enum, (
+        f"stance enum must be exactly {expected_enum!r} (the 'hostile' member "
+        f"is what _mention_is_hostile matches on); got {stance.get('enum')!r}"
+    )
+    assert "role" not in _NPCS_PRESENT_ITEM_SCHEMA["properties"], (
+        "`role` must NOT be a requested schema property — role carries "
+        "OCCUPATION semantics downstream (pool role='doctor', the drift "
+        "detector, the state projection); asking the LLM to put stance words "
+        "there overwrites descriptive roles and fires false npc.reinvented "
+        "warnings (the round-2 review finding)"
     )
 
     # The annotation must carry into the EMITTED tool schema, not just the
     # module constant — model_json_schema() is what reaches the LLM.
     emitted = SidecarExtraction.model_json_schema()
     emitted_item = emitted["properties"]["npcs_present"]["items"]
-    assert emitted_item["properties"]["role"]["enum"] == expected_enum, (
-        "WithJsonSchema must surface the role enum in the emitted tool schema"
+    assert emitted_item["properties"]["stance"]["enum"] == expected_enum, (
+        "WithJsonSchema must surface the stance enum in the emitted tool schema"
+    )
+    assert "role" not in emitted_item["properties"], (
+        "`role` must not appear as a requested property in the emitted tool schema"
     )
 
 
-def test_hostile_role_from_real_extraction_pipeline_attaches_to_seated_other(
+def test_hostile_stance_from_real_extraction_pipeline_attaches_to_seated_other(
     local_otel: InMemorySpanExporter,
 ) -> None:
     """Wiring (the gap the review exposed): drive the REAL pipeline — a fake
-    extraction payload whose npcs_present item carries `role: "hostile"` and
-    a novel name, through `merge_sidecar_extraction_npcs_present` (which
+    extraction payload whose npcs_present item carries `stance: "hostile"`
+    and a novel name, through `merge_sidecar_extraction_npcs_present` (which
     overwrites `side` with the ENGINE-adjudicated value: "neutral" here,
     since a new epithet matches no seated actor name) and then the real
     `_apply_npc_mentions` consumer — and assert the name lands as an alias
@@ -432,15 +452,22 @@ def test_hostile_role_from_real_extraction_pipeline_attaches_to_seated_other(
         npcs_present=[],  # stale/empty — the extraction is the sole source
     )
     extraction = SidecarExtraction(
-        npcs_present=[{"name": "Ihnsch of the Rusted Works", "role": "hostile"}]
+        npcs_present=[{"name": "Ihnsch of the Rusted Works", "stance": "hostile"}]
     )
 
     merged = merge_sidecar_extraction_npcs_present(result, extraction, snap)
 
-    # The merge must carry role through from_value and leave it intact while
+    # The merge must carry stance through from_value and leave it intact while
     # overwriting only side (engine-owned; a new epithet resolves "neutral").
-    assert [m.role for m in merged.npcs_present] == ["hostile"], (
-        f"role must survive the merge; got {[(m.name, m.role, m.side) for m in merged.npcs_present]!r}"
+    # `role` stays untouched ("" — the extractor was not asked for one), so
+    # stance can never leak into the occupation field through this path.
+    assert [m.stance for m in merged.npcs_present] == ["hostile"], (
+        f"stance must survive the merge; got "
+        f"{[(m.name, m.stance, m.side) for m in merged.npcs_present]!r}"
+    )
+    assert [m.role for m in merged.npcs_present] == [""], (
+        "role must stay untouched by the merge — stance is its own field, "
+        "never routed through the occupation slot"
     )
     assert [m.side for m in merged.npcs_present] == ["neutral"], (
         "side is engine-adjudicated; an unseated new epithet must resolve neutral "
@@ -458,3 +485,49 @@ def test_hostile_role_from_real_extraction_pipeline_attaches_to_seated_other(
     )
     seated = resolve_roster_npc(snap.npcs, "Ihnsch of the Rusted Works")
     assert seated is not None and seated.core.name == "the Scrapborn"
+
+
+def test_stance_classified_recite_does_not_clobber_occupation_role(
+    local_otel: InMemorySpanExporter,
+) -> None:
+    """The round-2 collision regression: an existing pool member holds an
+    OCCUPATION role ("doctor"). The extractor re-cites them with a stance
+    classification ("friendly"). Through the real merge -> apply pipeline,
+    the pool member's role must still be "doctor" (the pool-hit upsert must
+    see mention.role == "" — no overwrite) and NO npc.reinvented drift span
+    may fire (stance vs occupation must never register as identity drift)."""
+    from sidequest.game.npc_pool import NpcPoolMember
+
+    snap = _snapshot()
+    snap.npc_pool.append(
+        NpcPoolMember(
+            name="Mirena Salt",
+            role="doctor",
+            pronouns="she/her",
+            drawn_from="narrator_invented",
+        )
+    )
+
+    result = NarrationTurnResult(
+        narration="Mirena Salt kneels beside the cot and unrolls her kit.",
+        npcs_present=[],
+    )
+    extraction = SidecarExtraction(npcs_present=[{"name": "Mirena Salt", "stance": "friendly"}])
+
+    merged = merge_sidecar_extraction_npcs_present(result, extraction, snap)
+    _apply_npc_mentions(snapshot=snap, mentions=merged.npcs_present, turn_num=8)
+
+    member = next(m for m in snap.npc_pool if m.name == "Mirena Salt")
+    assert member.role == "doctor", (
+        f"a stance classification must NEVER overwrite the occupation role; "
+        f"got role={member.role!r}"
+    )
+    drift_spans = [
+        dict(s.attributes or {})
+        for s in local_otel.get_finished_spans()
+        if s.name == "npc.reinvented"
+    ]
+    assert drift_spans == [], (
+        f"stance vs occupation must not register as identity drift — no "
+        f"npc.reinvented span may fire; got {drift_spans!r}"
+    )

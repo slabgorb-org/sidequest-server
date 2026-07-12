@@ -440,8 +440,9 @@ def _seed_combat_hp_depletion_to_npcs(
         # opponent core by exact ``actor.name`` (``find_creature_core``: the
         # HP-bar filter, WN attack tools, query_encounter, payload builder),
         # so a seat left under the prose alias is an unreachable opponent.
-        # Mirrors the 108-2 conscription, which already seats canonically;
-        # the alias itself stays in the ledger for narrator prose.
+        # Mirrors the seater's own resolver leg (ADR-156 Amendment A: the
+        # ``materialized_threat`` branch canonicalizes a roster match the same
+        # way); the alias itself stays in the ledger for narrator prose.
         if npc is not None and npc.core.name != actor.name:
             actor.name = npc.core.name
         pool_origin = ""
@@ -513,10 +514,12 @@ def _seed_combat_hp_depletion_to_npcs(
                 pool_origin = pool_member.name
             else:
                 # 108-2 (MINTING-MAJOR): reaching here means the opponent name
-                # resolved to NEITHER a bound roster entry NOR a co-located statted
-                # adversary NOR a scene-active pool antagonist (the
-                # materialized-threat resolution + pool promotion upstream already
-                # tried) — a router-named free string with no backing.
+                # resolved to NEITHER a roster entry (canonical / alias /
+                # invented_from, via ``resolve_roster_npc`` above) NOR a
+                # scene-active pool antagonist (the pool scan just above) — a
+                # router-named free string with no backing. (Pre-ADR-156 a
+                # third source ran upstream: the deleted 108-2 conscription's
+                # co-located-adversary scan.)
                 #
                 # Story 162-3: the fabrication last-resort is replaced by the
                 # world bestiary's AUTHORED ``generics:`` section — the sanctioned
@@ -656,8 +659,9 @@ def _seed_combat_hp_depletion_to_npcs(
                         f"degenerate paths"
                     )
         elif npc.creature_id is not None:
-            # 108-2: a BOUND, statted bestiary creature (resolved upstream or
-            # named directly). Its authored HP pool IS the WWN-balanced math the
+            # 108-2 rule (still live): a BOUND, statted bestiary creature (named
+            # directly, or reached via the resolver's alias/invented_from legs
+            # above). Its authored HP pool IS the WWN-balanced math the
             # ruleset binding exists to inherit (SOUL "Bind the Ruleset, Don't
             # Balance It") — the confrontation's generic ``opponent_default_stats``
             # must NOT clobber it. Reset only ``current`` to the creature's OWN
@@ -1859,10 +1863,14 @@ def instantiate_encounter_from_trigger(
     # ``encounter.no_opponent_available`` span below.
     location_available = True
     seating_source = "router_named"
-    # 153-9 (ADR-116/143/144): resolve the Fate binding ONCE here. The 108-2
-    # roster reconciliation below must DECLINE under a Fate binding (a Fate
-    # conflict resolves on FateSheet stress, not bound hp), and the Fate-seating
-    # de-nativization branch downstream (126-30) reuses the same flag.
+    # 126-30 (ADR-143/144 "Bind the Ruleset"): resolve the Fate binding ONCE
+    # here; two downstream seams share the flag — the Fate-conflict seating
+    # de-nativization (``seat_as_fate_conflict``: inert metrics, FateSheet
+    # stress as the win track) and the native combat-seeding gate (a Fate
+    # combat must never reach ``_seed_combat_hp_depletion_to_npcs`` /
+    # initiative). Originally introduced for the 108-2 roster conscription's
+    # Fate decline (153-9); that conscription was deleted by ADR-156
+    # Amendment A (166-5), but both remaining consumers stand.
     is_fate = bool(pack and pack.rules and pack.rules.ruleset == "fate")
     # ADR-153 §6 (158-34): the ship-scale firewall must cover EVERY seating door,
     # not only the location fallback. The intent router (ADR-113) can name a
@@ -2242,8 +2250,8 @@ def instantiate_encounter_from_trigger(
         # alongside Fate (the upstream half of the #964 cleanup). A Fate Contest keeps its
         # OWN Fate path (``enc.contest``, below) with the metrics as its victory tally; a
         # sealed-letter duel is a commit-reveal table, not a conflict — both are excluded
-        # from the conflict de-nativization. (``is_fate`` is resolved once above,
-        # at the 108-2 roster-reconciliation gate — 153-9.)
+        # from the conflict de-nativization. (``is_fate`` is resolved once,
+        # near the top of this function.)
         seat_as_fate_conflict = is_fate and cdef.resolution_mode not in (
             ResolutionMode.contest,
             ResolutionMode.sealed_letter_lookup,

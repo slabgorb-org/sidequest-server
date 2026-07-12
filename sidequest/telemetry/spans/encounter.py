@@ -318,26 +318,6 @@ SPAN_ROUTES[SPAN_ENCOUNTER_OPPONENT_TOOTHLESS] = SpanRoute(
     },
 )
 
-# 108-2: the seater reconciled a router-named free-string opponent to a BOUND,
-# statted adversary in the scene (ADR-059 Monster-Manual / ADR-116 the Other).
-# Fires when the intent router invented an adversary name that matched no roster
-# entry (the "Hold-Dead"/"Arena Opponent" stubs) and the seater re-pointed it to
-# a co-located, statted, hostile ``creature_id`` creature instead of fabricating
-# one. The GM panel reads this to confirm the bound roster — not an improvised
-# HP-10 placeholder — reached the fight.
-SPAN_ENCOUNTER_OPPONENT_RESOLVED_FROM_ROSTER = "encounter.opponent_resolved_from_roster"
-SPAN_ROUTES[SPAN_ENCOUNTER_OPPONENT_RESOLVED_FROM_ROSTER] = SpanRoute(
-    event_type="state_transition",
-    component="encounter",
-    extract=lambda span: {
-        "field": "encounter.opponent_resolved_from_roster",
-        "router_name": (span.attributes or {}).get("router_name", ""),
-        "bound_name": (span.attributes or {}).get("bound_name", ""),
-        "creature_id": (span.attributes or {}).get("creature_id", ""),
-        "match_scope": (span.attributes or {}).get("match_scope", ""),
-    },
-)
-
 # 108-2 (MINTING-MAJOR): the seater had to FABRICATE an opponent — a router-named
 # free-string adversary with no backing roster/bestiary entry AND no co-located
 # bound creature to resolve to. Loud lie-detector (No Silent Fallbacks): the GM
@@ -393,53 +373,6 @@ SPAN_ROUTES[SPAN_ENCOUNTER_STUB_FABRICATION_REFUSED] = SpanRoute(
         "encounter_type": (span.attributes or {}).get("confrontation_type", ""),
         "opponent": (span.attributes or {}).get("opponent", ""),
         "reason": (span.attributes or {}).get("reason", ""),
-    },
-)
-
-# 150-2 (Defect A): the seater DECLINED to reconcile a router-named opponent to a
-# co-located bestiary creature because the confrontation is NON-combat (a Fate
-# standoff / social duel / chase). The 108-2 reconciliation exists to preserve a
-# bound creature's COMBAT hp stats (ADR-059); it is creature_id-gated, so the only
-# thing it can pull is a bestiary monster — never the right Other for a human
-# standoff (dust_and_lead seated a "Western Diamondback" rattlesnake against a
-# drifter). The GM panel reads this to confirm the engine REFUSED to conscript an
-# ambient hazard and seated the router-named threat instead (No Silent Fallbacks).
-SPAN_ENCOUNTER_ROSTER_RESOLUTION_SKIPPED = "encounter.roster_resolution_skipped"
-SPAN_ROUTES[SPAN_ENCOUNTER_ROSTER_RESOLUTION_SKIPPED] = SpanRoute(
-    event_type="state_transition",
-    component="encounter",
-    extract=lambda span: {
-        "field": "encounter.roster_resolution_skipped",
-        "router_name": (span.attributes or {}).get("router_name", ""),
-        "declined_name": (span.attributes or {}).get("declined_name", ""),
-        "confrontation_category": (span.attributes or {}).get("confrontation_category", ""),
-    },
-)
-
-# 158-1 (WWN-COMBAT-NEVER-SEATS): the seater found NO co-located adversary for a
-# combat target, but a manual_origin bestiary adversary the narrator surfaced
-# on-stage this turn (or last) was sitting at a STALE zone (its authored room,
-# not the PC's current scene — e.g. the entrance Gnaw-Swarm the party moved
-# past, dragged forward in prose). Per ADR-116 the projection had no co-located
-# Other, so the router never seated and the narrator free-narrated the fight.
-# The engine reconciles the surfaced creature's zone to the PC's scene so the
-# bound creature reaches the fight; this span is the GM-panel lie-detector that
-# the zone fix happened (CLAUDE.md OTEL Observability / SOUL "Yes, And"), naming
-# the creature and the from→to zones. Turn-scoped (``last_seen_turn`` recent) so
-# it never region-wide-conscripts an off-stage creature (the over-reach ADR-116
-# guards against).
-SPAN_ENCOUNTER_CREATURE_ZONE_RECONCILED = "encounter.creature_zone_reconciled"
-SPAN_ROUTES[SPAN_ENCOUNTER_CREATURE_ZONE_RECONCILED] = SpanRoute(
-    event_type="state_transition",
-    component="encounter",
-    extract=lambda span: {
-        "field": "encounter.creature_zone_reconciled",
-        "creature_name": (span.attributes or {}).get("creature_name", ""),
-        "creature_id": (span.attributes or {}).get("creature_id", ""),
-        "from_location": (span.attributes or {}).get("from_location", ""),
-        "to_location": (span.attributes or {}).get("to_location", ""),
-        "last_seen_turn": (span.attributes or {}).get("last_seen_turn", 0),
-        "current_turn": (span.attributes or {}).get("current_turn", 0),
     },
 )
 
@@ -1116,34 +1049,6 @@ def encounter_opponent_attack_resolved_span(
 
 
 @contextmanager
-def encounter_opponent_resolved_from_roster_span(
-    *,
-    router_name: str,
-    bound_name: str,
-    creature_id: str,
-    match_scope: str,
-    _tracer: trace.Tracer | None = None,
-    **attrs: Any,
-) -> Iterator[trace.Span]:
-    """108-2: a router-named free-string opponent was reconciled to a bound,
-    statted adversary in the scene instead of fabricating a stub. ``match_scope``
-    records HOW it was found (``room``); ``creature_id`` proves a real bestiary
-    creature reached the fight (ADR-059 Monster-Manual doctrine)."""
-    with Span.open(
-        SPAN_ENCOUNTER_OPPONENT_RESOLVED_FROM_ROSTER,
-        {
-            "router_name": router_name,
-            "bound_name": bound_name,
-            "creature_id": creature_id,
-            "match_scope": match_scope,
-            **attrs,
-        },
-        tracer_override=_tracer,
-    ) as span:
-        yield span
-
-
-@contextmanager
 def encounter_opponent_minted_stub_span(
     *,
     confrontation_type: str,
@@ -1228,69 +1133,6 @@ def encounter_stub_fabrication_refused_span(
             "confrontation_type": confrontation_type,
             "opponent": opponent,
             "reason": reason,
-            **attrs,
-        },
-        tracer_override=_tracer,
-    ) as span:
-        yield span
-
-
-@contextmanager
-def encounter_roster_resolution_skipped_span(
-    *,
-    router_name: str,
-    declined_name: str,
-    confrontation_category: str,
-    _tracer: trace.Tracer | None = None,
-    **attrs: Any,
-) -> Iterator[trace.Span]:
-    """150-2 (Defect A): the seater found a co-located bestiary adversary it COULD
-    have reconciled the router-named opponent to, but DECLINED because the
-    confrontation is non-combat (``confrontation_category`` != ``combat``). A
-    bestiary monster is never the right Other for a Fate standoff / social duel /
-    chase; the router-named threat is seated instead. ``declined_name`` is the
-    creature the engine refused to conscript (e.g. ``Western Diamondback``)."""
-    with Span.open(
-        SPAN_ENCOUNTER_ROSTER_RESOLUTION_SKIPPED,
-        {
-            "router_name": router_name,
-            "declined_name": declined_name,
-            "confrontation_category": confrontation_category,
-            **attrs,
-        },
-        tracer_override=_tracer,
-    ) as span:
-        yield span
-
-
-@contextmanager
-def encounter_creature_zone_reconciled_span(
-    *,
-    creature_name: str,
-    creature_id: str,
-    from_location: str,
-    to_location: str,
-    last_seen_turn: int,
-    current_turn: int,
-    _tracer: trace.Tracer | None = None,
-    **attrs: Any,
-) -> Iterator[trace.Span]:
-    """158-1: a combat target had no co-located adversary, but a manual_origin
-    bestiary adversary the narrator surfaced this turn (or last) was stranded at a
-    stale zone. Its zone is reconciled to the PC's current scene so the bound
-    creature reaches the fight instead of a fabricated stub (ADR-116 / ADR-059;
-    SOUL "Yes, And"). ``from_location`` is the stale stored zone, ``to_location``
-    the PC's scene; the GM panel reads this to confirm the engine MADE the Other
-    present rather than the narrator improvising (No Silent Fallbacks)."""
-    with Span.open(
-        SPAN_ENCOUNTER_CREATURE_ZONE_RECONCILED,
-        {
-            "creature_name": creature_name,
-            "creature_id": creature_id,
-            "from_location": from_location,
-            "to_location": to_location,
-            "last_seen_turn": last_seen_turn,
-            "current_turn": current_turn,
             **attrs,
         },
         tracer_override=_tracer,

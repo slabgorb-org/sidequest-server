@@ -16,11 +16,12 @@ driving the REAL production seams (no source-text assertions):
 1. ``_seed_combat_hp_depletion_to_npcs`` finds an opponent through the unified
    resolver (``resolve_roster_npc``: canonical + aliases + invented_from, one
    normalization) — an alias-named actor seats the canonical entity; no stub.
-2. When ``_resolve_opponent_from_roster`` conscripts a bound creature for a
-   router-named free string, the router/prose name is RECORDED in the
-   creature's alias ledger (existing ``accrete_npc_aliases`` — reuse-first),
-   emitting ``entity.alias_accreted``. The fork closes permanently: the next
-   reference by EITHER name resolves to the same entity.
+2. (RETIRED by ADR-156 Amendment A / 166-5) ``_resolve_opponent_from_roster``
+   conscripted a bound creature for a router-named free string and recorded
+   the prose name as its alias. The conscription itself is deleted: a
+   router-named free string with no roster match now seats AS GIVEN, never
+   substituted for a co-located creature — see
+   tests/server/test_166_5_wrong_other_repros.py.
 3. (RETIRED by 162-3) A genuinely-novel opponent no longer mints a stub on the
    default path — the authored bestiary ``generics:`` section is the sanctioned
    last resort and fabrication fails loud. Successor contract (including the
@@ -36,17 +37,10 @@ exact names only; conscription drops the router name; inject dedups by name.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from opentelemetry import trace as otel_trace
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
-    InMemorySpanExporter,
-)
 
 from sidequest.agents.orchestrator import NpcMention
 from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
@@ -66,23 +60,6 @@ from sidequest.server.dispatch.encounter_lifecycle import (
 
 _FIXTURE_PACK = Path(__file__).resolve().parents[1] / "fixtures" / "packs" / "test_genre"
 _LOC = "the_dropmouth"
-_ALIAS_ACCRETED_SPAN = "entity.alias_accreted"
-
-
-@pytest.fixture
-def otel_capture() -> Iterator[InMemorySpanExporter]:
-    from sidequest.telemetry.setup import init_tracer
-
-    init_tracer()
-    provider = otel_trace.get_tracer_provider()
-    assert isinstance(provider, TracerProvider)
-    exporter = InMemorySpanExporter()
-    processor = SimpleSpanProcessor(exporter)
-    provider.add_span_processor(processor)
-    try:
-        yield exporter
-    finally:
-        processor.shutdown()
 
 
 def _statted_creature(
@@ -224,69 +201,16 @@ class TestSeederSeatsByAlias:
 
 
 # ---------------------------------------------------------------------------
-# 2 + 3. Conscription records the prose name; the fork closes (AC3/AC4/AC5)
-# ---------------------------------------------------------------------------
-
-
-class TestConscriptionRecordsAlias:
-    def _instantiate(self, snap: GameSnapshot, threat_name: str):
-        return instantiate_encounter_from_trigger(
-            snapshot=snap,
-            pack=load_genre_pack(_FIXTURE_PACK),
-            encounter_type="combat",
-            player_name="Kirk",
-            npcs_present=[],
-            genre_slug=snap.genre_slug,
-            materialized_threat=NpcMention(name=threat_name, role="hostile", side="opponent"),
-        )
-
-    def test_router_name_is_recorded_in_the_conscripted_creatures_ledger(
-        self, otel_capture: InMemorySpanExporter
-    ) -> None:
-        """108-2 seats Molgrath in the router name's place (existing, kept).
-        NEW: the router name is recorded as Molgrath's alias — the binding
-        "Hold-Dead IS Molgrath" becomes durable world state, observably
-        (``entity.alias_accreted``, AC5) instead of being re-guessed."""
-        molgrath = _statted_creature("Molgrath the Eyeless")
-        snap = _snapshot_with(molgrath)
-
-        enc = self._instantiate(snap, "Hold-Dead, Still at the Shift")
-
-        opponents = [a.name for a in enc.actors if a.side == "opponent"]
-        assert opponents == ["Molgrath the Eyeless"]
-        assert "Hold-Dead, Still at the Shift" in molgrath.aliases, (
-            "conscription dropped the router name — the fork stays open for every later reference"
-        )
-        accreted = [s for s in otel_capture.get_finished_spans() if s.name == _ALIAS_ACCRETED_SPAN]
-        assert len(accreted) >= 1
-        joined = " | ".join(
-            str(dict(s.attributes or {}).get("aliases_accreted", "")) for s in accreted
-        )
-        assert "Hold-Dead, Still at the Shift" in joined
-
-    def test_recorded_alias_resolves_and_reseats_without_a_second_identity(
-        self,
-    ) -> None:
-        """AC4 kill-shot, two turns deep: after conscription records the alias,
-        a LATER reference by the prose name must (a) resolve to the same
-        entity via the unified resolver and (b) re-seat with NO stub and NO
-        roster growth. Two names, one enemy, one identity — permanently."""
-        molgrath = _statted_creature("Molgrath the Eyeless")
-        snap = _snapshot_with(molgrath)
-        self._instantiate(snap, "Hold-Dead, Still at the Shift")
-        assert len(snap.npcs) == 1
-
-        # (a) the prose name now IS this entity, through the one shared lookup.
-        assert resolve_roster_npc(snap.npcs, "Hold-Dead, Still at the Shift") is molgrath
-
-        # (b) a later combat seating by the prose name reuses it — no twin.
-        _seed(snap, "Hold-Dead, Still at the Shift")
-        assert len(snap.npcs) == 1, (
-            f"the recorded alias forked anyway: {[n.core.name for n in snap.npcs]!r}"
-        )
-        assert not any(n.ephemeral for n in snap.npcs)
-
-
+# 2. RETIRED by ADR-156 Amendment A (166-5, task 4) — the 108-2 conscription
+# this class pinned (``_resolve_opponent_from_roster`` seating a co-located
+# bound creature in a router-invented free string's place, then recording
+# that string as the creature's alias) is deleted outright: Amendment A's
+# target-first seater seats the router's named string AS GIVEN when it is
+# not a roster match — it never substitutes a different creature, so there
+# is no conscription event left to record an alias for. See
+# tests/server/test_166_5_wrong_other_repros.py for the replacement
+# contract (named target wins; the resolver leg below still canonicalizes
+# a genuine alias/case-variant hit).
 # ---------------------------------------------------------------------------
 # 3. RETIRED by story 162-3 — the genuinely-novel case no longer mints.
 #

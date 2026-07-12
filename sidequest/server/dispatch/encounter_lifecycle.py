@@ -23,6 +23,7 @@ from sidequest.game.encounter import (
     EncounterPhase,
     StructuredEncounter,
 )
+from sidequest.game.green_room import AdmitResult, MaterializationCandidate, admit
 from sidequest.game.lore_store import LoreStore
 from sidequest.game.origin import Origin, OriginKind, normalize_name, resolve_roster_npc
 from sidequest.game.resource_pool import ResourceThreshold
@@ -334,6 +335,27 @@ def _generics_for(pack, world_slug: str | None) -> list:
     return list(bestiary.generics or [])
 
 
+def _resolve_admitted_seat(
+    result: AdmitResult, npc: Npc, snapshot: GameSnapshot, *, source: str
+) -> Npc:
+    """Green Room Task 3 (ADR-156): resolve the ``Npc`` an ``admit()`` call
+    actually seated for THIS opponent slot — a freshly-built candidate is not
+    necessarily the live record when the ladder folds it onto an already-
+    materialized identity. ``result.admitted[0]`` when freshly seated, else
+    the merged existing via :func:`resolve_roster_npc` (the SAME lookup
+    ``admit()`` used internally to find it, so it always hits)."""
+    if result.admitted:
+        return result.admitted[0]
+    existing = resolve_roster_npc(snapshot.npcs, npc.core.name)
+    if existing is None:
+        raise ValueError(
+            f"green_room.admit ({source}) reported {npc.core.name!r} merged, but "
+            "the roster lookup cannot find it — identity resolution is broken "
+            "(No Silent Fallbacks)"
+        )
+    return existing
+
+
 def _seed_combat_hp_depletion_to_npcs(
     *,
     snapshot: GameSnapshot,
@@ -462,7 +484,24 @@ def _seed_combat_hp_depletion_to_npcs(
                 )
                 npc.core.hp = hp_pool_from_hp(hp)
                 npc.core.armor_class = ac
-                snapshot.npcs.append(npc)
+                # Green Room Task 3 (ADR-156): NARRATOR_INVENTED tier — a
+                # scene-active pool antagonist turning mechanical.
+                admit_result = admit(
+                    snapshot,
+                    [
+                        MaterializationCandidate(
+                            npc=npc,
+                            origin=npc.origin
+                            or Origin(
+                                kind=OriginKind.NARRATOR_INVENTED, creature_id=npc.creature_id
+                            ),
+                            source="seeder.pool_promotion",
+                        )
+                    ],
+                )
+                npc = _resolve_admitted_seat(
+                    admit_result, npc, snapshot, source="seeder.pool_promotion"
+                )
                 # Story 162-10 (review rework): canonicalize the SEAT to the
                 # promoted member's name. The pool leg now matches on
                 # ``normalize_name``, so a case/diacritic-variant ``actor.name``
@@ -522,7 +561,24 @@ def _seed_combat_hp_depletion_to_npcs(
                         creature_id=row.id,
                         origin=Origin(kind=OriginKind.GENERIC, creature_id=row.id),
                     )
-                    snapshot.npcs.append(npc)
+                    # Green Room Task 3 (ADR-156): the 162-3 generics seat —
+                    # already stamped GENERIC by construction above; admit()
+                    # passes it through verbatim (Task 1's identity_key change
+                    # already keys GENERIC by display name, not creature_id).
+                    admit_result = admit(
+                        snapshot,
+                        [
+                            MaterializationCandidate(
+                                npc=npc,
+                                origin=npc.origin
+                                or Origin(kind=OriginKind.GENERIC, creature_id=row.id),
+                                source="seeder.generics",
+                            )
+                        ],
+                    )
+                    npc = _resolve_admitted_seat(
+                        admit_result, npc, snapshot, source="seeder.generics"
+                    )
                     with encounter_opponent_seated_from_generics_span(
                         confrontation_type=str(getattr(cdef, "confrontation_type", "") or ""),
                         opponent=actor.name,
@@ -794,7 +850,25 @@ def _seed_fate_opponents(
                     npc=npc, member=pool_member, snapshot=snapshot, turn_num=turn
                 )
                 npc.core.fate_sheet = module.seed_opponent_fate_sheet(rules=pack.rules)
-                snapshot.npcs.append(npc)
+                # Green Room Task 3 (ADR-156): the Fate sibling of the native
+                # seeder's pool-promotion seat (L465-ish above) — NARRATOR_INVENTED
+                # tier.
+                admit_result = admit(
+                    snapshot,
+                    [
+                        MaterializationCandidate(
+                            npc=npc,
+                            origin=npc.origin
+                            or Origin(
+                                kind=OriginKind.NARRATOR_INVENTED, creature_id=npc.creature_id
+                            ),
+                            source="fate_seeder.pool_promotion",
+                        )
+                    ],
+                )
+                npc = _resolve_admitted_seat(
+                    admit_result, npc, snapshot, source="fate_seeder.pool_promotion"
+                )
                 # Story 162-10 (review rework): canonicalize the SEAT to the
                 # promoted member's name — the Fate resolver reads the Other's
                 # sheet via ``find_creature_core(actor.name)`` (EXACT-match), so a
@@ -813,7 +887,32 @@ def _seed_fate_opponents(
                     fate_sheet=module.seed_opponent_fate_sheet(rules=pack.rules),
                 )
                 npc = Npc(core=core, ephemeral=True)
-                snapshot.npcs.append(npc)
+                # Green Room Task 3 (ADR-156): unlike the native seeder's
+                # frame/stub branch (L567-ish), this Fate fallback carries no
+                # bestiary generics consultation today (162-3 Delivery Findings —
+                # a Fate-genre generics sibling is scoped as follow-up) and no
+                # ``allow_synthetic_opponent`` degenerate-opt-in carve-out either
+                # — it is the ONLY source for an unbacked Fate Other, so it must
+                # still land through the gate (NARRATOR_INVENTED, lowest ladder
+                # rung) rather than stay a raw append. ``ephemeral=True`` is
+                # UNCHANGED — that flag drives a separate reap-with-encounter
+                # mechanism (L180-ish), orthogonal to identity/origin.
+                admit_result = admit(
+                    snapshot,
+                    [
+                        MaterializationCandidate(
+                            npc=npc,
+                            origin=npc.origin
+                            or Origin(
+                                kind=OriginKind.NARRATOR_INVENTED, creature_id=npc.creature_id
+                            ),
+                            source="fate_seeder.frame",
+                        )
+                    ],
+                )
+                npc = _resolve_admitted_seat(
+                    admit_result, npc, snapshot, source="fate_seeder.frame"
+                )
                 created = True
         elif npc.core.fate_sheet is None:
             npc.core.fate_sheet = module.seed_opponent_fate_sheet(rules=pack.rules)

@@ -100,6 +100,16 @@ def test_preload_skips_npc_already_seeded_by_chapter_materialization() -> None:
     chapter_seeded = MagicMock()
     chapter_seeded.core.name = "Isaiah Rynders"
     chapter_seeded.disposition = 10
+    # Green Room's admit() (Task 3) legitimately reads these identity-resolution
+    # fields on every existing roster entry — give the mock the same falsy
+    # defaults a real Npc carries so it doesn't masquerade as an alias/
+    # invented_from hit (a bare MagicMock attribute is truthy and not a str).
+    chapter_seeded.aliases = []
+    chapter_seeded.invented_from = None
+    chapter_seeded.origin = None
+    chapter_seeded.creature_id = None
+    chapter_seeded.ephemeral = False
+    chapter_seeded.manual_origin = False
     state.npcs = [chapter_seeded]
     state.characters = []
     state.turn_manager = MagicMock(interaction=1)

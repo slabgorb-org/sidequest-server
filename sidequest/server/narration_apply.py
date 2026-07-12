@@ -46,6 +46,7 @@ from sidequest.game.dogfight_shot import (
     resolve_dogfight_shots,
 )
 from sidequest.game.encounter_classifier import is_player_victory, yield_side_for
+from sidequest.game.green_room import AdmitResult, MaterializationCandidate, admit
 from sidequest.game.item_catalog_resolution import resolve_gained_item_dict
 from sidequest.game.morale import (
     MoraleOutcome,
@@ -61,7 +62,7 @@ from sidequest.game.npc_development import (
     tier_for_interactions,
 )
 from sidequest.game.npc_pool import NpcPoolMember
-from sidequest.game.origin import normalize_name
+from sidequest.game.origin import Origin, OriginKind, normalize_name, resolve_roster_npc
 from sidequest.game.region_validation import (
     canonicalize_region_name,
     resolve_known_region_id,
@@ -1522,6 +1523,29 @@ def _promote_pool_member_to_npc(member: NpcPoolMember) -> Npc:
     return npc
 
 
+def _resolve_admitted_pool_promotion(
+    result: AdmitResult, npc: Npc, snapshot: GameSnapshot, *, source: str
+) -> Npc:
+    """Green Room Task 3 (ADR-156): resolve the ``Npc`` a pool-promotion
+    ``admit()`` call actually seated — a fresh candidate isn't necessarily
+    the live record when the ladder folds it onto an already-materialized
+    identity (an alias / ``invented_from`` hit the local build never knew
+    about). Mirrors ``encounter_lifecycle``'s post-``admit()`` resolution:
+    ``result.admitted[0]`` when freshly seated, else the merged existing via
+    :func:`resolve_roster_npc` (the SAME lookup ``admit()`` used internally
+    to find it, so it always hits)."""
+    if result.admitted:
+        return result.admitted[0]
+    existing = resolve_roster_npc(snapshot.npcs, npc.core.name)
+    if existing is None:
+        raise ValueError(
+            f"green_room.admit ({source}) reported {npc.core.name!r} merged, but "
+            "the roster lookup cannot find it — identity resolution is broken "
+            "(No Silent Fallbacks)"
+        )
+    return existing
+
+
 def _promote_engaged_pool_member(
     *,
     snapshot: GameSnapshot,
@@ -1564,7 +1588,22 @@ def _promote_engaged_pool_member(
             location=npc.last_seen_location,
         )
 
-    snapshot.npcs.append(npc)
+    # Green Room Task 3 (ADR-156): a pool member first becomes mechanical
+    # here — NARRATOR_INVENTED tier, the lowest ladder rung above the
+    # ephemeral-stub exclusion (a walk-on the table itself talked into
+    # existence, not authored/bestiary content).
+    result = admit(
+        snapshot,
+        [
+            MaterializationCandidate(
+                npc=npc,
+                origin=npc.origin
+                or Origin(kind=OriginKind.NARRATOR_INVENTED, creature_id=npc.creature_id),
+                source="pool_promotion",
+            )
+        ],
+    )
+    npc = _resolve_admitted_pool_promotion(result, npc, snapshot, source="pool_promotion")
     snapshot.npc_pool.remove(member)
 
     with Span.open(
@@ -1717,7 +1756,22 @@ def resolve_status_target(
         snapshot=snapshot,
         turn_num=turn_num,
     )
-    snapshot.npcs.append(promoted)
+    # Green Room Task 3 (ADR-156): same NARRATOR_INVENTED tier as
+    # ``_promote_engaged_pool_member`` — a pool member turning mechanical
+    # via a status mutation is the same lineage as one turning mechanical
+    # via engagement.
+    result = admit(
+        snapshot,
+        [
+            MaterializationCandidate(
+                npc=promoted,
+                origin=promoted.origin
+                or Origin(kind=OriginKind.NARRATOR_INVENTED, creature_id=promoted.creature_id),
+                source="pool_promotion",
+            )
+        ],
+    )
+    promoted = _resolve_admitted_pool_promotion(result, promoted, snapshot, source="pool_promotion")
     _watcher_publish(
         "state_transition",
         {

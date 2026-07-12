@@ -1,15 +1,21 @@
 """Task 1 — NPC region stamp.
 
-Verifies that ``NpcPatch.region`` is accepted and carried through both
-materialization legs:
-  - ``_npc_from_patch`` (spawn): sets ``npc.region`` on first encounter.
-  - ``_merge_npc_patch`` (merge): updates ``npc.region`` when a later patch
-    carries a non-None region.
+Verifies that ``NpcPatch.region`` is carried through the materialization
+builder ``GameSnapshot._npc_from_patch`` (spawn): sets ``npc.region`` on
+first encounter. This is the production leg — ``monster_manual_inject``
+builds every candidate Npc through ``_npc_from_patch`` before routing it
+through ``green_room.admit()`` (ADR-156).
 
-These are pure-model tests — no Postgres, no OTEL side-effects asserted.
+The old merge leg (``_merge_npc_patch`` updating ``npc.region`` from a later
+patch) was removed with the ``WorldStatePatch.npcs_present`` lane (Green Room
+follow-up, 2026-07-11); merge semantics now live in ``green_room.admit()``'s
+additive ``_fill_absent`` (region fills only when absent), covered by the
+green-room suites.
+
+Pure-model test — no Postgres, no OTEL side-effects asserted.
 """
 
-from sidequest.game.session import GameSnapshot, NpcPatch, WorldStatePatch
+from sidequest.game.session import GameSnapshot, NpcPatch
 
 
 def _snap() -> GameSnapshot:
@@ -19,25 +25,8 @@ def _snap() -> GameSnapshot:
 def test_npc_from_patch_carries_region() -> None:
     """Spawn leg: region flows from NpcPatch → Npc.region."""
     snap = _snap()
-    snap.apply_world_patch(
-        WorldStatePatch(
-            npcs_present=[NpcPatch(name="Gnaw-Swarm", hp=6, threat_level=1, region="exp002.r3")]
-        )
+    npc = snap._npc_from_patch(
+        NpcPatch(name="Gnaw-Swarm", hp=6, threat_level=1, region="exp002.r3"),
+        emit_spawn_span=False,
     )
-    npc = next(n for n in snap.npcs if n.core.name == "Gnaw-Swarm")
     assert npc.region == "exp002.r3"
-
-
-def test_merge_npc_patch_updates_region() -> None:
-    """Merge leg: a subsequent patch with a non-None region updates npc.region."""
-    snap = _snap()
-    snap.apply_world_patch(
-        WorldStatePatch(
-            npcs_present=[NpcPatch(name="Gnaw-Swarm", hp=6, threat_level=1, region="exp002.r3")]
-        )
-    )
-    snap.apply_world_patch(
-        WorldStatePatch(npcs_present=[NpcPatch(name="Gnaw-Swarm", region="exp004.r1")])
-    )
-    npc = next(n for n in snap.npcs if n.core.name == "Gnaw-Swarm")
-    assert npc.region == "exp004.r1"

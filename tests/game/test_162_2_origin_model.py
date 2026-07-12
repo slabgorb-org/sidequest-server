@@ -77,7 +77,7 @@ import pytest
 from pydantic import ValidationError
 
 from sidequest.game.creature_core import CreatureCore, HpPool
-from sidequest.game.session import GameSnapshot, Npc, NpcPatch, WorldStatePatch
+from sidequest.game.session import GameSnapshot, Npc, NpcPatch
 
 
 def _bare_npc(name: str, **kwargs) -> Npc:
@@ -266,6 +266,7 @@ def test_identity_key_generic_kind_keys_by_name() -> None:
     """A generics row is a stat DONOR, not an identity (Amendment B): two
     named persons backed by the same row must not collide on the row id."""
     from sidequest.game.origin import Origin, OriginKind, identity_key
+
     g = Origin(kind=OriginKind.GENERIC, creature_id="wasteland_scavenger")
     assert identity_key(g, "the Scrapborn") == "name:the scrapborn"
     assert identity_key(g, "the courier") == "name:the courier"
@@ -325,50 +326,32 @@ class TestNpcOriginField:
 
 
 class TestMaterializerCarriesOrigin:
-    def test_apply_world_patch_carries_patch_origin_onto_new_npc(self) -> None:
-        """The materializer leg every creation path shares: a stamped patch
-        materializes an Npc carrying the same typed origin."""
+    # The old ``apply_world_patch(npcs_present=...)`` drive was rewritten onto
+    # ``_npc_from_patch`` directly, and the ``_merge_npc_patch`` monotonicity
+    # test deleted with that method, when the legacy WorldStatePatch lane was
+    # removed (Green Room follow-up, 2026-07-11). Merge-time origin
+    # preservation is now ``green_room.admit()``'s no-touch semantics on an
+    # existing entry — covered by the green-room suites.
+
+    def test_npc_from_patch_carries_patch_origin_onto_new_npc(self) -> None:
+        """The materializer builder every creation path shares: a stamped
+        patch materializes an Npc carrying the same typed origin."""
         from sidequest.game.origin import Origin, OriginKind
 
         snap = _snapshot()
-        snap.apply_world_patch(
-            WorldStatePatch(
-                npcs_present=[
-                    NpcPatch(
-                        name="Gnaw-Swarm",
-                        creature_id="gnaw_swarm",
-                        threat_level=1,
-                        hp=6,
-                        manual_origin=True,
-                        origin=Origin(kind=OriginKind.ROOM_BOUND, creature_id="gnaw_swarm"),
-                    )
-                ]
-            )
+        materialized = snap._npc_from_patch(
+            NpcPatch(
+                name="Gnaw-Swarm",
+                creature_id="gnaw_swarm",
+                threat_level=1,
+                hp=6,
+                manual_origin=True,
+                origin=Origin(kind=OriginKind.ROOM_BOUND, creature_id="gnaw_swarm"),
+            ),
+            emit_spawn_span=False,
         )
-        assert len(snap.npcs) == 1
-        materialized = snap.npcs[0]
         assert materialized.origin is not None
         assert materialized.origin.kind == OriginKind.ROOM_BOUND
-
-    def test_merge_never_clears_a_stamped_origin(self) -> None:
-        """Monotonic like ``manual_origin`` (story 72-3): a later origin-less
-        patch (the narrator re-describing the creature) must not wipe the
-        stamped provenance."""
-        from sidequest.game.origin import Origin, OriginKind
-
-        snap = _snapshot()
-        snap.npcs.append(
-            _bare_npc(
-                "Gnaw-Swarm",
-                origin=Origin(kind=OriginKind.ROOM_BOUND, creature_id="gnaw_swarm"),
-            )
-        )
-        snap.apply_world_patch(
-            WorldStatePatch(npcs_present=[NpcPatch(name="Gnaw-Swarm", description="Chittering.")])
-        )
-        assert len(snap.npcs) == 1
-        assert snap.npcs[0].origin is not None
-        assert snap.npcs[0].origin.kind == OriginKind.ROOM_BOUND
 
 
 # ---------------------------------------------------------------------------

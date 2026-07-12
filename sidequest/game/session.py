@@ -381,7 +381,8 @@ class PartyPeer(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# NpcPatch — used in WorldStatePatch.npcs_present
+# NpcPatch — the flavor/stat shape the Monster Manual builders emit; wrapped in
+# MaterializationCandidates and routed through green_room.admit() (ADR-156)
 # ---------------------------------------------------------------------------
 
 
@@ -424,19 +425,17 @@ def npc_patch_is_creature(patch: NpcPatch) -> bool:
 
 
 class NpcPatch(BaseModel):
-    """Patch for NPC upsert — used in npcs_present.
+    """Per-NPC flavor/stat shape for materialization.
 
-    Used by two emitters:
-
-    1. The narrator (declared NPCs the prose introduced): name + the
-       human-facing flavor fields (description, personality, pronouns,
-       appearance, ...).
-    2. The Monster Manual pre-narrator seeder (ADR-059, port of
-       ``crates/sidequest-server/src/dispatch/pregen.rs``): adds creature
-       mechanical fields — ``creature_id``, ``threat_level``, ``hp``,
-       ``abilities``, ``morale``. ``hp`` is content-shape B/X HP and is
-       translated to an :class:`EdgePool` at materialization
-       (``Session._npc_from_patch``) per ADR-078.
+    Emitted by the Monster Manual pre-narrator seeder's builders (ADR-059,
+    port of ``crates/sidequest-server/src/dispatch/pregen.rs``): name + the
+    human-facing flavor fields (description, personality, pronouns,
+    appearance, ...) plus creature mechanical fields — ``creature_id``,
+    ``threat_level``, ``hp``, ``abilities``, ``morale``. ``hp`` is
+    content-shape B/X HP and is translated to an :class:`HpPool` at
+    materialization (``GameSnapshot._npc_from_patch``) per ADR-078/114.
+    Materialization routes through ``green_room.admit()`` (ADR-156); the
+    legacy ``WorldStatePatch.npcs_present`` lane was removed 2026-07-11.
     """
 
     model_config = {"extra": "forbid"}
@@ -629,7 +628,9 @@ class WorldStatePatch(BaseModel):
     discover_routes: list[str] | None = None
     hp_changes: dict[str, int] | None = None
     npc_attitudes: dict[str, int] | None = None
-    npcs_present: list[NpcPatch] | None = None
+    # ``npcs_present: list[NpcPatch]`` was REMOVED (Green Room follow-up,
+    # 2026-07-11): NPC materialization routes exclusively through
+    # ``green_room.admit()`` (ADR-156); the world patch no longer mints NPCs.
     active_stakes: str | None = None
     lore_established: list[str] | None = None
     discovered_facts: list[DiscoveredFact] | None = None
@@ -1884,13 +1885,11 @@ class GameSnapshot(BaseModel):
                             reason=PATCH_BEAT_REASON,
                             location=self.party_location(),
                         )
-        if patch.npcs_present is not None:
-            for npc_patch in patch.npcs_present:
-                existing = next((n for n in self.npcs if n.core.name == npc_patch.name), None)
-                if existing is not None:
-                    self._merge_npc_patch(existing, npc_patch)
-                else:
-                    self.npcs.append(self._npc_from_patch(npc_patch))
+        # Green Room follow-up (ADR-156, 2026-07-11): the ``npcs_present`` patch
+        # branch was REMOVED with the field — it was a producer-less raw
+        # append/merge that bypassed the green_room.admit() gate once the MM
+        # inject converted (Task 2) and the user deprecated /gm spawn (its last
+        # producer). NPC materialization has exactly one door: admit().
 
     def _apply_hp_change(self, name: str, delta: int) -> None:
         for ch in self.characters:
@@ -1921,85 +1920,12 @@ class GameSnapshot(BaseModel):
                 return npc.core
         return None
 
-    def _merge_npc_patch(self, npc: Npc, patch: NpcPatch) -> None:
-        if patch.description is not None:
-            npc.core.description = patch.description
-        if patch.personality is not None:
-            npc.core.personality = patch.personality
-        if patch.pronouns is not None:
-            npc.pronouns = patch.pronouns
-        if patch.appearance is not None:
-            npc.appearance = patch.appearance
-        if patch.age is not None:
-            npc.age = patch.age
-        if patch.build is not None:
-            npc.build = patch.build
-        if patch.height is not None:
-            npc.height = patch.height
-        if patch.distinguishing_features is not None:
-            npc.distinguishing_features = patch.distinguishing_features
-        if patch.location is not None:
-            npc.location = patch.location
-        if patch.region is not None:
-            npc.region = patch.region
-
-        # Creature-shape fields (ADR-059): patches re-emitted on
-        # re-encounter (e.g. Monster Manual seed during a save+load
-        # roundtrip) update creature flavor and re-derive the edge pool
-        # from the latest hp claim.
-        if patch.creature_id is not None:
-            npc.creature_id = patch.creature_id
-        if patch.threat_level is not None:
-            npc.threat_level = patch.threat_level
-        if patch.abilities is not None:
-            npc.abilities = list(patch.abilities)
-        if patch.morale is not None:
-            npc.morale = patch.morale
-        if patch.hp is not None:
-            # BUG 2b (eh-opp-damage): a re-injected creature patch must NOT heal an
-            # NPC that is already taking damage. The per-turn Monster-Manual inject
-            # re-emits each Available creature with its content ``hp`` claim EVERY
-            # combat turn; the old code reset ``npc.core.hp`` to a FULL pool here, so
-            # an opponent damaged to 2/8 (or killed at 0/8) sprang back to 8/8 on the
-            # next turn — combat could be neither won nor lost. Re-seed the pool
-            # CEILING from the claim (content may legitimately re-state max), but
-            # PRESERVE the live ``current`` (clamped to the new max). A genuinely new
-            # creature still gets a full pool via ``_npc_from_patch`` (the spawn leg,
-            # untouched). Emit the GM-panel lie-detector span so a re-inject that
-            # keeps the damaged HP is observable (its ABSENCE on a combat turn would
-            # signal a regression back to silent healing).
-            new_max = max(1, int(patch.hp))
-            preserved_current = min(npc.core.hp.current, new_max)
-            npc.core.hp.max = new_max
-            npc.core.hp.base_max = new_max
-            npc.core.hp.current = preserved_current
-            from sidequest.telemetry.spans import Span
-            from sidequest.telemetry.spans.monster_manual import (
-                SPAN_MONSTER_MANUAL_HP_PRESERVED,
-            )
-
-            with Span.open(
-                SPAN_MONSTER_MANUAL_HP_PRESERVED,
-                {
-                    "npc_name": npc.core.name,
-                    "preserved_current": preserved_current,
-                    "patch_hp": int(patch.hp),
-                    "new_max": new_max,
-                    "manual_origin": npc.manual_origin or patch.manual_origin,
-                },
-            ):
-                pass
-
-        # Provenance (story 72-3): monotonic — an authored Monster Manual
-        # patch records manual-origin on the surviving record (E2 forward),
-        # and a later narrator patch (manual_origin=False) must NOT clear an
-        # existing marker (E2 reverse). Logical OR satisfies both.
-        npc.manual_origin = npc.manual_origin or patch.manual_origin
-        # Typed provenance (story 162-2): same monotonicity — the FIRST stamp
-        # is the creation-time ground truth; a later origin-less narrator
-        # patch never clears it.
-        if npc.origin is None and patch.origin is not None:
-            npc.origin = patch.origin
+    # ``_merge_npc_patch`` was REMOVED with the ``npcs_present`` patch branch
+    # (Green Room follow-up, 2026-07-11) — its sole caller. Merge semantics on
+    # an already-materialized identity now live in ``green_room.admit()``'s
+    # additive ``_fill_absent`` (ADR-139 Invariant 2 made structural: live
+    # ``core.hp`` is never reset on merge — the BUG-2b hp-preserve guard this
+    # method carried is subsumed by the gate never touching hp at all).
 
     def _npc_from_patch(self, patch: NpcPatch, *, emit_spawn_span: bool = True) -> Npc:
         # Creature signal: presence of any creature-shape field flags this

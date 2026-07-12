@@ -781,7 +781,7 @@ def test_inject_is_idempotent_across_turns() -> None:
     snap = _snapshot()
     monster_manual_inject.inject(sd, snap, current_location="The Dome", in_combat=True)
     monster_manual_inject.inject(sd, snap, current_location="The Dome", in_combat=True)
-    # _merge_npc_patch path — same name lands once.
+    # green_room.admit() merge path — same name lands once.
     assert len(snap.npcs) == 1
 
 
@@ -793,8 +793,9 @@ def test_reinjection_across_combat_turns_preserves_damaged_hp() -> None:
     This is the exact playtest shape: ``monster_manual.injected ... in_combat=True``
     fires every combat turn; before the fix the merge leg reset core.hp to a full
     pool from the patch's hp claim, so a damaged (or dead) opponent sprang back.
-    Proves the session.py merge-seam fix is wired into the production injection
-    seam, not just unit-correct in isolation."""
+    The guard is now STRUCTURAL: ``green_room.admit()`` never touches live
+    ``core.hp`` on a merge (ADR-139 Inv-2) — this proves it holds through the
+    production injection seam, not just unit-correct in isolation."""
     sd = _FakeSessionData()
     sd.monster_manual = _manual_with(
         encounters=[_creature_encounter(enemy_name="Salt Burrower", hp=9)],

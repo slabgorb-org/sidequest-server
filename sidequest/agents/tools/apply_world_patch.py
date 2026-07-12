@@ -43,12 +43,14 @@ These are the four string-valued top-level world fields that have no
 dedicated typed tool. Other ``WorldStatePatch`` fields — ``hp_changes``
 (use ``apply_damage``), ``npc_attitudes`` (use ``update_npc_disposition``),
 ``active_stakes`` (use ``set_stakes``), ``quest_log`` (use ``record_quest``),
-``discovered_regions``, ``npcs_present``, ``lore_established``,
-``discovered_facts`` — are intentionally **not** exposed through the escape
-hatch because they have typed homes; routing them here would defeat the
-deprecation telemetry. (Story 77-4 dropped ``/active_stakes`` from the
-allowlist now that ``set_stakes`` is its typed home, and retired the
-``quest_updates`` lane onto ``record_quest``.)
+``discovered_regions``, ``lore_established``, ``discovered_facts`` — are
+intentionally **not** exposed through the escape hatch because they have
+typed homes; routing them here would defeat the deprecation telemetry.
+(Story 77-4 dropped ``/active_stakes`` from the allowlist now that
+``set_stakes`` is its typed home, and retired the ``quest_updates`` lane
+onto ``record_quest``. The ``npcs_present`` field itself was removed from
+``WorldStatePatch`` in the Green Room follow-up, 2026-07-11 — NPC
+materialization routes exclusively through ``green_room.admit()``.)
 
 Path support widens only when a real narrator playtest demonstrates a
 mutation that has no typed home and no path-allowlist entry. Until

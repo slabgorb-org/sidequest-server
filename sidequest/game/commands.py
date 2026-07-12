@@ -293,7 +293,13 @@ class SaveCommand(CommandHandler):
 
 
 # ---------------------------------------------------------------------------
-# /gm — operator commands (set, teleport, spawn, dmg)
+# /gm — operator commands (set, teleport, dmg)
+#
+# /gm spawn was REMOVED (user deprecation, 2026-07-11, Green Room follow-up):
+# it was the last producer of WorldStatePatch.npcs_present, a raw-append NPC
+# mint that bypassed the green_room.admit() gate (ADR-156). Operator NPC
+# seeding goes through authored content / the Monster Manual, not a chat
+# command.
 # ---------------------------------------------------------------------------
 
 
@@ -318,12 +324,10 @@ class GmCommand(CommandHandler):
             return self._handle_set(sub_args)
         elif sub == "teleport":
             return self._handle_teleport(sub_args)
-        elif sub == "spawn":
-            return self._handle_spawn(sub_args)
         elif sub == "dmg":
             return self._handle_dmg(sub_args)
         elif sub == "":
-            return ErrorResult("Usage: /gm <set|teleport|spawn|dmg> [args]")
+            return ErrorResult("Usage: /gm <set|teleport|dmg> [args]")
         else:
             return ErrorResult(f"Unknown GM subcommand: {sub}")
 
@@ -366,21 +370,6 @@ class GmCommand(CommandHandler):
             current_region=region,
             discover_regions=[region],
         )
-        return StateMutationResult(patch)
-
-    def _handle_spawn(self, args: str) -> CommandResult:
-        from sidequest.game.session import NpcPatch, WorldStatePatch
-
-        if not args:
-            return ErrorResult("Usage: /gm spawn <name> [role] [personality]")
-
-        parts = args.split(" ", 2)
-        npc_name = parts[0]
-        role = parts[1] if len(parts) > 1 else None
-        personality = parts[2] if len(parts) > 2 else None
-
-        npc = NpcPatch(name=npc_name, role=role, personality=personality)
-        patch = WorldStatePatch(npcs_present=[npc])
         return StateMutationResult(patch)
 
     def _handle_dmg(self, args: str) -> CommandResult:

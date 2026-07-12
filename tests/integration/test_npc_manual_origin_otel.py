@@ -17,9 +17,15 @@ than asserting on source text (CLAUDE.md "No Source-Text Wiring Tests"):
    requires: the marker reaches canonical state through the production path,
    not just through a hand-built patch.
 2. **OTEL (AC4):** the per-NPC materialization span ``npc.spawn_disposition``
-   (already fired in ``_npc_from_patch``, story 72-5) carries a
-   ``manual_origin`` attribute so the GM panel can attribute the NPC. A
-   narrator-path patch fires the same span with ``manual_origin=False`` (E1).
+   (story 72-5; emitted per ADMITTED identity via
+   ``emit_npc_spawn_disposition`` after ``green_room.admit()``) carries a
+   ``manual_origin`` attribute so the GM panel can attribute the NPC.
+
+The old E1 span-level test (an unmarked "narrator path" patch driven through
+``apply_world_patch(npcs_present=...)``) was deleted with that lane (Green
+Room follow-up, 2026-07-11 — the field is gone and no production path applies
+unmarked NpcPatches); the model-level default stays pinned in
+``tests/game/test_npc_manual_origin.py``.
 
 Same harness shape as ``test_npc_spawn_disposition_otel.py``.
 """
@@ -32,7 +38,7 @@ import pytest
 from opentelemetry.sdk.trace import TracerProvider
 
 from sidequest.game.monster_manual import EntryState, ManualEncounter, ManualNpc, MonsterManual
-from sidequest.game.session import GameSnapshot, NpcPatch, WorldStatePatch
+from sidequest.game.session import GameSnapshot
 from sidequest.game.turn import TurnManager
 from sidequest.server.dispatch import monster_manual_inject
 from sidequest.server.watcher import WatcherSpanProcessor
@@ -199,31 +205,3 @@ async def test_inject_human_marks_manual_origin_field_and_span(
     events = await _events_for(captured, "npc.spawn_disposition")
     evt = next(e for e in events if e["fields"]["npc_name"] == "Krag")
     assert evt["fields"]["manual_origin"] is True
-
-
-# ---------------------------------------------------------------------------
-# E1 (span level) — narrator-path patch is not manual-origin
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_narrator_patch_span_manual_origin_false(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A narrator-emitted patch (no MM marker) materializes through the same
-    span with ``manual_origin=False`` — the lie-detector can tell narrator
-    improv from Manual authorship."""
-    captured = await _setup(monkeypatch, "test-manual-origin-narrator")
-
-    snap = _snapshot()
-    snap.apply_world_patch(
-        WorldStatePatch(npcs_present=[NpcPatch(name="Shopkeeper", role="merchant")])
-    )
-    await asyncio.sleep(0)
-
-    keep = next(n for n in snap.npcs if n.core.name == "Shopkeeper")
-    assert keep.manual_origin is False
-
-    events = await _events_for(captured, "npc.spawn_disposition")
-    evt = next(e for e in events if e["fields"]["npc_name"] == "Shopkeeper")
-    assert evt["fields"]["manual_origin"] is False

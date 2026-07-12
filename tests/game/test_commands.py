@@ -206,22 +206,16 @@ def test_gm_teleport_missing_args_returns_error():
 
 
 # ---------------------------------------------------------------------------
-# /gm spawn
+# /gm spawn — REMOVED (user deprecation 2026-07-11, Green Room follow-up).
+# A removed subcommand must fall through to the unknown-subcommand error.
 # ---------------------------------------------------------------------------
 
 
-def test_gm_spawn_creates_npc_patch():
+def test_gm_spawn_is_gone():
     state = _make_state()
     result = GmCommand().handle(state, "spawn Grog Bouncer gruff and mean")
-    assert isinstance(result, StateMutationResult)
-    assert result.patch.npcs_present is not None
-    assert result.patch.npcs_present[0].name == "Grog"
-
-
-def test_gm_spawn_empty_returns_error():
-    state = _make_state()
-    result = GmCommand().handle(state, "spawn")
     assert isinstance(result, ErrorResult)
+    assert "Unknown GM subcommand" in result.message
 
 
 # ---------------------------------------------------------------------------

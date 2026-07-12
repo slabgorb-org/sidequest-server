@@ -482,6 +482,71 @@ class TestGenericsAreLastResortOnly:
 
 
 # ---------------------------------------------------------------------------
+# 3b. Pool-promotion OCEAN seed ordering symmetry (final review Finding 4)
+# ---------------------------------------------------------------------------
+
+
+def test_pool_promotion_ocean_seed_lands_on_resolved_seat_not_discarded_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Finding 4 (final review): mirror ``narration_apply``'s already-fixed
+    pattern (task-3 review fix 2, ``_promote_engaged_pool_member`` /
+    ``resolve_status_target``) — ``_seed_invented_npc_identity`` must apply
+    to admit()'s RESOLVED record, not the local pre-admit candidate. Pre-fix,
+    ``encounter_lifecycle``'s pool-promotion leg seeded OCEAN on the freshly
+    built candidate BEFORE calling ``admit()``; if admit() ever folds that
+    candidate onto a pre-existing identity, the seed lands on the discarded
+    local object and the real (resolved) record never gets one.
+
+    Unreachable via the full production call flow today — this function's
+    own top-of-loop ``resolve_roster_npc`` precheck already catches any
+    name-colliding existing Npc before the pool-promotion branch is ever
+    entered (so a same-name existing identity never reaches ``admit()`` as a
+    fold candidate) — so this monkeypatches ``encounter_lifecycle.admit`` to
+    append the "existing" identity as a side effect of the admit() call
+    itself (invisible to the precheck, which already ran), simulating a
+    fold onto an identity another feeder seated earlier the same turn.
+    Fixed for symmetry / defense-in-depth, matching the already-fixed
+    narration_apply seams exactly.
+    """
+    from sidequest.game.green_room import AdmitResult
+    from sidequest.game.origin import Origin, OriginKind
+    from sidequest.server.dispatch import encounter_lifecycle
+
+    snap = _snapshot()
+    snap.npc_pool.append(NpcPoolMember(name=_ROUTER_NAME, drawn_from="narrator_invented"))
+    pack = _generics_pack()
+
+    existing = Npc(
+        core=CreatureCore(
+            name=_ROUTER_NAME,
+            description="An adversary the table has already met.",
+            personality="Wary.",
+            inventory=Inventory(),
+            hp=HpPool(current=8, max=8, base_max=8),
+            armor_class=12,
+        ),
+        origin=Origin(kind=OriginKind.NARRATOR_INVENTED),
+    )
+    assert existing.ocean is None
+
+    def _fake_admit(snapshot, candidates):
+        snapshot.npcs.append(existing)
+        return AdmitResult(admitted=[], merged=[f"name:{_ROUTER_NAME.casefold()}"])
+
+    monkeypatch.setattr(encounter_lifecycle, "admit", _fake_admit)
+
+    enc = _drive(snap, pack)
+
+    assert enc is not None
+    assert existing.ocean is not None, (
+        "OCEAN seed must land on admit()'s RESOLVED record, not the local "
+        "pre-admit candidate — pre-fix, _seed_invented_npc_identity ran "
+        "before admit(), so a fold silently discarded the seed"
+    )
+
+
+# ---------------------------------------------------------------------------
 # 4. The degenerate opt-in (test fixtures / one-off scenario generation)
 # ---------------------------------------------------------------------------
 

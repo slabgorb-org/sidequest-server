@@ -65,6 +65,7 @@ from sidequest.game.npc_pool import NpcPoolMember
 from sidequest.game.origin import (
     Origin,
     OriginKind,
+    derive_origin,
     identity_key,
     normalize_name,
     resolve_roster_npc,
@@ -2653,10 +2654,23 @@ def _attach_before_mint(
     2. The "Ihnsch" case (ADR-156 design doc §3.4): an active, unresolved
        ``snapshot.encounter`` with EXACTLY ONE live (non-withdrawn)
        ``side="opponent"`` actor whose resolved identity carries an EMPTY
-       alias ledger and a GENERIC or NARRATOR_INVENTED origin is a lone,
-       still-unnamed Other — a HOSTILE mention is that Other's first prose
-       name. Two live opponents is ambiguous; never guess (No Silent
-       Fallbacks) — falls through to mint like any other novel name.
+       alias ledger and a GENERIC or NARRATOR_INVENTED origin (resolved via
+       :func:`derive_origin` — final review Finding 2: every other identity
+       seam derives, never reads ``npc.origin`` raw, so a resumed save whose
+       seated Other predates the origin model, ``origin=None``, still opens
+       this leg) is a lone, still-unnamed Other — a HOSTILE mention is that
+       Other's first prose name. Two live opponents is ambiguous; never guess
+       (No Silent Fallbacks) — falls through to mint like any other novel
+       name.
+
+    Known-scope case: a genuinely-new hostile arrival whose first prose
+    mention lands while the seated Other's alias ledger is empty (no
+    bystander or earlier hostile mention has attached anything yet) is
+    indistinguishable from the Ihnsch case by the signals available here and
+    gets attached as an alias of the seated Other instead of minting its own
+    identity — observable via ``green_room.alias_attached``. Accepted scope
+    (ADR-156 design doc §3.4); a router/turn-order signal to disambiguate is
+    future work.
 
     Returns ``True`` when ``name`` was attached (the caller mints nothing)
     and ``False`` when it is genuinely novel (the caller proceeds to mint).
@@ -2673,8 +2687,7 @@ def _attach_before_mint(
             if (
                 other is not None
                 and not other.aliases
-                and other.origin is not None
-                and other.origin.kind in (OriginKind.GENERIC, OriginKind.NARRATOR_INVENTED)
+                and derive_origin(other).kind in (OriginKind.GENERIC, OriginKind.NARRATOR_INVENTED)
             ):
                 attach_alias(other, name, from_source=from_source)
                 return True

@@ -232,6 +232,58 @@ def test_hostile_mention_attaches_to_lone_unaliased_seated_other(
 
 
 # ---------------------------------------------------------------------------
+# Test 2b — a resumed save's seated Other (legacy origin=None) still opens
+# the seated-Other leg (final review Finding 2: derive-don't-cache).
+# ---------------------------------------------------------------------------
+
+
+def test_hostile_mention_attaches_to_lone_unaliased_seated_other_with_derived_origin(
+    local_otel: InMemorySpanExporter,
+) -> None:
+    """Finding 2 (final review): a resumed save's Npc can carry
+    ``origin=None`` (pre-162-2 rows, or any row that predates the origin
+    model) while its legacy fields still derive NARRATOR_INVENTED
+    (``derive_origin``'s "otherwise" fallthrough — not ephemeral, not
+    manual_origin). Every OTHER identity seam resolves provenance through
+    ``derive_origin`` (derive-don't-cache doctrine); the seated-Other leg was
+    the one holdout reading ``other.origin.kind`` raw, which made it dead on
+    exactly this resumed-save shape. Must attach exactly like the fresh-save
+    GENERIC case (test 2 above), not fall through to a mint."""
+    snap = _snapshot()
+    # Origin left unstamped on purpose — the resumed-save shape. ephemeral
+    # and manual_origin both default False, so derive_origin's fallthrough
+    # resolves this to NARRATOR_INVENTED.
+    scrapborn = Npc(core=_core("the Scrapborn"), origin=None)
+    snap.npcs.append(scrapborn)
+    snap.encounter = StructuredEncounter(
+        encounter_type="combat",
+        player_metric=EncounterMetric(name="player", threshold=10),
+        opponent_metric=EncounterMetric(name="opponent", threshold=10),
+        actors=[EncounterActor(name="the Scrapborn", role="foe", side="opponent")],
+        resolved=False,
+    )
+    pool_before = len(snap.npc_pool)
+
+    _apply_npc_mentions(
+        snapshot=snap,
+        mentions=[NpcMention(name="Ihnsch of the Rusted Works", role="hostile")],
+        turn_num=6,
+    )
+
+    assert len(snap.npc_pool) == pool_before, (
+        f"a resumed save's legacy origin=None seated Other must still open "
+        f"the attach leg, not mint a twin; pool: {[m.name for m in snap.npc_pool]!r}"
+    )
+    seated = resolve_roster_npc(snap.npcs, "Ihnsch of the Rusted Works")
+    assert seated is not None and seated.core.name == "the Scrapborn", (
+        f"the alias must resolve back to the seated Other; got {seated!r}"
+    )
+    assert scrapborn.aliases == ["Ihnsch of the Rusted Works"]
+    mint_spans = [s for s in local_otel.get_finished_spans() if s.name == _MINT_SPAN]
+    assert mint_spans == [], "no green_room.mint span may fire — the mention attached, not minted"
+
+
+# ---------------------------------------------------------------------------
 # Test 3 — a bystander mention does not glue onto the seated enemy (green
 # guard, pins existing pass-through behavior)
 # ---------------------------------------------------------------------------

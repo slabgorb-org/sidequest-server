@@ -478,9 +478,6 @@ def _seed_combat_hp_depletion_to_npcs(
                 )
 
                 npc = _promote_pool_member_to_npc(pool_member)
-                _seed_invented_npc_identity(
-                    npc=npc, member=pool_member, snapshot=snapshot, turn_num=turn
-                )
                 npc.core.hp = hp_pool_from_hp(hp)
                 npc.core.armor_class = ac
                 # Green Room Task 3 (ADR-156): NARRATOR_INVENTED tier — a
@@ -500,6 +497,22 @@ def _seed_combat_hp_depletion_to_npcs(
                 )
                 npc = _resolve_admitted_seat(
                     admit_result, npc, snapshot, source="seeder.pool_promotion"
+                )
+                # Finding 4 (final review): seed OCEAN + scenario belief_state
+                # onto the RESOLVED record, AFTER admit() — mirrors
+                # narration_apply's already-fixed pattern (task-3 review fix
+                # 2, ``_promote_engaged_pool_member`` / ``resolve_status_
+                # target``). Pre-fix this seeded the LOCAL pre-admit
+                # candidate; a fold onto an existing identity would have
+                # silently discarded the seed (unreachable today — this
+                # function's own top-of-loop resolve_roster_npc precheck
+                # already catches any name-colliding existing Npc before this
+                # branch is entered — but fixed for symmetry / defense in
+                # depth). The seeder's own guard makes this safe on a fold:
+                # it never re-seeds a record that already holds an OCEAN
+                # profile.
+                _seed_invented_npc_identity(
+                    npc=npc, member=pool_member, snapshot=snapshot, turn_num=turn
                 )
                 # Story 162-10 (review rework): canonicalize the SEAT to the
                 # promoted member's name. The pool leg now matches on

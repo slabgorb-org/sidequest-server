@@ -23,20 +23,27 @@ SCOPE — read before extending:
   emit ``NpcPoolMember``s, which carry no ``creature_id`` by design (ADR-118
   identity-only staging) — they reconcile to an id on promotion, not at the pool
   tier.
-* The **Green Room single-gate materializer (ADR-156) is NOT built** — it is a
-  proposed design whose implementation stories are unfiled. There is no
-  ``admit()`` to call; the seven feeders still append independently. This test
-  drives the real seams directly and asserts the id-keyed identity primitives
-  hold where 162-2 wired them (the seeder, the inject dedup, the authored
-  preload, the alias ledger).
-* Four seams remain name-string-keyed, deferred to story **162-10** (unified
-  resolver adoption at the mention path, the Fate seeder, edge-publish, and the
-  pool-member lookup). This suite does NOT assert those don't fork — converting
-  them is 162-10's scope, not this 2-point guard's. The gap is filed as a
-  Delivery Finding, not quarantined (the server repo's rule: "never xfail
-  in-flight features"). ``TestIdentityKeyConvergesAcrossOriginKinds`` documents
-  *why* ids matter (a name-only mint is exactly the fork those seams still
-  produce).
+* The **Green Room single-gate materializer (ADR-156) IS built** as of this
+  branch (Tasks 1-6, ``feat/green-room``): ``sidequest/game/green_room.py``'s
+  ``admit()`` is the one door onto ``snapshot.npcs``, and every production
+  feeder routes through it. (When this suite was first written the Green Room
+  was still a proposed design and the feeders appended independently — the
+  legacy sections below predate the gate.) The sections divide accordingly:
+  ``TestIdentityKeyConvergesAcrossOriginKinds`` through
+  ``TestAuthoredSourceIsIdKeyed`` pin the pre-gate id-keyed identity
+  primitives that SURVIVE the gate (the 162-2 seeder/inject-dedup/authored-
+  preload/alias-ledger behavior, now enforced inside ``admit()`` rather than
+  at each seam); ``TestSixFeederOneSceneWiring`` drives the gate itself end
+  to end (one scene, six feeder labels, ``green_room.materialized`` /
+  ``green_room.mint`` span evidence).
+* Four seams were name-string-keyed when this suite was written; story
+  **162-10** (merged, PR #1118) converted them to the unified resolver (the
+  mention path, the Fate seeder, edge-publish, and the pool-member lookup).
+  This suite still does NOT assert those seams don't fork — their pins live
+  with 162-10's and the Green Room task suites.
+  ``TestIdentityKeyConvergesAcrossOriginKinds`` documents *why* ids matter (a
+  name-only mint is exactly the fork those seams produced before their
+  conversion).
 """
 
 from __future__ import annotations
@@ -241,8 +248,9 @@ class TestIdentityKeyConvergesAcrossOriginKinds:
     def test_idless_mints_fork_by_name(self) -> None:
         """WHY the epic drives ids into every feeder: two narrator mints with no
         id key on the normalized NAME, so different prose strings for one being
-        fork — exactly what the four unconverted seams (162-10) still produce.
-        This is the failure the id-keyed surface exists to delete."""
+        fork — exactly the fork the four name-string-keyed seams produced
+        before story 162-10 converted them to the unified resolver. This is
+        the failure the id-keyed surface exists to delete."""
         a = identity_key(Origin(kind=OriginKind.NARRATOR_INVENTED), "Molgrath the Eyeless")
         b = identity_key(Origin(kind=OriginKind.NARRATOR_INVENTED), "The Eyeless One")
         assert a != b
@@ -385,8 +393,9 @@ class TestAuthoredSourceIsIdKeyed:
         """A creature authored as a named character (authored id) and also
         present as a bestiary row (creature id) are DIFFERENT identity spaces by
         design (ADR-156 §1: authored outranks; the merge, not a fork, handles
-        placement-vs-stats). Guard that the keys are stable and distinct so a
-        future Green Room merges them by precedence rather than colliding."""
+        placement-vs-stats). Guard that the keys are stable and distinct so
+        ``green_room.admit()``'s ladder merges them by precedence rather than
+        colliding."""
         authored = identity_key(
             Origin(kind=OriginKind.AUTHORED, authored_id="molgrath"), "Molgrath the Eyeless"
         )

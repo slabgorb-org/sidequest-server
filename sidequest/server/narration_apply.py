@@ -1573,20 +1573,14 @@ def _promote_engaged_pool_member(
     Emits ``npc.promoted_from_pool`` (trigger=tier|valence_beat) — the
     AC-3 lie-detector for the promotion decision.
     """
+    milestone_tier = tier_for_interactions(member.non_transactional_interactions)
+    seen_location = actor_loc or member.last_seen_location
+
     npc = _promote_pool_member_to_npc(member)
     npc.non_transactional_interactions = member.non_transactional_interactions
-    npc.resolution_tier = tier_for_interactions(member.non_transactional_interactions)
+    npc.resolution_tier = milestone_tier
     npc.last_seen_turn = turn_num
-    npc.last_seen_location = actor_loc or member.last_seen_location
-
-    if trigger == "tier":
-        npc.disposition = Disposition(int(npc.disposition) + DISPOSITION_DRIFT_PER_MILESTONE)
-        npc.record_disposition_beat(
-            turn=turn_num,
-            delta=DISPOSITION_DRIFT_PER_MILESTONE,
-            reason=engagement_beat_reason(npc.resolution_tier),
-            location=npc.last_seen_location,
-        )
+    npc.last_seen_location = seen_location
 
     # Green Room Task 3 (ADR-156): a pool member first becomes mechanical
     # here — NARRATOR_INVENTED tier, the lowest ladder rung above the
@@ -1605,6 +1599,26 @@ def _promote_engaged_pool_member(
     )
     npc = _resolve_admitted_pool_promotion(result, npc, snapshot, source="pool_promotion")
     snapshot.npc_pool.remove(member)
+
+    if trigger == "tier":
+        # Task-3 rework (reviewer fix 2): the ADR-128 milestone is applied to
+        # the RESOLVED record, AFTER admit() — the engagement event happened to
+        # that person whether the identity freshly seated or folded onto an
+        # existing roster entry. Pre-fix it warmed the LOCAL candidate before
+        # the gate, and a fold silently dropped the drift + beat (_fill_absent
+        # deliberately excludes live disposition state, ADR-139 Inv-2).
+        # One-shot: both callers source ``member`` from ``snapshot.npc_pool``
+        # and the removal above consumes it, so this milestone cannot re-fire
+        # for the same member. The beat reason keys on the MEMBER's milestone
+        # tier (the tier that triggered this promotion), not the resolved
+        # record's own resolution_tier, which may differ on a fold.
+        npc.disposition = Disposition(int(npc.disposition) + DISPOSITION_DRIFT_PER_MILESTONE)
+        npc.record_disposition_beat(
+            turn=turn_num,
+            delta=DISPOSITION_DRIFT_PER_MILESTONE,
+            reason=engagement_beat_reason(milestone_tier),
+            location=seen_location,
+        )
 
     with Span.open(
         "npc.promoted_from_pool",
@@ -1747,15 +1761,6 @@ def resolve_status_target(
     if pool_match is None:
         return None
     promoted = _promote_pool_member_to_npc(pool_match)
-    # Story 72-9: seed OCEAN + scenario belief_state onto narrator-invented
-    # NPCs at the promotion seam (where ``snapshot`` is in scope). No-op for
-    # authored / MM lineages and for already-seeded NPCs.
-    _seed_invented_npc_identity(
-        npc=promoted,
-        member=pool_match,
-        snapshot=snapshot,
-        turn_num=turn_num,
-    )
     # Green Room Task 3 (ADR-156): same NARRATOR_INVENTED tier as
     # ``_promote_engaged_pool_member`` — a pool member turning mechanical
     # via a status mutation is the same lineage as one turning mechanical
@@ -1772,6 +1777,21 @@ def resolve_status_target(
         ],
     )
     promoted = _resolve_admitted_pool_promotion(result, promoted, snapshot, source="pool_promotion")
+    # Story 72-9: seed OCEAN + scenario belief_state onto narrator-invented
+    # NPCs at the promotion seam (where ``snapshot`` is in scope). Task-3
+    # rework (reviewer fix 2): applied to the RESOLVED record, AFTER admit()
+    # — pre-fix it seeded the LOCAL candidate, and a fold onto an existing
+    # roster identity silently dropped the seed (_fill_absent deliberately
+    # excludes ``ocean``, ADR-139 Inv-2). The seeder's own guards make this
+    # safe on a fold: it never re-seeds a record that already holds an OCEAN
+    # profile (ADR-042 — live personality is never clobbered), and it stays
+    # a no-op for authored / MM lineages and creature members.
+    _seed_invented_npc_identity(
+        npc=promoted,
+        member=pool_match,
+        snapshot=snapshot,
+        turn_num=turn_num,
+    )
     _watcher_publish(
         "state_transition",
         {

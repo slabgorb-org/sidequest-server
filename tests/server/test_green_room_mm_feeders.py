@@ -9,10 +9,12 @@ Step 1 findings (read before extending):
   ``all_patches`` (emitting ``SPAN_MONSTER_MANUAL_INJECTED`` off THOSE two
   builders only), then — when ``room_id`` + ``combat_encounters`` — appended
   the room-binding patches, then appended region-population patches AFTER
-  filtering them against the room-binding set via a hand-rolled
-  ``_patch_identity_key``/``normalize_name`` pre-filter (the ONLY place
-  identity-key dedup ran pre-Task-2). The combined ``all_patches`` list was
-  finally wrapped in one ``WorldStatePatch(npcs_present=...)`` and applied via
+  filtering them against the room-binding set via a hand-rolled identity-key/
+  ``normalize_name`` pre-filter (the ONLY place identity-key dedup ran
+  pre-Task-2; that pre-filter helper was later deleted outright as dead code
+  once Task 2 landed — see Finding 3 of the final-wave report). The combined
+  ``all_patches`` list was finally wrapped in one
+  ``WorldStatePatch(npcs_present=...)`` and applied via
   ``snapshot.apply_world_patch`` (session.py:1853-1859), which merges/appends
   purely by **NAME** (``next((n for n in self.npcs if n.core.name ==
   npc_patch.name), None)``) through ``_merge_npc_patch``/``_npc_from_patch``.
@@ -81,9 +83,10 @@ from typing import Any
 
 import pytest
 
+from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.game.monster_manual import EntryState, ManualEncounter, ManualNpc, MonsterManual
-from sidequest.game.origin import Origin, OriginKind
-from sidequest.game.session import GameSnapshot, NpcPatch
+from sidequest.game.origin import Origin, OriginKind, derive_origin, identity_key
+from sidequest.game.session import GameSnapshot, Npc, NpcPatch
 from sidequest.game.turn import TurnManager
 from sidequest.genre.models.authored_npc import AuthoredNpc
 from sidequest.server.dispatch import monster_manual_inject
@@ -253,9 +256,12 @@ def test_reinject_at_new_location_refreshes_merged_placement(
     placement refresh — a re-injected MM identity's ``location``/``region``
     must NOT freeze at first materialization. Turn 1 injects at region_a /
     "Salt Camp"; turn 2 injects at region_b / "Deep Cistern" — the MERGED
-    identity's location/region move. HP/disposition (ADR-139 Inv-2) and a
-    legacy None origin's first-stamp are asserted untouched/stamped
-    respectively.
+    identity's location/region move; HP/disposition (ADR-139 Inv-2) are
+    asserted untouched. This candidate is an UNMATCHED region-population row
+    (no room-binding this turn), so its origin deliberately carries no
+    per-individual id and must NOT get an origin/creature_id stamp — see
+    ``test_merge_from_a_nulled_creature_id_candidate_never_downgrades_
+    legacy_identity_key`` below for that (separate, id-gated) coverage.
     """
     snap = GameSnapshot(
         genre_slug="caverns_and_claudes",
@@ -292,9 +298,6 @@ def test_reinject_at_new_location_refreshes_merged_placement(
     creature = next(n for n in snap.npcs if n.core.name == "Pale Lurker")
     assert creature.location == "Salt Camp"
     assert creature.region == "region_a"
-    # 162-2/ADR-156 §6 defense-in-depth: a legacy identity's origin is None
-    # until first stamped. Force that state to prove the first-origin stamp.
-    creature.origin = None
     creature.core.apply_hp_delta(-3)
     hp_after_wound = creature.core.hp.current
     disposition_before = int(creature.disposition)
@@ -318,9 +321,14 @@ def test_reinject_at_new_location_refreshes_merged_placement(
     assert int(creature.disposition) == disposition_before, (
         "placement refresh must never touch live disposition (ADR-139 Inv-2)"
     )
-    assert creature.origin is not None and creature.origin.kind == OriginKind.REGION_POPULATION, (
-        "a legacy (origin=None) merged NPC must get its origin first-stamped"
-    )
+    # Regression guard (final review follow-up): this candidate's origin
+    # carries no per-individual id both turns (an unmatched region-population
+    # row — no room-binding this turn) — the origin/creature_id fields must
+    # stay exactly as fresh-admit stamped them at turn 1, never re-touched by
+    # the turn-2 refresh.
+    assert creature.origin is not None and creature.origin.kind == OriginKind.REGION_POPULATION
+    assert creature.origin.creature_id is None
+    assert creature.creature_id == "pale_lurker"
 
     refreshed = [
         s
@@ -333,6 +341,105 @@ def test_reinject_at_new_location_refreshes_merged_placement(
     attrs = dict(refreshed[0].attributes or {})
     assert attrs.get("location") == "Deep Cistern"
     assert attrs.get("region") == "region_b"
+
+
+def test_merge_from_a_nulled_creature_id_candidate_never_downgrades_legacy_identity_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression (final-review follow-up): Finding 1's placement refresh had
+    its own derive-don't-cache violation. ``mm.encounters``/``mm.region_
+    population`` DELIBERATELY null ``candidate.origin.creature_id`` (species-
+    tag policy — see ``_candidate``'s docstring: the encounter/region-pop
+    builders' id is a shared species tag, not a per-individual identifier).
+    Unconditionally stamping THAT nulled origin onto a legacy (``origin=
+    None``) NPC that carries a REAL bestiary id in its legacy ``creature_id``
+    field downgrades its DERIVED identity key from ``creature:<id>`` to
+    ``name:<name>`` — and because ``origin`` is persisted, the downgrade is
+    permanent. A later drifted-name counterpart keyed on the real id can then
+    no longer find it and forks a twin instead of merging.
+
+    Turn 1: an ``mm.encounters`` candidate merges by NAME onto a legacy NPC
+    that already carries the real bestiary ``creature_id`` in its legacy
+    field. The legacy NPC's *derived* identity key must survive unchanged —
+    only a candidate whose OWN origin carries a genuine per-individual id
+    (room_binding, or a region-population row matched to a room-bound id)
+    may ever fill ``origin``/``creature_id`` here.
+
+    Turn 2: a drifted-name room-bound counterpart carrying the SAME real id
+    arrives — it must MERGE onto the same identity via the creature_id-keyed
+    derived match (roster stays one NPC), not fork a twin.
+    """
+    snap = GameSnapshot(
+        genre_slug="caverns_and_claudes",
+        world_slug="beneath_sunden",
+        turn_manager=TurnManager(interaction=3),
+    )
+    legacy = Npc(
+        core=CreatureCore(
+            name="Resonance Grazer",
+            description="A statted regular.",
+            personality="Placid.",
+            inventory=Inventory(),
+            hp=HpPool(current=6, max=6, base_max=6),
+            armor_class=11,
+        ),
+        creature_id="grazer",
+        manual_origin=True,
+        origin=None,
+    )
+    snap.npcs.append(legacy)
+
+    manual = MonsterManual(
+        genre="caverns_and_claudes",
+        world="beneath_sunden",
+        encounters=[_encounter("Resonance Grazer", tier=1, hp=6)],
+    )
+    sd: Any = SimpleNamespace(
+        monster_manual=manual,
+        genre_pack=None,
+        genre_slug="caverns_and_claudes",
+        world_slug="beneath_sunden",
+    )
+
+    # Turn 1: mm.encounters proposes the exact same name — admit() merges
+    # via the name-resolution fallback leg (the candidate's own origin
+    # carries no id at all).
+    monster_manual_inject.inject(sd, snap, current_location="Salt Camp", in_combat=True)
+
+    assert len(snap.npcs) == 1, "turn 1 must merge onto the legacy NPC, not duplicate it"
+    assert identity_key(derive_origin(legacy), legacy.core.name) == "creature:grazer", (
+        "the legacy NPC's derived identity key must survive an mm.encounters "
+        "merge unchanged — a candidate whose origin carries no per-individual "
+        "id must never downgrade it to a name key"
+    )
+
+    # Turn 2: a drifted-name counterpart arrives via room-binding, carrying
+    # the SAME real bestiary id — genuinely trustworthy (ROOM_BOUND,
+    # creature_id="grazer") — and must merge onto the SAME identity via the
+    # creature_id-keyed derived match, not fork a twin.
+    monkeypatch.setattr(
+        monster_manual_inject,
+        "_npc_patches_for_room_binding",
+        lambda *a, **k: [
+            NpcPatch(
+                name="Grazer Prime",
+                creature_id="grazer",
+                threat_level=1,
+                hp=6,
+                manual_origin=True,
+                origin=Origin(kind=OriginKind.ROOM_BOUND, creature_id="grazer"),
+            )
+        ],
+    )
+    monster_manual_inject.inject(
+        sd, snap, current_location="Salt Camp", in_combat=True, room_id="toods_dome"
+    )
+
+    assert len(snap.npcs) == 1, (
+        "the drifted-name room-bound counterpart must MERGE onto the same "
+        "creature:grazer identity, not fork a twin — roster: "
+        f"{[n.core.name for n in snap.npcs]!r}"
+    )
 
 
 def test_authored_backfill_human_lands_authored_pregen_lands_manual_pool(otel_capture) -> None:

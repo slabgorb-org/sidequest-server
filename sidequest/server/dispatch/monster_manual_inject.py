@@ -860,12 +860,28 @@ def _refresh_merged_placement(
     For each merged identity key: resolves the SAME (LADDER, source)
     canonical candidate ``admit()`` itself would have selected for that
     identity group this turn, then re-stamps the resolved snapshot Npc's
-    ``location``/``region`` from it (when the patch carries a value),
+    ``location``/``region`` from it (when the patch carries a value) and
     ORs in ``manual_origin`` (monotonic — MM authorship, once true, is never
-    unset), first-stamps ``origin`` when the existing Npc predates the
-    origin model (``origin is None`` — a legacy MM NPC; this also un-deadens
-    ``_attach_before_mint``'s seated-Other leg for it, ADR-156 §6), and fills
-    ``creature_id`` when the existing Npc has none. Never touches
+    unset) UNCONDITIONALLY. ``origin``/``creature_id`` are different: they
+    are IDENTITY, not placement, and are gated on
+    ``canonical.origin.creature_id is not None`` — only room_binding (and a
+    region-population row matched to a room-bound id) ever carries a
+    genuine per-individual bestiary id on the origin itself;
+    ``mm.encounters``/``mm.region_population`` deliberately null it (species-
+    tag policy, see :func:`_candidate`'s docstring). Regression fix (final
+    review follow-up, 2026-07-12): an EARLIER version of this function
+    stamped ``origin``/``creature_id`` unconditionally whenever the existing
+    Npc predated the origin model (``origin is None``) — but a nulled-id
+    candidate's origin, stamped verbatim onto a legacy NPC that carries a
+    REAL bestiary id only in its legacy ``creature_id`` field, downgrades
+    that NPC's *derived* identity key (``creature:<id>``) to a name key
+    PERMANENTLY (``origin`` is persisted) — itself a derive-don't-cache
+    violation, and it broke a later drifted-name counterpart keyed on the
+    real id, which could no longer find the existing seat and forked a twin
+    instead of merging. Only a candidate whose OWN origin carries a
+    trustworthy id may ever write ``origin``/``creature_id`` here; when it
+    does, the stamp also un-deadens ``_attach_before_mint``'s seated-Other
+    leg for that NPC (ADR-156 §6). Never touches
     ``core.hp``/``disposition``/``belief_state`` — those stay
     ``_fill_absent``'s domain (or, for hp/disposition, are structurally
     excluded from it, ADR-139 Inv-2). Emits ONE
@@ -921,12 +937,28 @@ def _refresh_merged_placement(
         if fresh.manual_origin and not existing.manual_origin:
             existing.manual_origin = True
             changed = True
-        if existing.origin is None:
-            existing.origin = canonical.origin
-            changed = True
-        if existing.creature_id is None and fresh.creature_id is not None:
-            existing.creature_id = fresh.creature_id
-            changed = True
+        # Regression fix (final review follow-up): only room_binding (and a
+        # region-population row matched to a room-bound id, see inject()'s
+        # room_bound_ids overlap carve-out) ever carries a genuine per-
+        # individual bestiary id on the ORIGIN itself — mm.encounters /
+        # mm.region_population deliberately null it (species-tag policy,
+        # _candidate's docstring). Gating on ``canonical.origin.creature_id``
+        # (not ``fresh.creature_id``, which can carry an untrustworthy raw
+        # patch value even when the origin was nulled) stops a nulled-id
+        # candidate from ever stamping ``origin``/``creature_id`` onto an
+        # existing NPC — doing so unconditionally was itself a derive-don't-
+        # cache violation: it downgrades a legacy NPC's *derived* identity
+        # key (creature:<id>, read from its own legacy creature_id field)
+        # to a name key PERMANENTLY (origin is persisted), so a later
+        # drifted-name counterpart keyed on the real id can no longer find
+        # it and forks a twin instead of merging.
+        if canonical.origin.creature_id is not None:
+            if existing.creature_id is None:
+                existing.creature_id = canonical.origin.creature_id
+                changed = True
+            if existing.origin is None:
+                existing.origin = canonical.origin
+                changed = True
 
         if changed:
             with Span.open(

@@ -42,9 +42,16 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from sidequest.game import zone_eligibility
-from sidequest.game.green_room import MaterializationCandidate, admit
+from sidequest.game.green_room import LADDER, AdmitResult, MaterializationCandidate, admit
 from sidequest.game.monster_manual import EntryState, MonsterManual
-from sidequest.game.origin import Origin, OriginKind, identity_key, normalize_name
+from sidequest.game.origin import (
+    Origin,
+    OriginKind,
+    derive_origin,
+    identity_key,
+    normalize_name,
+    resolve_roster_npc,
+)
 from sidequest.game.session import NpcPatch, emit_npc_spawn_disposition, npc_patch_is_creature
 from sidequest.genre.names.generator import sanitize_display_name
 from sidequest.telemetry.spans import Span
@@ -52,6 +59,7 @@ from sidequest.telemetry.spans.monster_manual import (
     SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL,
     SPAN_MONSTER_MANUAL_CAP_ENFORCED,
     SPAN_MONSTER_MANUAL_INJECTED,
+    SPAN_MONSTER_MANUAL_PLACEMENT_REFRESHED,
     SPAN_MONSTER_MANUAL_POOL_DISCARDED,
     SPAN_MONSTER_MANUAL_REGION_POPULATION,
 )
@@ -84,16 +92,6 @@ _ACTIVE_NPC_INJECT_LIMIT = 5
 # in ``snapshot.npcs``; out of combat we surface only the leading 2 so a
 # marketplace doesn't spawn eight monsters into the world state.
 _OUT_OF_COMBAT_ENCOUNTER_LIMIT = 2
-
-
-def _patch_identity_key(patch: NpcPatch) -> str:
-    """Identity key for a patch (story 162-2): the stamped origin where the
-    builder set one, else the patch's own ``creature_id`` (an unstamped
-    creature patch still keys on its bestiary id, never its display name)."""
-    origin = patch.origin
-    if origin is None and patch.creature_id:
-        origin = Origin(kind=OriginKind.MANUAL_POOL, creature_id=patch.creature_id)
-    return identity_key(origin, patch.name)
 
 
 def _candidate(
@@ -837,6 +835,111 @@ def _npc_patches_for_room_binding(
     return patches
 
 
+def _refresh_merged_placement(
+    snapshot: GameSnapshot,
+    candidates: list[MaterializationCandidate],
+    result: AdmitResult,
+) -> None:
+    """Finding 1 (final review, Green Room follow-up 2026-07-12): re-stamp a
+    per-turn placement refresh onto every MM identity ``admit()`` reported
+    MERGED this turn.
+
+    ``green_room.admit()``'s ``_fill_absent`` merge is deliberately additive
+    — it only fills a winner's ABSENT fields (ADR-139 Inv-2: live mechanical
+    state must never reset). That is correct for HP/disposition/beliefs, but
+    it also means ``location``/``region`` froze at first materialization: a
+    re-injected identity's Npc keeps turn-1's location forever, because by
+    turn 2 the winner's ``location`` is no longer absent. The deleted
+    ``_merge_npc_patch`` (retired with the ``npcs_present`` lane) used to
+    refresh both from every later patch — this restores that refresh, scoped
+    to THIS feeder only. Gate semantics (``_fill_absent``,
+    ``_MERGE_FILL_FIELDS``) are UNCHANGED: a narrator mint still cannot move
+    an authored NPC through this path (only MM-feeder candidates ever reach
+    here).
+
+    For each merged identity key: resolves the SAME (LADDER, source)
+    canonical candidate ``admit()`` itself would have selected for that
+    identity group this turn, then re-stamps the resolved snapshot Npc's
+    ``location``/``region`` from it (when the patch carries a value),
+    ORs in ``manual_origin`` (monotonic — MM authorship, once true, is never
+    unset), first-stamps ``origin`` when the existing Npc predates the
+    origin model (``origin is None`` — a legacy MM NPC; this also un-deadens
+    ``_attach_before_mint``'s seated-Other leg for it, ADR-156 §6), and fills
+    ``creature_id`` when the existing Npc has none. Never touches
+    ``core.hp``/``disposition``/``belief_state`` — those stay
+    ``_fill_absent``'s domain (or, for hp/disposition, are structurally
+    excluded from it, ADR-139 Inv-2). Emits ONE
+    :data:`SPAN_MONSTER_MANUAL_PLACEMENT_REFRESHED` per identity actually
+    refreshed.
+    """
+    if not result.merged:
+        return
+    merged_keys = set(result.merged)
+    groups: dict[str, list[MaterializationCandidate]] = {}
+    for cand in candidates:
+        groups.setdefault(identity_key(cand.origin, cand.npc.core.name), []).append(cand)
+
+    for key in merged_keys:
+        group = groups.get(key)
+        if not group:
+            # Defensive: every merged key came from this turn's candidates,
+            # so this should be unreachable — never silently skip a key we
+            # can't explain (No Silent Fallbacks).
+            raise ValueError(
+                f"monster_manual_inject._refresh_merged_placement: admit() "
+                f"reported {key!r} merged but no candidate this turn produced "
+                "that identity key"
+            )
+        # Same (LADDER[kind], source) tiebreak admit() uses to pick a group's
+        # own canonical (green_room.admit) — the freshest, highest-precedence
+        # candidate's fields are the ones that should win the refresh.
+        group.sort(key=lambda c: (LADDER[c.origin.kind], c.source))
+        canonical = group[0]
+
+        existing = None
+        for npc in snapshot.npcs:
+            if identity_key(derive_origin(npc), npc.core.name) == key:
+                existing = npc
+                break
+        if existing is None:
+            existing = resolve_roster_npc(snapshot.npcs, canonical.npc.core.name)
+        if existing is None:
+            raise ValueError(
+                f"monster_manual_inject._refresh_merged_placement: admit() "
+                f"reported {key!r} merged, but the roster lookup cannot find "
+                "it — identity resolution is broken (No Silent Fallbacks)"
+            )
+
+        fresh = canonical.npc
+        changed = False
+        if fresh.location is not None and existing.location != fresh.location:
+            existing.location = fresh.location
+            changed = True
+        if fresh.region is not None and existing.region != fresh.region:
+            existing.region = fresh.region
+            changed = True
+        if fresh.manual_origin and not existing.manual_origin:
+            existing.manual_origin = True
+            changed = True
+        if existing.origin is None:
+            existing.origin = canonical.origin
+            changed = True
+        if existing.creature_id is None and fresh.creature_id is not None:
+            existing.creature_id = fresh.creature_id
+            changed = True
+
+        if changed:
+            with Span.open(
+                SPAN_MONSTER_MANUAL_PLACEMENT_REFRESHED,
+                {
+                    "identity_key": key,
+                    "location": existing.location or "",
+                    "region": existing.region or "",
+                },
+            ):
+                pass
+
+
 def inject(
     sd: _SessionData,
     snapshot: GameSnapshot,
@@ -1082,6 +1185,10 @@ def inject(
     # onto an existing entry or folded into a batch-mate (those didn't spawn).
     for npc in result.admitted:
         emit_npc_spawn_disposition(npc, is_creature=spawn_is_creature[id(npc)])
+    # Finding 1 (final review): the per-turn placement refresh _fill_absent
+    # (additive-only, ADR-139 Inv-2) cannot provide — see the function
+    # docstring for why this must live here and not in the gate.
+    _refresh_merged_placement(snapshot, candidates, result)
     return len(result.admitted) + len(result.merged)
 
 

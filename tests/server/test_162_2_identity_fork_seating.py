@@ -442,33 +442,3 @@ class TestSeatNameCanonicalization:
             if a.side == "opponent":
                 assert resolve_roster_npc(snap.npcs, a.name) is ghast
                 assert snap.find_creature_core(a.name) is not None
-
-
-# ---------------------------------------------------------------------------
-# Rework round 1 (review [MEDIUM]): the id-leg dedup guard, ISOLATED — the
-# integration negative above can pass on the name leg alone (review finding:
-# its display names also differ). These unit-pin _patch_identity_key itself:
-# same display name + different creature ids MUST key apart (only the id leg
-# can produce that), and drifted names + same id MUST key together.
-# CONTRACT GUARDS: green on arrival by design — they pin the mechanism the
-# integration test cannot isolate; they must stay green.
-# ---------------------------------------------------------------------------
-
-
-class TestPatchIdentityKeyUnit:
-    def test_same_display_name_different_creature_ids_key_apart(self) -> None:
-        from sidequest.server.dispatch.monster_manual_inject import _patch_identity_key
-
-        a = NpcPatch(name="Gnaw-Swarm", creature_id="gnaw_swarm", threat_level=1, hp=6)
-        b = NpcPatch(name="Gnaw-Swarm", creature_id="swarm", threat_level=1, hp=6)
-        assert _patch_identity_key(a) != _patch_identity_key(b), (
-            "distinct bestiary ids under one display name must not collapse — "
-            "the id leg is the ONLY thing separating them"
-        )
-
-    def test_drifted_display_names_same_creature_id_share_key(self) -> None:
-        from sidequest.server.dispatch.monster_manual_inject import _patch_identity_key
-
-        a = NpcPatch(name="Gnaw-Swarm", creature_id="gnaw_swarm", threat_level=1, hp=6)
-        b = NpcPatch(name="Gnaw Swarm", creature_id="gnaw_swarm", threat_level=1, hp=6)
-        assert _patch_identity_key(a) == _patch_identity_key(b)

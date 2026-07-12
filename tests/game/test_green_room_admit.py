@@ -20,12 +20,22 @@ def snapshot() -> GameSnapshot:
     return GameSnapshot(genre_slug="caverns_and_claudes", world_slug="beneath_sunden")
 
 
-def _npc(name: str, *, hp: int = 10, creature_id: str | None = None,
-         authored_id: str | None = None, kind: OriginKind = OriginKind.MANUAL_POOL) -> Npc:
+def _npc(
+    name: str,
+    *,
+    hp: int = 10,
+    creature_id: str | None = None,
+    authored_id: str | None = None,
+    kind: OriginKind = OriginKind.MANUAL_POOL,
+) -> Npc:
     return Npc(
         core=CreatureCore(
-            name=name, description="d", personality="p",
-            inventory=Inventory(), hp=hp_pool_from_hp(hp), armor_class=10,
+            name=name,
+            description="d",
+            personality="p",
+            inventory=Inventory(),
+            hp=hp_pool_from_hp(hp),
+            armor_class=10,
         ),
         creature_id=creature_id,
         origin=Origin(kind=kind, creature_id=creature_id, authored_id=authored_id),
@@ -39,7 +49,7 @@ def _cand(npc: Npc, source: str = "test") -> MaterializationCandidate:
 
 def test_ladder_ranks_match_adr_156() -> None:
     assert LADDER[OriginKind.AUTHORED] == 1
-    assert LADDER[OriginKind.GENERIC] == 1          # authored content, ADR-156 §5
+    assert LADDER[OriginKind.GENERIC] == 1  # authored content, ADR-156 §5
     assert LADDER[OriginKind.ROOM_BOUND] == 2
     assert LADDER[OriginKind.REGION_POPULATION] == 3
     assert LADDER[OriginKind.MANUAL_POOL] == 4
@@ -54,8 +64,9 @@ def test_admit_appends_new_identity(snapshot: GameSnapshot) -> None:
 
 
 def test_same_identity_two_tiers_highest_wins_dropped_recorded(snapshot: GameSnapshot) -> None:
-    authored = _npc("Molgrath", creature_id="thief",
-                    authored_id="molgrath", kind=OriginKind.AUTHORED)
+    authored = _npc(
+        "Molgrath", creature_id="thief", authored_id="molgrath", kind=OriginKind.AUTHORED
+    )
     pool = _npc("Molgrath", creature_id="thief", kind=OriginKind.MANUAL_POOL)
     result = admit(snapshot, [_cand(pool, "mm.encounters"), _cand(authored, "preload")])
     assert len(result.admitted) == 1
@@ -72,26 +83,25 @@ def test_additive_merge_fills_absent_fields_only(snapshot: GameSnapshot) -> None
     loser.core.description = "SHOULD NOT OVERWRITE"
     admit(snapshot, [_cand(winner), _cand(loser)])
     seated = next(n for n in snapshot.npcs if n.core.name == "Molgrath")
-    assert seated.pronouns == "he/him"            # absent → filled
-    assert seated.core.description == "d"         # present → untouched
+    assert seated.pronouns == "he/him"  # absent → filled
+    assert seated.core.description == "d"  # present → untouched
 
 
 def test_idempotence_never_resets_live_state(snapshot: GameSnapshot) -> None:
     admit(snapshot, [_cand(_npc("Grazer", hp=8, creature_id="grazer"))])
     seated = next(n for n in snapshot.npcs if n.core.name == "Grazer")
-    seated.core.apply_hp_delta(-5)                 # wounded in the fight
+    seated.core.apply_hp_delta(-5)  # wounded in the fight
     # Disposition is a value type with no in-place mutator; this is the
     # production idiom (sidequest/agents/tools/update_npc_disposition.py).
     seated.disposition = Disposition(int(seated.disposition) - 30)
     admit(snapshot, [_cand(_npc("Grazer", hp=8, creature_id="grazer"))])  # re-inject
-    assert seated.core.hp.current == 3             # ADR-139 Inv-2, structural
+    assert seated.core.hp.current == 3  # ADR-139 Inv-2, structural
     assert len([n for n in snapshot.npcs if n.core.name == "Grazer"]) == 1
 
 
 def test_prose_name_lands_as_alias_not_identity(snapshot: GameSnapshot) -> None:
     bound = _npc("Thief", creature_id="thief")
-    mint = _npc("Molgrath the Eyeless", creature_id="thief",
-                kind=OriginKind.NARRATOR_INVENTED)
+    mint = _npc("Molgrath the Eyeless", creature_id="thief", kind=OriginKind.NARRATOR_INVENTED)
     result = admit(snapshot, [_cand(bound), _cand(mint)])
     assert len(result.admitted) == 1
     seated = result.admitted[0]
@@ -121,8 +131,9 @@ def test_cross_group_fold_emits_conflict_not_materialized(
     the fold surfaces as green_room.precedence_conflict carrying the
     WINNER's identity_key/tier, so the GM panel can tell "won a seat" from
     "was folded into someone else's seat"."""
-    authored = _npc("Molgrath", creature_id="thief",
-                    authored_id="molgrath", kind=OriginKind.AUTHORED)
+    authored = _npc(
+        "Molgrath", creature_id="thief", authored_id="molgrath", kind=OriginKind.AUTHORED
+    )
     pool = _npc("Molgrath", creature_id="thief", kind=OriginKind.MANUAL_POOL)
     admit(snapshot, [_cand(pool, "mm.encounters"), _cand(authored, "preload")])
 

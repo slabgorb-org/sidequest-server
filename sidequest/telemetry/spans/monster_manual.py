@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ._core import FLAT_ONLY_SPANS
+from ._core import FLAT_ONLY_SPANS, SPAN_ROUTES, SpanRoute
 
 SPAN_MONSTER_MANUAL_INJECTED = "monster_manual.injected"
 
@@ -62,6 +62,30 @@ SPAN_MONSTER_MANUAL_CAP_ENFORCED = "monster_manual.cap_enforced"
 # stamped for region-keyed seating. The GM-panel lie-detector that procedural
 # rooms field real, statted creatures instead of leaving the narrator to improvise.
 SPAN_MONSTER_MANUAL_REGION_POPULATION = "monster_manual.region_population"
+
+# Finding 1 (final review, Green Room follow-up, 2026-07-12): the fill-absent
+# merge (``green_room.admit()``'s ``_fill_absent``) only fills a winner's
+# ABSENT fields, so a re-injected MM identity's ``location``/``region`` froze
+# at first materialization — the deleted ``_merge_npc_patch`` used to refresh
+# them every turn. ``monster_manual_inject.inject()`` now performs that
+# refresh itself, scoped to identities ``admit()`` reports MERGED this turn
+# only; HP/disposition/beliefs are never touched (ADR-139 Inv-2). Routed (not
+# flat-only), mirroring ``spans/green_room.py``'s registration shape, so the
+# GM panel's typed tab renders the moved location/region directly — the
+# lie-detector that a re-injected identity's placement is actually current,
+# not frozen at first sight.
+SPAN_MONSTER_MANUAL_PLACEMENT_REFRESHED = "monster_manual.placement_refreshed"
+SPAN_ROUTES[SPAN_MONSTER_MANUAL_PLACEMENT_REFRESHED] = SpanRoute(
+    event_type="state_transition",
+    component="monster_manual",
+    extract=lambda span: {
+        "field": "monster_manual",
+        "op": "placement_refreshed",
+        "identity_key": (span.attributes or {}).get("identity_key", ""),
+        "location": (span.attributes or {}).get("location", ""),
+        "region": (span.attributes or {}).get("region", ""),
+    },
+)
 
 FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_INJECTED)
 FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_ROOM_BOUND)

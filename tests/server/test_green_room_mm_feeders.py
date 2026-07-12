@@ -245,6 +245,96 @@ def test_reinject_preserves_wounded_hp(mm_session_fixture: _MMSessionFixture) ->
     assert len([n for n in snap.npcs if n.core.name == creature.core.name]) == 1
 
 
+def test_reinject_at_new_location_refreshes_merged_placement(
+    monkeypatch: pytest.MonkeyPatch, otel_capture
+) -> None:
+    """Finding 1 (final review, Green Room follow-up 2026-07-12): the
+    fill-absent merge dropped the deleted ``_merge_npc_patch``'s per-turn
+    placement refresh — a re-injected MM identity's ``location``/``region``
+    must NOT freeze at first materialization. Turn 1 injects at region_a /
+    "Salt Camp"; turn 2 injects at region_b / "Deep Cistern" — the MERGED
+    identity's location/region move. HP/disposition (ADR-139 Inv-2) and a
+    legacy None origin's first-stamp are asserted untouched/stamped
+    respectively.
+    """
+    snap = GameSnapshot(
+        genre_slug="caverns_and_claudes",
+        world_slug="beneath_sunden",
+        turn_manager=TurnManager(interaction=3),
+    )
+    manual = MonsterManual(genre="caverns_and_claudes", world="beneath_sunden")
+    sd: Any = SimpleNamespace(
+        monster_manual=manual,
+        genre_pack=None,
+        genre_slug="caverns_and_claudes",
+        world_slug="beneath_sunden",
+    )
+
+    def _region_patch(sd, region_id, *, current_location, in_combat):
+        return [
+            NpcPatch(
+                name="Pale Lurker",
+                creature_id="pale_lurker",
+                threat_level=2,
+                hp=9,
+                location=current_location,
+                region=region_id,
+                manual_origin=True,
+                origin=Origin(kind=OriginKind.REGION_POPULATION, creature_id="pale_lurker"),
+            )
+        ]
+
+    monkeypatch.setattr(monster_manual_inject, "_npc_patches_for_region_population", _region_patch)
+
+    monster_manual_inject.inject(
+        sd, snap, current_location="Salt Camp", in_combat=True, room_id="region_a"
+    )
+    creature = next(n for n in snap.npcs if n.core.name == "Pale Lurker")
+    assert creature.location == "Salt Camp"
+    assert creature.region == "region_a"
+    # 162-2/ADR-156 §6 defense-in-depth: a legacy identity's origin is None
+    # until first stamped. Force that state to prove the first-origin stamp.
+    creature.origin = None
+    creature.core.apply_hp_delta(-3)
+    hp_after_wound = creature.core.hp.current
+    disposition_before = int(creature.disposition)
+
+    monster_manual_inject.inject(
+        sd, snap, current_location="Deep Cistern", in_combat=True, room_id="region_b"
+    )
+
+    assert len([n for n in snap.npcs if n.core.name == "Pale Lurker"]) == 1, (
+        "re-injection must merge onto the existing identity, not duplicate it"
+    )
+    assert creature.location == "Deep Cistern", (
+        "placement refresh regressed: location froze at first materialization"
+    )
+    assert creature.region == "region_b", (
+        "placement refresh regressed: region froze at first materialization"
+    )
+    assert creature.core.hp.current == hp_after_wound, (
+        "placement refresh must never touch live HP (ADR-139 Inv-2)"
+    )
+    assert int(creature.disposition) == disposition_before, (
+        "placement refresh must never touch live disposition (ADR-139 Inv-2)"
+    )
+    assert creature.origin is not None and creature.origin.kind == OriginKind.REGION_POPULATION, (
+        "a legacy (origin=None) merged NPC must get its origin first-stamped"
+    )
+
+    refreshed = [
+        s
+        for s in otel_capture.get_finished_spans()
+        if s.name == "monster_manual.placement_refreshed"
+    ]
+    assert len(refreshed) == 1, (
+        f"expected one monster_manual.placement_refreshed span; got {len(refreshed)}"
+    )
+    attrs = dict(refreshed[0].attributes or {})
+    assert attrs.get("location") == "Deep Cistern"
+    assert attrs.get("region") == "region_b"
+
+
 def test_authored_backfill_human_lands_authored_pregen_lands_manual_pool(otel_capture) -> None:
     """Task-2 rework (reviewer Finding 1): the AUTHORED + authored_id branch.
 

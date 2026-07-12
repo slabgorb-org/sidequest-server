@@ -69,11 +69,12 @@ SPAN_ROUTES[SPAN_GREEN_ROOM_ALIAS_ATTACHED] = SpanRoute(
     },
 )
 
-# Story 166-1: reserved for the narrator-mint feeder (ADR-156 §6, later
-# task) — fires when a candidate reaching the gate at NARRATOR_INVENTED tier
-# actually mints a new identity rather than attaching as an alias onto an
-# existing one. Registered now so the routing-completeness lint and the GM
-# panel's typed tab exist ahead of the feeder wiring.
+# Story 166-1 / ADR-156 §6 (Task 5, live): fires when a candidate reaching
+# the gate at NARRATOR_INVENTED tier actually mints a new identity rather
+# than attaching as an alias onto an existing one — emitted from both
+# narrator-mint feeders (`narration_apply._apply_npc_mentions`'s novel-name
+# branch, `session_helpers._auto_mint_prose_only_npcs`) at the genuine-mint
+# path, after `_attach_before_mint` declines to attach.
 SPAN_GREEN_ROOM_MINT = "green_room.mint"
 SPAN_ROUTES[SPAN_GREEN_ROOM_MINT] = SpanRoute(
     event_type="state_transition",

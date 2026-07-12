@@ -44,7 +44,6 @@ class MaterializationCandidate:
     npc: Npc
     origin: Origin
     source: str
-    aliases: tuple[str, ...] = ()
 
 
 @dataclass
@@ -61,9 +60,18 @@ class AdmitResult:
 # last_seen_turn, non_transactional_interactions, last_development_turn.
 
 _MERGE_FILL_FIELDS = (
-    "pronouns", "appearance", "age", "build", "height",
-    "location", "region", "current_room", "threat_level",
-    "jungian_id", "rpg_role_id", "npc_role_id",
+    "pronouns",
+    "appearance",
+    "age",
+    "build",
+    "height",
+    "location",
+    "region",
+    "current_room",
+    "threat_level",
+    "jungian_id",
+    "rpg_role_id",
+    "npc_role_id",
 )
 
 
@@ -101,9 +109,7 @@ def _fill_absent(winner: Npc, donor: Npc) -> None:
             winner.distinguishing_features.append(df)
 
 
-def admit(
-    snapshot: GameSnapshot, candidates: Sequence[MaterializationCandidate]
-) -> AdmitResult:
+def admit(snapshot: GameSnapshot, candidates: Sequence[MaterializationCandidate]) -> AdmitResult:
     from sidequest.telemetry.spans import (
         SPAN_GREEN_ROOM_MATERIALIZED,
         SPAN_GREEN_ROOM_PRECEDENCE_CONFLICT,
@@ -163,9 +169,6 @@ def admit(
             if attach_alias(canonical.npc, loser.npc.core.name, from_source=loser.source):
                 alias_count += 1
             result.dropped.append(identity_key(loser.origin, loser.npc.core.name))
-        for extra in canonical.aliases:
-            if attach_alias(canonical.npc, extra, from_source=canonical.source):
-                alias_count += 1
 
         existing = _find_existing(snapshot, key, canonical.npc.core.name)
         batch_winner: Npc | None = None

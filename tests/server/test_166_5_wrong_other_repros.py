@@ -49,6 +49,7 @@ from sidequest.genre.models.rules import (
 )
 from sidequest.server.dispatch.confrontation import find_confrontation_def
 from sidequest.server.dispatch.encounter_lifecycle import (
+    NoOpponentAvailableError,
     instantiate_encounter_from_trigger,
 )
 from tests.fixtures.dogfight_playtest_encounter import GENRE_SLUG as _DOGFIGHT_GENRE_SLUG
@@ -341,3 +342,69 @@ def test_ship_duel_frame_source_unaffected(sealed_letter_pack) -> None:
     assert all(a.name != "Gengineered Killer" for a in enc.actors), (
         "the ground creature must not be seated in the dogfight at all"
     )
+
+
+# ---------------------------------------------------------------------------
+# 5. Task 6 (Green Room implementation plan) — the loud-failure fixture.
+# Other-requiring type, no named target, empty room, no generics: the
+# "nothing to seat, nowhere to look" shape must still raise loudly and
+# leave nothing half-seated, unchanged through the Amendment-A refactor
+# this file's other four tests exercise.
+# ---------------------------------------------------------------------------
+
+
+class _NoGenericsCombatPack:
+    """A combat-capable pack that authors NO generics — the 162-3
+    last-resort source is unavailable too. Note this guard fires BEFORE
+    generics would ever be consulted (see the test docstring below), so a
+    pack that DID carry generics would raise identically; this shape is
+    kept genuinely generics-less to match the brief's stated scenario."""
+
+    def __init__(self) -> None:
+        self.rules = RulesConfig(confrontations=[_combat_cdef()])
+
+    def effective_bestiary(self, world: str | None) -> tuple[object | None, str]:
+        return None, "genre"
+
+
+@pytest.fixture
+def bare_combat_pack() -> SimpleNamespace:
+    """Solo, alone, in an empty room, against a pack with no authored
+    generics — every legitimate opponent source (roster, pool, location
+    fallback, generics) comes up empty."""
+    snapshot = _snapshot(
+        player="Solo",
+        location="An Empty Room",
+        genre_slug="mutant_wasteland",
+        world_slug="seaboard_of_saints",
+    )
+    return SimpleNamespace(snapshot=snapshot, pack=_NoGenericsCombatPack())
+
+
+def test_no_target_no_room_no_generics_raises(bare_combat_pack: SimpleNamespace) -> None:
+    """Other-requiring type + no named target + empty room + no generics:
+    raises, nothing half-seated (162-3 rollback preserved through the
+    Green Room refactor).
+
+    ``NoOpponentAvailableError`` (a ``ValueError`` subclass,
+    encounter_lifecycle.py:75) is what actually fires here:
+    ``instantiate_encounter_from_trigger``'s own adversarial empty+empty
+    guard (ADR-116, ~L2018) raises it BEFORE the seeder ever reaches
+    162-3's generics last-resort branch — with ``npcs_present=[]`` and no
+    ``materialized_threat``, the location fallback finds nobody in the
+    empty room, so ``npcs_present`` stays empty and the guard trips first.
+    The brief's ``(NoOpponentAvailableError, ValueError)`` tuple is kept
+    verbatim for robustness against a hypothetical future where a
+    different guard on this path raises a bare ``ValueError`` instead."""
+    with pytest.raises((NoOpponentAvailableError, ValueError)):
+        instantiate_encounter_from_trigger(
+            snapshot=bare_combat_pack.snapshot,
+            pack=bare_combat_pack.pack,  # type: ignore[arg-type]  # duck-typed
+            encounter_type="combat",
+            player_name="Solo",
+            npcs_present=[],
+            genre_slug="test",
+            materialized_threat=None,
+        )
+    assert bare_combat_pack.snapshot.encounter is None
+    assert bare_combat_pack.snapshot.npcs == []

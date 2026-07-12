@@ -27,6 +27,7 @@ from sidequest.foundation.asset_urls import resolve_asset_url
 from sidequest.game.builder import humanize_snake_case
 from sidequest.game.creature_core import CreatureCore
 from sidequest.game.npc_pool import NpcPoolMember
+from sidequest.game.origin import identity_key
 from sidequest.game.projection.envelope import MessageEnvelope
 from sidequest.game.retrieval_orchestration import RetrievedEntities, render_entity_section
 from sidequest.game.ruleset.fate_projection import build_fate_projection
@@ -70,6 +71,8 @@ from sidequest.server.snapshot_slimming import (
     apply_snapshot_slimming,
 )
 from sidequest.telemetry.spans import (
+    SPAN_GREEN_ROOM_MINT,
+    Span,
     cartography_map_emitted_span,
     narrator_settings_span,
     npc_auto_mint_skipped_span,
@@ -2141,6 +2144,13 @@ def _auto_mint_prose_only_npcs(
     if not narration_text:
         return
 
+    # ADR-156 §6 (Amendment B) — local import to break the module cycle
+    # (``narration_apply`` imports THIS module at module scope to call
+    # ``_auto_mint_prose_only_npcs``; a top-level import here would try to
+    # import a partially-initialized ``narration_apply``). Shared with the
+    # narrator-mention feeder — see ``_attach_before_mint``'s docstring.
+    from sidequest.server.narration_apply import _attach_before_mint, _mention_is_hostile
+
     pc_names = _pc_name_skip_set(snapshot)
 
     # Known-name and known-role skip sets, seeded from existing stores and
@@ -2173,6 +2183,26 @@ def _auto_mint_prose_only_npcs(
         pronouns: str,
         pronoun_source: str = "window_inference",
     ) -> None:
+        # ADR-156 §6 (Amendment B) — attach-before-mint. A prose-extracted
+        # honorific/role name that already resolves to a roster identity
+        # (``resolve_roster_npc``'s canonical/alias/invented_from legs — the
+        # dedup below only checks EXACT ``npc.core.name``, so a recorded
+        # ALIAS misses it) attaches instead of minting a twin. ``role_token``
+        # is a bare string with no ``.side``/``.role`` attributes, so
+        # ``_mention_is_hostile`` always reads False here — this
+        # prose-extraction feeder has no hostility signal to offer the
+        # seated-Other leg, which is exactly correct: honorific/role prose
+        # (Mrs. Gow, the doctor, ...) never names a combat opponent.
+        if _attach_before_mint(
+            snapshot=snapshot,
+            name=public_name,
+            hostile=_mention_is_hostile(role_token),
+            from_source="prose_extraction",
+        ):
+            known_names.add(public_name.casefold())
+            if role_token:
+                known_roles.add(role_token.casefold())
+            return
         snapshot.npc_pool.append(
             NpcPoolMember(
                 name=public_name,
@@ -2185,6 +2215,15 @@ def _auto_mint_prose_only_npcs(
         known_names.add(public_name.casefold())
         if role_token:
             known_roles.add(role_token.casefold())
+        with Span.open(
+            SPAN_GREEN_ROOM_MINT,
+            {
+                "identity_key": identity_key(None, public_name),
+                "prose_name": public_name,
+                "source": "prose_extraction",
+            },
+        ):
+            pass
         with npc_auto_minted_from_prose_span(
             npc_name=public_name,
             role=role_token,

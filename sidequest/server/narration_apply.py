@@ -46,7 +46,7 @@ from sidequest.game.dogfight_shot import (
     resolve_dogfight_shots,
 )
 from sidequest.game.encounter_classifier import is_player_victory, yield_side_for
-from sidequest.game.green_room import AdmitResult, MaterializationCandidate, admit
+from sidequest.game.green_room import AdmitResult, MaterializationCandidate, admit, attach_alias
 from sidequest.game.item_catalog_resolution import resolve_gained_item_dict
 from sidequest.game.morale import (
     MoraleOutcome,
@@ -62,7 +62,13 @@ from sidequest.game.npc_development import (
     tier_for_interactions,
 )
 from sidequest.game.npc_pool import NpcPoolMember
-from sidequest.game.origin import Origin, OriginKind, normalize_name, resolve_roster_npc
+from sidequest.game.origin import (
+    Origin,
+    OriginKind,
+    identity_key,
+    normalize_name,
+    resolve_roster_npc,
+)
 from sidequest.game.region_validation import (
     canonicalize_region_name,
     resolve_known_region_id,
@@ -116,6 +122,7 @@ from sidequest.server.session_helpers import (
 )
 from sidequest.telemetry.spans import (
     SPAN_DISPOSITION_SHIFT,
+    SPAN_GREEN_ROOM_MINT,
     Span,
     container_retrieval_blocked_span,
     container_retrieval_recorded_span,
@@ -2591,6 +2598,74 @@ def _apply_opponent_disengagements(
                 break
 
 
+def _mention_is_hostile(mention: Any) -> bool:
+    """True when a mention marks its subject as the hostile Other.
+
+    ADR-156 §6 (Amendment B) — the seated-Other attach gate in
+    :func:`_attach_before_mint` only opens for a hostile cite. Checked via
+    ``getattr`` with an empty-string default so a caller passing something
+    that isn't an ``NpcMention`` (the prose-extraction site hands this a bare
+    ``role_token`` string, which has no ``.side``/``.role`` attributes at
+    all) degrades to "not hostile" instead of raising — prose-extracted
+    honorifics/roles (Mrs. Gow, the doctor, ...) are never combat opponents
+    by construction, so that degrade is correct, not a swallow.
+    """
+    return getattr(mention, "side", "") == "opponent" or getattr(mention, "role", "") in (
+        "hostile",
+        "enemy",
+        "opponent",
+    )
+
+
+def _attach_before_mint(
+    *, snapshot: GameSnapshot, name: str, hostile: bool, from_source: str
+) -> bool:
+    """ADR-156 §6 (Amendment B) — the shared mint-branch preamble: resolve,
+    then attach, before either narrator-mint feeder (``_apply_npc_mentions``'s
+    novel-name branch, ``_auto_mint_prose_only_npcs``) constructs a
+    ``NpcPoolMember``. Run BEFORE any type-specific mint processing
+    (creature preservation, epithet reconciliation, culture-name routing) —
+    an attaching mention must never pay for, or log, a culture-routing pass
+    it then discards (the ``npc.invented_name_routed`` self_match case from
+    the 2026-07-10 Chico trace: the mint feeder must not even reach the
+    namer for a name that resolves here).
+
+    Two attach legs, checked in order; either short-circuits the mint:
+
+    1. :func:`resolve_roster_npc` (canonical -> alias -> invented_from)
+       against ``snapshot.npcs``. A hit attaches ``name`` as a fresh alias
+       on that identity.
+    2. The "Ihnsch" case (ADR-156 design doc §3.4): an active, unresolved
+       ``snapshot.encounter`` with EXACTLY ONE live (non-withdrawn)
+       ``side="opponent"`` actor whose resolved identity carries an EMPTY
+       alias ledger and a GENERIC or NARRATOR_INVENTED origin is a lone,
+       still-unnamed Other — a HOSTILE mention is that Other's first prose
+       name. Two live opponents is ambiguous; never guess (No Silent
+       Fallbacks) — falls through to mint like any other novel name.
+
+    Returns ``True`` when ``name`` was attached (the caller mints nothing)
+    and ``False`` when it is genuinely novel (the caller proceeds to mint).
+    """
+    hit = resolve_roster_npc(snapshot.npcs, name)
+    if hit is not None:
+        attach_alias(hit, name, from_source=from_source)
+        return True
+    enc = snapshot.encounter
+    if enc is not None and not enc.resolved and hostile:
+        live_others = [a for a in enc.actors if a.side == "opponent" and not a.withdrawn]
+        if len(live_others) == 1:
+            other = resolve_roster_npc(snapshot.npcs, live_others[0].name)
+            if (
+                other is not None
+                and not other.aliases
+                and other.origin is not None
+                and other.origin.kind in (OriginKind.GENERIC, OriginKind.NARRATOR_INVENTED)
+            ):
+                attach_alias(other, name, from_source=from_source)
+                return True
+    return False
+
+
 def _apply_npc_mentions(
     *,
     snapshot: GameSnapshot,
@@ -3120,6 +3195,19 @@ def _apply_npc_mentions(
         # reaching here means a fresh identity). The minted name — generated,
         # raw-degraded, or legacy-raw — is what every downstream span reports.
         original_name = mention.name
+        # ADR-156 §6 (Amendment B) — attach-before-mint. Resolve, then
+        # attach, before ANY of the type-specific mint processing below
+        # (creature preservation, epithet reconciliation, culture-name
+        # routing) ever runs — see _attach_before_mint's docstring for the
+        # two legs (roster resolve; the lone-unaliased-seated-Other "Ihnsch"
+        # case).
+        if _attach_before_mint(
+            snapshot=snapshot,
+            name=original_name,
+            hostile=_mention_is_hostile(mention),
+            from_source="narrator_mention",
+        ):
+            continue
         minted_name = original_name
         creature_data: dict | None = None
         if mention.is_creature:
@@ -3228,6 +3316,14 @@ def _apply_npc_mentions(
                     naming_unresolved,
                 ) = _resolve_invented_naming_context(pack, world, mention_name=original_name)
                 naming_resolved = True
+            # ADR-156 §6: no separate roster-resolve check belongs here. The
+            # attach-before-mint preamble at the top of Step 3 already ran
+            # ``resolve_roster_npc(snapshot.npcs, original_name)`` (and the
+            # seated-Other "Ihnsch" check) before this culture-routing block
+            # was ever reached — a mention that would resolve or attach
+            # ``continue``d there and never pays for a self_match routing
+            # pass it would only discard. Reaching this line already proves
+            # ``original_name`` is genuinely novel.
             if name_generator is not None and culture_name is not None:
                 minted_name, collision_reroll = _generate_invented_name(
                     name_generator=name_generator,
@@ -3319,6 +3415,20 @@ def _apply_npc_mentions(
             creature_data=creature_data if mention.is_creature else None,
         )
         snapshot.npc_pool.append(new_member)
+        # ADR-156 §6 — the attach-before-mint preamble above declined both
+        # legs, so this identity is genuinely novel. ``identity_key(None,
+        # ...)`` mirrors the Green Room's own id-less-origin fallback (a pool
+        # member carries no stamped Origin until promotion) — same
+        # normalized-name key ``admit()`` would compute for it later.
+        with Span.open(
+            SPAN_GREEN_ROOM_MINT,
+            {
+                "identity_key": identity_key(None, minted_name),
+                "prose_name": minted_name,
+                "source": "narrator_mention",
+            },
+        ):
+            pass
         with npc_referenced_span(
             npc_name=minted_name,
             match_strategy="invented",

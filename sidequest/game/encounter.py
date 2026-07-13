@@ -119,11 +119,14 @@ class EncounterActor(BaseModel):
 
     ``name`` is a load-bearing entity ID, not a label. It equals the seated
     ``Npc.core.name``, and that identity is what the engine resolves the actor's
-    stat block by (``GameSnapshot.find_creature_core`` — an exact match, and the
-    ``edge_resolver`` behind ``apply_damage``/``wn_tools``/``apply_status``/
-    ``query_encounter`` and ``dice.py``'s ``apply_beat``). Tag targets,
-    initiative tokens and sealed commits all carry it too. **It is never
-    rewritten** — a seat left under a prose alias is an unreachable opponent
+    stat block by (``GameSnapshot.find_creature_core`` — the ``edge_resolver``
+    behind ``apply_damage``/``wn_tools``/``apply_status``/``query_encounter`` and
+    ``dice.py``'s ``apply_beat``; exact for characters, then exact for NPCs, and
+    only then alias-aware via ``resolve_roster_npc``). Tag targets, initiative
+    tokens and sealed commits all carry it too, and every one of THOSE seams is a
+    bare exact match with no alias leg at all (``find_actor``, the initiative
+    walk, the map-token roster match). **It is never rewritten** — a seat left
+    under a prose alias is an unreachable opponent
     (``encounter_lifecycle._seed_combat_hp_depletion_to_npcs``).
 
     ``display_name`` is the label, and the only thing a promotion touches — see
@@ -493,10 +496,31 @@ class StructuredEncounter(BaseModel):
         nothing moves, nothing dangles, and there is no reference sweep here to
         get wrong.
 
-        Returns True when the stage name was applied, False on a no-op (blank, or
-        a name the seat already shows).
+        Returns True when the stage name was applied, False on every no-op — and a
+        no-op emits **no span**. The GM panel reads ``green_room.actor_promoted`` as
+        proof the player's panel changed; a span for a promotion that changed nothing
+        makes the lie detector lie, which is worse than no span at all.
+
+        Three no-ops, all silent-and-False:
+
+        * **Blank.** A whitespace-only name is not a name.
+        * **A stage name equal to the seat id.** The player would read exactly what
+          they already read. Nothing was promoted.
+        * **A seat that already carries a stage name.** Promotion is coal→diamond: a
+          ONE-WAY door (SOUL *Diamonds and Coal*). The FIRST name the world gave this
+          enemy stands. Silently relabelling it would make the panel's name *churn*
+          mid-fight — "Ihnsch" on turn 6, something else on turn 9 — while the prose
+          and the alias ledger keep the original, which is this story's own
+          player-visible name split re-introduced from the other direction. The
+          narrator path already cannot do this (``_attach_before_mint`` gates on an
+          empty alias ledger), so the invariant was being held by a caller, by
+          accident. It is held here now, by the seam that owns it.
         """
-        if not display_name.strip() or display_name == actor.display_name:
+        if not display_name.strip():
+            return False
+        if display_name == actor.name:
+            return False
+        if actor.display_name is not None:
             return False
         actor.display_name = display_name
 

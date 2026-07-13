@@ -105,8 +105,16 @@ def _place_tokens_on_anchors(*, snapshot, room_id: str, anchors) -> list:
             ac = npc.core.armor_class if npc is not None else None
             tokens.append(
                 TokenPayload(
+                    # `token_id` is the ID (keys token identity across map refreshes);
+                    # `label` is what the player READS. Story 166-10 (ADR-156 §6): the
+                    # split already existed here and both sides were being fed the seat
+                    # id, so a promoted Other's token on the battle map still said "the
+                    # Scrapborn" under narration saying "Ihnsch of the Rusted Works" —
+                    # this story's bug on a third projection. The UI needs no change:
+                    # TacticalGridRenderer renders `label` and derives its token glyph
+                    # from `label[0]`, so both follow the stage name from here.
                     token_id=f"creature:{actor.name}",
-                    label=actor.name,
+                    label=actor.display_name or actor.name,
                     position=creature_anchors[i].cell,
                     faction=faction,
                     hp=hp,

@@ -1130,6 +1130,16 @@ class FateConflictParticipant(BaseModel):
     model_config = {"extra": "forbid"}
 
     name: str
+    #: The stage name (story 166-10 / ADR-156 §6) — the DISPLAY half of the
+    #: coal→diamond promotion, mirroring ``EncounterActor.display_name``. ``None``
+    #: until the narrator's prose names a generic Other.
+    #:
+    #: ``name`` above stays the canonical seat id and is what the surface must keep
+    #: SENDING (the attack-target ``<option value>`` rides back as
+    #: ``FATE_THROW.target``, and ``_resolve_attack`` resolves the victim by it).
+    #: This field is what the surface must keep SHOWING. Two names, two jobs — see
+    #: ``EncounterActor.name``, where conflating them made the enemy unhittable.
+    display_name: str | None = None
     side: str
     committed: bool = False
     stress: dict[str, list[FateStressBox]] = Field(default_factory=dict)

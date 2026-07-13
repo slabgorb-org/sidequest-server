@@ -154,6 +154,16 @@ def _project_conflict_participant(
     committed = enc is not None and any(c.actor == actor.name for c in enc.fate_commits)
     return FateConflictParticipant(
         name=actor.name,
+        # Story 166-10 (ADR-156 §6): the stage name the narrator's prose gave a coal
+        # Other. `name` stays the canonical seat id — the Fate surface sends it back
+        # as `FATE_THROW.target` and `_resolve_attack` resolves the victim by it — so
+        # the label rides ALONGSIDE the id, never in place of it. Dropping it here is
+        # how the promotion fired on all four Fate packs (pulp_noir, spaghetti_western,
+        # tea_and_murder, wry_whimsy), emitted `green_room.actor_promoted` announcing
+        # the panel had changed, and left the player reading "the Scrapborn" in the
+        # attack-target dropdown under narration calling it "Ihnsch of the Rusted
+        # Works".
+        display_name=actor.display_name,
         side=actor.side,
         committed=committed,
         stress=stress,

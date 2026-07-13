@@ -70,15 +70,17 @@ SPAN_ROUTES[SPAN_GREEN_ROOM_ALIAS_ATTACHED] = SpanRoute(
 )
 
 # Story 166-10 / ADR-156 §6: the DISPLAY half of the coal→diamond promotion —
-# the seated Other's panel name was repointed from its seat-time coal
-# placeholder to the name the narrator's prose gave it (``promote_actor``).
-# ``alias_attached`` proves the identity LEARNED the name; this proves the name
-# reached the surface the player is actually looking at. Without both, a panel
-# still reading "the Scrapborn" under narration that says "Ihnsch of the Rusted
-# Works" is indistinguishable from the narrator simply improvising a name with
-# no engine behind it. ``references_rewritten`` counts the pre-promotion
-# references (initiative tokens, sealed commits, tags) repointed onto the new
-# name — a dangling tag target shows up here as a 0 that should not be.
+# the seated Other was given the stage name the narrator's prose used
+# (``StructuredEncounter.promote_actor``). ``alias_attached`` proves the IDENTITY
+# learned the name; this proves the name reached the surface the player is
+# actually looking at. Without both, a panel still reading "the Scrapborn" under
+# narration that says "Ihnsch of the Rusted Works" is indistinguishable from the
+# narrator simply improvising a name with no engine behind it.
+#
+# ``seat_id`` is the actor's UNCHANGED entity id — the promotion adds a label, it
+# never repoints the id (a seat left under a prose alias is an opponent the
+# engine cannot resolve). Carrying both on the span is what lets the GM panel see
+# that the two stayed distinct.
 SPAN_GREEN_ROOM_ACTOR_PROMOTED = "green_room.actor_promoted"
 SPAN_ROUTES[SPAN_GREEN_ROOM_ACTOR_PROMOTED] = SpanRoute(
     event_type="state_transition",
@@ -86,10 +88,9 @@ SPAN_ROUTES[SPAN_GREEN_ROOM_ACTOR_PROMOTED] = SpanRoute(
     extract=lambda span: {
         "field": "green_room",
         "op": "actor_promoted",
-        "old_name": (span.attributes or {}).get("old_name", ""),
-        "new_name": (span.attributes or {}).get("new_name", ""),
+        "seat_id": (span.attributes or {}).get("seat_id", ""),
+        "display_name": (span.attributes or {}).get("display_name", ""),
         "side": (span.attributes or {}).get("side", ""),
-        "references_rewritten": (span.attributes or {}).get("references_rewritten", 0),
     },
 )
 

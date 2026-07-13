@@ -1911,14 +1911,24 @@ class GameSnapshot(BaseModel):
         instantiated NPC — caller decides whether that's a hard error
         (target_edge_delta with no actor) or a legitimate omission
         (numerical_advantage_for excludes unknown allies).
+
+        Story 166-10: the NPC leg resolves through ``resolve_roster_npc``
+        (canonical → alias ledger → ``invented_from``) rather than a bare
+        ``core.name`` match. Once the narrator has named a coal Other — "Ihnsch
+        of the Rusted Works" for a bestiary row canonically called "the
+        Scrapborn" (ADR-156 §6) — the narrator's NEXT turn hands that prose name
+        straight to ``apply_damage(target=...)``. On a bare exact match that is a
+        ``not_found`` and the damage silently never lands. Characters keep their
+        exact-match leg and are still checked FIRST, so a PC name can never be
+        shadowed by an NPC's alias.
         """
         for ch in self.characters:
             if ch.core.name == name:
                 return ch.core
-        for npc in self.npcs:
-            if npc.core.name == name:
-                return npc.core
-        return None
+        from sidequest.game.origin import resolve_roster_npc
+
+        npc = resolve_roster_npc(self.npcs, name)
+        return npc.core if npc is not None else None
 
     # ``_merge_npc_patch`` was REMOVED with the ``npcs_present`` patch branch
     # (Green Room follow-up, 2026-07-11) — its sole caller. Merge semantics on

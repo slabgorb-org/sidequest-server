@@ -2661,11 +2661,12 @@ def _attach_before_mint(
        this leg) is a lone, still-unnamed Other — a HOSTILE mention is that
        Other's first prose name. Two live opponents is ambiguous; never guess
        (No Silent Fallbacks) — falls through to mint like any other novel
-       name. On a fresh attach this leg also PROMOTES the seat
+       name. On a fresh attach this leg also gives the SEAT its stage name
        (``StructuredEncounter.promote_actor``, story 166-10): the alias ledger
-       is what the engine reads, but the panel renders
-       ``EncounterActor.name``, so a promotion that stops at the ledger leaves
-       the prose name and the panel name disagreeing in front of the player.
+       is what the engine reads, but the panel renders the seat, so a promotion
+       that stops at the ledger leaves the prose name and the panel name
+       disagreeing in front of the player. Only ``EncounterActor.display_name``
+       is written — the seat's id is never repointed.
 
     Known-scope case: a genuinely-new hostile arrival whose first prose
     mention lands while the seated Other's alias ledger is empty (no
@@ -2695,13 +2696,11 @@ def _attach_before_mint(
                 and derive_origin(other).kind in (OriginKind.GENERIC, OriginKind.NARRATOR_INVENTED)
             ):
                 if attach_alias(other, name, from_source=from_source):
-                    # Story 166-10: the ledger alone is INVISIBLE. The panel
-                    # renders EncounterActor.name, baked with the coal
-                    # placeholder at seat time — so without this the table reads
-                    # "Ihnsch of the Rusted Works" in the prose and
-                    # "[ the Scrapborn ]" in the panel, one enemy under two
-                    # names. Promote the seat too; the placeholder survives as an
-                    # actor alias, so earlier-turn references still resolve.
+                    # Story 166-10: the ledger alone is INVISIBLE. Without this
+                    # the table reads "Ihnsch of the Rusted Works" in the prose
+                    # and "[ the Scrapborn ]" in the panel — one enemy under two
+                    # names. Give the seat its stage name; the seat's ID is not
+                    # touched, so every mechanical seam still resolves it.
                     enc.promote_actor(seat, name)
                 return True
     return False

@@ -781,7 +781,7 @@ def test_inject_is_idempotent_across_turns() -> None:
     snap = _snapshot()
     monster_manual_inject.inject(sd, snap, current_location="The Dome", in_combat=True)
     monster_manual_inject.inject(sd, snap, current_location="The Dome", in_combat=True)
-    # _merge_npc_patch path — same name lands once.
+    # green_room.admit() merge path — same name lands once.
     assert len(snap.npcs) == 1
 
 
@@ -793,8 +793,9 @@ def test_reinjection_across_combat_turns_preserves_damaged_hp() -> None:
     This is the exact playtest shape: ``monster_manual.injected ... in_combat=True``
     fires every combat turn; before the fix the merge leg reset core.hp to a full
     pool from the patch's hp claim, so a damaged (or dead) opponent sprang back.
-    Proves the session.py merge-seam fix is wired into the production injection
-    seam, not just unit-correct in isolation."""
+    The guard is now STRUCTURAL: ``green_room.admit()`` never touches live
+    ``core.hp`` on a merge (ADR-139 Inv-2) — this proves it holds through the
+    production injection seam, not just unit-correct in isolation."""
     sd = _FakeSessionData()
     sd.monster_manual = _manual_with(
         encounters=[_creature_encounter(enemy_name="Salt Burrower", hp=9)],
@@ -1355,11 +1356,21 @@ def test_inject_region_population_authored_name_wins_dedup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """When an authored room-bound creature and a region-population creature share
-    a name, the authored patch wins (region-population is de-duped out).
+    a name, the authored patch wins the seat (region-population is de-duped out,
+    never re-appended or renamed onto a second Npc).
 
-    This mirrors the authored-creature precedence established in
-    _append_authored_creatures and ensures authored content always dominates
-    procedural content at the injection seam."""
+    Green Room test-semantics update (ADR-156 Task 2, 2026-07-11): pre-Green-Room
+    this asserted the region-pop loser contributed NOTHING to the surviving
+    authored Npc. Routing through ``green_room.admit()`` makes the merge
+    additive-by-design (``_MERGE_FILL_FIELDS`` in green_room.py) — a losing
+    candidate still donates its value into any field the winner left ABSENT.
+    The authored room-binding patch never stamps ``region`` (that's a
+    region-population-only field), so it is absent on the winner and the
+    region-pop candidate's ``region`` fills it. This is NOT a precedence
+    loss: identity, name, description, threat_level, and hp all still come
+    from the authored entry (none of those were absent), matching
+    "authored-creature precedence" as ADR-156 §4 actually defines it —
+    additive merge, not last-writer-wins on already-set fields."""
     from types import SimpleNamespace
 
     # Set up an sd with a genre_pack so the authored room-binding path fires.
@@ -1424,8 +1435,16 @@ def test_inject_region_population_authored_name_wins_dedup(
     assert len(gnaw_npcs) == 1, (
         f"Gnaw-Swarm must appear exactly once (authored wins dedup); got {len(gnaw_npcs)}"
     )
-    # The authored creature has manual_origin=True but region=None; the
-    # region-pop duplicate must not overwrite it.
-    assert gnaw_npcs[0].region is None, (
-        "authored creature (no region stamp) must win over the region-pop duplicate"
+    # Identity fields all come from the authored (room-bound) entry — never
+    # overwritten by the region-pop loser.
+    assert gnaw_npcs[0].creature_id == "gnaw_swarm"
+    assert gnaw_npcs[0].core.description == "authored desc"
+    assert gnaw_npcs[0].threat_level == 2
+    # ``region`` is the one field the authored patch never sets — the Green
+    # Room's additive merge (green_room.py _MERGE_FILL_FIELDS) fills it from
+    # the region-pop donor rather than leaving it None (fill-absent, not
+    # last-writer-wins — see the docstring above).
+    assert gnaw_npcs[0].region == "exp002.r3", (
+        "the region-pop loser's region should fill the authored winner's "
+        "ABSENT region field (Green Room additive merge)"
     )

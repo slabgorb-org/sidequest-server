@@ -46,6 +46,7 @@ from sidequest.game.dogfight_shot import (
     resolve_dogfight_shots,
 )
 from sidequest.game.encounter_classifier import is_player_victory, yield_side_for
+from sidequest.game.green_room import AdmitResult, MaterializationCandidate, admit, attach_alias
 from sidequest.game.item_catalog_resolution import resolve_gained_item_dict
 from sidequest.game.morale import (
     MoraleOutcome,
@@ -61,7 +62,14 @@ from sidequest.game.npc_development import (
     tier_for_interactions,
 )
 from sidequest.game.npc_pool import NpcPoolMember
-from sidequest.game.origin import normalize_name
+from sidequest.game.origin import (
+    Origin,
+    OriginKind,
+    derive_origin,
+    identity_key,
+    normalize_name,
+    resolve_roster_npc,
+)
 from sidequest.game.region_validation import (
     canonicalize_region_name,
     resolve_known_region_id,
@@ -115,6 +123,7 @@ from sidequest.server.session_helpers import (
 )
 from sidequest.telemetry.spans import (
     SPAN_DISPOSITION_SHIFT,
+    SPAN_GREEN_ROOM_MINT,
     Span,
     container_retrieval_blocked_span,
     container_retrieval_recorded_span,
@@ -1522,6 +1531,29 @@ def _promote_pool_member_to_npc(member: NpcPoolMember) -> Npc:
     return npc
 
 
+def _resolve_admitted_pool_promotion(
+    result: AdmitResult, npc: Npc, snapshot: GameSnapshot, *, source: str
+) -> Npc:
+    """Green Room Task 3 (ADR-156): resolve the ``Npc`` a pool-promotion
+    ``admit()`` call actually seated — a fresh candidate isn't necessarily
+    the live record when the ladder folds it onto an already-materialized
+    identity (an alias / ``invented_from`` hit the local build never knew
+    about). Mirrors ``encounter_lifecycle``'s post-``admit()`` resolution:
+    ``result.admitted[0]`` when freshly seated, else the merged existing via
+    :func:`resolve_roster_npc` (the SAME lookup ``admit()`` used internally
+    to find it, so it always hits)."""
+    if result.admitted:
+        return result.admitted[0]
+    existing = resolve_roster_npc(snapshot.npcs, npc.core.name)
+    if existing is None:
+        raise ValueError(
+            f"green_room.admit ({source}) reported {npc.core.name!r} merged, but "
+            "the roster lookup cannot find it — identity resolution is broken "
+            "(No Silent Fallbacks)"
+        )
+    return existing
+
+
 def _promote_engaged_pool_member(
     *,
     snapshot: GameSnapshot,
@@ -1549,23 +1581,52 @@ def _promote_engaged_pool_member(
     Emits ``npc.promoted_from_pool`` (trigger=tier|valence_beat) — the
     AC-3 lie-detector for the promotion decision.
     """
+    milestone_tier = tier_for_interactions(member.non_transactional_interactions)
+    seen_location = actor_loc or member.last_seen_location
+
     npc = _promote_pool_member_to_npc(member)
     npc.non_transactional_interactions = member.non_transactional_interactions
-    npc.resolution_tier = tier_for_interactions(member.non_transactional_interactions)
+    npc.resolution_tier = milestone_tier
     npc.last_seen_turn = turn_num
-    npc.last_seen_location = actor_loc or member.last_seen_location
+    npc.last_seen_location = seen_location
+
+    # Green Room Task 3 (ADR-156): a pool member first becomes mechanical
+    # here — NARRATOR_INVENTED tier, the lowest ladder rung above the
+    # ephemeral-stub exclusion (a walk-on the table itself talked into
+    # existence, not authored/bestiary content).
+    result = admit(
+        snapshot,
+        [
+            MaterializationCandidate(
+                npc=npc,
+                origin=npc.origin
+                or Origin(kind=OriginKind.NARRATOR_INVENTED, creature_id=npc.creature_id),
+                source="pool_promotion",
+            )
+        ],
+    )
+    npc = _resolve_admitted_pool_promotion(result, npc, snapshot, source="pool_promotion")
+    snapshot.npc_pool.remove(member)
 
     if trigger == "tier":
+        # Task-3 rework (reviewer fix 2): the ADR-128 milestone is applied to
+        # the RESOLVED record, AFTER admit() — the engagement event happened to
+        # that person whether the identity freshly seated or folded onto an
+        # existing roster entry. Pre-fix it warmed the LOCAL candidate before
+        # the gate, and a fold silently dropped the drift + beat (_fill_absent
+        # deliberately excludes live disposition state, ADR-139 Inv-2).
+        # One-shot: both callers source ``member`` from ``snapshot.npc_pool``
+        # and the removal above consumes it, so this milestone cannot re-fire
+        # for the same member. The beat reason keys on the MEMBER's milestone
+        # tier (the tier that triggered this promotion), not the resolved
+        # record's own resolution_tier, which may differ on a fold.
         npc.disposition = Disposition(int(npc.disposition) + DISPOSITION_DRIFT_PER_MILESTONE)
         npc.record_disposition_beat(
             turn=turn_num,
             delta=DISPOSITION_DRIFT_PER_MILESTONE,
-            reason=engagement_beat_reason(npc.resolution_tier),
-            location=npc.last_seen_location,
+            reason=engagement_beat_reason(milestone_tier),
+            location=seen_location,
         )
-
-    snapshot.npcs.append(npc)
-    snapshot.npc_pool.remove(member)
 
     with Span.open(
         "npc.promoted_from_pool",
@@ -1708,16 +1769,37 @@ def resolve_status_target(
     if pool_match is None:
         return None
     promoted = _promote_pool_member_to_npc(pool_match)
+    # Green Room Task 3 (ADR-156): same NARRATOR_INVENTED tier as
+    # ``_promote_engaged_pool_member`` — a pool member turning mechanical
+    # via a status mutation is the same lineage as one turning mechanical
+    # via engagement.
+    result = admit(
+        snapshot,
+        [
+            MaterializationCandidate(
+                npc=promoted,
+                origin=promoted.origin
+                or Origin(kind=OriginKind.NARRATOR_INVENTED, creature_id=promoted.creature_id),
+                source="pool_promotion",
+            )
+        ],
+    )
+    promoted = _resolve_admitted_pool_promotion(result, promoted, snapshot, source="pool_promotion")
     # Story 72-9: seed OCEAN + scenario belief_state onto narrator-invented
-    # NPCs at the promotion seam (where ``snapshot`` is in scope). No-op for
-    # authored / MM lineages and for already-seeded NPCs.
+    # NPCs at the promotion seam (where ``snapshot`` is in scope). Task-3
+    # rework (reviewer fix 2): applied to the RESOLVED record, AFTER admit()
+    # — pre-fix it seeded the LOCAL candidate, and a fold onto an existing
+    # roster identity silently dropped the seed (_fill_absent deliberately
+    # excludes ``ocean``, ADR-139 Inv-2). The seeder's own guards make this
+    # safe on a fold: it never re-seeds a record that already holds an OCEAN
+    # profile (ADR-042 — live personality is never clobbered), and it stays
+    # a no-op for authored / MM lineages and creature members.
     _seed_invented_npc_identity(
         npc=promoted,
         member=pool_match,
         snapshot=snapshot,
         turn_num=turn_num,
     )
-    snapshot.npcs.append(promoted)
     _watcher_publish(
         "state_transition",
         {
@@ -2517,6 +2599,101 @@ def _apply_opponent_disengagements(
                 break
 
 
+def _mention_is_hostile(mention: Any) -> bool:
+    """True when a mention marks its subject as the hostile Other.
+
+    ADR-156 §6 (Amendment B) — the seated-Other attach gate in
+    :func:`_attach_before_mint` only opens for a hostile cite. Three legs,
+    any one suffices:
+
+    * ``side == "opponent"`` — the engine's adjudicated seat membership
+      (only ever set for an already-seated exact-name match);
+    * ``stance == "hostile"`` — the sidecar extractor's prose-stance
+      classification (task-5 review fix round 2: the signal that actually
+      EXISTS on real traffic for a first-mention epithet — requested via
+      ``_NPCS_PRESENT_ITEM_SCHEMA``'s stance enum and carried through
+      ``NpcMention.from_value``);
+    * ``role in ("hostile", "enemy", "opponent")`` — the brief's original
+      contract, kept for internal constructors that stamp stance-words into
+      role (subsystems/confrontation.py, dogfight.py). ``role``'s PRIMARY
+      semantics remain occupation ("doctor", "guard") — the extractor is
+      never asked to put stance words here.
+
+    Checked via ``getattr`` with an empty-string default so a caller passing
+    something that isn't an ``NpcMention`` (the prose-extraction site hands
+    this a bare ``role_token`` string, which has none of these attributes)
+    degrades to "not hostile" instead of raising — prose-extracted
+    honorifics/roles (Mrs. Gow, the doctor, ...) are never combat opponents
+    by construction, so that degrade is correct, not a swallow.
+    """
+    return (
+        getattr(mention, "side", "") == "opponent"
+        or getattr(mention, "stance", "") == "hostile"
+        or getattr(mention, "role", "") in ("hostile", "enemy", "opponent")
+    )
+
+
+def _attach_before_mint(
+    *, snapshot: GameSnapshot, name: str, hostile: bool, from_source: str
+) -> bool:
+    """ADR-156 §6 (Amendment B) — the shared mint-branch preamble: resolve,
+    then attach, before either narrator-mint feeder (``_apply_npc_mentions``'s
+    novel-name branch, ``_auto_mint_prose_only_npcs``) constructs a
+    ``NpcPoolMember``. Run BEFORE any type-specific mint processing
+    (creature preservation, epithet reconciliation, culture-name routing) —
+    an attaching mention must never pay for, or log, a culture-routing pass
+    it then discards (the ``npc.invented_name_routed`` self_match case from
+    the 2026-07-10 Chico trace: the mint feeder must not even reach the
+    namer for a name that resolves here).
+
+    Two attach legs, checked in order; either short-circuits the mint:
+
+    1. :func:`resolve_roster_npc` (canonical -> alias -> invented_from)
+       against ``snapshot.npcs``. A hit attaches ``name`` as a fresh alias
+       on that identity.
+    2. The "Ihnsch" case (ADR-156 design doc §3.4): an active, unresolved
+       ``snapshot.encounter`` with EXACTLY ONE live (non-withdrawn)
+       ``side="opponent"`` actor whose resolved identity carries an EMPTY
+       alias ledger and a GENERIC or NARRATOR_INVENTED origin (resolved via
+       :func:`derive_origin` — final review Finding 2: every other identity
+       seam derives, never reads ``npc.origin`` raw, so a resumed save whose
+       seated Other predates the origin model, ``origin=None``, still opens
+       this leg) is a lone, still-unnamed Other — a HOSTILE mention is that
+       Other's first prose name. Two live opponents is ambiguous; never guess
+       (No Silent Fallbacks) — falls through to mint like any other novel
+       name.
+
+    Known-scope case: a genuinely-new hostile arrival whose first prose
+    mention lands while the seated Other's alias ledger is empty (no
+    bystander or earlier hostile mention has attached anything yet) is
+    indistinguishable from the Ihnsch case by the signals available here and
+    gets attached as an alias of the seated Other instead of minting its own
+    identity — observable via ``green_room.alias_attached``. Accepted scope
+    (ADR-156 design doc §3.4); a router/turn-order signal to disambiguate is
+    future work.
+
+    Returns ``True`` when ``name`` was attached (the caller mints nothing)
+    and ``False`` when it is genuinely novel (the caller proceeds to mint).
+    """
+    hit = resolve_roster_npc(snapshot.npcs, name)
+    if hit is not None:
+        attach_alias(hit, name, from_source=from_source)
+        return True
+    enc = snapshot.encounter
+    if enc is not None and not enc.resolved and hostile:
+        live_others = [a for a in enc.actors if a.side == "opponent" and not a.withdrawn]
+        if len(live_others) == 1:
+            other = resolve_roster_npc(snapshot.npcs, live_others[0].name)
+            if (
+                other is not None
+                and not other.aliases
+                and derive_origin(other).kind in (OriginKind.GENERIC, OriginKind.NARRATOR_INVENTED)
+            ):
+                attach_alias(other, name, from_source=from_source)
+                return True
+    return False
+
+
 def _apply_npc_mentions(
     *,
     snapshot: GameSnapshot,
@@ -3046,6 +3223,19 @@ def _apply_npc_mentions(
         # reaching here means a fresh identity). The minted name — generated,
         # raw-degraded, or legacy-raw — is what every downstream span reports.
         original_name = mention.name
+        # ADR-156 §6 (Amendment B) — attach-before-mint. Resolve, then
+        # attach, before ANY of the type-specific mint processing below
+        # (creature preservation, epithet reconciliation, culture-name
+        # routing) ever runs — see _attach_before_mint's docstring for the
+        # two legs (roster resolve; the lone-unaliased-seated-Other "Ihnsch"
+        # case).
+        if _attach_before_mint(
+            snapshot=snapshot,
+            name=original_name,
+            hostile=_mention_is_hostile(mention),
+            from_source="narrator_mention",
+        ):
+            continue
         minted_name = original_name
         creature_data: dict | None = None
         if mention.is_creature:
@@ -3154,6 +3344,14 @@ def _apply_npc_mentions(
                     naming_unresolved,
                 ) = _resolve_invented_naming_context(pack, world, mention_name=original_name)
                 naming_resolved = True
+            # ADR-156 §6: no separate roster-resolve check belongs here. The
+            # attach-before-mint preamble at the top of Step 3 already ran
+            # ``resolve_roster_npc(snapshot.npcs, original_name)`` (and the
+            # seated-Other "Ihnsch" check) before this culture-routing block
+            # was ever reached — a mention that would resolve or attach
+            # ``continue``d there and never pays for a self_match routing
+            # pass it would only discard. Reaching this line already proves
+            # ``original_name`` is genuinely novel.
             if name_generator is not None and culture_name is not None:
                 minted_name, collision_reroll = _generate_invented_name(
                     name_generator=name_generator,
@@ -3245,6 +3443,20 @@ def _apply_npc_mentions(
             creature_data=creature_data if mention.is_creature else None,
         )
         snapshot.npc_pool.append(new_member)
+        # ADR-156 §6 — the attach-before-mint preamble above declined both
+        # legs, so this identity is genuinely novel. ``identity_key(None,
+        # ...)`` mirrors the Green Room's own id-less-origin fallback (a pool
+        # member carries no stamped Origin until promotion) — same
+        # normalized-name key ``admit()`` would compute for it later.
+        with Span.open(
+            SPAN_GREEN_ROOM_MINT,
+            {
+                "identity_key": identity_key(None, minted_name),
+                "prose_name": minted_name,
+                "source": "narrator_mention",
+            },
+        ):
+            pass
         with npc_referenced_span(
             npc_name=minted_name,
             match_strategy="invented",

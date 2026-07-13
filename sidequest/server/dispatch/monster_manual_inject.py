@@ -5,8 +5,10 @@ version (``crates/sidequest-server/src/dispatch/mod.rs:643-681``) appended
 ``format_nearby_npcs`` and ``format_area_creatures`` text directly to the
 narrator's ``state_summary``. Python deviates: per ``project_narrator_
 gaslighting_doctrine.md``, we materialize Manual entries into ``snap.npcs``
-as runtime ``Npc`` records via :class:`NpcPatch` / :class:`WorldStatePatch`
-so the narrator sees them as world truth — never as "available list" prose.
+as runtime ``Npc`` records — built from :class:`NpcPatch` (the flavor/stat
+shape each builder emits), then routed through the Green Room single gate
+(:func:`sidequest.game.green_room.admit`, ADR-156) — so the narrator sees
+them as world truth — never as "available list" prose.
 
 Lifecycle:
 
@@ -15,9 +17,13 @@ Lifecycle:
    Manual lives on :class:`_SessionData` across the session; Rust re-loaded
    from disk on every turn — Python keeps it in memory and saves at turn
    end (same effective on-disk state, fewer JSON parses).
-2. :func:`inject` — builds the per-turn :class:`WorldStatePatch` from the
-   Manual's location-filtered Available pool and applies it to the
-   snapshot.  Emits the ``monster_manual.injected`` OTEL span (Rust parity).
+2. :func:`inject` — builds this turn's :class:`NpcPatch` list from the
+   Manual's location-filtered Available pool plus the room-binding /
+   region-population feeders, wraps each in a
+   :class:`~sidequest.game.green_room.MaterializationCandidate`, and makes
+   ONE :func:`~sidequest.game.green_room.admit` call (Green Room Task 2,
+   ADR-156 §4).  Emits the ``monster_manual.injected`` OTEL span (Rust
+   parity) plus ``green_room.materialized`` per resolved identity.
 3. :func:`mark_active_from_narration` — scans narration for Manual NPC
    names and flips matches to ``EntryState.ACTIVE`` (Rust port of
    ``dispatch/mod.rs:1671-1695``).
@@ -36,22 +42,31 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from sidequest.game import zone_eligibility
+from sidequest.game.green_room import LADDER, AdmitResult, MaterializationCandidate, admit
 from sidequest.game.monster_manual import EntryState, MonsterManual
-from sidequest.game.origin import Origin, OriginKind, identity_key, normalize_name
-from sidequest.game.session import NpcPatch, WorldStatePatch
+from sidequest.game.origin import (
+    Origin,
+    OriginKind,
+    derive_origin,
+    identity_key,
+    normalize_name,
+    resolve_roster_npc,
+)
+from sidequest.game.session import NpcPatch, emit_npc_spawn_disposition, npc_patch_is_creature
 from sidequest.genre.names.generator import sanitize_display_name
 from sidequest.telemetry.spans import Span
 from sidequest.telemetry.spans.monster_manual import (
     SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL,
     SPAN_MONSTER_MANUAL_CAP_ENFORCED,
     SPAN_MONSTER_MANUAL_INJECTED,
+    SPAN_MONSTER_MANUAL_PLACEMENT_REFRESHED,
     SPAN_MONSTER_MANUAL_POOL_DISCARDED,
     SPAN_MONSTER_MANUAL_REGION_POPULATION,
 )
 from sidequest.telemetry.spans.zone_eligibility import SPAN_ZONE_ELIGIBILITY_FILTERED
 
 if TYPE_CHECKING:
-    from sidequest.game.session import GameSnapshot
+    from sidequest.game.session import GameSnapshot, Npc
     from sidequest.server.session_handler import _SessionData
 
 logger = logging.getLogger(__name__)
@@ -79,14 +94,48 @@ _ACTIVE_NPC_INJECT_LIMIT = 5
 _OUT_OF_COMBAT_ENCOUNTER_LIMIT = 2
 
 
-def _patch_identity_key(patch: NpcPatch) -> str:
-    """Identity key for a patch (story 162-2): the stamped origin where the
-    builder set one, else the patch's own ``creature_id`` (an unstamped
-    creature patch still keys on its bestiary id, never its display name)."""
-    origin = patch.origin
-    if origin is None and patch.creature_id:
-        origin = Origin(kind=OriginKind.MANUAL_POOL, creature_id=patch.creature_id)
-    return identity_key(origin, patch.name)
+def _candidate(
+    npc: Npc,
+    *,
+    kind: OriginKind,
+    source: str,
+    creature_id: str | None = None,
+    authored_id: str | None = None,
+) -> MaterializationCandidate:
+    """Wrap a materialized ``Npc`` for the Green Room gate (ADR-156 Task 2).
+
+    ``creature_id`` is passed through only where the builder's id is a
+    genuine, per-individual identifier — room-binding's authored bestiary
+    reference (``_creature_patch_from_bestiary_entry``). The encounter and
+    region-population builders do NOT get their ``patch.creature_id`` routed
+    here, on purpose: it is not a reliable per-individual id.
+
+    * Encounters: ``pregen.py``'s own docstring records that
+      ``encountergen.generate_enemy_from_bestiary`` "carries no creature_id"
+      — ``_creature_patch_from_enemy`` falls back to the raw enemy's
+      ``class``, which both content pipelines (``creature_to_enemy_block``
+      and ``generate_enemy_from_bestiary``, encountergen.py) hardcode to the
+      literal ``"creature"`` for every creature-type enemy. Every creature
+      enemy in every encounter, in every genre, shares that one fallback
+      value.
+    * Region population: ``RegionCreature.creature_type`` is a SPECIES tag,
+      not a per-instance id — ``test_inject_region_population_ooc_cap``'s own
+      fixture proves it (five distinctly-named ``Mob0..Mob4`` rows all typed
+      ``"mob"``).
+
+    Routing either straight through as an ``Origin.creature_id`` would key
+    ``identity_key`` on that shared tag and collapse every same-species /
+    same-fallback-class enemy in one scene onto ONE seat — a materialization
+    regression, not a dedup. Both feeders key on normalized display NAME
+    instead (``creature_id=None`` here), which is exactly their
+    pre-Green-Room name-keyed dedup behavior (``GameSnapshot.apply_world_patch``
+    matched by ``npc_patch.name``), now just routed through ``admit()``.
+    """
+    return MaterializationCandidate(
+        npc=npc,
+        origin=Origin(kind=kind, creature_id=creature_id, authored_id=authored_id),
+        source=source,
+    )
 
 
 def _sanitize_patch_names(patches: list[NpcPatch]) -> tuple[list[NpcPatch], int]:
@@ -348,8 +397,32 @@ def ensure_loaded(sd: _SessionData) -> MonsterManual | None:
     return manual
 
 
+def _authored_npc_ids(pack: Any, world_slug: str) -> dict[str, str]:
+    """Normalized-name -> ``AuthoredNpc.id`` lookup (Green Room Task 2, feeder 1).
+
+    ``ManualNpc.authored`` (monster_manual.py:168) marks a row backfilled from
+    the world's ``npcs.yaml`` cast, but the Manual entry itself carries no id
+    — only ``world_materialization.preload_authored_npcs`` stamps
+    ``authored_id`` today. This lookup keys on :func:`normalize_name` (the
+    single identity-seam normalization), which is *stricter* than the plain
+    ``.lower()`` exact-match ``pregen._seed_authored_npcs`` /
+    ``find_npc_by_exact_name`` dedup on — equivalent here in practice because
+    the backfill copies ``AuthoredNpc.name`` into ``ManualNpc.name`` verbatim,
+    so both sides of the lookup see the same byte string. Returns ``{}`` when
+    the pack/world/roster is unavailable — an authored row with no id match
+    still gets ``AUTHORED`` kind (``npc.authored`` is the ground truth), just
+    falls back to the name-keyed identity leg.
+    """
+    worlds = getattr(pack, "worlds", None) if pack is not None else None
+    world_obj = worlds.get(world_slug) if worlds is not None and world_slug else None
+    authored = getattr(world_obj, "authored_npcs", None) if world_obj is not None else None
+    if not authored:
+        return {}
+    return {normalize_name(a.name): a.id for a in authored}
+
+
 def _npc_patches_for_available_humans(
-    manual: MonsterManual, current_location: str
+    manual: MonsterManual, current_location: str, *, authored_ids: dict[str, str] | None = None
 ) -> tuple[list[NpcPatch], int, int, int]:
     """Build patches for Active-at-location + top-N Available humans.
 
@@ -391,6 +464,10 @@ def _npc_patches_for_available_humans(
     """
     loc_lower = (current_location or "").lower()
     fallback_location = current_location or None
+    authored_ids = authored_ids or {}
+
+    def _aid(npc: Any) -> str | None:
+        return authored_ids.get(normalize_name(npc.name))
 
     # Collect all Active-at-location matches first, then cap — so the cap drops
     # the tail deterministically (manual.npcs order) and we can report how many
@@ -401,11 +478,13 @@ def _npc_patches_for_available_humans(
             continue
         anchor = npc.activated_location
         if anchor is None:
-            active_patches.append(_human_patch(npc, location=fallback_location))
+            active_patches.append(
+                _human_patch(npc, location=fallback_location, authored_id=_aid(npc))
+            )
             continue
         anchor_lower = anchor.lower()
         if loc_lower and (anchor_lower in loc_lower or loc_lower in anchor_lower):
-            active_patches.append(_human_patch(npc, location=anchor))
+            active_patches.append(_human_patch(npc, location=anchor, authored_id=_aid(npc)))
 
     active_capped = max(0, len(active_patches) - _ACTIVE_NPC_INJECT_LIMIT)
     if active_capped:
@@ -442,12 +521,12 @@ def _npc_patches_for_available_humans(
     available = placed + unplaced[:unplaced_budget]
     available_placed_matched = sum(1 for n in available if n.location_tags)
     for npc in available:
-        patches.append(_human_patch(npc, location=fallback_location))
+        patches.append(_human_patch(npc, location=fallback_location, authored_id=_aid(npc)))
 
     return patches, active_capped, available_placed_matched, available_placed_eligible
 
 
-def _human_patch(npc: Any, *, location: str | None) -> NpcPatch:
+def _human_patch(npc: Any, *, location: str | None, authored_id: str | None = None) -> NpcPatch:
     """Build an :class:`NpcPatch` for a human Manual NPC.
 
     Pulls flavor fields (personality summary, dialogue quirks) from the
@@ -456,6 +535,14 @@ def _human_patch(npc: Any, *, location: str | None) -> NpcPatch:
     patches. ``location`` is the zone the projection should bind the NPC
     to so ``in_same_zone()`` can match them; ``None`` is reserved for the
     pre-bind / pre-chargen case where no meaningful zone exists yet.
+
+    Green Room Task 2: the Manual's own ``authored`` flag (set by
+    ``pregen._seed_authored_npcs`` on a world ``npcs.yaml`` backfill row) is
+    the ONE marker distinguishing an authored-backfill human from a namegen
+    pregen walk-on in this seam — pre-Task-2 both stamped MANUAL_POOL
+    unconditionally. An authored row now stamps AUTHORED (+ ``authored_id``
+    when the caller resolved one via :func:`_authored_npc_ids`); a pregen row
+    keeps MANUAL_POOL.
     """
     data = npc.data if isinstance(npc.data, dict) else {}
     ocean_summary = data.get("ocean_summary") or None
@@ -475,6 +562,12 @@ def _human_patch(npc: Any, *, location: str | None) -> NpcPatch:
         description_bits.append(npc.culture)
     description = ", ".join(description_bits) if description_bits else None
 
+    origin = (
+        Origin(kind=OriginKind.AUTHORED, authored_id=authored_id)
+        if npc.authored
+        else Origin(kind=OriginKind.MANUAL_POOL)
+    )
+
     return NpcPatch(
         name=npc.name,
         description=description,
@@ -483,9 +576,9 @@ def _human_patch(npc: Any, *, location: str | None) -> NpcPatch:
         location=location,
         # Story 72-3: Monster Manual authorship marker (ADR-059).
         manual_origin=True,
-        # Typed provenance (story 162-2): Manual pool human (namegen pregen /
-        # authored backfill).
-        origin=Origin(kind=OriginKind.MANUAL_POOL),
+        # Typed provenance (story 162-2; Green Room Task 2 splits authored
+        # backfill from pregen — see the docstring above).
+        origin=origin,
     )
 
 
@@ -742,6 +835,143 @@ def _npc_patches_for_room_binding(
     return patches
 
 
+def _refresh_merged_placement(
+    snapshot: GameSnapshot,
+    candidates: list[MaterializationCandidate],
+    result: AdmitResult,
+) -> None:
+    """Finding 1 (final review, Green Room follow-up 2026-07-12): re-stamp a
+    per-turn placement refresh onto every MM identity ``admit()`` reported
+    MERGED this turn.
+
+    ``green_room.admit()``'s ``_fill_absent`` merge is deliberately additive
+    — it only fills a winner's ABSENT fields (ADR-139 Inv-2: live mechanical
+    state must never reset). That is correct for HP/disposition/beliefs, but
+    it also means ``location``/``region`` froze at first materialization: a
+    re-injected identity's Npc keeps turn-1's location forever, because by
+    turn 2 the winner's ``location`` is no longer absent. The deleted
+    ``_merge_npc_patch`` (retired with the ``npcs_present`` lane) used to
+    refresh both from every later patch — this restores that refresh, scoped
+    to THIS feeder only. Gate semantics (``_fill_absent``,
+    ``_MERGE_FILL_FIELDS``) are UNCHANGED: a narrator mint still cannot move
+    an authored NPC through this path (only MM-feeder candidates ever reach
+    here).
+
+    For each merged identity key: resolves the SAME (LADDER, source)
+    canonical candidate ``admit()`` itself would have selected for that
+    identity group this turn, then re-stamps the resolved snapshot Npc's
+    ``location``/``region`` from it (when the patch carries a value) and
+    ORs in ``manual_origin`` (monotonic — MM authorship, once true, is never
+    unset) UNCONDITIONALLY. ``origin``/``creature_id`` are different: they
+    are IDENTITY, not placement, and are gated on
+    ``canonical.origin.creature_id is not None`` — only room_binding (and a
+    region-population row matched to a room-bound id) ever carries a
+    genuine per-individual bestiary id on the origin itself;
+    ``mm.encounters``/``mm.region_population`` deliberately null it (species-
+    tag policy, see :func:`_candidate`'s docstring). Regression fix (final
+    review follow-up, 2026-07-12): an EARLIER version of this function
+    stamped ``origin``/``creature_id`` unconditionally whenever the existing
+    Npc predated the origin model (``origin is None``) — but a nulled-id
+    candidate's origin, stamped verbatim onto a legacy NPC that carries a
+    REAL bestiary id only in its legacy ``creature_id`` field, downgrades
+    that NPC's *derived* identity key (``creature:<id>``) to a name key
+    PERMANENTLY (``origin`` is persisted) — itself a derive-don't-cache
+    violation, and it broke a later drifted-name counterpart keyed on the
+    real id, which could no longer find the existing seat and forked a twin
+    instead of merging. Only a candidate whose OWN origin carries a
+    trustworthy id may ever write ``origin``/``creature_id`` here; when it
+    does, the stamp also un-deadens ``_attach_before_mint``'s seated-Other
+    leg for that NPC (ADR-156 §6). Never touches
+    ``core.hp``/``disposition``/``belief_state`` — those stay
+    ``_fill_absent``'s domain (or, for hp/disposition, are structurally
+    excluded from it, ADR-139 Inv-2). Emits ONE
+    :data:`SPAN_MONSTER_MANUAL_PLACEMENT_REFRESHED` per identity actually
+    refreshed.
+    """
+    if not result.merged:
+        return
+    merged_keys = set(result.merged)
+    groups: dict[str, list[MaterializationCandidate]] = {}
+    for cand in candidates:
+        groups.setdefault(identity_key(cand.origin, cand.npc.core.name), []).append(cand)
+
+    for key in merged_keys:
+        group = groups.get(key)
+        if not group:
+            # Defensive: every merged key came from this turn's candidates,
+            # so this should be unreachable — never silently skip a key we
+            # can't explain (No Silent Fallbacks).
+            raise ValueError(
+                f"monster_manual_inject._refresh_merged_placement: admit() "
+                f"reported {key!r} merged but no candidate this turn produced "
+                "that identity key"
+            )
+        # Same (LADDER[kind], source) tiebreak admit() uses to pick a group's
+        # own canonical (green_room.admit) — the freshest, highest-precedence
+        # candidate's fields are the ones that should win the refresh.
+        group.sort(key=lambda c: (LADDER[c.origin.kind], c.source))
+        canonical = group[0]
+
+        existing = None
+        for npc in snapshot.npcs:
+            if identity_key(derive_origin(npc), npc.core.name) == key:
+                existing = npc
+                break
+        if existing is None:
+            existing = resolve_roster_npc(snapshot.npcs, canonical.npc.core.name)
+        if existing is None:
+            raise ValueError(
+                f"monster_manual_inject._refresh_merged_placement: admit() "
+                f"reported {key!r} merged, but the roster lookup cannot find "
+                "it — identity resolution is broken (No Silent Fallbacks)"
+            )
+
+        fresh = canonical.npc
+        changed = False
+        if fresh.location is not None and existing.location != fresh.location:
+            existing.location = fresh.location
+            changed = True
+        if fresh.region is not None and existing.region != fresh.region:
+            existing.region = fresh.region
+            changed = True
+        if fresh.manual_origin and not existing.manual_origin:
+            existing.manual_origin = True
+            changed = True
+        # Regression fix (final review follow-up): only room_binding (and a
+        # region-population row matched to a room-bound id, see inject()'s
+        # room_bound_ids overlap carve-out) ever carries a genuine per-
+        # individual bestiary id on the ORIGIN itself — mm.encounters /
+        # mm.region_population deliberately null it (species-tag policy,
+        # _candidate's docstring). Gating on ``canonical.origin.creature_id``
+        # (not ``fresh.creature_id``, which can carry an untrustworthy raw
+        # patch value even when the origin was nulled) stops a nulled-id
+        # candidate from ever stamping ``origin``/``creature_id`` onto an
+        # existing NPC — doing so unconditionally was itself a derive-don't-
+        # cache violation: it downgrades a legacy NPC's *derived* identity
+        # key (creature:<id>, read from its own legacy creature_id field)
+        # to a name key PERMANENTLY (origin is persisted), so a later
+        # drifted-name counterpart keyed on the real id can no longer find
+        # it and forks a twin instead of merging.
+        if canonical.origin.creature_id is not None:
+            if existing.creature_id is None:
+                existing.creature_id = canonical.origin.creature_id
+                changed = True
+            if existing.origin is None:
+                existing.origin = canonical.origin
+                changed = True
+
+        if changed:
+            with Span.open(
+                SPAN_MONSTER_MANUAL_PLACEMENT_REFRESHED,
+                {
+                    "identity_key": key,
+                    "location": existing.location or "",
+                    "region": existing.region or "",
+                },
+            ):
+                pass
+
+
 def inject(
     sd: _SessionData,
     snapshot: GameSnapshot,
@@ -750,15 +980,21 @@ def inject(
     in_combat: bool,
     room_id: str | None = None,
 ) -> int:
-    """Materialize Manual entries into ``snapshot.npcs``.
+    """Materialize Manual entries into ``snapshot.npcs`` via the Green Room gate.
 
-    Returns the count of patches applied. Idempotent across turns: NPCs
-    already in ``snapshot.npcs`` with the same name are merged
-    (:meth:`GameSnapshot._merge_npc_patch`) rather than duplicated.
+    Returns ``len(result.admitted) + len(result.merged)`` from
+    :func:`sidequest.game.green_room.admit` — every candidate this turn's four
+    feeders proposed that landed a seat (fresh or merged onto an existing
+    one). Idempotent across turns: an identity already present in
+    ``snapshot.npcs`` is never re-appended or stat-reset (live HP/disposition
+    survive structurally — ADR-139 Invariant 2).
 
     Emits :data:`SPAN_MONSTER_MANUAL_INJECTED` with the same attribute
     shape as the Rust span so the existing GM-panel dashboard reads it
-    without changes.
+    without changes, plus one ``green_room.materialized`` span per resolved
+    identity (ADR-156 §4) — the GM panel's lie detector that this seam's
+    four feeders (``mm.available_humans``, ``mm.encounters``,
+    ``mm.room_binding``, ``mm.region_population``) actually reached the gate.
 
     Story 107-2: when ``room_id`` is supplied (sourced from
     ``snapshot.region_for()`` / ``pc_regions`` — 107-1's per-room key), the
@@ -797,17 +1033,19 @@ def inject(
         zone_active = zone_eligibility.active_factions(snapshot, pack)
         region = snapshot.region_for() or ""
 
-    all_patches: list[NpcPatch] = []
+    human_patches: list[NpcPatch] = []
+    creature_patches: list[NpcPatch] = []
     active_capped = 0
     available_placed_matched = 0
     available_placed_eligible = 0
     if manual is not None:
+        authored_ids = _authored_npc_ids(pack, getattr(sd, "world_slug", None) or "")
         (
             human_patches,
             active_capped,
             available_placed_matched,
             available_placed_eligible,
-        ) = _npc_patches_for_available_humans(manual, current_location)
+        ) = _npc_patches_for_available_humans(manual, current_location, authored_ids=authored_ids)
         creature_patches = (
             _npc_patches_for_encounters(
                 manual,
@@ -826,14 +1064,14 @@ def inject(
         human_patches, human_sanitized = _sanitize_patch_names(human_patches)
         creature_patches, creature_sanitized = _sanitize_patch_names(creature_patches)
         names_sanitized = human_sanitized + creature_sanitized
-        all_patches = human_patches + creature_patches
 
         # Playtest 2026-05-11 lie-detector: count how many patches actually
         # land with a bound location. Pre-fix this was always 0 (every patch
         # had location=None) which silently masked every NPC from
-        # ``in_same_zone()``. Post-fix this matches ``len(all_patches)`` whenever
+        # ``in_same_zone()``. Post-fix this matches
+        # ``len(human_patches) + len(creature_patches)`` whenever
         # ``current_location`` is meaningful.
-        patches_with_location = sum(1 for p in all_patches if p.location)
+        patches_with_location = sum(1 for p in human_patches + creature_patches if p.location)
 
         # Placement-aware selection visibility (M5): ``eligible`` (the uncapped
         # count of placed NPCs whose tags match here) and ``matched`` (how many
@@ -879,39 +1117,111 @@ def inject(
     # the room's AUTHORED bestiary opponent (emits monster_manual.room_bound,
     # fails loud on a dangling ref). Strictly additive to the Manual pool above
     # and gated on combat — a non-combat pack never fields creatures.
+    room_binding_patches: list[NpcPatch] = []
+    region_population_patches: list[NpcPatch] = []
     if room_id and combat_encounters:
-        authored = _npc_patches_for_room_binding(sd, room_id, current_location)
-        all_patches = all_patches + authored
+        room_binding_patches = _npc_patches_for_room_binding(sd, room_id, current_location)
         # Story 153-x (ADR-106 region population): inject the region's frozen
         # procedural roster, region-stamped so Task 6 can seat by region id.
-        # De-duped by identity_key (story 162-2: creature_id where one exists,
-        # normalized name as the floor) so an authored creature ALWAYS wins
-        # over its procedural counterpart even under display-name drift between
-        # the bestiary and the frozen roster (authored content dominates; No
-        # Silent Fallbacks).
-        authored_keys = {_patch_identity_key(p) for p in authored}
-        # Name leg alongside the id leg: two patches with the same display name
-        # but different creature ids would otherwise BOTH land and then collide
-        # at the materializer's name-keyed merge (region-pop fields clobbering
-        # the authored patch). The id leg catches name drift; the name leg
-        # keeps the pre-162-2 same-name dominance.
-        authored_names = {normalize_name(p.name) for p in authored}
-        region_pop = _npc_patches_for_region_population(
+        # Precedence between this and the room binding above is now
+        # green_room.admit()'s ladder (ROOM_BOUND outranks REGION_POPULATION) —
+        # not a pre-filter here (Green Room Task 2 deleted the old
+        # identity-key/name pre-filter; admit() is the one gate).
+        region_population_patches = _npc_patches_for_region_population(
             sd, room_id, current_location=current_location, in_combat=in_combat
         )
-        all_patches = all_patches + [
-            p
-            for p in region_pop
-            if _patch_identity_key(p) not in authored_keys
-            and normalize_name(p.name) not in authored_names
-        ]
 
-    if not all_patches:
+    # Green Room Task 2 (ADR-156 §4): every patch this turn's four feeders
+    # proposed becomes a MaterializationCandidate and lands through ONE
+    # admit() call — the single gate that arbitrates identity across
+    # feeders, not four independent appends. ``creature_id`` is routed only
+    # for room-binding (see :func:`_candidate`'s docstring for why the
+    # encounter/region-population builders' ids are NOT trustworthy
+    # per-individual identifiers and must key on name instead).
+    #
+    # ``emit_spawn_span=False`` + ``spawn_is_creature`` (task-2 rework): the
+    # npc.spawn_disposition lie-detector must fire once per GENUINELY spawned
+    # identity — pre-gate, apply_world_patch only built an Npc when no
+    # same-name entry existed, so a re-injected creature never re-fired it.
+    # Candidates are built for every proposed patch (admit() needs real Npcs),
+    # so construction defers the span and we emit it below, only for
+    # ``result.admitted``. ``spawn_is_creature`` carries each candidate's
+    # patch-derived creature signal to that deferred emission.
+    candidates: list[MaterializationCandidate] = []
+    spawn_is_creature: dict[int, bool] = {}
+
+    def _build(patch: NpcPatch) -> Npc:
+        npc = snapshot._npc_from_patch(patch, emit_spawn_span=False)
+        spawn_is_creature[id(npc)] = npc_patch_is_creature(patch)
+        return npc
+
+    for patch in human_patches:
+        human_origin = patch.origin
+        if human_origin is None:
+            raise ValueError(
+                f"monster_manual_inject: available-humans patch {patch.name!r} "
+                "carries no stamped origin — _human_patch must always stamp "
+                "AUTHORED or MANUAL_POOL (No Silent Fallbacks)"
+            )
+        candidates.append(
+            _candidate(
+                _build(patch),
+                kind=human_origin.kind,
+                source="mm.available_humans",
+                authored_id=human_origin.authored_id,
+            )
+        )
+    for patch in creature_patches:
+        candidates.append(
+            _candidate(
+                _build(patch),
+                kind=OriginKind.MANUAL_POOL,
+                source="mm.encounters",
+            )
+        )
+    for patch in room_binding_patches:
+        candidates.append(
+            _candidate(
+                _build(patch),
+                kind=OriginKind.ROOM_BOUND,
+                source="mm.room_binding",
+                creature_id=patch.creature_id,
+            )
+        )
+    # Region-population candidates key on name (see _candidate's docstring —
+    # RegionCreature.creature_type is a species tag shared by many distinct
+    # individuals), EXCEPT when a patch's creature_type matches THIS turn's
+    # room-binding id: that overlap is the authored-vs-procedural-counterpart
+    # case story 162-2 pinned (test_name_drifted_procedural_counterpart_dedups_
+    # on_creature_id) — the frozen roster naming the room's own bound creature
+    # under a drifted display name must still collapse onto the authored seat.
+    # Scoped to THIS room's authored ids only, so an unrelated generic tag
+    # ("mob") never collapses distinct procedural individuals onto each other.
+    room_bound_ids = {p.creature_id for p in room_binding_patches if p.creature_id}
+    for patch in region_population_patches:
+        candidates.append(
+            _candidate(
+                _build(patch),
+                kind=OriginKind.REGION_POPULATION,
+                source="mm.region_population",
+                creature_id=patch.creature_id if patch.creature_id in room_bound_ids else None,
+            )
+        )
+
+    if not candidates:
         return 0
 
-    patch = WorldStatePatch(npcs_present=all_patches)
-    snapshot.apply_world_patch(patch)
-    return len(all_patches)
+    result = admit(snapshot, candidates)
+    # Story 72-5 parity (task-2 rework): the spawn-disposition span fires once
+    # per identity admit() actually seated — never for a candidate that merged
+    # onto an existing entry or folded into a batch-mate (those didn't spawn).
+    for npc in result.admitted:
+        emit_npc_spawn_disposition(npc, is_creature=spawn_is_creature[id(npc)])
+    # Finding 1 (final review): the per-turn placement refresh _fill_absent
+    # (additive-only, ADR-139 Inv-2) cannot provide — see the function
+    # docstring for why this must live here and not in the gate.
+    _refresh_merged_placement(snapshot, candidates, result)
+    return len(result.admitted) + len(result.merged)
 
 
 def mark_active_from_narration(

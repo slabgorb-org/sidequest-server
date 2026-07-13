@@ -171,30 +171,12 @@ def test_apply_patch_npc_attitudes():
     assert int(s.npcs[0].disposition) == 10
 
 
-def test_apply_patch_npc_upsert_new():
-    s = _make_snapshot()
-    s.apply_world_patch(WorldStatePatch(npcs_present=[NpcPatch(name="Mira")]))
-    assert any(n.core.name == "Mira" for n in s.npcs)
-
-
-def test_apply_patch_npc_upsert_existing():
-    npc = Npc(
-        core=CreatureCore(
-            name="Mira",
-            description="An old woman",
-            personality="Wise",
-            inventory=Inventory(),
-            statuses=[],
-            hp=HpPool(current=10, max=10, base_max=10),
-        )
-    )
-    s = _make_snapshot()
-    s.npcs.append(npc)
-    s.apply_world_patch(
-        WorldStatePatch(npcs_present=[NpcPatch(name="Mira", description="A young woman")])
-    )
-    mira = next(n for n in s.npcs if n.core.name == "Mira")
-    assert mira.core.description == "A young woman"
+# The ``npcs_present`` upsert lane on WorldStatePatch was REMOVED (Green Room
+# follow-up, 2026-07-11): NPC materialization routes exclusively through
+# ``green_room.admit()`` (ADR-156). The builder tests below pin
+# ``GameSnapshot._npc_from_patch`` — the construction leg the production
+# Monster-Manual inject still drives — directly; the old upsert/merge tests
+# for the deleted lane were removed with it.
 
 
 def test_apply_patch_none_fields_unchanged():
@@ -236,24 +218,20 @@ def test_npc_patch_creature_fields_default_to_none() -> None:
     assert patch.morale is None
 
 
-def test_apply_patch_creature_translates_hp_to_hp_pool() -> None:
+def test_npc_from_patch_creature_translates_hp_to_hp_pool() -> None:
     """Patch with creature ``hp`` materializes an Npc with HpPool seeded from hp."""
     s = _make_snapshot()
-    s.apply_world_patch(
-        WorldStatePatch(
-            npcs_present=[
-                NpcPatch(
-                    name="Chalk Moth",
-                    creature_id="chalk_moth",
-                    threat_level=1,
-                    hp=1,
-                    abilities=["Color Feed — Drains pigment from cloth."],
-                    morale="cowardly",
-                )
-            ]
-        )
+    moth = s._npc_from_patch(
+        NpcPatch(
+            name="Chalk Moth",
+            creature_id="chalk_moth",
+            threat_level=1,
+            hp=1,
+            abilities=["Color Feed — Drains pigment from cloth."],
+            morale="cowardly",
+        ),
+        emit_spawn_span=False,
     )
-    moth = next(n for n in s.npcs if n.core.name == "Chalk Moth")
     assert moth.creature_id == "chalk_moth"
     assert moth.threat_level == 1
     assert moth.morale == "cowardly"
@@ -268,43 +246,35 @@ def test_apply_patch_creature_translates_hp_to_hp_pool() -> None:
     assert int(moth.disposition) == -20
 
 
-def test_apply_patch_creature_hp_zero_clamps_to_one() -> None:
+def test_npc_from_patch_creature_hp_zero_clamps_to_one() -> None:
     """A creature authored with ``hp: 0`` clamps to EdgePool max=1 (positive ceiling)."""
     s = _make_snapshot()
-    s.apply_world_patch(
-        WorldStatePatch(npcs_present=[NpcPatch(name="Faint Echo", creature_id="echo", hp=0)])
+    echo = s._npc_from_patch(
+        NpcPatch(name="Faint Echo", creature_id="echo", hp=0), emit_spawn_span=False
     )
-    echo = next(n for n in s.npcs if n.core.name == "Faint Echo")
     assert echo.core.hp.max == 1
 
 
-def test_apply_patch_creature_threat_level_seeds_level_field() -> None:
+def test_npc_from_patch_creature_threat_level_seeds_level_field() -> None:
     """``CreatureCore.level`` reflects ``threat_level`` for creature patches."""
     s = _make_snapshot()
-    s.apply_world_patch(
-        WorldStatePatch(
-            npcs_present=[
-                NpcPatch(
-                    name="Patient Butcher",
-                    creature_id="patient_butcher",
-                    threat_level=4,
-                    hp=30,
-                )
-            ]
-        )
+    boss = s._npc_from_patch(
+        NpcPatch(
+            name="Patient Butcher",
+            creature_id="patient_butcher",
+            threat_level=4,
+            hp=30,
+        ),
+        emit_spawn_span=False,
     )
-    boss = next(n for n in s.npcs if n.core.name == "Patient Butcher")
     assert boss.core.level == 4
     assert boss.core.hp.max == 30
 
 
-def test_apply_patch_human_npc_unchanged_by_creature_signal_absence() -> None:
+def test_npc_from_patch_human_npc_unchanged_by_creature_signal_absence() -> None:
     """A patch with no creature fields still produces a human-shape NPC."""
     s = _make_snapshot()
-    s.apply_world_patch(
-        WorldStatePatch(npcs_present=[NpcPatch(name="Mira", description="scholar")])
-    )
-    mira = next(n for n in s.npcs if n.core.name == "Mira")
+    mira = s._npc_from_patch(NpcPatch(name="Mira", description="scholar"), emit_spawn_span=False)
     assert mira.creature_id is None
     assert mira.threat_level is None
     assert mira.abilities == []
@@ -315,36 +285,6 @@ def test_apply_patch_human_npc_unchanged_by_creature_signal_absence() -> None:
     assert mira.core.hp.max > 1  # PLACEHOLDER_EDGE_BASE_MAX is the constant
 
 
-def test_apply_patch_creature_merge_updates_hp_and_flavor() -> None:
-    """Re-emitting a creature patch updates EdgePool, abilities, and morale in place."""
-    s = _make_snapshot()
-    # First emission — chalk_moth at hp=1
-    s.apply_world_patch(
-        WorldStatePatch(
-            npcs_present=[
-                NpcPatch(name="Chalk Moth", creature_id="chalk_moth", hp=1, morale="cowardly")
-            ]
-        )
-    )
-    # Second emission — same name, updated stats (e.g. enraged variant)
-    s.apply_world_patch(
-        WorldStatePatch(
-            npcs_present=[
-                NpcPatch(
-                    name="Chalk Moth",
-                    hp=3,
-                    abilities=["Shimmer Cloud — Disorients onlookers."],
-                    morale="enraged",
-                )
-            ]
-        )
-    )
-    moth = next(n for n in s.npcs if n.core.name == "Chalk Moth")
-    assert moth.core.hp.max == 3
-    assert moth.morale == "enraged"
-    assert moth.abilities == ["Shimmer Cloud — Disorients onlookers."]
-
-
 def test_creature_npc_roundtrips_through_json() -> None:
     """A creature-materialized Npc serializes and reloads losslessly.
 
@@ -352,18 +292,17 @@ def test_creature_npc_roundtrips_through_json() -> None:
     ``state_summary`` JSON dump intact.
     """
     s = _make_snapshot()
-    s.apply_world_patch(
-        WorldStatePatch(
-            npcs_present=[
-                NpcPatch(
-                    name="Chalk Moth",
-                    creature_id="chalk_moth",
-                    threat_level=1,
-                    hp=1,
-                    abilities=["Color Feed — Drains pigment."],
-                    morale="cowardly",
-                )
-            ]
+    s.npcs.append(
+        s._npc_from_patch(
+            NpcPatch(
+                name="Chalk Moth",
+                creature_id="chalk_moth",
+                threat_level=1,
+                hp=1,
+                abilities=["Color Feed — Drains pigment."],
+                morale="cowardly",
+            ),
+            emit_spawn_span=False,
         )
     )
     serialized = s.model_dump_json()
@@ -389,8 +328,7 @@ def test_hp_pool_from_hp_helper() -> None:
 def test_creature_threat_level_only_still_signals_creature_branch() -> None:
     """``threat_level`` alone (no hp, no creature_id) still triggers creature defaults."""
     s = _make_snapshot()
-    s.apply_world_patch(WorldStatePatch(npcs_present=[NpcPatch(name="Lurker", threat_level=2)]))
-    lurker = next(n for n in s.npcs if n.core.name == "Lurker")
+    lurker = s._npc_from_patch(NpcPatch(name="Lurker", threat_level=2), emit_spawn_span=False)
     assert int(lurker.disposition) == -20  # creature default hostile
     assert lurker.core.level == 2
 

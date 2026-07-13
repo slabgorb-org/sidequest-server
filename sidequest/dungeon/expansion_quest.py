@@ -389,8 +389,9 @@ def collect_defeated_npc_names(snapshot: GameSnapshot) -> set[str]:
     so a ``big_bad``-signature quest can resolve when its antagonist falls. An
     NPC at ``core.hp.current == 0`` is the durable defeat signal: the per-turn
     Monster-Manual re-inject deliberately does NOT heal a slain NPC back to a
-    full pool (see ``GameSnapshot._merge_npc_patch`` BUG-2b), so a killed
-    big_bad stays pinned at 0/N across turns.
+    full pool (``green_room.admit()`` structurally never touches live
+    ``core.hp`` on a merge — ADR-139 Inv-2, formerly the ``_merge_npc_patch``
+    BUG-2b guard), so a killed big_bad stays pinned at 0/N across turns.
 
     Names are normalized through ``sanitize_display_name`` — the SAME transform
     ``select_signature`` applies when it binds the quest ref_id. The Monster-

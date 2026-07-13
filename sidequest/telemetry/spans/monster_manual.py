@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from ._core import FLAT_ONLY_SPANS
+from ._core import FLAT_ONLY_SPANS, SPAN_ROUTES, SpanRoute
 
 SPAN_MONSTER_MANUAL_INJECTED = "monster_manual.injected"
 
-# BUG 2b (eh-opp-damage): emitted when a per-turn re-injection merge keeps a
-# damaged creature's live ``hp.current`` instead of resetting it to the patch's
-# full-pool claim — the GM-panel lie-detector that the enemy was NOT silently
-# healed back up between combat turns.
-SPAN_MONSTER_MANUAL_HP_PRESERVED = "monster_manual.hp_preserved"
+# ``monster_manual.hp_preserved`` (BUG 2b) was RETIRED with
+# ``GameSnapshot._merge_npc_patch`` (Green Room follow-up, 2026-07-11): the
+# hp-preserve decision it observed no longer exists — ``green_room.admit()``
+# structurally never touches live ``core.hp`` on a merge (ADR-139 Inv-2), so
+# there is no per-turn "keep the damaged HP" branch left to attest.
 
 # Story 107-2 (ADR-059 per-room binding): emitted when a room's structured
 # ``encounter_creatures`` binding resolves to its authored bestiary creature(s)
@@ -63,8 +63,31 @@ SPAN_MONSTER_MANUAL_CAP_ENFORCED = "monster_manual.cap_enforced"
 # rooms field real, statted creatures instead of leaving the narrator to improvise.
 SPAN_MONSTER_MANUAL_REGION_POPULATION = "monster_manual.region_population"
 
+# Finding 1 (final review, Green Room follow-up, 2026-07-12): the fill-absent
+# merge (``green_room.admit()``'s ``_fill_absent``) only fills a winner's
+# ABSENT fields, so a re-injected MM identity's ``location``/``region`` froze
+# at first materialization — the deleted ``_merge_npc_patch`` used to refresh
+# them every turn. ``monster_manual_inject.inject()`` now performs that
+# refresh itself, scoped to identities ``admit()`` reports MERGED this turn
+# only; HP/disposition/beliefs are never touched (ADR-139 Inv-2). Routed (not
+# flat-only), mirroring ``spans/green_room.py``'s registration shape, so the
+# GM panel's typed tab renders the moved location/region directly — the
+# lie-detector that a re-injected identity's placement is actually current,
+# not frozen at first sight.
+SPAN_MONSTER_MANUAL_PLACEMENT_REFRESHED = "monster_manual.placement_refreshed"
+SPAN_ROUTES[SPAN_MONSTER_MANUAL_PLACEMENT_REFRESHED] = SpanRoute(
+    event_type="state_transition",
+    component="monster_manual",
+    extract=lambda span: {
+        "field": "monster_manual",
+        "op": "placement_refreshed",
+        "identity_key": (span.attributes or {}).get("identity_key", ""),
+        "location": (span.attributes or {}).get("location", ""),
+        "region": (span.attributes or {}).get("region", ""),
+    },
+)
+
 FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_INJECTED)
-FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_HP_PRESERVED)
 FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_ROOM_BOUND)
 FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_AUTHORED_BACKFILL)
 FLAT_ONLY_SPANS.add(SPAN_MONSTER_MANUAL_POOL_DISCARDED)

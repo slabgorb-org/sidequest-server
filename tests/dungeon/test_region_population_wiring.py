@@ -186,7 +186,7 @@ async def test_region_population_end_to_end_inject(
         f"inject() returned {injected_count}; snap.npcs = {snap.npcs!r}.  "
         "Possible causes: _npc_patches_for_region_population returned [] "
         "(check that load_region_population sees the committed rows), or "
-        "NpcPatch.region is not propagated through apply_world_patch/_merge_npc_patch "
+        "NpcPatch.region is not propagated through _npc_from_patch/green_room.admit "
         "(check Task 1/5 wiring)."
     )
 

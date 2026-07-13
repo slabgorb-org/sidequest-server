@@ -23,6 +23,7 @@ from sidequest.game.encounter import (
     EncounterPhase,
     StructuredEncounter,
 )
+from sidequest.game.green_room import AdmitResult, MaterializationCandidate, admit
 from sidequest.game.lore_store import LoreStore
 from sidequest.game.origin import Origin, OriginKind, normalize_name, resolve_roster_npc
 from sidequest.game.resource_pool import ResourceThreshold
@@ -45,13 +46,10 @@ from sidequest.telemetry.spans import (
     SPAN_CONFRONTATION_COLOCATION,
     Span,
     encounter_confrontation_initiated_span,
-    encounter_creature_zone_reconciled_span,
     encounter_no_opponent_available_span,
     encounter_opponent_minted_stub_span,
-    encounter_opponent_resolved_from_roster_span,
     encounter_opponent_seated_from_generics_span,
     encounter_opponent_toothless_span,
-    encounter_roster_resolution_skipped_span,
     encounter_sealed_letter_arity_rejected_span,
     encounter_stub_fabrication_refused_span,
     npc_edge_published_span,
@@ -334,6 +332,27 @@ def _generics_for(pack, world_slug: str | None) -> list:
     return list(bestiary.generics or [])
 
 
+def _resolve_admitted_seat(
+    result: AdmitResult, npc: Npc, snapshot: GameSnapshot, *, source: str
+) -> Npc:
+    """Green Room Task 3 (ADR-156): resolve the ``Npc`` an ``admit()`` call
+    actually seated for THIS opponent slot — a freshly-built candidate is not
+    necessarily the live record when the ladder folds it onto an already-
+    materialized identity. ``result.admitted[0]`` when freshly seated, else
+    the merged existing via :func:`resolve_roster_npc` (the SAME lookup
+    ``admit()`` used internally to find it, so it always hits)."""
+    if result.admitted:
+        return result.admitted[0]
+    existing = resolve_roster_npc(snapshot.npcs, npc.core.name)
+    if existing is None:
+        raise ValueError(
+            f"green_room.admit ({source}) reported {npc.core.name!r} merged, but "
+            "the roster lookup cannot find it — identity resolution is broken "
+            "(No Silent Fallbacks)"
+        )
+    return existing
+
+
 def _seed_combat_hp_depletion_to_npcs(
     *,
     snapshot: GameSnapshot,
@@ -421,17 +440,19 @@ def _seed_combat_hp_depletion_to_npcs(
         # opponent core by exact ``actor.name`` (``find_creature_core``: the
         # HP-bar filter, WN attack tools, query_encounter, payload builder),
         # so a seat left under the prose alias is an unreachable opponent.
-        # Mirrors the 108-2 conscription, which already seats canonically;
-        # the alias itself stays in the ledger for narrator prose.
+        # Mirrors the seater's own resolver leg (ADR-156 Amendment A: the
+        # ``materialized_threat`` branch canonicalizes a roster match the same
+        # way); the alias itself stays in the ledger for narrator prose.
         if npc is not None and npc.core.name != actor.name:
             actor.name = npc.core.name
         pool_origin = ""
         if created:
             # 153-10 ([WWN-OTHER-SEATING]): before fabricating a hollow stub, check
             # ``snapshot.npc_pool`` for a scene-active PERSON antagonist the
-            # narrator established on a prior turn. The seater declined the ambient
-            # MM grab upstream (``_resolve_opponent_from_roster``), so a router-
-            # named pool antagonist reaches us un-backed. Promote it carrying its
+            # narrator established on a prior turn. A router-named pool
+            # antagonist reaches us un-backed (ADR-156 Amendment A: the seater
+            # never substitutes a co-located creature for a named target, so a
+            # pool-tracked person still needs promoting here). Promote it carrying its
             # narrated identity + disposition (the native sibling of the Fate
             # seeder's 126-32a promotion) instead of minting a phantom of the same
             # name beside the cast member the player engaged — then seed the
@@ -457,12 +478,42 @@ def _seed_combat_hp_depletion_to_npcs(
                 )
 
                 npc = _promote_pool_member_to_npc(pool_member)
+                npc.core.hp = hp_pool_from_hp(hp)
+                npc.core.armor_class = ac
+                # Green Room Task 3 (ADR-156): NARRATOR_INVENTED tier — a
+                # scene-active pool antagonist turning mechanical.
+                admit_result = admit(
+                    snapshot,
+                    [
+                        MaterializationCandidate(
+                            npc=npc,
+                            origin=npc.origin
+                            or Origin(
+                                kind=OriginKind.NARRATOR_INVENTED, creature_id=npc.creature_id
+                            ),
+                            source="seeder.pool_promotion",
+                        )
+                    ],
+                )
+                npc = _resolve_admitted_seat(
+                    admit_result, npc, snapshot, source="seeder.pool_promotion"
+                )
+                # Finding 4 (final review): seed OCEAN + scenario belief_state
+                # onto the RESOLVED record, AFTER admit() — mirrors
+                # narration_apply's already-fixed pattern (task-3 review fix
+                # 2, ``_promote_engaged_pool_member`` / ``resolve_status_
+                # target``). Pre-fix this seeded the LOCAL pre-admit
+                # candidate; a fold onto an existing identity would have
+                # silently discarded the seed (unreachable today — this
+                # function's own top-of-loop resolve_roster_npc precheck
+                # already catches any name-colliding existing Npc before this
+                # branch is entered — but fixed for symmetry / defense in
+                # depth). The seeder's own guard makes this safe on a fold:
+                # it never re-seeds a record that already holds an OCEAN
+                # profile.
                 _seed_invented_npc_identity(
                     npc=npc, member=pool_member, snapshot=snapshot, turn_num=turn
                 )
-                npc.core.hp = hp_pool_from_hp(hp)
-                npc.core.armor_class = ac
-                snapshot.npcs.append(npc)
                 # Story 162-10 (review rework): canonicalize the SEAT to the
                 # promoted member's name. The pool leg now matches on
                 # ``normalize_name``, so a case/diacritic-variant ``actor.name``
@@ -476,10 +527,12 @@ def _seed_combat_hp_depletion_to_npcs(
                 pool_origin = pool_member.name
             else:
                 # 108-2 (MINTING-MAJOR): reaching here means the opponent name
-                # resolved to NEITHER a bound roster entry NOR a co-located statted
-                # adversary NOR a scene-active pool antagonist (the
-                # materialized-threat resolution + pool promotion upstream already
-                # tried) — a router-named free string with no backing.
+                # resolved to NEITHER a roster entry (canonical / alias /
+                # invented_from, via ``resolve_roster_npc`` above) NOR a
+                # scene-active pool antagonist (the pool scan just above) — a
+                # router-named free string with no backing. (Pre-ADR-156 a
+                # third source ran upstream: the deleted 108-2 conscription's
+                # co-located-adversary scan.)
                 #
                 # Story 162-3: the fabrication last-resort is replaced by the
                 # world bestiary's AUTHORED ``generics:`` section — the sanctioned
@@ -522,7 +575,24 @@ def _seed_combat_hp_depletion_to_npcs(
                         creature_id=row.id,
                         origin=Origin(kind=OriginKind.GENERIC, creature_id=row.id),
                     )
-                    snapshot.npcs.append(npc)
+                    # Green Room Task 3 (ADR-156): the 162-3 generics seat —
+                    # already stamped GENERIC by construction above; admit()
+                    # passes it through verbatim (Task 1's identity_key change
+                    # already keys GENERIC by display name, not creature_id).
+                    admit_result = admit(
+                        snapshot,
+                        [
+                            MaterializationCandidate(
+                                npc=npc,
+                                origin=npc.origin
+                                or Origin(kind=OriginKind.GENERIC, creature_id=row.id),
+                                source="seeder.generics",
+                            )
+                        ],
+                    )
+                    npc = _resolve_admitted_seat(
+                        admit_result, npc, snapshot, source="seeder.generics"
+                    )
                     with encounter_opponent_seated_from_generics_span(
                         confrontation_type=str(getattr(cdef, "confrontation_type", "") or ""),
                         opponent=actor.name,
@@ -602,8 +672,9 @@ def _seed_combat_hp_depletion_to_npcs(
                         f"degenerate paths"
                     )
         elif npc.creature_id is not None:
-            # 108-2: a BOUND, statted bestiary creature (resolved upstream or
-            # named directly). Its authored HP pool IS the WWN-balanced math the
+            # 108-2 rule (still live): a BOUND, statted bestiary creature (named
+            # directly, or reached via the resolver's alias/invented_from legs
+            # above). Its authored HP pool IS the WWN-balanced math the
             # ruleset binding exists to inherit (SOUL "Bind the Ruleset, Don't
             # Balance It") — the confrontation's generic ``opponent_default_stats``
             # must NOT clobber it. Reset only ``current`` to the creature's OWN
@@ -794,7 +865,25 @@ def _seed_fate_opponents(
                     npc=npc, member=pool_member, snapshot=snapshot, turn_num=turn
                 )
                 npc.core.fate_sheet = module.seed_opponent_fate_sheet(rules=pack.rules)
-                snapshot.npcs.append(npc)
+                # Green Room Task 3 (ADR-156): the Fate sibling of the native
+                # seeder's pool-promotion seat (L465-ish above) — NARRATOR_INVENTED
+                # tier.
+                admit_result = admit(
+                    snapshot,
+                    [
+                        MaterializationCandidate(
+                            npc=npc,
+                            origin=npc.origin
+                            or Origin(
+                                kind=OriginKind.NARRATOR_INVENTED, creature_id=npc.creature_id
+                            ),
+                            source="fate_seeder.pool_promotion",
+                        )
+                    ],
+                )
+                npc = _resolve_admitted_seat(
+                    admit_result, npc, snapshot, source="fate_seeder.pool_promotion"
+                )
                 # Story 162-10 (review rework): canonicalize the SEAT to the
                 # promoted member's name — the Fate resolver reads the Other's
                 # sheet via ``find_creature_core(actor.name)`` (EXACT-match), so a
@@ -813,7 +902,32 @@ def _seed_fate_opponents(
                     fate_sheet=module.seed_opponent_fate_sheet(rules=pack.rules),
                 )
                 npc = Npc(core=core, ephemeral=True)
-                snapshot.npcs.append(npc)
+                # Green Room Task 3 (ADR-156): unlike the native seeder's
+                # frame/stub branch (L567-ish), this Fate fallback carries no
+                # bestiary generics consultation today (162-3 Delivery Findings —
+                # a Fate-genre generics sibling is scoped as follow-up) and no
+                # ``allow_synthetic_opponent`` degenerate-opt-in carve-out either
+                # — it is the ONLY source for an unbacked Fate Other, so it must
+                # still land through the gate (NARRATOR_INVENTED, lowest ladder
+                # rung) rather than stay a raw append. ``ephemeral=True`` is
+                # UNCHANGED — that flag drives a separate reap-with-encounter
+                # mechanism (L180-ish), orthogonal to identity/origin.
+                admit_result = admit(
+                    snapshot,
+                    [
+                        MaterializationCandidate(
+                            npc=npc,
+                            origin=npc.origin
+                            or Origin(
+                                kind=OriginKind.NARRATOR_INVENTED, creature_id=npc.creature_id
+                            ),
+                            source="fate_seeder.frame",
+                        )
+                    ],
+                )
+                npc = _resolve_admitted_seat(
+                    admit_result, npc, snapshot, source="fate_seeder.frame"
+                )
                 created = True
         elif npc.core.fate_sheet is None:
             npc.core.fate_sheet = module.seed_opponent_fate_sheet(rules=pack.rules)
@@ -1222,243 +1336,6 @@ def _npc_fallback_at_location(
             )
         )
     return fallback, True
-
-
-def _reconcile_surfaced_adversary(
-    snapshot: GameSnapshot,
-    *,
-    location: str,
-    turn: int,
-) -> Npc | None:
-    """158-1 ([WWN-COMBAT-NEVER-SEATS]): when a combat target has NO co-located
-    adversary, recover a bound Monster-Manual adversary the narrator surfaced
-    on-stage whose stored zone drifted from the PC's current scene.
-
-    The forensic shape (beneath_sunden ``8b54610d``): the authored entrance
-    Gnaw-Swarm sits in ``snapshot.npcs`` at its authored room ("Under the Rope")
-    while the PC descended to a procedural region; the narrator dragged it forward
-    in prose ("pooling at your feet") but the engine kept it at the entrance. The
-    co-location projection (``_resolve_opponent_from_roster`` /
-    ``_npc_fallback_at_location``, ADR-116) finds no Other → the router never seats
-    → the narrator free-narrates the fight and fabricates player HP.
-
-    Recovery is deliberately NARROW — the same over-reach guard
-    ``_resolve_opponent_from_roster`` documents (region-wide sourcing is forbidden;
-    ADR-116). A candidate must be:
-
-      * ``creature_id``-statted AND ``manual_origin`` — a bound bestiary adversary
-        (ADR-059), never a narrator-invented person;
-      * adversarial and not ``Attitude.FRIENDLY``;
-      * carrying a REAL stored zone (at least one of ``location`` /
-        ``last_seen_location`` non-None) that is stale relative to the PC's scene —
-        a creature with NO location is unplaced, not zone-drifted;
-      * surfaced THIS turn or the immediately-preceding one — ``last_seen_turn > 0``
-        (the model's ``0`` means "never mentioned this session" — a never-surfaced
-        creature is not "engaged this turn") AND ``0 <= turn - last_seen_turn <= 1``.
-        Narration stamps ``last_seen_turn`` AFTER the seater runs, so a creature the
-        narrator put on-stage last turn carries ``turn - 1`` at this turn's seat
-        time; a creature last seen earlier (or never) is genuinely off-stage and is
-        left untouched (the 158-1 no-over-reach AC);
-      * NOT already co-located (else the normal candidate scan already had it).
-
-    The most-recently-surfaced match has its ``last_seen_location`` and
-    ``location`` reconciled to the PC's scene (SOUL "Yes, And" — trust the
-    narrator's on-stage placement), emitting ``encounter.creature_zone_reconciled``
-    for the GM panel. Returns the reconciled, now-co-located ``Npc`` or ``None``.
-    """
-    candidates = [
-        n
-        for n in snapshot.npcs
-        if n.creature_id is not None
-        and n.manual_origin
-        and _npc_is_adversary(n)
-        and n.disposition.attitude() != Attitude.FRIENDLY
-        # Must carry a REAL stored zone to have drifted FROM — a creature with no
-        # location at all (both fields None) is unplaced, not zone-drifted, and
-        # would emit a phantom from_location="" span (review finding).
-        and (n.last_seen_location is not None or n.location is not None)
-        and n.last_seen_location != location
-        and n.location != location
-        # Surfaced THIS turn or the immediately-preceding one. ``last_seen_turn > 0``
-        # excludes the model's "never mentioned in this session" default (0) — a
-        # never-surfaced creature is NOT "engaged this turn" and reconciling it is
-        # the region-wide over-reach ADR-116 forbids (review finding: the window
-        # ``0 <= 1 - 0 <= 1`` would otherwise admit it at interaction==1).
-        and n.last_seen_turn > 0
-        and 0 <= turn - n.last_seen_turn <= 1
-    ]
-    if not candidates:
-        return None
-    # Most recently surfaced, then highest threat, then name (deterministic).
-    candidates.sort(
-        key=lambda n: (n.last_seen_turn, n.threat_level or 0, n.core.name),
-        reverse=True,
-    )
-    chosen = candidates[0]
-    from_location = chosen.last_seen_location or chosen.location or ""
-    with encounter_creature_zone_reconciled_span(
-        creature_name=chosen.core.name,
-        creature_id=chosen.creature_id or "",
-        from_location=from_location,
-        to_location=location,
-        last_seen_turn=chosen.last_seen_turn,
-        current_turn=turn,
-    ):
-        pass
-    chosen.last_seen_location = location
-    chosen.location = location
-    return chosen
-
-
-def _resolve_opponent_from_roster(
-    snapshot: GameSnapshot,
-    *,
-    threat_name: str,
-    acting_character_name: str | None,
-    confrontation_category: str,
-    is_fate: bool,
-) -> Npc | None:
-    """108-2: reconcile a router-named free-string opponent to a bound, statted
-    adversary present in the scene BEFORE the seater fabricates a stub.
-
-    The intent router names the adversary as a free string
-    (``confrontation params["opponent"]``); when that string matches no roster
-    ``Npc`` the seater used to fabricate a generic HP-10 placeholder (the
-    "Hold-Dead, Still at the Shift" / "Arena Opponent" stubs) while the
-    narrator's own prose referenced a BOUND bestiary creature ("Molgrath the
-    Eyeless", HP 24) — a player-visible identity split (prose name ≠ combat-panel
-    name) and a discard of the WWN-balanced Monster-Manual stats (107-2 /
-    ADR-059). The narrator knows the roster; the seater didn't consult it.
-
-    Returns the co-located bound creature to seat in the router name's place, or
-    ``None`` to leave the router name as-is — because it already matches a roster
-    entry (seat it directly; the seater dedups), because no co-located bound
-    adversary exists (the truly-novel fight: since 162-3 the seater seats a
-    bestiary generic, mints a frame-sourced/degenerate-opt-in stub, or RAISES —
-    downstream), or because the confrontation is one where conscription is
-    never right: a NON-combat confrontation (150-2) or ANY confrontation under a
-    FATE binding (153-9 — ``is_fate``; a Fate conflict resolves on FateSheet
-    stress, not the bound creature's hp, so there is nothing to preserve).
-
-    A candidate is a ``creature_id``-statted, adversarial (``_npc_is_adversary``),
-    non-friendly NPC at the acting PC's resolved location — the same room signal
-    (``last_seen_location`` / ``location``) ``_npc_fallback_at_location`` and the
-    Monster-Manual injector use. Region-wide sourcing (``_co_located``) is now safe
-    when the NPC carries a ``region`` stamp (Task 1 procedural creatures); the
-    ``_co_located`` helper gates region-matching on that stamp so narrator NPCs and
-    non-procedural worlds keep the exact free-text behaviour.
-    """
-    # A roster match — canonical name, recorded alias, or invented_from binding
-    # (story 162-2: the unified resolver, replacing the exact-name scan) —
-    # means the router named a real NPC: seat it directly (the seater resolves
-    # the same way and reuses it). Resolution is only for unbacked inventions.
-    if resolve_roster_npc(snapshot.npcs, threat_name) is not None:
-        return None
-    location = snapshot.party_location(perspective=acting_character_name)
-    if not location:
-        return None
-    pc_region = snapshot.region_for(perspective=acting_character_name)
-    candidates = [
-        n
-        for n in snapshot.npcs
-        if n.creature_id is not None
-        and _co_located(
-            n,
-            pc_region=pc_region,
-            scene_match=(n.last_seen_location == location or n.location == location),
-        )
-        and _npc_is_adversary(n)
-        and n.disposition.attitude() != Attitude.FRIENDLY
-    ]
-    if not candidates:
-        # 158-1: no co-located adversary — but the player may be attacking a bound
-        # bestiary creature the narrator surfaced on-stage whose stored zone
-        # drifted from the PC's scene (the entrance Gnaw-Swarm the party moved
-        # past). Reconcile its zone so the bound creature reaches the fight instead
-        # of a fabricated stub. Native COMBAT only: a Fate conflict resolves on
-        # FateSheet stress and a non-combat standoff never conscripts a bestiary
-        # mob (the same 150-2 / 153-9 declines enforced below) — so there is
-        # nothing to recover for those paths.
-        if confrontation_category == "combat" and not is_fate:
-            reconciled = _reconcile_surfaced_adversary(
-                snapshot,
-                location=location,
-                turn=snapshot.turn_manager.interaction,
-            )
-            if reconciled is not None:
-                candidates = [reconciled]
-        if not candidates:
-            return None
-    # Deterministic pick: most recently in scene, then highest threat, then name.
-    candidates.sort(
-        key=lambda n: (n.last_seen_turn, n.threat_level or 0, n.core.name),
-        reverse=True,
-    )
-    # 153-10 ([WWN-OTHER-SEATING]): the router named a scene-active antagonist the
-    # narrator established on a PRIOR turn that lives in ``snapshot.npc_pool`` — a
-    # PERSON, not yet promoted to ``snapshot.npcs``, so the candidate scan above
-    # (gated ``creature_id is not None`` over ``snapshot.npcs``) cannot see it. On
-    # a vague / non-roster target this is the "MM grab": an ambient bestiary mob
-    # wins by default over the cast member the player actually engaged (playtest
-    # 150-14 "Mistos Warden over the Daggereyes"). Prefer the pool antagonist —
-    # decline the conscription so the caller seats the router-named threat, and the
-    # hp seeder (``_seed_combat_hp_depletion_to_npcs``) promotes the pool member
-    # downstream carrying its narrated identity. This is the native/WN sibling of
-    # the Fate seater's 126-32a pool consultation. Applies in COMBAT too (unlike
-    # the 150-2 / 153-9 declines below): a NAMED scene antagonist always outranks
-    # an ambient mob, regardless of category. Emit the lie-detector span naming the
-    # refused bestiary mob (No Silent Fallbacks).
-    if any(m.name == threat_name and not m.is_creature for m in snapshot.npc_pool):
-        with encounter_roster_resolution_skipped_span(
-            router_name=threat_name,
-            declined_name=candidates[0].core.name,
-            confrontation_category=confrontation_category,
-            reason="pool_antagonist",
-        ):
-            pass
-        return None
-    # Every candidate here is a bestiary monster (the filter is
-    # ``creature_id is not None``). The 108-2 reconciliation exists to preserve a
-    # bound creature's COMBAT hp stats (ADR-059) — so it is only correct for a
-    # native (Without-Number / dial) COMBAT confrontation. Decline in two cases:
-    #
-    #   * 150-2 (Defect A) — NON-combat, any ruleset: a bestiary monster is never
-    #     the right Other for a standoff / social duel / chase. dust_and_lead
-    #     seated a "Western Diamondback" rattlesnake against a human drifter
-    #     because the only co-located adversary was an ambient bestiary hazard.
-    #   * 153-9 ([FATE-OTHER-SEATING]) — ANY category under a FATE binding: a Fate
-    #     conflict resolves against the Other's FateSheet stress, NOT hp_depletion
-    #     (ADR-143/144 "Bind the Ruleset"), so there is no bound-hp value to
-    #     preserve. Conscripting an ambient co-located adversary over the
-    #     narrator's NAMED scene-active antagonist is the bug: the router names
-    #     "Silas Vance" and the seater grabs the same-surname "Marguerite Vance".
-    #
-    # Either way: decline the conscription and let the seater seat the
-    # router-named threat instead; emit a lie-detector span so the GM panel sees
-    # the engine refused the ambient adversary (No Silent Fallbacks). Native
-    # (non-Fate) combat keeps the 108-2 behavior untouched.
-    if confrontation_category != "combat" or is_fate:
-        with encounter_roster_resolution_skipped_span(
-            router_name=threat_name,
-            declined_name=candidates[0].core.name,
-            confrontation_category=confrontation_category,
-            reason="fate_binding" if is_fate else "non_combat",
-        ):
-            pass
-        return None
-    # Story 162-2: conscription BINDS the router/prose name to the bound
-    # creature durably — record it in the alias ledger (existing accretion
-    # path, emits ``entity.alias_accreted``) so every later reference by
-    # either name resolves to this one entity instead of re-running the
-    # guessing stack (the two-names-one-enemy fork, closed permanently).
-    from sidequest.game.alias_accretion import accrete_npc_aliases
-
-    accrete_npc_aliases(
-        candidates[0],
-        [threat_name],
-        turn=snapshot.turn_manager.interaction,
-    )
-    return candidates[0]
 
 
 def _friendly_fallback_at_location(
@@ -1999,10 +1876,14 @@ def instantiate_encounter_from_trigger(
     # ``encounter.no_opponent_available`` span below.
     location_available = True
     seating_source = "router_named"
-    # 153-9 (ADR-116/143/144): resolve the Fate binding ONCE here. The 108-2
-    # roster reconciliation below must DECLINE under a Fate binding (a Fate
-    # conflict resolves on FateSheet stress, not bound hp), and the Fate-seating
-    # de-nativization branch downstream (126-30) reuses the same flag.
+    # 126-30 (ADR-143/144 "Bind the Ruleset"): resolve the Fate binding ONCE
+    # here; two downstream seams share the flag — the Fate-conflict seating
+    # de-nativization (``seat_as_fate_conflict``: inert metrics, FateSheet
+    # stress as the win track) and the native combat-seeding gate (a Fate
+    # combat must never reach ``_seed_combat_hp_depletion_to_npcs`` /
+    # initiative). Originally introduced for the 108-2 roster conscription's
+    # Fate decline (153-9); that conscription was deleted by ADR-156
+    # Amendment A (166-5), but both remaining consumers stand.
     is_fate = bool(pack and pack.rules and pack.rules.ruleset == "fate")
     # ADR-153 §6 (158-34): the ship-scale firewall must cover EVERY seating door,
     # not only the location fallback. The intent router (ADR-113) can name a
@@ -2040,61 +1921,27 @@ def instantiate_encounter_from_trigger(
         # lacking an Npc. ``materialized`` distinguishes this seat from a
         # router-named or location-fallback one on the participant.joined span.
         #
-        # 108-2: the router names the adversary as a FREE STRING. Before seating
-        # (and persisting) an invention, reconcile it to a bound, statted
-        # adversary present in the scene (ADR-059 Monster-Manual / ADR-116 the
-        # Other). The narrator's prose already fights the bound creature; only
-        # the router's separate call invented the placeholder name (the
-        # Molgrath-vs-Hold-Dead split). When it resolves, seat the bound creature
-        # — its WWN-statted HP reaches the fight instead of an HP-10 stub.
-        # Rework round 1 (review [HIGH]): the router may name the threat by a
-        # RECORDED alias / invented_from binding / case variant of a roster
-        # NPC. Seat it under the CANONICAL name — every downstream consumer
-        # resolves the opponent by exact actor name (``find_creature_core``:
-        # HP bars, WN attack, query_encounter), and a dial-path confrontation
-        # never reaches the hp_depletion seeder that could otherwise
-        # canonicalize. (162-10 comment fix: ``_publish_combat_edge_to_npcs``
-        # resolves via the shared ``resolve_roster_npc`` now, NOT
-        # ``find_creature_core`` — so it is no longer in that exact-match list.)
-        # Observability: an alias / invented_from rebind IS visible via the
-        # resolver's ``identity.resolved`` span, but a case/diacritic
-        # (canonical-leg) rebind derives nothing and is span-SILENT by design
-        # (origin.py — only the alias / invented_from legs span). Prose keeps
-        # the alias via the ledger.
+        # ADR-156 Amendment A (166-5, closes the 108-2 conscription): a named
+        # target wins the seat — full stop. The ONLY reconciliation left is
+        # identity resolution: if the router's free-string name IS a recorded
+        # roster alias / invented_from binding / case variant of an existing
+        # NPC, seat that NPC under its CANONICAL name (every downstream
+        # consumer resolves the opponent by exact actor name —
+        # ``find_creature_core``: HP bars, WN attack, query_encounter). If it
+        # is NOT a roster match, seat the name AS GIVEN — never substitute a
+        # different, merely co-located creature (the 108-2 conscription's
+        # "MM grab" was exactly backwards: the router named a person and the
+        # engine seated a bestiary mob instead). Two outcomes, no third:
+        # ``seating_source="roster_resolved"`` (canonical identity) or
+        # ``"materialized"`` (seat as named; backing seeded downstream by
+        # ``_seed_combat_hp_depletion_to_npcs``).
         known = resolve_roster_npc(snapshot.npcs, materialized_threat.name)
         if known is not None and known.core.name != materialized_threat.name:
             # 162-10: ``dataclasses.replace`` preserves the mention's flags
-            # (is_new / is_creature / disengaged / is_place); the prior manual
-            # field-copy dropped them (inert today — the ship-scale firewall runs
-            # pre-rebind — but a latent trap for future consumers).
+            # (is_new / is_creature / disengaged / is_place); a manual
+            # field-copy would drop them.
             materialized_threat = replace(materialized_threat, name=known.core.name)
-        resolved_opponent = _resolve_opponent_from_roster(
-            snapshot,
-            threat_name=materialized_threat.name,
-            acting_character_name=player_name,
-            confrontation_category=cdef.category,
-            is_fate=is_fate,
-        )
-        if resolved_opponent is not None:
-            from sidequest.agents.orchestrator import NpcMention as _NpcMention
-
-            with encounter_opponent_resolved_from_roster_span(
-                router_name=materialized_threat.name,
-                bound_name=resolved_opponent.core.name,
-                creature_id=resolved_opponent.creature_id or "",
-                match_scope="room",
-            ):
-                pass
-            materialized_threat = _NpcMention(
-                name=resolved_opponent.core.name,
-                pronouns=resolved_opponent.pronouns or "",
-                role=resolved_opponent.npc_role_id or "hostile",
-                appearance=resolved_opponent.appearance or "",
-                side="opponent",
-            )
-            seating_source = "roster_resolved"
-        else:
-            seating_source = "materialized"
+        seating_source = "roster_resolved" if known is not None else "materialized"
         npcs_present = [materialized_threat]
     elif (
         not npcs_present
@@ -2416,8 +2263,8 @@ def instantiate_encounter_from_trigger(
         # alongside Fate (the upstream half of the #964 cleanup). A Fate Contest keeps its
         # OWN Fate path (``enc.contest``, below) with the metrics as its victory tally; a
         # sealed-letter duel is a commit-reveal table, not a conflict — both are excluded
-        # from the conflict de-nativization. (``is_fate`` is resolved once above,
-        # at the 108-2 roster-reconciliation gate — 153-9.)
+        # from the conflict de-nativization. (``is_fate`` is resolved once,
+        # near the top of this function.)
         seat_as_fate_conflict = is_fate and cdef.resolution_mode not in (
             ResolutionMode.contest,
             ResolutionMode.sealed_letter_lookup,

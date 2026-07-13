@@ -403,6 +403,15 @@ class NpcMention:
     role: str = ""
     appearance: str = ""
     side: str = "neutral"
+    # ADR-156 §6 (task-5 review fix, round 2): the sidecar extractor's PROSE
+    # stance classification ("hostile" | "friendly" | "bystander" | "neutral",
+    # or "" when unclassified) — the signal ``_mention_is_hostile`` reads for
+    # the attach-before-mint seated-Other leg. Deliberately its OWN field:
+    # ``role`` carries OCCUPATION semantics downstream (pool ``role="doctor"``,
+    # the identity-drift detector, the state projection), and ``side`` is
+    # ENGINE-owned seat membership a first-mention epithet can never carry.
+    # Defaults "" (No Silent Fallbacks — absence is never read as a stance).
+    stance: str = ""
     is_new: bool = False
     # ping-pong #74: the narrator marks a mention as a wild animal / beast /
     # monster that belongs to NO culture or faction. When true, the invented-
@@ -456,6 +465,7 @@ class NpcMention:
                 role=str(value.get("role", "")),
                 appearance=str(value.get("appearance", "")),
                 side=side,
+                stance=str(value.get("stance", "")),
                 is_new=bool(value.get("is_new", False)),
                 is_creature=bool(value.get("is_creature", False)),
                 disengaged=bool(value.get("disengaged", False)),

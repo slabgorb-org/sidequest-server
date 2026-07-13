@@ -90,6 +90,10 @@ _TOOL_DESCRIPTION = (
     "For NPCs present, list only PEOPLE and CREATURES — if a proper noun names a "
     "PLACE or location (a hold, cavern, town, region), set that entry's is_place "
     "to true so it is not mistaken for a person. "
+    "For each NPC present, classify their stance toward the player characters in "
+    "this narration as that entry's stance: 'hostile' (attacks, threatens, or "
+    "opposes the party), 'friendly' (aids or sides with it), 'bystander' "
+    "(present but uninvolved), or 'neutral' (no stance stated). "
     "Report only what the prose states; never invent. An empty field is correct "
     "when the prose says nothing about it."
 )
@@ -129,16 +133,43 @@ _ITEMS_GAINED_ITEM_SCHEMA: dict[str, Any] = {
 # than listing it as a person — closing the beneath_sunden place-name leak where
 # narrator-invented "Torchdeep"/"Torchhold" registered as phantom NPCs (disp=0,
 # creature_id=None). ``additionalProperties`` stays OPEN: ``NpcMention.from_value``
-# still reads name/pronouns/role/appearance/is_new/is_creature free-form, so this
-# only ADDS the place discriminator; it does not constrain the existing fields.
+# still reads name/pronouns/appearance/is_new/is_creature free-form, so this
+# only ADDS the documented discriminators; it does not constrain the other fields.
 # ``side`` is deliberately undocumented — it is ENGINE-owned
 # (merge_sidecar_extraction_npcs_present), not a thing the reader should claim.
+#
+# ADR-156 §6 (task-5 review fix, round 2): ``stance`` is documented as its OWN
+# enum so the attach-before-mint hostile gate
+# (`narration_apply._mention_is_hostile`) receives a REAL signal on real
+# traffic. Pre-fix, no stance-shaped field was ever prompted — the extractor
+# structurally never emitted one, so the seated-Other attach leg could not fire
+# outside hand-built tests. It is deliberately NOT ``role``: role carries
+# OCCUPATION semantics downstream (pool-member ``role="doctor"``, the drift
+# detector, the state projection) and routing stance words through it would
+# overwrite descriptive roles and fire false ``npc_reinvented`` drift warnings
+# on every cite — ``role`` stays unrequested/free-form exactly as before.
+# Also distinct from ``side``: side is the engine's ADJUDICATED seat membership
+# (exact-name match against already-seated actors — a NEW prose epithet always
+# resolves "neutral"); stance is the reader's PROSE classification, which is
+# exactly the signal a first-mention hostile epithet carries.
 _NPCS_PRESENT_ITEM_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "name": {
             "type": "string",
             "description": "The NPC's name, as the prose states it.",
+        },
+        "stance": {
+            "type": "string",
+            "enum": ["hostile", "friendly", "bystander", "neutral"],
+            "description": (
+                "This NPC's stance toward the player characters IN THIS "
+                "narration: 'hostile' when they attack, threaten, or actively "
+                "oppose the party; 'friendly' when they aid or side with it; "
+                "'bystander' for a present-but-uninvolved figure; 'neutral' "
+                "when the prose gives no stance signal. Classify from what the "
+                "prose STATES this turn — do not infer beyond it."
+            ),
         },
         "is_place": {
             "type": "boolean",

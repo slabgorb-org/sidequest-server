@@ -36,6 +36,7 @@ from sidequest.game.creature_core import (
     Inventory,
 )
 from sidequest.game.disposition import CHAPTER_BEAT_REASON
+from sidequest.game.green_room import MaterializationCandidate, admit
 from sidequest.game.history_chapter import (
     ChapterCharacter,
     ChapterNpc,
@@ -540,25 +541,37 @@ class WorldBuilder:
             hp=HpPool(current=10, max=10, base_max=10),
             acquired_advancements=[],
         )
-        snap.npcs.append(
-            Npc(
-                core=core,
-                disposition=int(npc_data.disposition or 0),
-                location=npc_data.location,
-                pronouns=None,
-                appearance=None,
-                age=None,
-                build=None,
-                height=None,
-                distinguishing_features=[],
-                ocean=None,
-                resolution_tier="spawn",
-                non_transactional_interactions=0,
-                jungian_id=None,
-                rpg_role_id=None,
-                npc_role_id=None,
-                resolved_archetype=None,
-            )
+        new_npc = Npc(
+            core=core,
+            disposition=int(npc_data.disposition or 0),
+            location=npc_data.location,
+            pronouns=None,
+            appearance=None,
+            age=None,
+            build=None,
+            height=None,
+            distinguishing_features=[],
+            ocean=None,
+            resolution_tier="spawn",
+            non_transactional_interactions=0,
+            jungian_id=None,
+            rpg_role_id=None,
+            npc_role_id=None,
+            resolved_archetype=None,
+        )
+        # Green Room Task 3 (ADR-156): a history-chapter-authored NPC is
+        # world-authored content — AUTHORED tier, same as npcs.yaml preload,
+        # just with no per-row id (ChapterNpc carries no ``id`` field).
+        admit(
+            snap,
+            [
+                MaterializationCandidate(
+                    npc=new_npc,
+                    origin=new_npc.origin
+                    or Origin(kind=OriginKind.AUTHORED, creature_id=new_npc.creature_id),
+                    source="worldbuilder_history",
+                )
+            ],
         )
         self._ensure_world_authored_pool_member(snap, npc_data.name)
 
@@ -950,7 +963,19 @@ def preload_authored_npcs(
             # AuthoredNpc.id the id-keyed identity surface needs.
             origin=Origin(kind=OriginKind.AUTHORED, authored_id=authored_npc.id),
         )
-        state.npcs.append(runtime)
+        # Green Room Task 3 (ADR-156): the session-start authored cast —
+        # AUTHORED tier, carrying the real AuthoredNpc.id.
+        admit(
+            state,
+            [
+                MaterializationCandidate(
+                    npc=runtime,
+                    origin=runtime.origin
+                    or Origin(kind=OriginKind.AUTHORED, authored_id=authored_npc.id),
+                    source="preload_authored",
+                )
+            ],
+        )
         seen_names.add(authored_npc.name.casefold())
         with Span.open(
             SPAN_NPC_AUTHORED_LOADED,

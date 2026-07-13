@@ -8,9 +8,13 @@ emit a ``npc.spawn_disposition`` ``state_transition`` so the GM panel
 can verify the default fired rather than trusting the narrator's prose.
 
 Same shape as ``test_disposition_otel_wiring.py``: drive the *real*
-materialization seam (``_apply_world_patch_inner`` → ``_npc_from_patch``
-and ``resolve_status_target`` → ``_promote_pool_member_to_npc``), assert
-both the resulting ``Npc.disposition`` and the routed watcher event.
+materialization seams (``monster_manual_inject.inject`` → ``_npc_from_patch``
+→ ``green_room.admit()`` → ``emit_npc_spawn_disposition``, and
+``resolve_status_target`` → ``_promote_pool_member_to_npc``), assert both the
+resulting ``Npc.disposition`` and the routed watcher event. The patch-path
+drives were rewritten onto the MM inject path when the legacy
+``WorldStatePatch.npcs_present`` lane was removed (Green Room follow-up,
+2026-07-11) — the MM inject is the production spawn path for patches now.
 """
 
 from __future__ import annotations
@@ -23,11 +27,18 @@ from opentelemetry.sdk.trace import TracerProvider
 from sidequest.game.character import Character
 from sidequest.game.creature_core import CreatureCore, HpPool
 from sidequest.game.npc_pool import NpcPoolMember
-from sidequest.game.session import GameSnapshot, NpcPatch, WorldStatePatch
+from sidequest.game.session import GameSnapshot
+from sidequest.server.dispatch import monster_manual_inject
 from sidequest.server.narration_apply import resolve_status_target
 from sidequest.server.watcher import WatcherSpanProcessor
 from sidequest.telemetry import spans as spans_module
 from sidequest.telemetry.watcher_hub import watcher_hub
+from tests.integration.test_npc_manual_origin_otel import (
+    _creature_encounter,
+    _FakeSessionData,
+    _human,
+    _manual_with,
+)
 
 
 def _make_pc(name: str) -> Character:
@@ -121,9 +132,10 @@ async def test_creature_patch_spawns_hostile_with_span(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """AC2/AC3: a genuine Monster Manual creature patch (carries a
-    creature-shape field) still spawns hostile (-20) and emits a
-    ``npc.spawn_disposition`` event tagged ``default_creature_hostile``.
-    The fix must not neutralize intentional creature hostility."""
+    creature-shape field) driven through the production inject path still
+    spawns hostile (-20) and emits a ``npc.spawn_disposition`` event tagged
+    ``default_creature_hostile``. The fix must not neutralize intentional
+    creature hostility."""
     captured = await _setup(monkeypatch, "test-spawn-disposition-creature")
 
     snapshot = GameSnapshot(
@@ -131,8 +143,14 @@ async def test_creature_patch_spawns_hostile_with_span(
         world_slug="beneath_sunden",
         characters=[_make_pc("Hero")],
     )
-    snapshot.apply_world_patch(
-        WorldStatePatch(npcs_present=[NpcPatch(name="Chalk Moth", threat_level=2, hp=6)])
+    sd = _FakeSessionData(
+        _manual_with(encounters=[_creature_encounter(enemy_name="Chalk Moth", tier=2, hp=6)])
+    )
+    monster_manual_inject.inject(
+        sd,  # type: ignore[arg-type]  # duck-typed _SessionData stand-in
+        snapshot,
+        current_location="The Dome",
+        in_combat=True,
     )
     await asyncio.sleep(0)
 
@@ -151,8 +169,8 @@ async def test_creature_patch_spawns_hostile_with_span(
 async def test_person_patch_spawns_neutral_with_span(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC1/AC3: a narrator/roster *person* patch (no creature-shape field)
-    spawns neutral (0) through ``_npc_from_patch`` and emits a
+    """AC1/AC3: a Manual *person* patch (no creature-shape field) driven
+    through the production inject path spawns neutral (0) and emits a
     ``default_neutral`` span — guarding the boundary that a person carrying
     no creature field is never dragged to -20."""
     captured = await _setup(monkeypatch, "test-spawn-disposition-person")
@@ -162,8 +180,12 @@ async def test_person_patch_spawns_neutral_with_span(
         world_slug="beneath_sunden",
         characters=[_make_pc("Hero")],
     )
-    snapshot.apply_world_patch(
-        WorldStatePatch(npcs_present=[NpcPatch(name="Shopkeeper", role="merchant")])
+    sd = _FakeSessionData(_manual_with(npcs=[_human("Shopkeeper")]))
+    monster_manual_inject.inject(
+        sd,  # type: ignore[arg-type]  # duck-typed _SessionData stand-in
+        snapshot,
+        current_location="The Dome",
+        in_combat=False,
     )
     await asyncio.sleep(0)
 

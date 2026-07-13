@@ -148,6 +148,17 @@ def test_chapter_npcs_and_crew_coexist_without_duplicates() -> None:
         stub = MagicMock()
         stub.core = MagicMock(name=nm)
         stub.core.name = nm
+        # Green Room's admit() (Task 3) legitimately reads these identity-
+        # resolution fields on every existing roster entry — give the mock
+        # the same falsy defaults a real Npc carries so it doesn't masquerade
+        # as an alias/invented_from hit (a bare MagicMock attribute is truthy
+        # and not a str).
+        stub.aliases = []
+        stub.invented_from = None
+        stub.origin = None
+        stub.creature_id = None
+        stub.ephemeral = False
+        stub.manual_origin = False
         snap.npcs.append(stub)
 
     crew = _crew()

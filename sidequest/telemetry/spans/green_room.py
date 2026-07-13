@@ -69,6 +69,30 @@ SPAN_ROUTES[SPAN_GREEN_ROOM_ALIAS_ATTACHED] = SpanRoute(
     },
 )
 
+# Story 166-10 / ADR-156 §6: the DISPLAY half of the coal→diamond promotion —
+# the seated Other's panel name was repointed from its seat-time coal
+# placeholder to the name the narrator's prose gave it (``promote_actor``).
+# ``alias_attached`` proves the identity LEARNED the name; this proves the name
+# reached the surface the player is actually looking at. Without both, a panel
+# still reading "the Scrapborn" under narration that says "Ihnsch of the Rusted
+# Works" is indistinguishable from the narrator simply improvising a name with
+# no engine behind it. ``references_rewritten`` counts the pre-promotion
+# references (initiative tokens, sealed commits, tags) repointed onto the new
+# name — a dangling tag target shows up here as a 0 that should not be.
+SPAN_GREEN_ROOM_ACTOR_PROMOTED = "green_room.actor_promoted"
+SPAN_ROUTES[SPAN_GREEN_ROOM_ACTOR_PROMOTED] = SpanRoute(
+    event_type="state_transition",
+    component="green_room",
+    extract=lambda span: {
+        "field": "green_room",
+        "op": "actor_promoted",
+        "old_name": (span.attributes or {}).get("old_name", ""),
+        "new_name": (span.attributes or {}).get("new_name", ""),
+        "side": (span.attributes or {}).get("side", ""),
+        "references_rewritten": (span.attributes or {}).get("references_rewritten", 0),
+    },
+)
+
 # Story 166-1 / ADR-156 §6 (Task 5, live): fires when a candidate reaching
 # the gate at NARRATOR_INVENTED tier actually mints a new identity rather
 # than attaching as an alias onto an existing one — emitted from both

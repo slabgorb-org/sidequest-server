@@ -116,6 +116,11 @@ class EncounterActor(BaseModel):
 
     ``withdrawn`` flips True when the actor yields. Withdrawn actors are
     skipped by ``_apply_beat`` and emit a ``beat_skipped`` watcher event.
+
+    ``name`` is a load-bearing entity id, not a label: the UI hands it back as
+    a tag target and every targeting seam funnels through
+    ``StructuredEncounter.find_actor``. ``aliases`` is what lets it be renamed
+    anyway — see :meth:`StructuredEncounter.promote_actor`.
     """
 
     model_config = {"extra": "forbid"}
@@ -124,6 +129,12 @@ class EncounterActor(BaseModel):
     role: str
     side: ActorSide
     withdrawn: bool = False
+    #: Names this seat ALSO answers to (story 166-10 / ADR-156 §6). Populated by
+    #: ``promote_actor`` when a coal Other's seat-time placeholder is replaced by
+    #: the name the narrator's prose gave it: the placeholder moves here so that
+    #: references stamped before the promotion still resolve. Empty for every
+    #: actor that has never been renamed.
+    aliases: list[str] = Field(default_factory=list)
     per_actor_state: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -444,10 +455,114 @@ class StructuredEncounter(BaseModel):
         return data
 
     def find_actor(self, name: str) -> EncounterActor | None:
+        """The seated actor answering to ``name`` — canonical first, then aliases.
+
+        Two whole-list passes, so one actor's canonical name always outranks
+        another actor's alias (the same precedence order
+        ``origin.resolve_roster_npc`` uses on the roster). The alias leg is what
+        keeps a promoted seat findable by BOTH names — see :meth:`promote_actor`.
+        """
         for a in self.actors:
             if a.name == name:
                 return a
+        for a in self.actors:
+            if name in a.aliases:
+                return a
         return None
+
+    def promote_actor(self, actor: EncounterActor, new_name: str) -> bool:
+        """Rename a seated actor to the name the narrator's prose gave it — the
+        DISPLAY half of ADR-156 §6's coal→diamond promotion (story 166-10).
+
+        The panel renders ``EncounterActor.name``, and that name was baked with
+        the coal placeholder once, at seat time. Attaching the prose name to the
+        identity's alias ledger (``green_room.attach_alias``) teaches the ENGINE
+        the new name but leaves the player reading ``[ the Scrapborn ]`` under
+        narration that says "Ihnsch of the Rusted Works". This closes that split.
+
+        The rename is additive, never destructive. ``name`` is a load-bearing
+        entity id — the UI hands it back as a tag target — so the seat-time
+        placeholder moves into ``aliases`` (both names resolve through
+        :meth:`find_actor`), and the in-encounter references that already carry
+        it are repointed, so nothing stamped before the promotion dangles.
+
+        Returns True when the rename applied, False on a no-op (blank name, or a
+        name the seat already answers to as its canonical).
+        """
+        old = actor.name
+        if not new_name.strip() or new_name == old:
+            return False
+        if old not in actor.aliases:
+            actor.aliases.append(old)
+        actor.name = new_name
+        rewritten = self._repoint_actor_name(old, new_name)
+
+        from sidequest.telemetry.spans import SPAN_GREEN_ROOM_ACTOR_PROMOTED, Span
+
+        with Span.open(
+            SPAN_GREEN_ROOM_ACTOR_PROMOTED,
+            {
+                "old_name": old,
+                "new_name": new_name,
+                "side": actor.side,
+                "references_rewritten": rewritten,
+            },
+        ):
+            pass
+        return True
+
+    def _repoint_actor_name(self, old: str, new: str) -> int:
+        """Repoint every in-encounter reference holding ``old`` as an actor name.
+
+        These are the structures that outlive a rename and match an actor by
+        EXACT string rather than through :meth:`find_actor`: initiative tokens
+        (the WN round walk), the WN and Fate sealed-commit ledgers, the Fate
+        DEFEND barrier, offered compels, scene tags, and the taunt tracker. Miss
+        one and the reference silently dangles — the impact drops, the redirect
+        stops firing — which is exactly the failure ``aliases`` alone cannot
+        prevent. Returns the number of references repointed.
+        """
+        n = 0
+        for entry in self.initiative:
+            if entry.token_id == old:
+                entry.token_id = new
+                n += 1
+        for wc in self.wn_commits:
+            if wc.actor == old:
+                wc.actor = new
+                n += 1
+            if wc.target == old:
+                wc.target = new
+                n += 1
+        for fc in self.fate_commits:
+            if fc.actor == old:
+                fc.actor = new
+                n += 1
+            if fc.target == old:
+                fc.target = new
+                n += 1
+        for pd in self.pending_defenses:
+            if pd.attacker == old:
+                pd.attacker = new
+                n += 1
+            if pd.defender == old:
+                pd.defender = new
+                n += 1
+        for compel in self.pending_compels:
+            if compel.target == old:
+                compel.target = new
+                n += 1
+        for tag in self.tags:
+            if tag.created_by == old:
+                tag.created_by = new
+                n += 1
+            if tag.target == old:
+                tag.target = new
+                n += 1
+        if self.taunt.active_actor == old:
+            self.taunt.active_actor = new
+            n += 1
+        return n
 
     def add_pending_compel(self, *, target: str, aspect: str, reason: str = "") -> PendingCompel:
         """Persist a narrator-offered compel awaiting accept/refuse (ADR-144 F3e)."""

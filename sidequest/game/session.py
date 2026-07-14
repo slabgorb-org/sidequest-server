@@ -1911,6 +1911,24 @@ class GameSnapshot(BaseModel):
         instantiated NPC — caller decides whether that's a hard error
         (target_edge_delta with no actor) or a legitimate omission
         (numerical_advantage_for excludes unknown allies).
+
+        Story 166-10: the NPC leg WIDENS to ``resolve_roster_npc`` (canonical →
+        alias ledger → ``invented_from``) after an exact match fails. Once the
+        narrator has named a coal Other — "Ihnsch of the Rusted Works" for a
+        bestiary row canonically called "the Scrapborn" (ADR-156 §6) — the
+        narrator's NEXT turn hands that prose name straight to
+        ``apply_damage(target=...)``. On a bare exact match that is a ``not_found``
+        and the damage silently never lands.
+
+        **Exact FIRST, then widen** — not widen instead of exact. ``resolve_roster_npc``
+        compares ``normalize_name`` (casefold + diacritic-fold) on BOTH sides of its
+        canonical pass, so two roster NPCs differing only by case fold together and it
+        returns whichever is first in ROSTER ORDER. Widening unconditionally therefore
+        traded a ``not_found`` for a *wrong answer*: with a mook "the courier" (5 hp)
+        listed before a boss "The Courier" (99 hp), ``apply_damage("The Courier", 4)``
+        silently damaged the mook. An exact hit is never ambiguous; try it before
+        reaching for the fold. Characters keep their exact-match leg and are still
+        checked FIRST of all, so a PC can never be shadowed by an NPC's alias.
         """
         for ch in self.characters:
             if ch.core.name == name:
@@ -1918,7 +1936,10 @@ class GameSnapshot(BaseModel):
         for npc in self.npcs:
             if npc.core.name == name:
                 return npc.core
-        return None
+        from sidequest.game.origin import resolve_roster_npc
+
+        npc = resolve_roster_npc(self.npcs, name)
+        return npc.core if npc is not None else None
 
     # ``_merge_npc_patch`` was REMOVED with the ``npcs_present`` patch branch
     # (Green Room follow-up, 2026-07-11) — its sole caller. Merge semantics on

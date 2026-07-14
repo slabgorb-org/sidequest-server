@@ -116,6 +116,21 @@ class EncounterActor(BaseModel):
 
     ``withdrawn`` flips True when the actor yields. Withdrawn actors are
     skipped by ``_apply_beat`` and emit a ``beat_skipped`` watcher event.
+
+    ``name`` is a load-bearing entity ID, not a label. It equals the seated
+    ``Npc.core.name``, and that identity is what the engine resolves the actor's
+    stat block by (``GameSnapshot.find_creature_core`` — the ``edge_resolver``
+    behind ``apply_damage``/``wn_tools``/``apply_status``/``query_encounter`` and
+    ``dice.py``'s ``apply_beat``; exact for characters, then exact for NPCs, and
+    only then alias-aware via ``resolve_roster_npc``). Tag targets, initiative
+    tokens and sealed commits all carry it too, and every one of THOSE seams is a
+    bare exact match with no alias leg at all (``find_actor``, the initiative
+    walk, the map-token roster match). **It is never rewritten** — a seat left
+    under a prose alias is an unreachable opponent
+    (``encounter_lifecycle._seed_combat_hp_depletion_to_npcs``).
+
+    ``display_name`` is the label, and the only thing a promotion touches — see
+    :meth:`StructuredEncounter.promote_actor`.
     """
 
     model_config = {"extra": "forbid"}
@@ -124,6 +139,12 @@ class EncounterActor(BaseModel):
     role: str
     side: ActorSide
     withdrawn: bool = False
+    #: The stage name (story 166-10 / ADR-156 §6). When the narrator's prose
+    #: names a coal Other, the name lands HERE — never on ``name`` — and the
+    #: overlay renders ``display_name ?? name``. Display only: nothing resolves,
+    #: targets or keys on it. ``None`` for every actor the world has not named,
+    #: which is almost all of them.
+    display_name: str | None = None
     per_actor_state: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -444,10 +465,77 @@ class StructuredEncounter(BaseModel):
         return data
 
     def find_actor(self, name: str) -> EncounterActor | None:
+        """The seated actor whose entity id is ``name``. Exact match, by design.
+
+        ``EncounterActor.name`` is an id, not a label — it is never rewritten, so
+        this never needs a fallback leg. A promoted Other keeps answering to the
+        same id it was seated under; its stage name lives on ``display_name`` and
+        resolves nothing. (Resolving a *prose* name to an identity is
+        ``origin.resolve_roster_npc``'s job, on the roster, via the alias ledger.)
+        """
         for a in self.actors:
             if a.name == name:
                 return a
         return None
+
+    def promote_actor(self, actor: EncounterActor, display_name: str) -> bool:
+        """Give a seated actor the name the narrator's prose gave it — the DISPLAY
+        half of ADR-156 §6's coal→diamond promotion (story 166-10).
+
+        The panel used to read ``[ the Scrapborn ]`` under narration that said
+        "Ihnsch of the Rusted Works": the identity's alias ledger had learned the
+        name (``green_room.attach_alias``) but nothing the player looks at had.
+        This closes that split, and it closes it by ADDING a label rather than
+        moving an id.
+
+        The seat id (``actor.name``) is deliberately untouched. It is what
+        ``find_creature_core`` resolves the opponent's stat block by, and what
+        tag targets, initiative tokens and sealed commits all carry; repoint it
+        and the enemy on the panel becomes one the engine cannot find — no
+        damage lands, the HP bar vanishes, the round walk skips its slot. Because
+        nothing moves, nothing dangles, and there is no reference sweep here to
+        get wrong.
+
+        Returns True when the stage name was applied, False on every no-op — and a
+        no-op emits **no span**. The GM panel reads ``green_room.actor_promoted`` as
+        proof the player's panel changed; a span for a promotion that changed nothing
+        makes the lie detector lie, which is worse than no span at all.
+
+        Three no-ops, all silent-and-False:
+
+        * **Blank.** A whitespace-only name is not a name.
+        * **A stage name equal to the seat id.** The player would read exactly what
+          they already read. Nothing was promoted.
+        * **A seat that already carries a stage name.** Promotion is coal→diamond: a
+          ONE-WAY door (SOUL *Diamonds and Coal*). The FIRST name the world gave this
+          enemy stands. Silently relabelling it would make the panel's name *churn*
+          mid-fight — "Ihnsch" on turn 6, something else on turn 9 — while the prose
+          and the alias ledger keep the original, which is this story's own
+          player-visible name split re-introduced from the other direction. The
+          narrator path already cannot do this (``_attach_before_mint`` gates on an
+          empty alias ledger), so the invariant was being held by a caller, by
+          accident. It is held here now, by the seam that owns it.
+        """
+        if not display_name.strip():
+            return False
+        if display_name == actor.name:
+            return False
+        if actor.display_name is not None:
+            return False
+        actor.display_name = display_name
+
+        from sidequest.telemetry.spans import SPAN_GREEN_ROOM_ACTOR_PROMOTED, Span
+
+        with Span.open(
+            SPAN_GREEN_ROOM_ACTOR_PROMOTED,
+            {
+                "seat_id": actor.name,
+                "display_name": display_name,
+                "side": actor.side,
+            },
+        ):
+            pass
+        return True
 
     def add_pending_compel(self, *, target: str, aspect: str, reason: str = "") -> PendingCompel:
         """Persist a narrator-offered compel awaiting accept/refuse (ADR-144 F3e)."""

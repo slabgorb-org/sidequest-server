@@ -2661,7 +2661,12 @@ def _attach_before_mint(
        this leg) is a lone, still-unnamed Other — a HOSTILE mention is that
        Other's first prose name. Two live opponents is ambiguous; never guess
        (No Silent Fallbacks) — falls through to mint like any other novel
-       name.
+       name. On a fresh attach this leg also gives the SEAT its stage name
+       (``StructuredEncounter.promote_actor``, story 166-10): the alias ledger
+       is what the engine reads, but the panel renders the seat, so a promotion
+       that stops at the ledger leaves the prose name and the panel name
+       disagreeing in front of the player. Only ``EncounterActor.display_name``
+       is written — the seat's id is never repointed.
 
     Known-scope case: a genuinely-new hostile arrival whose first prose
     mention lands while the seated Other's alias ledger is empty (no
@@ -2683,13 +2688,20 @@ def _attach_before_mint(
     if enc is not None and not enc.resolved and hostile:
         live_others = [a for a in enc.actors if a.side == "opponent" and not a.withdrawn]
         if len(live_others) == 1:
-            other = resolve_roster_npc(snapshot.npcs, live_others[0].name)
+            seat = live_others[0]
+            other = resolve_roster_npc(snapshot.npcs, seat.name)
             if (
                 other is not None
                 and not other.aliases
                 and derive_origin(other).kind in (OriginKind.GENERIC, OriginKind.NARRATOR_INVENTED)
             ):
-                attach_alias(other, name, from_source=from_source)
+                if attach_alias(other, name, from_source=from_source):
+                    # Story 166-10: the ledger alone is INVISIBLE. Without this
+                    # the table reads "Ihnsch of the Rusted Works" in the prose
+                    # and "[ the Scrapborn ]" in the panel — one enemy under two
+                    # names. Give the seat its stage name; the seat's ID is not
+                    # touched, so every mechanical seam still resolves it.
+                    enc.promote_actor(seat, name)
                 return True
     return False
 

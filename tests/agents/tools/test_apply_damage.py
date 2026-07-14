@@ -332,3 +332,219 @@ async def test_parallel_damage_against_same_session_runs_sequentially() -> None:
     # And the payloads' target_hp_after values are a serial sequence:
     payloads = sorted([json.loads(r.content)["target_hp_after"] for r in results], reverse=True)
     assert payloads == [7, 3]
+
+
+# ---------------------------------------------------------------------------
+# Story 166-10 (ADR-156 §6) — the coal→diamond promotion, driven END TO END.
+#
+# Round 1 of 166-10 renamed the seated Other's entity id to the narrator's prose
+# name and shipped an enemy that could not be hit: every mechanical seam resolves
+# the opponent through ``find_creature_core``, and the id no longer matched. The
+# suite was green because it never left the blast radius — it drove the two
+# functions that were going to change and asserted on a payload.
+#
+# The test that was owed and never written is one sentence long: **rename the
+# enemy, then attack it.** Not "assert the resolver resolves" — actually swing,
+# and watch the HP come off. These are that test. They live here because this is
+# where the damage harness lives, and the damage path is the thing that broke.
+# ---------------------------------------------------------------------------
+
+_COAL = "the Scrapborn"
+_PROSE = "Ihnsch of the Rusted Works"
+
+
+def _seat_coal_other(snap: GameSnapshot, coal: Npc) -> None:
+    """Seat ``coal`` as the lone live Other of an unresolved combat — the shape the
+    ADR-156 §3.3 target-first seater leaves behind before the narrator names it."""
+    snap.npcs.append(coal)
+    snap.encounter = StructuredEncounter(
+        encounter_type="combat",
+        win_condition="hp_depletion",
+        player_metric=EncounterMetric(name="resolve", current=0, starting=0, threshold=10),
+        opponent_metric=EncounterMetric(name="menace", current=0, starting=0, threshold=10),
+        actors=[
+            EncounterActor(name="Alice", role="delver", side="player"),
+            EncounterActor(name=coal.core.name, role="foe", side="opponent"),
+        ],
+        resolved=False,
+    )
+
+
+def _name_the_other(snap: GameSnapshot, prose_name: str = _PROSE) -> None:
+    """Drive the REAL narrator-mention path — the attach-before-mint seated-Other leg
+    that performs the promotion (``sidequest.server.narration_apply``)."""
+    from sidequest.agents.orchestrator import NpcMention
+    from sidequest.server.narration_apply import _apply_npc_mentions
+
+    _apply_npc_mentions(
+        snapshot=snap,
+        mentions=[NpcMention(name=prose_name, role="hostile")],
+        turn_num=6,
+    )
+
+
+def _promoted_scene() -> GameSnapshot:
+    """A coal Other, seated, then named by the narrator's prose. Its alias ledger now
+    holds the prose name; its canonical name and seat id are both still the coal."""
+    from sidequest.game.origin import Origin, OriginKind
+
+    snap = _build_snapshot(characters=[_character("Alice", edge_current=10)])
+    coal = Npc(
+        core=CreatureCore(
+            name=_COAL,
+            description="d",
+            personality="p",
+            inventory=Inventory(),
+            hp=HpPool(current=8, max=8, base_max=8),
+        ),
+        origin=Origin(kind=OriginKind.GENERIC, creature_id="scrapborn_raider"),
+    )
+    _seat_coal_other(snap, coal)
+    _name_the_other(snap)
+    assert coal.aliases == [_PROSE], (
+        f"precondition: the prose name must attach to the Other's alias ledger; "
+        f"aliases={coal.aliases!r}"
+    )
+    return snap
+
+
+async def test_the_promoted_other_actually_takes_damage_by_its_prose_name() -> None:
+    """THE TEST ROUND 1 OWED AND DID NOT WRITE.
+
+    The world has named the enemy. So the narrator's next turn calls it "Ihnsch of
+    the Rusted Works" — and hands THAT STRING to ``apply_damage(target=...)``. The
+    damage has to land. Not "the resolver returns non-None": the enemy's HP has to
+    actually go down, and stay down after a reload.
+
+    This is the swing the first suite never took. It resolves the target through the
+    real tool, through the real registry handler, against the real persisted store.
+    """
+    snap = _promoted_scene()
+    store = _store_with(snap)
+    ctx = _make_ctx(store)
+
+    r = await _call({"target": _PROSE, "amount": 3, "damage_type": "crushing"}, ctx)
+
+    assert r.status is ToolResultStatus.OK, (
+        f"the narrator now knows this enemy as {_PROSE!r} and will target it by that "
+        f"name — apply_damage must resolve it, not return not_found. result={r!r}"
+    )
+    p = _payload(r)
+    assert p["target_hp_after"] == 5, (
+        f"the damage must LAND: 8 - 3 = 5. A resolver that finds the creature but a "
+        f"tool that damages nothing is the same bug wearing a hat. payload={p!r}"
+    )
+
+    reloaded = store.load()
+    assert reloaded is not None
+    # Resolved by the CANONICAL name — the id the engine has always keyed on. The
+    # promotion is display-only; if the identity forked, this reads the stale twin.
+    found = reloaded.snapshot.find_creature_core(_COAL)
+    assert found is not None and found.hp.current == 5, (
+        f"and it must persist against the SAME identity the seat is keyed on — one "
+        f"enemy, one stat block, two names. hp={None if found is None else found.hp!r}"
+    )
+
+
+async def test_the_promoted_other_still_takes_damage_by_its_seat_id() -> None:
+    """The other direction, and the one a naive rename breaks.
+
+    Every mechanical caller — ``apply_beat``, the WN round walk, ``_primary_hp``, the
+    player's own dice throw — passes the canonical SEAT ID, because that is what tag
+    targets, initiative tokens and sealed commits all carry. Both names must land on
+    the same creature, or half the engine stops being able to hit an enemy the player
+    can see.
+    """
+    snap = _promoted_scene()
+    store = _store_with(snap)
+    ctx = _make_ctx(store)
+
+    r = await _call({"target": _COAL, "amount": 2}, ctx)
+
+    assert r.status is ToolResultStatus.OK, (
+        f"the seat id {_COAL!r} is what the engine's own callers pass; it must keep "
+        f"resolving. result={r!r}"
+    )
+    assert _payload(r)["target_hp_after"] == 6, (
+        f"8 - 2 = 6, on the same stat block the prose name reaches. payload={_payload(r)!r}"
+    )
+
+
+async def test_damage_hits_the_exactly_named_npc_not_its_fold_twin() -> None:
+    """Story 166-10 widened ``find_creature_core`` to resolve through the alias
+    ledger (``resolve_roster_npc``) so the narrator can target a promoted Other by its
+    prose name. That widening compares NORMALIZED names on the canonical pass — so two
+    roster NPCs differing only by case fold together, and the lookup returns whichever
+    is FIRST IN ROSTER ORDER rather than the one actually named.
+
+    The consequence is not an abstract resolver quirk. It is this: a mook and a boss
+    are both seated in the same fight, the narrator swings at the boss ("The Courier"),
+    and the 5-HP mook standing next to it eats the hit instead — while the boss walks
+    away untouched at full health. Silent, deterministic, and reachable: AUTHORED NPCs
+    key the Green Room's dedup gate on ``authored_id``, so it does NOT dedup them by
+    name, and any pre-gate legacy save can carry any pair at all.
+
+    Exact first, then widen.
+    """
+    from sidequest.game.origin import Origin, OriginKind
+
+    lowercase = Npc(
+        core=CreatureCore(
+            name="the courier",
+            description="d",
+            personality="p",
+            inventory=Inventory(),
+            hp=HpPool(current=5, max=5, base_max=5),
+        ),
+        origin=Origin(kind=OriginKind.AUTHORED, authored_id="courier_generic"),
+    )
+    proper = Npc(
+        core=CreatureCore(
+            name="The Courier",
+            description="d",
+            personality="p",
+            inventory=Inventory(),
+            hp=HpPool(current=99, max=99, base_max=99),
+        ),
+        origin=Origin(kind=OriginKind.AUTHORED, authored_id="courier_named"),
+    )
+    # Roster ORDER matters: the lowercase twin is listed FIRST, so a normalized
+    # whole-roster canonical pass returns it for either spelling.
+    snap = _build_snapshot(
+        characters=[_character("Alice", edge_current=10)], npcs=[lowercase, proper]
+    )
+    # Both are seated in the SAME fight — a mook and a boss. `apply_damage` refuses to
+    # touch opponent HP outside a live confrontation (ADR-116), so the collision is
+    # only reachable, and only meaningful, with the encounter seated.
+    snap.encounter = StructuredEncounter(
+        encounter_type="combat",
+        win_condition="hp_depletion",
+        player_metric=EncounterMetric(name="resolve", current=0, starting=0, threshold=10),
+        opponent_metric=EncounterMetric(name="menace", current=0, starting=0, threshold=10),
+        actors=[
+            EncounterActor(name="Alice", role="delver", side="player"),
+            EncounterActor(name="the courier", role="mook", side="opponent"),
+            EncounterActor(name="The Courier", role="boss", side="opponent"),
+        ],
+        resolved=False,
+    )
+    store = _store_with(snap)
+    ctx = _make_ctx(store)
+
+    r = await _call({"target": "The Courier", "amount": 4}, ctx)
+
+    assert r.status is ToolResultStatus.OK, (
+        f"precondition: the boss is seated and damageable; result={r!r}"
+    )
+    assert _payload(r)["target_hp_after"] == 95, (
+        f"an EXACT name must damage the creature that bears it: 'The Courier' has 99 "
+        f"HP, so 99 - 4 = 95. Folding it onto the lowercase 'the courier' (5 HP) "
+        f"listed before it damages the WRONG NPC. payload={_payload(r)!r}"
+    )
+
+    reloaded = store.load()
+    assert reloaded is not None
+    bystander = next(n for n in reloaded.snapshot.npcs if n.core.name == "the courier")
+    assert bystander.core.hp.current == 5, (
+        f"and the fold twin must be UNTOUCHED — it was never the target. hp={bystander.core.hp!r}"
+    )

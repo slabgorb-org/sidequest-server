@@ -703,13 +703,22 @@ def _resolve_mutation_for_beat(
     target_name = _opposite_side_first_actor(encounter, actor.side) or ""
 
     # 158-59: a save-vs mutation requires resolving the DEFENDER's saving
-    # throw. ADR-074 cuts both ways — the server rolls for NPCs (no client
-    # to throw) but must NEVER roll a seated PC's save on their behalf.
-    # Refuse loudly before any cost is paid; see the docstring above.
+    # throw BEFORE any cost is paid. Review round 1 [HIGH]: the defender-core
+    # and ability-score checks used to live INSIDE the save_resolver closure,
+    # which use_ops only calls AFTER Strain is already debited — a miss there
+    # raised an uncaught ValueError (not DiceDispatchError), so the player
+    # paid Strain, got no OTEL span, and the exception escaped straight to
+    # the websocket handler's disconnect path. Every guard below now runs
+    # HERE, before ``use_mutation`` is ever called, mirroring the
+    # PC-defender refusal shape immediately above it: refuse loud
+    # (``awn.mutation.refused``), pay no Strain, never raise. This also
+    # means a defender-resolution miss inherits 158-57's player-facing
+    # refusal frame (``wn_round.py``'s ``mutation_refusal`` threading) for
+    # free, same as every other refusal reason in this function.
+    defender_core = None
+    defender_stats: dict[str, int] | None = None
     if md.save is not None and md.save.stat is not None:
-        pc_defender = next(
-            (c for c in snapshot.characters if c.core.name == target_name), None
-        )
+        pc_defender = next((c for c in snapshot.characters if c.core.name == target_name), None)
         if pc_defender is not None:
             awn_mutation_refused_span(
                 actor=actor.name,
@@ -722,28 +731,56 @@ def _resolve_mutation_for_beat(
                 mutation_id=mutation_id,
                 reason="pc_defender_save_not_server_rollable",
             )
+        # No live actor on the opposite side at all — reachable in ordinary
+        # play: a sole opponent that broke and ran (narrator-named
+        # disengagement sets ``EncounterActor.withdrawn = True`` without
+        # resolving the encounter) leaves ``_opposite_side_first_actor``
+        # with nothing to return, so ``target_name == ""``. Nobody to save
+        # against is a refusal, not a crash.
+        defender_core = snapshot.find_creature_core(target_name)
+        if defender_core is None:
+            awn_mutation_refused_span(
+                actor=actor.name,
+                mutation_id=mutation_id,
+                reason="no_resolvable_defender",
+            )
+            return UseMutationResult(
+                applied=False,
+                actor=actor.name,
+                mutation_id=mutation_id,
+                reason="no_resolvable_defender",
+            )
+        # The opponent core exists but the confrontation authored no ability
+        # scores to save with (No Silent Fallbacks — never default the
+        # modifier to 0 and call that a save).
+        defender_stats = cdef.opponent_ability_scores()
+        if not defender_stats:
+            awn_mutation_refused_span(
+                actor=actor.name,
+                mutation_id=mutation_id,
+                reason="defender_missing_ability_scores",
+            )
+            return UseMutationResult(
+                applied=False,
+                actor=actor.name,
+                mutation_id=mutation_id,
+                reason="defender_missing_ability_scores",
+            )
 
     def _save_resolver(stat: str, target: str) -> SaveResult:
-        # NPC defender only (a PC defender is refused above). Server-side
-        # roll per ADR-074. The sole authority is
+        # NPC defender only (a PC defender is refused above); defender_core
+        # and defender_stats are already resolved and validated above — this
+        # closure computes the roll, it does not re-validate (both guards
+        # live before use_mutation is called, never inside here, so a miss
+        # can never reach this point having already spent Strain). Server-
+        # side roll per ADR-074. The sole authority is
         # ``WithoutNumberRulesetModule.save_params`` on the BOUND module
         # (ADR-143 — bind the ruleset, don't balance it): no invented
         # threshold, no converted die, no gate on the actor's own roll.
-        defender_core = snapshot.find_creature_core(target)
-        if defender_core is None:
-            raise ValueError(
-                f"mutation {mutation_id!r} save.stat={stat!r} has no resolvable "
-                f"defender {target!r} to save against (No Silent Fallbacks)"
-            )
-        stats = cdef.opponent_ability_scores()
-        if not stats:
-            raise ValueError(
-                f"opponent {target!r} has no ability scores to resolve a "
-                f"{stat!r} save — author them under opponent_default_stats "
-                "(No Silent Fallbacks)"
-            )
+        assert defender_core is not None
+        assert defender_stats is not None
         params = module.save_params(
-            stats=stats,
+            stats=defender_stats,
             save=stat,
             level=int(getattr(defender_core, "level", 1) or 1),
             label=f"{stat} save",
@@ -764,7 +801,7 @@ def _resolve_mutation_for_beat(
         )
         return "success" if success else "fail"
 
-    return use_mutation(
+    result = use_mutation(
         state=state,
         catalog=catalog,
         module=module,
@@ -775,6 +812,46 @@ def _resolve_mutation_for_beat(
         target_id=target_name,
         save_resolver=_save_resolver,
     )
+
+    # Review round 2 (SM SCOPE RULING follow-up): a successful save that
+    # negates the effect changes nothing the table can see unless the
+    # narrator is told — use_ops already blanks ``result.effect`` on a
+    # negated success, but nothing downstream ever read it (dice.py only
+    # threads ``mutation_result`` onward when ``not applied``; wn_round.py
+    # only reads ``mutation_refusal``). Reuse the EXACT MECHANICAL-TRUTH
+    # narrator-hint idiom 158-57 established for refusals (same seam,
+    # same precedent) so the narrator cannot write a full-effect hit over a
+    # save the defender won.
+    #
+    # The gate reads ``md.save.effect == "negates"`` — the SAME condition
+    # ``use_ops`` blanks the effect on — rather than inferring the negation
+    # from the blanked ``result.effect == ""``. ``UseMutationResult.effect``
+    # defaults to ``""`` and is copied from ``md.effect``, so an empty
+    # authored effect is indistinguishable from a negated one; a mutation
+    # with no ``effect`` text and a ``half`` save would otherwise earn a hint
+    # asserting a negation that never happened. Reviewer round 1 flagged that
+    # stringly-typed overload as non-blocking for ``magic_working``; it is not
+    # safe to build a MECHANICAL TRUTH claim on. A "half"/"partial"
+    # ``SaveVs.effect`` is still NOT honoured (158-82, out of scope) — those
+    # mutations land at full effect on a successful save, and claiming
+    # otherwise here would be the same Illusionism failure in the other
+    # direction, so they get no hint.
+    #
+    # No ``sanitize_player_text`` here, unlike ``wn_round.py``'s refusal hint:
+    # that seam sanitizes because its ``unknown_mutation`` reason carries the
+    # raw wire ``mutation_id`` that never reached the catalog. This branch is
+    # reachable only when ``catalog.positive_by_id`` already resolved above,
+    # so ``mutation_id`` is a validated catalog key; ``target_name`` and
+    # ``actor.name`` are encounter-structure derived, never client text.
+    negated = md.save is not None and md.save.effect == "negates"
+    if result.applied and result.save_result == "success" and negated:
+        encounter.narrator_hints.append(
+            f"MECHANICAL TRUTH: {target_name}'s {result.save_stat} save against "
+            f"{actor.name}'s {mutation_id} SUCCEEDED and negated the effect. Do "
+            "not narrate the mutation's effect landing — narrate the save "
+            "holding instead."
+        )
+    return result
 
 
 def _all_opponents_mindless(opp_actors, pack: GenrePack | None) -> bool:

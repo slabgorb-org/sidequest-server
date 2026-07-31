@@ -181,6 +181,49 @@ def _save_stat(md) -> str:
     return md.save.stat
 
 
+def _negates_mutation(pack):
+    """A positive mutation whose ``SaveVs.effect == "negates"`` — 5 of 7
+    save-vs positives in the real catalog (review round 2 SM SCOPE RULING
+    follow-up). Fail-loud fixture premise, not a content pin."""
+    assert pack.mutations is not None
+    md = next(
+        (
+            m
+            for m in pack.mutations.positives
+            if m.save is not None and m.save.stat is not None and m.save.effect == "negates"
+        ),
+        None,
+    )
+    assert md is not None, (
+        "fixture premise: the catalog must offer a save-vs positive whose "
+        "SaveVs.effect == 'negates' — the majority shape and the review "
+        "round 2 reproduction target"
+    )
+    return md
+
+
+def _non_negating_save_mutation(pack):
+    """A positive mutation whose ``SaveVs.effect`` is something OTHER than
+    ``negates`` — ``half`` or ``partial``, 2 of the 7 save-vs positives in the
+    real catalog. Honouring those is explicitly out of scope (158-82), so a
+    successful save against one must NOT claim a negation. Fail-loud fixture
+    premise, not a content pin."""
+    assert pack.mutations is not None
+    md = next(
+        (
+            m
+            for m in pack.mutations.positives
+            if m.save is not None and m.save.stat is not None and m.save.effect != "negates"
+        ),
+        None,
+    )
+    assert md is not None, (
+        "fixture premise: the catalog must offer a save-vs positive whose "
+        "SaveVs.effect is not 'negates' — the un-honoured shape 158-82 owns"
+    )
+    return md
+
+
 def _awn_cfg(pack):
     """The pack's ruleset config, narrowed to the AWN block that owns
     ``save_base`` and ``attribute_map``."""
@@ -841,4 +884,248 @@ def test_a_pc_defender_is_never_server_rolled(otel_capture, monkeypatch):
     assert reason, "the refusal span must carry a reason slug the GM panel can group on"
     assert pc.core.system_strain.current == strain_before, (
         f"a refused use pays no Strain; {strain_before} -> {pc.core.system_strain.current}"
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. Review round 2 (Dev, [HIGH] fix) — a defender-resolution miss refuses,
+#    it does not debit Strain and then crash
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Reviewer reproduced both of these empirically against the pre-fix code
+# through the production dispatch_dice_throw seam:
+#
+#   PROBE-WITHDRAWN: strain 0.0 -> 1.0; ValueError: mutation
+#     'sense/thermal_vision' save.stat='evasion' has no resolvable
+#     defender '' to save against
+#   PROBE-NOSTATS:   strain 0.0 -> 1.0; ValueError: opponent 'Scrapjaw'
+#     has no ability scores
+#
+# Both guards used to live INSIDE the save_resolver closure, which use_ops
+# only invokes AFTER Strain is already spent — a miss there raised an
+# uncaught ValueError (not DiceDispatchError), so the player paid Strain,
+# the GM panel saw nothing, and the exception escaped the dispatch layer's
+# error handling straight to the websocket handler's disconnect path. Both
+# tests below pin the fix: refuse loud, pay no Strain, never raise.
+
+
+def test_defender_withdrawn_refuses_without_charging_strain_or_raising(otel_capture, monkeypatch):
+    """The sole opponent withdrew — a designed morale outcome
+    (``narration_apply.py`` sets ``EncounterActor.withdrawn = True`` on a
+    narrator-named disengagement without resolving the encounter), so
+    ``_opposite_side_first_actor`` has nothing to return and
+    ``target_name == ""``. A save-vs mutation committed against an empty
+    battlefield must refuse — no defender core to resolve is a mechanical
+    fact, not a crash.
+
+    FAILED review round 1: this used to debit Strain then raise an uncaught
+    ``ValueError`` with zero OTEL.
+    """
+    pack = _load_pack()
+    md = _save_mutation(pack)
+    beat = _mutation_beat(pack)
+    pc, stats, snap, enc = _scenario(pack, [md.id])
+    assert pc.core.system_strain is not None
+    strain_before = pc.core.system_strain.current
+    for a in enc.actors:
+        if a.side == "opponent":
+            a.withdrawn = True
+    _pin_d20(monkeypatch, 20)
+
+    _dispatch(
+        pack=pack,
+        snap=snap,
+        enc=enc,
+        pc_name="Rux",
+        stats=stats,
+        beat_id=beat.id,
+        mutation_id=md.id,
+    )
+
+    assert not _spans(otel_capture, _SPAN_USED), "no defender to save against means no resolved use"
+    assert not _spans(otel_capture, _SPAN_SAVE), "no defender means no saving throw was rolled"
+    refused = _spans(otel_capture, _SPAN_REFUSED)
+    assert len(refused) == 1, (
+        f"expected exactly one {_SPAN_REFUSED} naming why this use could not "
+        f"resolve; got {len(refused)}. The GM panel must see the refusal, not "
+        "an uncaught exception it never learns about"
+    )
+    reason = str((refused[0].attributes or {}).get("reason", ""))
+    assert reason, "the refusal span must carry a reason slug the GM panel can group on"
+    assert pc.core.system_strain.current == strain_before, (
+        f"a refused use pays no Strain; {strain_before} -> {pc.core.system_strain.current} — "
+        "the guard must run BEFORE use_mutation, not inside the save_resolver "
+        "AFTER Strain is already spent"
+    )
+
+
+def test_defender_missing_ability_scores_refuses_without_charging_strain_or_raising(
+    otel_capture, monkeypatch
+):
+    """The opponent core exists (seating already gave it hp/armor_class) but
+    the confrontation authored no ability scores for it — ``save_params``
+    would have nothing to compute a modifier from. This must refuse, not
+    silently default the modifier to 0 (No Silent Fallbacks) and not raise
+    after Strain is already spent.
+
+    FAILED review round 1: this used to debit Strain then raise an uncaught
+    ``ValueError`` with zero OTEL.
+    """
+    pack = _load_pack()
+    md = _save_mutation(pack)
+    beat = _mutation_beat(pack)
+    cdef = _combat_cdef(pack)
+    pc, stats, snap, enc = _scenario(pack, [md.id])
+    assert pc.core.system_strain is not None
+    strain_before = pc.core.system_strain.current
+
+    # Seating already baked hp/armor_class/dexterity into the opponent's
+    # CreatureCore; strip everything else so opponent_ability_scores()
+    # returns {} for the save that fires AFTER seating.
+    from sidequest.genre.models.rules import OPPONENT_RESERVED_STAT_KEYS
+
+    assert cdef.opponent_default_stats is not None
+    cdef.opponent_default_stats = {
+        k: v for k, v in cdef.opponent_default_stats.items() if k in OPPONENT_RESERVED_STAT_KEYS
+    }
+    assert not cdef.opponent_ability_scores(), (
+        "fixture premise: stripping every non-reserved key must leave no "
+        "ability scores for save_params to read"
+    )
+    _pin_d20(monkeypatch, 20)
+
+    _dispatch(
+        pack=pack,
+        snap=snap,
+        enc=enc,
+        pc_name="Rux",
+        stats=stats,
+        beat_id=beat.id,
+        mutation_id=md.id,
+    )
+
+    assert not _spans(otel_capture, _SPAN_USED), "no ability scores means no resolved use"
+    assert not _spans(otel_capture, _SPAN_SAVE), (
+        "no ability scores means no saving throw was rolled"
+    )
+    refused = _spans(otel_capture, _SPAN_REFUSED)
+    assert len(refused) == 1, (
+        f"expected exactly one {_SPAN_REFUSED} naming why this use could not "
+        f"resolve; got {len(refused)}"
+    )
+    reason = str((refused[0].attributes or {}).get("reason", ""))
+    assert reason, "the refusal span must carry a reason slug the GM panel can group on"
+    assert pc.core.system_strain.current == strain_before, (
+        f"a refused use pays no Strain; {strain_before} -> {pc.core.system_strain.current} — "
+        "the guard must run BEFORE use_mutation, not inside the save_resolver "
+        "AFTER Strain is already spent"
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. Review round 2 (Dev) — a successful negating save is visible AT THE TABLE
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_a_successful_negating_save_leaves_a_mechanical_truth_narrator_hint(
+    otel_capture, monkeypatch
+):
+    """SM SCOPE RULING follow-up: ``SaveVs.effect == "negates"`` honouring
+    was dead code until the table could see it — ``result.effect`` was read
+    in exactly one place server-wide (``magic_working.py``, whose resolver
+    is flat ``"fail"`` and can never observe a success), so a successful
+    negating save changed nothing a player would notice. A defender that
+    saves against a ``negates`` mutation must leave exactly one MECHANICAL
+    TRUTH narrator hint (the same idiom 158-57 established for refusals) so
+    the narrator cannot write the full effect landing over a save the
+    defender won.
+    """
+    pack = _load_pack()
+    md = _negates_mutation(pack)
+    beat = _mutation_beat(pack)
+    _, stats, snap, enc = _scenario(pack, [md.id])
+    defender_name, defender_core = _defender(snap, enc)
+    params = _ruleset_save_params(
+        pack, save=_save_stat(md), defender_core=defender_core, cdef=_combat_cdef(pack)
+    )
+    face = params.difficulty - params.modifier
+    _pin_d20(monkeypatch, face)
+
+    _dispatch(
+        pack=pack,
+        snap=snap,
+        enc=enc,
+        pc_name="Rux",
+        stats=stats,
+        beat_id=beat.id,
+        mutation_id=md.id,
+    )
+
+    attrs = _used_span(otel_capture)
+    assert attrs.get("save_result") == "success", (
+        "fixture premise: the pinned face must clear the boundary and win the save"
+    )
+
+    hits = [
+        h
+        for h in enc.narrator_hints
+        if "MECHANICAL TRUTH" in h and defender_name in h and md.id in h
+    ]
+    assert len(hits) == 1, (
+        "a successful negating save must leave exactly one MECHANICAL TRUTH "
+        "narrator hint naming the defender and the mutation, so the narrator "
+        f"cannot write the effect landing over the save; hints present: {enc.narrator_hints}"
+    )
+
+
+def test_a_successful_non_negating_save_claims_no_negation(otel_capture, monkeypatch):
+    """The other direction of the same honesty rule. ``SaveVs.effect`` of
+    ``half``/``partial`` is NOT honoured — those mutations still land at full
+    effect on a successful save (158-82 owns closing that). So the save
+    succeeding must leave NO hint claiming the effect was negated: asserting a
+    negation the engine did not deliver is the same Illusionism failure as
+    narrating a full-effect hit over a save the defender won, pointed the
+    other way.
+
+    This also pins the gate's shape. It reads ``md.save.effect == "negates"``
+    — the same condition ``use_ops`` blanks the effect on — rather than
+    inferring negation from ``result.effect == ""``, which collides with the
+    field's own default whenever a mutation authors no ``effect`` text.
+    """
+    pack = _load_pack()
+    md = _non_negating_save_mutation(pack)
+    beat = _mutation_beat(pack)
+    _, stats, snap, enc = _scenario(pack, [md.id])
+    defender_name, defender_core = _defender(snap, enc)
+    params = _ruleset_save_params(
+        pack, save=_save_stat(md), defender_core=defender_core, cdef=_combat_cdef(pack)
+    )
+    face = params.difficulty - params.modifier
+    _pin_d20(monkeypatch, face)
+
+    _dispatch(
+        pack=pack,
+        snap=snap,
+        enc=enc,
+        pc_name="Rux",
+        stats=stats,
+        beat_id=beat.id,
+        mutation_id=md.id,
+    )
+
+    attrs = _used_span(otel_capture)
+    assert attrs.get("save_result") == "success", (
+        "fixture premise: the pinned face must clear the boundary and win the save"
+    )
+    assert md.save is not None and md.save.effect != "negates", (
+        "fixture premise: this mutation's save must be one we do NOT honour"
+    )
+
+    negation_claims = [
+        h for h in enc.narrator_hints if "MECHANICAL TRUTH" in h and md.id in h and "negated" in h
+    ]
+    assert not negation_claims, (
+        f"a {md.save.effect!r} save is not honoured — the effect still lands at "
+        "full strength, so nothing may tell the narrator it was negated; "
+        f"offending hints: {negation_claims}"
     )

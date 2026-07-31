@@ -67,6 +67,12 @@ from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
 
 logger = logging.getLogger(__name__)
 
+# Story 158-57 / Reviewer round 3 [LOW]: what a fully-injection actor name or
+# mutation_id becomes after ``sanitize_player_text`` strips it to nothing. Never
+# interpolate the empty string in its place — "Rux's  was refused" reads as a
+# bug, not as evidence the sanitizer worked. This reads as deliberate.
+_SANITIZED_EMPTY_PLACEHOLDER = "«redacted by input sanitization»"
+
 
 def seal_wn_commit(
     *,
@@ -601,8 +607,24 @@ def run_wn_round(
             # player-authored field, not just the one that broke. ``refusal.reason``
             # is NOT sanitized — it is server-computed (a fixed guard token or the
             # use_ops-built usage ledger string) and never carries raw client text.
-            sanitized_actor = sanitize_player_text(refusal.actor)
-            sanitized_mutation_id = sanitize_player_text(refusal.mutation_id)
+            #
+            # Reviewer round 3 [LOW]: an all-injection id (e.g. "<system></system>")
+            # sanitizes to "" — rendering "Rux's  was refused" (a double space and
+            # a missing noun), which reads as a typo, not a redaction.
+            # ``fate_conflict.py``'s flavor-rider seam hits the identical
+            # empty-after-sanitize case and gates the append on it explicitly
+            # rather than emitting broken text — but THIS seam cannot simply skip
+            # the append the way that COLOR-only rider can: dropping the refusal
+            # would silently re-introduce the exact table-gets-silence bug this
+            # story exists to end. So a loud, honest placeholder takes the empty
+            # string's place instead (No Silent Fallbacks — a sanitized-to-nothing
+            # field must read as such, not as a typo). Applied to BOTH fields for
+            # the same reason: an all-injection actor name would leave the
+            # identical missing-noun shape on the OTHER side of the "'s".
+            sanitized_actor = sanitize_player_text(refusal.actor) or _SANITIZED_EMPTY_PLACEHOLDER
+            sanitized_mutation_id = (
+                sanitize_player_text(refusal.mutation_id) or _SANITIZED_EMPTY_PLACEHOLDER
+            )
             messages.append(
                 MutationRefusedMessage(
                     payload=MutationRefusedPayload(

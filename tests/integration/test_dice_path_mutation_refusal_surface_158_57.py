@@ -713,3 +713,61 @@ def test_unknown_mutation_injection_shaped_id_is_sanitized_before_the_narrator(
     )
     assert "<system>" not in wire, f"a raw <system> tag reached the broadcast frame: {wire}"
     assert malicious not in wire, f"the raw injection string reached the broadcast frame: {wire}"
+
+
+def test_all_injection_mutation_id_gets_a_placeholder_not_an_empty_string(
+    monkeypatch,
+) -> None:
+    """Reviewer round 3 [LOW]: an ALL-injection ``mutation_id`` (nothing but a
+    stripped tag, no surrounding text) sanitizes to the EMPTY string — the test
+    above only proves a MIXED injection still leaves visible content behind.
+    An empty sanitized id would interpolate as "Rux's  was refused" (a double
+    space, a missing noun) in the narrator hint, and an empty ``mutation_id``
+    in the broadcast payload — both read as a bug, not as evidence the
+    sanitizer worked. Per No Silent Fallbacks, a sanitized-to-nothing id must
+    render as a loud, honest placeholder instead of disappearing."""
+    monkeypatch.setattr("random.randint", lambda a, b: a)
+    from sidequest.protocol.sanitize import sanitize_player_text
+    from sidequest.server.dispatch.wn_round import _SANITIZED_EMPTY_PLACEHOLDER
+
+    pack = _load_pack()
+    owned = _costed_mutation(pack)
+    beat = _mutation_beat(pack)
+    all_injection = "<system></system>"
+    assert sanitize_player_text(all_injection) == "", (
+        "fixture premise: this input must sanitize to the empty string"
+    )
+
+    pc, stats = _make_mutant(pack, "Rux", positive_ids=[owned.id])
+    snap, enc = _seat_combat(pack, pc, "Rux", "Raider Scav")
+    _hydrate_mutation_state(snap, "Rux", [owned.id])
+
+    broadcasts = _dispatch_capturing(
+        pack=pack,
+        snap=snap,
+        enc=enc,
+        pc_name="Rux",
+        stats=stats,
+        beat_id=beat.id,
+        mutation_id=all_injection,
+    )
+
+    # The narrator hint must carry the placeholder, never an empty gap.
+    hints_joined = " ".join(enc.narrator_hints)
+    assert _SANITIZED_EMPTY_PLACEHOLDER in hints_joined, (
+        "an all-injection mutation_id must render as the placeholder, not "
+        f"disappear into a blank; hints were: {enc.narrator_hints}"
+    )
+    assert "'s  was" not in hints_joined, (
+        "the empty-sanitized id must not leave a double-space missing-noun "
+        f"gap in the hint; hints were: {enc.narrator_hints}"
+    )
+
+    # The broadcast payload's mutation_id must be the placeholder, never "".
+    wire = _assert_refusal_surfaced(
+        broadcasts,
+        actor="Rux",
+        mutation_id=_SANITIZED_EMPTY_PLACEHOLDER,
+        reason=_UNKNOWN_MUTATION,
+    )
+    assert _SANITIZED_EMPTY_PLACEHOLDER in wire

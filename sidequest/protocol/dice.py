@@ -18,7 +18,7 @@ this shape via sidequest-ui/src/types/payloads.ts.
 from __future__ import annotations
 
 from enum import Enum, IntEnum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import Field, model_validator
 
@@ -200,6 +200,12 @@ class DiceThrowPayload(ProtocolBase):
     mutations. ``None`` on every non-mutation beat. The narrator apply_beat
     path carries the same value on its BeatSelection sidecar; this field is
     the dice path's carrier.
+
+    Story 158-58: ``spell_id``/``mutation_id`` are bounded to 64 characters —
+    the longest shipped id is 35 (mutation) / 21 (spell), and 64 is already
+    this codebase's identifier bound (``fate_tools.CompelInput.actor``,
+    ``record_quest``). This is a wire-length boundary only; catalog
+    membership is still checked at dispatch time (``dispatch/dice.py``).
     """
 
     request_id: str
@@ -207,8 +213,8 @@ class DiceThrowPayload(ProtocolBase):
     face: list[int]
     beat_id: str | None = None
     player_action: str | None = None
-    spell_id: str | None = None
-    mutation_id: str | None = None
+    spell_id: Annotated[str, Field(max_length=64)] | None = None
+    mutation_id: Annotated[str, Field(max_length=64)] | None = None
 
 
 class DiceResultPayload(ProtocolBase):

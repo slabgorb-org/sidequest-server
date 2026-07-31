@@ -600,6 +600,8 @@ def _resolve_mutation_for_beat(
     actor,
     snapshot,
     pack,
+    encounter,
+    cdef,
 ) -> UseMutationResult:
     """Story 102-7 — drive ``use_mutation`` for a ``mutation_resolution`` beat.
 
@@ -617,11 +619,22 @@ def _resolve_mutation_for_beat(
     callers are unaffected: the narrator route (``apply_narration``) already
     ignores the return value, and threading its player-facing parity is a
     separate follow-up (out of scope here).
+
+    Story 158-59 — the target actually saves. ``encounter``/``cdef`` are now
+    required so the DEFENDER's saving throw can be resolved: the sole
+    authority is ``WithoutNumberRulesetModule.save_params`` on the BOUND
+    module (ADR-143 — bind the ruleset, don't balance it), server-rolled per
+    ADR-074 because the common defender is an NPC with no client to throw. A
+    defender that resolves to a SEATED PC is refused loudly instead — ADR-074
+    cuts both ways, and there is no live client-thrown WN save to route a
+    PC's saving throw into yet (158-59 Delivery Findings; same
+    refuse-until-a-story-defines-it precedent as 158-54's opposed_check).
     """
     from sidequest.game.ruleset.awn import AwnRulesetModule
     from sidequest.game.ruleset.registry import get_ruleset_module
-    from sidequest.mutation.use_ops import UseMutationResult, use_mutation
+    from sidequest.mutation.use_ops import SaveResult, UseMutationResult, use_mutation
     from sidequest.telemetry.spans.awn import awn_mutation_refused_span
+    from sidequest.telemetry.spans.wn import wn_save_resolved_span
 
     mutation_id = getattr(sel, "mutation_id", None)
     if not mutation_id:
@@ -655,6 +668,10 @@ def _resolve_mutation_for_beat(
             mutation_id=mutation_id,
             reason="non_awn_ruleset",
         )
+    # module is AwnRulesetModule only when rules was not None (see the
+    # ternary above) — narrow explicitly so pyright doesn't flag every
+    # rules.ruleset_config() below as an Optional access.
+    assert rules is not None
     core = snapshot.find_creature_core(actor.name)
     if core is None:
         awn_mutation_refused_span(actor=actor.name, mutation_id=mutation_id, reason="no_actor_core")
@@ -665,7 +682,7 @@ def _resolve_mutation_for_beat(
             reason="no_actor_core",
         )
     try:
-        catalog.positive_by_id(mutation_id)
+        md = catalog.positive_by_id(mutation_id)
     except KeyError:
         awn_mutation_refused_span(
             actor=actor.name, mutation_id=mutation_id, reason="unknown_mutation"
@@ -677,9 +694,76 @@ def _resolve_mutation_for_beat(
             reason="unknown_mutation",
         )
 
-    # v1 save handling matches the use_mutation tool: the narrator narrates
-    # the target's save from the returned save_stat; opposed-save dice wiring
-    # rides the dice protocol in a later plan. "fail" applies the full effect.
+    # The defender is derived from the encounter STRUCTURE — the same
+    # ``_opposite_side_first_actor`` idiom the strike/cast/shock paths use —
+    # not trusted from a narrator/client-supplied free-text field, because a
+    # save's defender is a mechanical fact, not a narration choice.
+    from sidequest.game.beat_kinds import _opposite_side_first_actor
+
+    target_name = _opposite_side_first_actor(encounter, actor.side) or ""
+
+    # 158-59: a save-vs mutation requires resolving the DEFENDER's saving
+    # throw. ADR-074 cuts both ways — the server rolls for NPCs (no client
+    # to throw) but must NEVER roll a seated PC's save on their behalf.
+    # Refuse loudly before any cost is paid; see the docstring above.
+    if md.save is not None and md.save.stat is not None:
+        pc_defender = next(
+            (c for c in snapshot.characters if c.core.name == target_name), None
+        )
+        if pc_defender is not None:
+            awn_mutation_refused_span(
+                actor=actor.name,
+                mutation_id=mutation_id,
+                reason="pc_defender_save_not_server_rollable",
+            )
+            return UseMutationResult(
+                applied=False,
+                actor=actor.name,
+                mutation_id=mutation_id,
+                reason="pc_defender_save_not_server_rollable",
+            )
+
+    def _save_resolver(stat: str, target: str) -> SaveResult:
+        # NPC defender only (a PC defender is refused above). Server-side
+        # roll per ADR-074. The sole authority is
+        # ``WithoutNumberRulesetModule.save_params`` on the BOUND module
+        # (ADR-143 — bind the ruleset, don't balance it): no invented
+        # threshold, no converted die, no gate on the actor's own roll.
+        defender_core = snapshot.find_creature_core(target)
+        if defender_core is None:
+            raise ValueError(
+                f"mutation {mutation_id!r} save.stat={stat!r} has no resolvable "
+                f"defender {target!r} to save against (No Silent Fallbacks)"
+            )
+        stats = cdef.opponent_ability_scores()
+        if not stats:
+            raise ValueError(
+                f"opponent {target!r} has no ability scores to resolve a "
+                f"{stat!r} save — author them under opponent_default_stats "
+                "(No Silent Fallbacks)"
+            )
+        params = module.save_params(
+            stats=stats,
+            save=stat,
+            level=int(getattr(defender_core, "level", 1) or 1),
+            label=f"{stat} save",
+            cfg=rules.ruleset_config(),
+            character_core=defender_core,
+        )
+        d20 = random.randint(1, params.sides)
+        success = (d20 + params.modifier) >= params.difficulty
+        wn_save_resolved_span(
+            slug=module.slug,
+            actor=target,
+            save=stat,
+            effect=mutation_id,
+            target=params.difficulty,
+            d20=d20,
+            modifier=params.modifier,
+            success=success,
+        )
+        return "success" if success else "fail"
+
     return use_mutation(
         state=state,
         catalog=catalog,
@@ -688,8 +772,8 @@ def _resolve_mutation_for_beat(
         core=core,
         actor=actor.name,
         mutation_id=mutation_id,
-        target_id=getattr(sel, "target", None) or "",
-        save_resolver=lambda stat, target: "fail",
+        target_id=target_name,
+        save_resolver=_save_resolver,
     )
 
 
@@ -7240,6 +7324,8 @@ def _apply_narration_result_to_snapshot(
                         actor=actor,
                         snapshot=snapshot,
                         pack=pack,
+                        encounter=enc,
+                        cdef=cdef,
                     )
 
                 # ─── B/X morale per-beat hook (Task 9, architect feedback

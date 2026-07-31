@@ -2172,6 +2172,8 @@ def _apply_committed_player_beat(
             actor=actor,
             snapshot=snapshot,
             pack=pack,
+            encounter=encounter,
+            cdef=cdef,
         )
 
     own_delta = apply_result.deltas.own if apply_result.deltas else 0

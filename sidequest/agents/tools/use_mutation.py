@@ -81,8 +81,15 @@ async def use_mutation(args: UseMutationArgs, ctx: ToolContext) -> ToolResult:
 
     def _save_resolver(stat: str, target: str) -> Literal["success", "fail"]:
         # v1: the narrator narrates the target's save from the returned
-        # save_stat; mechanical opposed-save wiring rides the dice protocol
-        # in the next plan. Returning "fail" applies the full effect.
+        # save_stat. Story 158-59 wired a real opposed save on the dice path
+        # (narration_apply.py's _resolve_mutation_for_beat) but deliberately
+        # NOT here: ``args.target`` is unvalidated free text with no seam
+        # that resolves it to a CreatureCore/ability-score block, so there
+        # is no defender to compute save_params against. Faking a save off
+        # no stats would be the same homebrew-math failure ADR-143 forbids
+        # (158-59 Delivery Finding: this tool needs its own
+        # defender-resolution seam, tracked separately). Returning "fail"
+        # applies the full effect.
         return "fail"
 
     result = resolve_use_mutation(

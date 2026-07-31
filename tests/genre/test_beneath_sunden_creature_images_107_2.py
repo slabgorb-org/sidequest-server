@@ -30,6 +30,11 @@ assertion, mirrors ``tests/genre/test_world_bestiary_content.py``).
 
 from __future__ import annotations
 
+import shutil
+import sys
+from collections.abc import Callable
+from pathlib import Path
+
 import pytest
 import yaml
 
@@ -211,4 +216,268 @@ def test_world_suffix_carries_no_text_clause() -> None:
     assert "no text" in suffix and "no caption" in suffix, (
         "world positive_suffix lost the no-text/no-caption cleanup clause — "
         "under the derived-source model this is the ONLY place it layers in"
+    )
+
+
+# ── GATE META-TESTS (story 158-61) ──────────────────────────────────────
+#
+# A gate that is too narrow does not fail. It PASSES input it should have
+# rejected — which is precisely how the two 158-60 review findings survived
+# review in the first place. Re-running the gates above against the shipped
+# world therefore proves nothing about their REACH.
+#
+# So the tests below do not check the content. They check THE GATE: each one
+# hands the real gate functions a copy of the shipped world with exactly one
+# thing wrong and asserts that some gate rejects it. The control test pins the
+# unmodified copy as clean, so a rejection can only have come from the poison.
+#
+# This is a fixture-driven behavior test, not a source-text wiring test
+# (sidequest-server/CLAUDE.md "No Source-Text Wiring Tests"): the production
+# gate functions run for real, against a real-shaped world on disk.
+
+_WORLD_FILES = ("bestiary.yaml", "creatures.yaml", "visual_style.yaml")
+
+
+def _meta(fn: Callable[..., None]) -> Callable[..., None]:
+    """Mark a test as a gate meta-test so ``_gate_functions`` excludes it.
+
+    Attribute-marked rather than name-matched so renaming a test cannot
+    silently fold a meta-test into the set of gates it is measuring.
+    """
+    fn._is_gate_meta = True  # type: ignore[attr-defined]
+    return fn
+
+
+def _gate_functions() -> list[Callable[[], object]]:
+    """Every shipped-content gate defined in this module.
+
+    Enumerated from the module namespace rather than hand-listed so a gate
+    added or renamed later is measured automatically.
+    """
+    gates = [
+        obj
+        for name, obj in sorted(globals().items())
+        if name.startswith("test_") and callable(obj) and not getattr(obj, "_is_gate_meta", False)
+    ]
+    assert gates, "found no shipped-content gates in this module to measure"
+    return gates
+
+
+def _world_copy(tmp_path: Path) -> Path:
+    """A byte-for-byte copy of the shipped beneath_sunden world files."""
+    src = _world_dir()
+    dest = tmp_path / "beneath_sunden"
+    dest.mkdir()
+    for name in _WORLD_FILES:
+        shutil.copyfile(src / name, dest / name)
+    return dest
+
+
+def _rewrite(world: Path, filename: str, mutate: Callable[[dict], None]) -> None:
+    path = world / filename
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert isinstance(data, dict), f"fixture precondition: {filename} is a mapping"
+    mutate(data)
+    path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
+
+
+def _spec(data: dict, cid: str) -> dict:
+    for entry in data.get("creatures") or []:
+        if isinstance(entry, dict) and entry.get("id") == cid:
+            return entry
+    raise AssertionError(f"fixture precondition: {cid!r} is a shipped override spec")
+
+
+def _gates_rejecting(world: Path, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Run every gate against ``world``; return the gates that REJECTED it.
+
+    An empty list means the whole gate let this world through.
+    """
+    monkeypatch.setattr(sys.modules[__name__], "_world_dir", lambda: world)
+    rejected: list[str] = []
+    for fn in _gate_functions():
+        try:
+            fn()
+        except AssertionError:
+            rejected.append(fn.__name__)
+    return rejected
+
+
+@_meta
+def test_gate_accepts_the_shipped_world_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CONTROL for every poison test below.
+
+    Each poison test starts from this same copy and changes exactly one thing,
+    so this baseline must be clean — otherwise a 'rejected' result would prove
+    nothing about the poison. Also pins that the harness actually reaches the
+    gates (a typo'd fixture path would fail here, not silently pass).
+    """
+    rejected = _gates_rejecting(_world_copy(tmp_path), monkeypatch)
+    assert not rejected, (
+        f"the unmodified shipped world is rejected by {rejected} — the poison "
+        "fixtures below are measuring the copy, not the poison"
+    )
+
+
+@_meta
+def test_gate_rejects_digits_in_a_low_band_spec_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Gap 1. The spec ``name`` slugifies to the PNG filename and is sent as the
+    CLIP prompt, so digits in it corrupt both. That guard exists — in
+    ``test_low_band_shaft_ids_keep_non_proper_noun_guard``, which walks the
+    hardcoded ``LOW_BAND_IDS`` six. ``stirge`` is one of the five low-band specs
+    158-60 added, so it is low-tagged in the bestiary but outside that tuple and
+    receives no name gating at all.
+    """
+    world = _world_copy(tmp_path)
+
+    def poison(data: dict) -> None:
+        _spec(data, "stirge")["name"] = "The Small Thirst On 2 Fast Wings"
+
+    _rewrite(world, "creatures.yaml", poison)
+    assert _gates_rejecting(world, monkeypatch), (
+        "a low-band override name carrying a digit passed every gate — the name "
+        "guard reaches only the hardcoded LOW_BAND_IDS six, not the eleven "
+        "entries the bestiary actually tags `low`. Derive the id list from the "
+        "bestiary tags, as test_every_low_tagged_bestiary_entry_is_renderable "
+        "already does."
+    )
+
+
+@_meta
+def test_gate_rejects_quotes_in_a_low_band_spec_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Gap 1, second limb of the same guard. A quote in the name breaks the
+    slugified filename and reaches the CLIP prompt as a quoted phrase — the very
+    thing this world's 'nothing is named' conceit exists to prevent. ``grimlock``
+    is likewise low-tagged but outside ``LOW_BAND_IDS``.
+    """
+    world = _world_copy(tmp_path)
+
+    def poison(data: dict) -> None:
+        _spec(data, "grimlock")["name"] = 'The Blind Thing That Hunts By "Sound"'
+
+    _rewrite(world, "creatures.yaml", poison)
+    assert _gates_rejecting(world, monkeypatch), (
+        "a low-band override name carrying quotes passed every gate — same "
+        "hardcoded-tuple blind spot as the digits case"
+    )
+
+
+@_meta
+def test_gate_rejects_a_bad_spec_for_a_newly_low_tagged_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Gap 1, the mechanism rather than the symptom.
+
+    The fix is 'derive the id list from the bestiary `low` tags', NOT 'widen the
+    hand-kept tuple from six to eleven'. This fixture adds a TWELFTH low-tagged
+    bestiary entry plus a non-compliant override for it — exactly what a future
+    content story does. A tag-derived gate catches it. A gate keyed to any
+    hand-kept list, of six ids or of eleven, does not, and the low band regresses
+    to the 'T' letter-chip the moment it grows again.
+    """
+    world = _world_copy(tmp_path)
+
+    def add_bestiary_entry(data: dict) -> None:
+        data["entries"].append(
+            {
+                "id": "sump_leech",
+                "name": "Sump Leech",
+                "description": (
+                    "A blind swollen leech the length of a forearm, ringed and "
+                    "glistening, humped across the wet stone of a standing pool."
+                ),
+                "tags": ["beast", "vermin", "low"],
+            }
+        )
+
+    def add_override_spec(data: dict) -> None:
+        data["creatures"].append(
+            {
+                "id": "sump_leech",
+                "name": "The 9 Ringed Thing In The Standing Water",
+                "description": (
+                    "A blind ringed leech humped across wet cut stone, one low "
+                    "grudging light along its back. No text, no caption, no "
+                    "title, no lettering, no labels, no watermark, no border."
+                ),
+                "threat_level": 1,
+                "tags": ["beast", "vermin", "low"],
+            }
+        )
+
+    _rewrite(world, "bestiary.yaml", add_bestiary_entry)
+    _rewrite(world, "creatures.yaml", add_override_spec)
+    assert _gates_rejecting(world, monkeypatch), (
+        "a brand-new low-tagged entry shipped an override name with a digit in "
+        "it and passed every gate — the name guard is not closed under low-band "
+        "growth. Widening LOW_BAND_IDS by hand does not fix this; deriving the "
+        "id list from the bestiary `low` tags does."
+    )
+
+
+@_meta
+def test_gate_rejects_a_spec_with_no_bestiary_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Gap 2. Referential integrity runs in one direction only today:
+    ``test_all_room_bindings_reference_real_bestiary_ids`` checks room→bestiary,
+    and ``test_every_low_tagged_bestiary_entry_is_renderable`` walks bestiary→
+    spec. Nothing walks spec→bestiary.
+
+    Under ADR-155 ``bestiary.yaml`` is the single source of truth for creature-
+    image production and ``creatures.yaml`` is an optional per-field override.
+    An override for an id the source of truth has never heard of overrides
+    nothing: it renders no plate and raises no complaint. Per No Silent
+    Fallbacks that must fail at author time.
+    """
+    world = _world_copy(tmp_path)
+
+    def poison(data: dict) -> None:
+        data["creatures"].append(
+            {
+                "id": "the_spec_that_binds_to_nothing",
+                "name": "The Thing That Was Never In The Roster",
+                "description": (
+                    "A shape in the dark that no bestiary entry describes. No "
+                    "text, no caption, no title, no lettering, no labels, no "
+                    "watermark, no border."
+                ),
+                "threat_level": 1,
+                "tags": ["undead", "low"],
+            }
+        )
+
+    _rewrite(world, "creatures.yaml", poison)
+    assert _gates_rejecting(world, monkeypatch), (
+        "a phantom override spec resolving to no bestiary entry passed every "
+        "gate — add the converse spec→bestiary integrity check, mirroring "
+        "test_all_room_bindings_reference_real_bestiary_ids"
+    )
+
+
+@_meta
+def test_gate_rejects_a_typod_spec_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Gap 2, the way it actually reaches a repo. Nobody authors a phantom on
+    purpose; they mistype an id. One dropped letter costs twice — the bespoke
+    plate is silently detached from the creature it was written for (which then
+    falls back to its derived prose), and an orphan override is left behind. The
+    world still parses, every gate still passes, and the only symptom is a
+    portrait that quietly stopped being the one someone wrote.
+    """
+    world = _world_copy(tmp_path)
+
+    def poison(data: dict) -> None:
+        _spec(data, "grimlock")["id"] = "grimlok"
+
+    _rewrite(world, "creatures.yaml", poison)
+    assert _gates_rejecting(world, monkeypatch), (
+        "a one-letter typo in an override id detached a bespoke plate from its "
+        "creature and left an orphan spec, and every gate passed — this is the "
+        "silent fallback the converse integrity check exists to catch"
     )

@@ -351,12 +351,24 @@ def test_the_bound_keeps_headroom_over_real_content() -> None:
 
 def test_unknown_mutation_never_reaches_the_sealed_commit_ledger(monkeypatch) -> None:
     """THE STORY.  A non-catalog ``mutation_id`` must not be sealed onto
-    ``encounter.wn_commits``, and must not appear in the serialized encounter —
-    which is what the PG save writes.
+    ``encounter.wn_commits``, and must not reach the serialized encounter — the
+    blob the PG save persists — as a sealed commit.
 
     The two-PC barrier is what makes this observable; see
     ``_seat_two_pc_barrier``.  Measured today: Rux's commit lands with the
-    garbage id verbatim and it round-trips into ``model_dump_json()``."""
+    garbage id verbatim and it round-trips into ``model_dump_json()``.
+
+    SCOPED DELIBERATELY to the commit ledger, and NOT a blanket "the string
+    appears nowhere in the blob" search — do not "strengthen" it back.  158-57
+    requires the refusal to leave a MECHANICAL-TRUTH hint on
+    ``encounter.narrator_hints`` NAMING the refused mutation, and
+    ``narrator_hints`` is itself part of the serialized encounter.  You cannot
+    both tell the narrator which power fizzled and keep that id out of the save;
+    a blanket search makes the two stories mutually unsatisfiable.  What must
+    not survive is the id as MECHANICAL STATE — a sealed commit is replayed as a
+    real action, a hint is prose.  The id that does reach the hint is bounded by
+    the wire length check and sanitized by 158-57's layer, which
+    ``test_rejection_never_echoes_the_raw_client_string_anywhere`` pins."""
     monkeypatch.setattr("random.randint", lambda a, b: a)
     pack = _load_pack()
     owned = _costed_mutation(pack)
@@ -390,10 +402,11 @@ def test_unknown_mutation_never_reaches_the_sealed_commit_ledger(monkeypatch) ->
         "any catalog check ran — validate before seal, the way the cast path "
         f"already does. Ledger: {[(c.actor, c.mutation_id) for c in enc.wn_commits]}"
     )
-    saved = enc.model_dump_json()
-    assert phantom not in saved, (
-        "the unvalidated client string reached the serialized encounter — this is "
-        "the blob the PG save persists, so a non-catalog string is now durable state"
+    saved_commits = enc.model_dump()["wn_commits"]
+    assert not [c for c in saved_commits if c.get("mutation_id") == phantom], (
+        "the unvalidated client string reached the SERIALIZED commit ledger — this is "
+        "the blob the PG save persists, so a non-catalog string becomes durable "
+        f"mechanical state that a later round walk replays as a real action: {saved_commits}"
     )
 
 

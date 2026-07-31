@@ -44,18 +44,6 @@ pytestmark = pytest.mark.skipif(
     not GENRE_PACKS_DIR.is_dir(), reason="sidequest-content not on disk"
 )
 
-# The six low-band (level 1-2) shaft creatures 107-2 authored bespoke specs
-# for — the actual early-combat opponents. Their non-proper-noun guard is
-# kept under the derived-source model (158-52).
-LOW_BAND_IDS = (
-    "gnaw_swarm",
-    "rope_spider",
-    "hold_skeleton",
-    "shaft_goblin",
-    "grave_ghoul",
-    "harrier_pack_leader",
-)
-
 # Medium/style tokens that MUST NOT appear in an override `description` — they
 # auto-layer from visual_style.yaml positive_suffix; duplicating them flattens
 # the render (context-story-107-2 Technical Guardrails, explicit list).
@@ -92,6 +80,15 @@ def _bestiary_entries_by_id() -> dict[str, dict]:
     entries = data.get("entries") if isinstance(data, dict) else None
     assert isinstance(entries, list) and entries
     return {e["id"]: e for e in entries if isinstance(e, dict) and e.get("id")}
+
+
+def _low_tagged_ids(bestiary: dict[str, dict]) -> set[str]:
+    """The ids the bestiary itself tags `low` (158-61).
+
+    The name guard derives its id list from this tag rather than a hand-kept
+    tuple, so a newly low-tagged entry is gated the moment it ships, not
+    after someone remembers to widen a list by hand."""
+    return {eid for eid, e in bestiary.items() if "low" in (e.get("tags") or [])}
 
 
 def _naming_handled(spec: dict | None, secret_flag: bool, proper: str) -> bool:
@@ -146,15 +143,22 @@ def test_every_low_tagged_bestiary_entry_is_renderable() -> None:
 
 
 def test_low_band_shaft_ids_keep_non_proper_noun_guard() -> None:
-    """The historical 107-2 guard for the 6 bespoke shaft ids, kept under the
-    derived model: where a bespoke spec names one of them, that name is a
-    descriptive phrase (it slugifies to the PNG filename) — never the bestiary
-    proper noun, no digits, no quotes. An id whose spec was dropped in the
-    demotion must instead be covered by the world naming flag."""
+    """The 107-2 non-proper-noun guard, kept under the derived model and
+    retuned (158-61) to reach every low-band spec, not just the six 107-2
+    originally authored: where a bespoke spec names a low-tagged bestiary
+    entry, that name is a descriptive phrase (it slugifies to the PNG
+    filename) — never the bestiary proper noun, no digits, no quotes. An
+    entry with no bespoke override must instead be covered by the world
+    naming flag.
+
+    The id list is DERIVED from the bestiary `low` tags (``_low_tagged_ids``)
+    rather than a hand-kept tuple, so this guard is closed under low-band
+    growth: a newly low-tagged entry is gated the moment it ships."""
     specs, secret_flag = _creatures_manifest()
     bestiary = _bestiary_entries_by_id()
-    for cid in LOW_BAND_IDS:
-        assert cid in bestiary, f"{cid}: shaft id vanished from bestiary.yaml"
+    low_ids = _low_tagged_ids(bestiary)
+    assert low_ids, "precondition: bestiary tags its low band"
+    for cid in sorted(low_ids):
         spec = specs.get(cid)
         proper = bestiary[cid]["name"]
         if spec is None or not (spec.get("name") or "").strip():
@@ -216,6 +220,27 @@ def test_world_suffix_carries_no_text_clause() -> None:
     assert "no text" in suffix and "no caption" in suffix, (
         "world positive_suffix lost the no-text/no-caption cleanup clause — "
         "under the derived-source model this is the ONLY place it layers in"
+    )
+
+
+def test_creature_specs_reference_real_bestiary_ids() -> None:
+    """158-61, AC2 — the converse leg of referential integrity. Room bindings
+    check room→bestiary (``test_all_room_bindings_reference_real_bestiary_ids``
+    in the sibling room-binding file) and bestiary→spec is covered by
+    ``test_every_low_tagged_bestiary_entry_is_renderable`` above; nothing
+    walked spec→bestiary. Under ADR-155 ``bestiary.yaml`` is the single source
+    of truth for creature-image production and ``creatures.yaml`` is an
+    optional per-field OVERRIDE — an override spec whose id resolves to no
+    bestiary entry overrides nothing, renders no plate, and raises no
+    complaint. Per No Silent Fallbacks that must fail at author time, not
+    surface later as a portrait that quietly isn't the one someone wrote."""
+    specs, _ = _creatures_manifest()
+    bestiary = _bestiary_entries_by_id()
+    dangling = sorted(cid for cid in specs if cid not in bestiary)
+    assert not dangling, (
+        f"creatures.yaml override spec(s) reference unknown bestiary ids: "
+        f"{dangling} — an override with no matching bestiary entry silently "
+        "overrides nothing"
     )
 
 

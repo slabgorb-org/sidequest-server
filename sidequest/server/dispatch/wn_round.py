@@ -55,6 +55,7 @@ from sidequest.protocol.messages import (
     MutationRefusedMessage,
     MutationRefusedPayload,
 )
+from sidequest.protocol.sanitize import sanitize_player_text
 from sidequest.server.dispatch.downed_seam import DiceDispatchError
 from sidequest.telemetry.spans import (
     wn_dead_premise_span,
@@ -584,11 +585,29 @@ def run_wn_round(
         # the ``awn.mutation.refused`` span above already fired unchanged.
         if application.mutation_refusal is not None:
             refusal = application.mutation_refusal
+            # Reviewer round 1 [HIGH][SEC]: on the ``unknown_mutation`` reason —
+            # and ONLY that reason, since the other three have already passed
+            # ``catalog.positive_by_id`` — ``refusal.mutation_id`` is the raw,
+            # unvalidated ``DiceThrowPayload.mutation_id`` straight off the wire.
+            # It used to reach ``encounter.narrator_hints`` unsanitized, and
+            # ``narrator_hints`` reaches the narrator prompt UNSANITIZED via
+            # ``render_encounter_summary`` — the same ADR-047 choke-point
+            # ``fate_conflict.py`` applies at every client-text->narrator_hints
+            # seam (``sanitize_player_text``, imported above). Sanitize ONCE here
+            # and reuse the sanitized values for BOTH the broadcast payload and the
+            # narrator hint so a connected client and the narrator prompt see the
+            # same defanged text. ``refusal.actor`` is sanitized too, for parity
+            # with ``fate_conflict.py``'s posture of sanitizing every sealed
+            # player-authored field, not just the one that broke. ``refusal.reason``
+            # is NOT sanitized — it is server-computed (a fixed guard token or the
+            # use_ops-built usage ledger string) and never carries raw client text.
+            sanitized_actor = sanitize_player_text(refusal.actor)
+            sanitized_mutation_id = sanitize_player_text(refusal.mutation_id)
             messages.append(
                 MutationRefusedMessage(
                     payload=MutationRefusedPayload(
-                        actor=refusal.actor,
-                        mutation_id=refusal.mutation_id,
+                        actor=sanitized_actor,
+                        mutation_id=sanitized_mutation_id,
                         reason=refusal.reason,
                     ),
                     player_id="server",
@@ -597,9 +616,10 @@ def run_wn_round(
             # MECHANICAL-TRUTH hint (the same idiom as dead premise / item use /
             # the ADR-139 liveness gate above): the beat's own narrator_hint
             # ("The mutation manifests visibly...") would otherwise reach the
-            # narrator unopposed and narrate a power that never fired.
+            # narrator unopposed and narrate a power that never fired. Sanitized
+            # values only — see the sanitization note above.
             encounter.narrator_hints.append(
-                f"MECHANICAL TRUTH: {refusal.actor}'s mutation {refusal.mutation_id} "
+                f"MECHANICAL TRUTH: {sanitized_actor}'s mutation {sanitized_mutation_id} "
                 f"was REFUSED ({refusal.reason}) and did NOT manifest. Do not "
                 "narrate the power firing or any effect from it; narrate the "
                 "attempt failing or fizzling instead."

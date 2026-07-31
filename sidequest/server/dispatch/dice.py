@@ -78,7 +78,10 @@ from sidequest.protocol.messages import (
     ConfrontationPayload,
     DiceRequestMessage,
     DiceResultMessage,
+    MutationRefusedMessage,
+    MutationRefusedPayload,
 )
+from sidequest.protocol.sanitize import sanitize_player_text
 from sidequest.protocol.types import Stat
 from sidequest.server.ability_invocation_telemetry import (
     emit_ability_invocation_unrouted,
@@ -104,6 +107,7 @@ from sidequest.server.dispatch.downed_seam import (
     physical_save_target_for as _physical_save_target_for,
 )
 from sidequest.telemetry.spans import (
+    awn_mutation_refused_span,
     combat_tick_span,
     emit_dice_request_sent,
     emit_dice_result_broadcast,
@@ -682,6 +686,80 @@ def dispatch_dice_throw(
                 f"{cdef.confrontation_type!r} — the AWN mutation spine has no "
                 "opposed-check arm; author the mutation beat on a "
                 "beat_selection/hp_depletion confrontation (No Silent Fallbacks)"
+            )
+
+        # Story 158-58: catalog MEMBERSHIP is checked HERE, before any state
+        # mutation — seal_wn_commit runs later in this function, mirroring the
+        # cast guard's validate-before-seal ordering above. Unlike the cast
+        # guard, an unknown mutation_id does NOT raise: DiceDispatchError only
+        # ever reaches the THROWING socket as a technical dump (see
+        # handlers/dice_throw.py's ``_error_msg(f"Dice throw failed: {exc}")``)
+        # — the rest of the table sees nothing, which is the exact silence bug
+        # story 158-57 shipped to fix. This guard's own comment two blocks up
+        # already classifies not_owned/limit_exhausted/strain_over_max as
+        # "valid requests the spine refuses-but-records on
+        # awn.mutation.refused" — unknown_mutation is the same class of thing
+        # (a catalog miss, not a request-shape bug), so it gets the same
+        # refuse-and-record treatment, just moved earlier so the id is never
+        # sealed (SM ruling, .session/158-58-session.md: "Shape A —
+        # refuse-and-broadcast, no seal, no raise"). MEMBERSHIP ONLY: a
+        # catalog-known mutation the PC merely doesn't own must still seal and
+        # defer its ownership/economy refusal to the round walk unchanged —
+        # this check must never reach into ownership, usage, or Strain.
+        catalog = getattr(pack, "mutations", None)
+        if catalog is None:
+            raise DiceDispatchError(
+                f"mutation beat {payload.beat_id!r} committed on ruleset "
+                f"{pack.rules.ruleset if pack and pack.rules else None!r} but "
+                "the pack ships no mutations catalog (pack data bug — "
+                "CLAUDE.md 'no silent fallback')"
+            )
+        try:
+            catalog.positive_by_id(payload.mutation_id)
+        except KeyError:
+            # 158-57's sanitize_player_text layer stays — this dispatch-time
+            # guard is a fresh client-text seam (ADR-047) now that the check
+            # runs before the round walk, not a replacement for it.
+            from sidequest.server.dispatch.wn_round import (
+                _SANITIZED_EMPTY_PLACEHOLDER,
+            )
+
+            sanitized_actor = (
+                sanitize_player_text(character_name) or _SANITIZED_EMPTY_PLACEHOLDER
+            )
+            sanitized_mutation_id = (
+                sanitize_player_text(payload.mutation_id) or _SANITIZED_EMPTY_PLACEHOLDER
+            )
+            awn_mutation_refused_span(
+                actor=character_name,
+                mutation_id=payload.mutation_id,
+                reason="unknown_mutation",
+            )
+            if room_broadcast is not None:
+                room_broadcast(
+                    MutationRefusedMessage(
+                        payload=MutationRefusedPayload(
+                            actor=sanitized_actor,
+                            mutation_id=sanitized_mutation_id,
+                            reason="unknown_mutation",
+                        ),
+                        player_id="server",
+                    )
+                )
+            encounter.narrator_hints.append(
+                f"MECHANICAL TRUTH: {sanitized_actor}'s mutation "
+                f"{sanitized_mutation_id} was REFUSED (unknown_mutation) and "
+                "did NOT manifest. Do not narrate the power firing or any "
+                "effect from it; narrate the attempt failing or fizzling "
+                "instead."
+            )
+            return DiceThrowOutcome(
+                replay_action_text=(
+                    f"[MUTATION REFUSED] {sanitized_actor}'s mutation attempt "
+                    f"({sanitized_mutation_id}) was refused: unknown_mutation."
+                ),
+                outcome=RollOutcome.Fail,
+                encounter_resolved=encounter.resolved,
             )
 
     # Ability-invocation decline evidence (sq-playtest 2026-06-07 Reroute

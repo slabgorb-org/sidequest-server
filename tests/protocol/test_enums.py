@@ -219,6 +219,14 @@ def test_message_type_character_incapacitated_wire_string() -> None:
     assert MessageType.CHARACTER_INCAPACITATED == "CHARACTER_INCAPACITATED"
 
 
+def test_message_type_mutation_refused_wire_string() -> None:
+    """Story 158-57 — the player-facing mirror of the ``awn.mutation.refused``
+    OTEL span. Broadcast by the WN sealed round walk when a committed AWN
+    mutation use did not apply (not_owned/limit_exhausted/strain_over_max from
+    use_ops, or unknown_mutation from the pre-spine catalog guard)."""
+    assert MessageType.MUTATION_REFUSED == "MUTATION_REFUSED"
+
+
 def test_message_type_complete_count() -> None:
     """All 56 GameMessage variants must be represented.
 
@@ -296,10 +304,14 @@ def test_message_type_complete_count() -> None:
     non-roll FATE_ACTION verbs. Intentional addition; bumped 57 → 58.
     ADR-148/149 (story 126-8) added FATE_DEFEND_REQUEST — the server→client prompt
     at the DEFEND barrier; intentional addition, bumped 58 → 59.
+    Story 158-57 added MUTATION_REFUSED — the player-facing mirror of the
+    awn.mutation.refused OTEL span (the GM panel already saw it; the table
+    did not). Broadcast by the WN sealed round walk, additive to the
+    unchanged span; intentional addition, bumped 59 → 60.
     When new variants land, update this count and the individual wire-string
     test above so the contract test keeps catching silent drift.
     """
-    assert len(MessageType) == 59
+    assert len(MessageType) == 60
 
 
 # ===========================================================================

@@ -49,7 +49,13 @@ from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.pack import GenrePack
 from sidequest.genre.models.rules import BeatDef, ConfrontationDef
 from sidequest.protocol.dice import RollOutcome
-from sidequest.protocol.messages import DiceRequestMessage, DiceResultMessage
+from sidequest.protocol.messages import (
+    DiceRequestMessage,
+    DiceResultMessage,
+    MutationRefusedMessage,
+    MutationRefusedPayload,
+)
+from sidequest.protocol.sanitize import sanitize_player_text
 from sidequest.server.dispatch.downed_seam import DiceDispatchError
 from sidequest.telemetry.spans import (
     wn_dead_premise_span,
@@ -60,6 +66,12 @@ from sidequest.telemetry.spans import (
 from sidequest.telemetry.watcher_hub import publish_event as _watcher_publish
 
 logger = logging.getLogger(__name__)
+
+# Story 158-57 / Reviewer round 3 [LOW]: what a fully-injection actor name or
+# mutation_id becomes after ``sanitize_player_text`` strips it to nothing. Never
+# interpolate the empty string in its place — "Rux's  was refused" reads as a
+# bug, not as evidence the sanitizer worked. This reads as deliberate.
+_SANITIZED_EMPTY_PLACEHOLDER = "«redacted by input sanitization»"
 
 
 def seal_wn_commit(
@@ -569,6 +581,70 @@ def run_wn_round(
             )
             messages.append(
                 DiceResultMessage(payload=application.damage_result_payload, player_id="server")
+            )
+        # Story 158-57: a committed AWN mutation that did NOT apply — surface
+        # it to the table. This is the ONLY seam that sees a refusal sealed in
+        # one player's dispatch and resolved at ANOTHER's (the MP barrier):
+        # ``application`` comes from THIS slot's walk regardless of which
+        # dispatch call closed the barrier, so PC A's refusal reaches the room
+        # even when PC B's throw is what fired the round. Purely additive —
+        # the ``awn.mutation.refused`` span above already fired unchanged.
+        if application.mutation_refusal is not None:
+            refusal = application.mutation_refusal
+            # Reviewer round 1 [HIGH][SEC]: on the ``unknown_mutation`` reason —
+            # and ONLY that reason, since the other three have already passed
+            # ``catalog.positive_by_id`` — ``refusal.mutation_id`` is the raw,
+            # unvalidated ``DiceThrowPayload.mutation_id`` straight off the wire.
+            # It used to reach ``encounter.narrator_hints`` unsanitized, and
+            # ``narrator_hints`` reaches the narrator prompt UNSANITIZED via
+            # ``render_encounter_summary`` — the same ADR-047 choke-point
+            # ``fate_conflict.py`` applies at every client-text->narrator_hints
+            # seam (``sanitize_player_text``, imported above). Sanitize ONCE here
+            # and reuse the sanitized values for BOTH the broadcast payload and the
+            # narrator hint so a connected client and the narrator prompt see the
+            # same defanged text. ``refusal.actor`` is sanitized too, for parity
+            # with ``fate_conflict.py``'s posture of sanitizing every sealed
+            # player-authored field, not just the one that broke. ``refusal.reason``
+            # is NOT sanitized — it is server-computed (a fixed guard token or the
+            # use_ops-built usage ledger string) and never carries raw client text.
+            #
+            # Reviewer round 3 [LOW]: an all-injection id (e.g. "<system></system>")
+            # sanitizes to "" — rendering "Rux's  was refused" (a double space and
+            # a missing noun), which reads as a typo, not a redaction.
+            # ``fate_conflict.py``'s flavor-rider seam hits the identical
+            # empty-after-sanitize case and gates the append on it explicitly
+            # rather than emitting broken text — but THIS seam cannot simply skip
+            # the append the way that COLOR-only rider can: dropping the refusal
+            # would silently re-introduce the exact table-gets-silence bug this
+            # story exists to end. So a loud, honest placeholder takes the empty
+            # string's place instead (No Silent Fallbacks — a sanitized-to-nothing
+            # field must read as such, not as a typo). Applied to BOTH fields for
+            # the same reason: an all-injection actor name would leave the
+            # identical missing-noun shape on the OTHER side of the "'s".
+            sanitized_actor = sanitize_player_text(refusal.actor) or _SANITIZED_EMPTY_PLACEHOLDER
+            sanitized_mutation_id = (
+                sanitize_player_text(refusal.mutation_id) or _SANITIZED_EMPTY_PLACEHOLDER
+            )
+            messages.append(
+                MutationRefusedMessage(
+                    payload=MutationRefusedPayload(
+                        actor=sanitized_actor,
+                        mutation_id=sanitized_mutation_id,
+                        reason=refusal.reason,
+                    ),
+                    player_id="server",
+                )
+            )
+            # MECHANICAL-TRUTH hint (the same idiom as dead premise / item use /
+            # the ADR-139 liveness gate above): the beat's own narrator_hint
+            # ("The mutation manifests visibly...") would otherwise reach the
+            # narrator unopposed and narrate a power that never fired. Sanitized
+            # values only — see the sanitization note above.
+            encounter.narrator_hints.append(
+                f"MECHANICAL TRUTH: {sanitized_actor}'s mutation {sanitized_mutation_id} "
+                f"was REFUSED ({refusal.reason}) and did NOT manifest. Do not "
+                "narrate the power firing or any effect from it; narrate the "
+                "attempt failing or fizzling instead."
             )
         _emit_player_beat_resolution_close(
             encounter=encounter,

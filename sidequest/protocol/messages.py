@@ -1634,6 +1634,38 @@ class CharacterIncapacitatedMessage(ProtocolBase):
     player_id: str = ""
 
 
+class MutationRefusedPayload(ProtocolBase):
+    """A committed AWN mutation use did NOT apply — the player-facing mirror
+    of the ``awn.mutation.refused`` OTEL span (story 158-57).
+
+    The GM panel already sees every refusal on the span; the table did not.
+    ``reason`` carries the mechanics-first math verbatim as computed by
+    ``use_ops.use_mutation`` (e.g. ``"limit_exhausted (per_day: 1/1)"``) rather
+    than a bare verdict re-derived at this surface.
+    """
+
+    actor: str
+    """WHO was refused — the acting PC's name."""
+    mutation_id: str
+    """WHICH mutation was refused — the catalog id (or the unrecognized id
+    named on an ``unknown_mutation`` refusal)."""
+    reason: str
+    """WHY — the refusal reason, including the economy math when applicable."""
+
+
+class MutationRefusedMessage(ProtocolBase):
+    """GameMessage::MutationRefused — player-facing mutation-refusal surface.
+
+    Broadcast alongside the WN sealed round's other slot messages (story
+    102-4's ``wn_round.py`` walk) so a refusal sealed in one player's dispatch
+    and resolved at another's (the MP barrier) still reaches the room.
+    """
+
+    type: Literal[MessageType.MUTATION_REFUSED] = MessageType.MUTATION_REFUSED
+    payload: MutationRefusedPayload
+    player_id: str = ""
+
+
 # ---------------------------------------------------------------------------
 # SITE_MAP — Track B site-map frame (story 164-4; was DUNGEON_MAP, the
 # Beneath Sünden BETTER-fix seam-3 message — renamed in the Task 8 cutover,
@@ -1873,6 +1905,7 @@ _Phase1Variant = Annotated[
     | FateStateMessage
     | FateRollMessage
     | CharacterIncapacitatedMessage
+    | MutationRefusedMessage
     | SiteMapMessage
     | JournalRequestMessage
     | JournalResponseMessage

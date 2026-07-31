@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from sidequest.genre.models.world import CartographyConfig
     from sidequest.genre.names.generator import NameGenerator
     from sidequest.magic.confrontations import ConfrontationDefinition
+    from sidequest.mutation.use_ops import UseMutationResult
     from sidequest.server.session_room import SessionRoom
 
 # Story 153-21: the procedural dungeon entrance anchor — the don't-clobber guard
@@ -599,7 +600,7 @@ def _resolve_mutation_for_beat(
     actor,
     snapshot,
     pack,
-) -> None:
+) -> UseMutationResult:
     """Story 102-7 — drive ``use_mutation`` for a ``mutation_resolution`` beat.
 
     The AWN Plan 2 §6.3 wiring: a beat carrying the marker routes through the
@@ -608,10 +609,18 @@ def _resolve_mutation_for_beat(
     ``spell_id`` pattern. Mirrors ``_resolve_wwn_cast_for_beat``'s guard
     idiom: every miss is LOUD (an ``awn.mutation.refused`` span the GM panel
     can see), never a silent fall-through to bare narration.
+
+    Story 158-57: every branch now RETURNS a ``UseMutationResult`` (never
+    discards it) so the dice-path caller can thread the refusal reason —
+    including the pre-spine ``unknown_mutation`` catalog miss, which never
+    reaches ``use_ops`` — to a player-facing surface. This function's own
+    callers are unaffected: the narrator route (``apply_narration``) already
+    ignores the return value, and threading its player-facing parity is a
+    separate follow-up (out of scope here).
     """
     from sidequest.game.ruleset.awn import AwnRulesetModule
     from sidequest.game.ruleset.registry import get_ruleset_module
-    from sidequest.mutation.use_ops import use_mutation
+    from sidequest.mutation.use_ops import UseMutationResult, use_mutation
     from sidequest.telemetry.spans.awn import awn_mutation_refused_span
 
     mutation_id = getattr(sel, "mutation_id", None)
@@ -619,37 +628,59 @@ def _resolve_mutation_for_beat(
         # The pre-wiring bug shape: a mutation beat with no mutation named.
         # Mirror of magic.cast_spell_no_spell_id — loud, inert.
         awn_mutation_refused_span(actor=actor.name, mutation_id="", reason="beat_no_mutation_id")
-        return
+        return UseMutationResult(
+            applied=False, actor=actor.name, mutation_id="", reason="beat_no_mutation_id"
+        )
     catalog = getattr(pack, "mutations", None)
     state = snapshot.mutation_state
     if catalog is None or state is None:
         awn_mutation_refused_span(
             actor=actor.name, mutation_id=mutation_id, reason="no_mutation_surface"
         )
-        return
+        return UseMutationResult(
+            applied=False,
+            actor=actor.name,
+            mutation_id=mutation_id,
+            reason="no_mutation_surface",
+        )
     rules = getattr(pack, "rules", None)
     module = get_ruleset_module(rules.ruleset) if rules is not None else None
     if not isinstance(module, AwnRulesetModule):
         awn_mutation_refused_span(
             actor=actor.name, mutation_id=mutation_id, reason="non_awn_ruleset"
         )
-        return
+        return UseMutationResult(
+            applied=False,
+            actor=actor.name,
+            mutation_id=mutation_id,
+            reason="non_awn_ruleset",
+        )
     core = snapshot.find_creature_core(actor.name)
     if core is None:
         awn_mutation_refused_span(actor=actor.name, mutation_id=mutation_id, reason="no_actor_core")
-        return
+        return UseMutationResult(
+            applied=False,
+            actor=actor.name,
+            mutation_id=mutation_id,
+            reason="no_actor_core",
+        )
     try:
         catalog.positive_by_id(mutation_id)
     except KeyError:
         awn_mutation_refused_span(
             actor=actor.name, mutation_id=mutation_id, reason="unknown_mutation"
         )
-        return
+        return UseMutationResult(
+            applied=False,
+            actor=actor.name,
+            mutation_id=mutation_id,
+            reason="unknown_mutation",
+        )
 
     # v1 save handling matches the use_mutation tool: the narrator narrates
     # the target's save from the returned save_stat; opposed-save dice wiring
     # rides the dice protocol in a later plan. "fail" applies the full effect.
-    use_mutation(
+    return use_mutation(
         state=state,
         catalog=catalog,
         module=module,

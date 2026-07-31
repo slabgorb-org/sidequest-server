@@ -62,6 +62,7 @@ from sidequest.game.session import GameSnapshot
 from sidequest.game.status import status_roll_modifier
 from sidequest.genre.models.pack import GenrePack
 from sidequest.genre.models.rules import BeatDef, ConfrontationDef, ResolutionMode
+from sidequest.mutation.use_ops import UseMutationResult
 from sidequest.protocol.dice import (
     DiceRequestPayload,
     DiceResultPayload,
@@ -1556,6 +1557,14 @@ class _PlayerBeatApplication:
     shock_hp_removed: int
     damage_request_payload: DiceRequestPayload | None
     damage_result_payload: DiceResultPayload | None
+    mutation_refusal: UseMutationResult | None = None
+    """Story 158-57: set when this beat carried an AWN mutation commit that did
+    NOT apply (``UseMutationResult.applied is False``) — from either
+    ``use_ops`` (not_owned/limit_exhausted/strain_over_max) or the pre-spine
+    catalog guard (unknown_mutation). ``None`` on every non-mutation beat AND
+    on a mutation that applied successfully (AC 3 — no phantom refusals).
+    The WN round walk (``wn_round.py``) is the only reader: it turns this into
+    a player-facing broadcast frame + narrator hint."""
 
 
 def _resolve_wn_committed_action(
@@ -2063,11 +2072,19 @@ def _apply_committed_player_beat(
     # ``awn.mutation.refused`` by the spine itself — engagement, never
     # silence. Function-level import: narration_apply is a heavy module and
     # dispatch must not pull it at import time.
+    #
+    # Story 158-57: the result is CAPTURED (not discarded) so a refusal can be
+    # surfaced to the player. ``mutation_result`` is applied=True on a
+    # successful use, applied=False on any of the four refusal reasons
+    # (not_owned / limit_exhausted / strain_over_max from use_ops,
+    # unknown_mutation from the pre-spine catalog guard) — one field, both
+    # origins, threaded through ``_PlayerBeatApplication`` below.
+    mutation_result: UseMutationResult | None = None
     if _is_awn_mutation_beat(beat, pack):
         from sidequest.agents.orchestrator import BeatSelection
         from sidequest.server.narration_apply import _resolve_mutation_for_beat
 
-        _resolve_mutation_for_beat(
+        mutation_result = _resolve_mutation_for_beat(
             sel=BeatSelection(
                 actor=actor.name,
                 beat_id=beat_id,
@@ -2142,6 +2159,9 @@ def _apply_committed_player_beat(
         shock_hp_removed=shock_hp_removed,
         damage_request_payload=damage_request_payload,
         damage_result_payload=damage_result_payload,
+        mutation_refusal=(
+            mutation_result if mutation_result is not None and not mutation_result.applied else None
+        ),
     )
 
 

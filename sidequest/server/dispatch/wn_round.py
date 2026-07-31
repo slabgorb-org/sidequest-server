@@ -49,7 +49,12 @@ from sidequest.game.session import GameSnapshot
 from sidequest.genre.models.pack import GenrePack
 from sidequest.genre.models.rules import BeatDef, ConfrontationDef
 from sidequest.protocol.dice import RollOutcome
-from sidequest.protocol.messages import DiceRequestMessage, DiceResultMessage
+from sidequest.protocol.messages import (
+    DiceRequestMessage,
+    DiceResultMessage,
+    MutationRefusedMessage,
+    MutationRefusedPayload,
+)
 from sidequest.server.dispatch.downed_seam import DiceDispatchError
 from sidequest.telemetry.spans import (
     wn_dead_premise_span,
@@ -569,6 +574,35 @@ def run_wn_round(
             )
             messages.append(
                 DiceResultMessage(payload=application.damage_result_payload, player_id="server")
+            )
+        # Story 158-57: a committed AWN mutation that did NOT apply — surface
+        # it to the table. This is the ONLY seam that sees a refusal sealed in
+        # one player's dispatch and resolved at ANOTHER's (the MP barrier):
+        # ``application`` comes from THIS slot's walk regardless of which
+        # dispatch call closed the barrier, so PC A's refusal reaches the room
+        # even when PC B's throw is what fired the round. Purely additive —
+        # the ``awn.mutation.refused`` span above already fired unchanged.
+        if application.mutation_refusal is not None:
+            refusal = application.mutation_refusal
+            messages.append(
+                MutationRefusedMessage(
+                    payload=MutationRefusedPayload(
+                        actor=refusal.actor,
+                        mutation_id=refusal.mutation_id,
+                        reason=refusal.reason,
+                    ),
+                    player_id="server",
+                )
+            )
+            # MECHANICAL-TRUTH hint (the same idiom as dead premise / item use /
+            # the ADR-139 liveness gate above): the beat's own narrator_hint
+            # ("The mutation manifests visibly...") would otherwise reach the
+            # narrator unopposed and narrate a power that never fired.
+            encounter.narrator_hints.append(
+                f"MECHANICAL TRUTH: {refusal.actor}'s mutation {refusal.mutation_id} "
+                f"was REFUSED ({refusal.reason}) and did NOT manifest. Do not "
+                "narrate the power firing or any effect from it; narrate the "
+                "attempt failing or fizzling instead."
             )
         _emit_player_beat_resolution_close(
             encounter=encounter,

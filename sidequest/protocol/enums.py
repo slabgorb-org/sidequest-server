@@ -170,6 +170,13 @@ class MessageType(StrEnum):
     # death banner / re-roll CTA. The server-side turn-intake gate is the
     # authority — this message is the player-facing mirror.
     CHARACTER_INCAPACITATED = "CHARACTER_INCAPACITATED"
+    # Story 158-57: a committed AWN mutation use did NOT apply (not_owned,
+    # limit_exhausted, strain_over_max, unknown_mutation). The GM panel already
+    # sees this on the awn.mutation.refused OTEL span (additive, unchanged); this
+    # is the player-facing mirror — the refused table learns WHO, WHICH mutation,
+    # and WHY, with the mechanical math (e.g. "limit_exhausted (per_day: 1/1)")
+    # carried verbatim in ``reason`` rather than re-derived at the UI.
+    MUTATION_REFUSED = "MUTATION_REFUSED"
 
 
 class NarratorVerbosity(StrEnum):

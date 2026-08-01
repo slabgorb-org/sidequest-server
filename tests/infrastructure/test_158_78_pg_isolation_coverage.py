@@ -106,10 +106,7 @@ def test_no_test_runs_with_the_developer_database_bound() -> None:
 # --- AC-2: the shared helpers must not reuse one session slug ---------------
 
 
-def test_pg_store_with_does_not_reuse_a_single_session_slug(
-    migrated_db: str,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_pg_store_with_does_not_reuse_a_single_session_slug(pg_isolation: None) -> None:
     """Two ``pg_store_with()`` calls must not silently clobber each other.
 
     The helper defaults to ``slug="tool-test"`` for every caller, so two
@@ -122,26 +119,11 @@ def test_pg_store_with_does_not_reuse_a_single_session_slug(
     ``tests/integration/test_mutation_wiring.py`` already models the fix: a
     unique ``wiring-{uuid4}`` slug per store.
     """
-    import psycopg
-
-    from sidequest.game import db_pool
     from sidequest.game.character import Character
     from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
     from sidequest.game.session import GameSnapshot
     from sidequest.game.turn import TurnManager
     from tests.agents.tools.conftest import pg_store_with
-
-    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
-    with psycopg.connect(plain, autocommit=True) as conn:
-        rows = conn.execute(
-            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
-            "AND tablename <> 'alembic_version'"
-        ).fetchall()
-        if rows:
-            names = ", ".join(f'"{r[0]}"' for r in rows)
-            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
-    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
-    db_pool.close_pool()
 
     def _snapshot(genre: str, world: str, who: str) -> GameSnapshot:
         core = CreatureCore(
@@ -178,8 +160,6 @@ def test_pg_store_with_does_not_reuse_a_single_session_slug(
         f"second call silently overwrote the first. Give each store a unique "
         f"slug, as tests/integration/test_mutation_wiring.py already does."
     )
-
-    db_pool.close_pool()
 
 
 # --- AC-3: wiring — the offending modules survive a real parallel run -------

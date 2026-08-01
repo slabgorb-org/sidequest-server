@@ -17,6 +17,10 @@ Postgres-backed store. Nothing tool-side is mocked: this is the production tool
 walk. The advertised toolset is also asserted to expose ``wn_attack`` under the
 production ``mcp__narration__`` allowed-tools shape ``complete_with_tools``
 builds.
+
+This module lives OUTSIDE tests/agents/tools/, so it does not inherit that
+directory's autouse Postgres isolation — it must request it explicitly (story
+158-78; see the module-level ``_isolate_pg`` fixture below).
 """
 
 from __future__ import annotations
@@ -43,6 +47,16 @@ from sidequest.game.creature_core import CreatureCore, HpPool, Inventory
 from sidequest.game.session import GameSnapshot
 from sidequest.game.turn import TurnManager
 from sidequest.genre.models.rules import WwnConfig
+
+
+@pytest.fixture(autouse=True)
+def _isolate_pg(pg_isolation: None) -> None:
+    """Story 158-78: this module uses the ``pg_store_with`` helper but sits
+    outside ``tests/agents/tools/``, so it does not inherit that directory's
+    autouse isolation. Without this it bound the developer's real database and
+    raced every other unisolated worker on a shared session slug.
+    """
+
 
 # --- WWN fixture world -------------------------------------------------------
 

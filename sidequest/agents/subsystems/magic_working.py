@@ -572,8 +572,18 @@ async def _run_awn_freeplay_mutation(
         )
 
     # v1 save handling matches the use_mutation tool: the narrator narrates
-    # the target's save from the returned save_stat; opposed-save dice wiring
-    # rides the dice protocol in a later plan.
+    # the target's save from the returned save_stat. Story 158-59 wired a
+    # real opposed save on the dice path (narration_apply.py's
+    # _resolve_mutation_for_beat), but deliberately NOT here: ``target``
+    # above is unvalidated free text from the router (``dispatch.params``)
+    # with no seam that resolves it to a CreatureCore/ability-score block —
+    # there is no defender to compute save_params against. Faking a save off
+    # no stats would be the same homebrew-math failure ADR-143 forbids, so
+    # this stays a flat "fail" (158-59 Delivery Finding: this route needs
+    # its own defender-resolution seam, tracked separately). Because it is
+    # always "fail", use_ops's save.effect honouring never engages here
+    # either — the "Effect: {effect}" line below still narrates the full
+    # effect, which is honest given the save can never be recorded as won.
     result = use_mutation(
         state=state,
         catalog=catalog,

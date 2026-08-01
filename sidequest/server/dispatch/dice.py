@@ -724,9 +724,7 @@ def dispatch_dice_throw(
                 _SANITIZED_EMPTY_PLACEHOLDER,
             )
 
-            sanitized_actor = (
-                sanitize_player_text(character_name) or _SANITIZED_EMPTY_PLACEHOLDER
-            )
+            sanitized_actor = sanitize_player_text(character_name) or _SANITIZED_EMPTY_PLACEHOLDER
             sanitized_mutation_id = (
                 sanitize_player_text(payload.mutation_id) or _SANITIZED_EMPTY_PLACEHOLDER
             )
@@ -1798,6 +1796,32 @@ def _apply_committed_player_beat(
     is already resolved — ``outcome_tier`` is the tier the dice produced at
     commit time. Request-shape validation (cast spell_id, stat) happened
     before any mutation, at dispatch."""
+    # Story 158-59 review round 2 [HIGH]: retire THIS actor's stale
+    # negated-save narrator hint before the beat resolves. The hint is a
+    # standing instruction ("do not narrate the mutation's effect landing")
+    # that is only true for the turn that produced it, and nothing on the
+    # WN/dice path clears ``narrator_hints``. Purging inside
+    # ``_resolve_mutation_for_beat`` alone would only cover mutate-then-mutate;
+    # here it also covers mutate-then-punch, which is what scopes the hint to
+    # one turn. Actor-keyed, so a sealed MP round (this function runs once per
+    # commit in ``wn_round.py``'s walk) cannot drop another player's hint from
+    # the same round. Inert for every non-AWN pack — no matching hint can exist
+    # — and inert on the overwhelmingly common path where none is standing.
+    # Both dispatch branches reach it: the sealed WN walk and the legacy
+    # ``dice.py`` else-branch both come through this function.
+    from sidequest.server.narration_apply import _drop_stale_negated_save_hints
+
+    _stale_hints_dropped = _drop_stale_negated_save_hints(encounter, actor.name)
+    if _stale_hints_dropped:
+        from sidequest.telemetry.spans.awn import awn_mutation_save_hint_span
+
+        awn_mutation_save_hint_span(
+            actor=actor.name,
+            mutation_id=mutation_id or "",
+            op="dropped_stale",
+            count=_stale_hints_dropped,
+        )
+
     damage_request_payload: DiceRequestPayload | None = None
     damage_result_payload: DiceResultPayload | None = None
     shock_hp_removed = 0
@@ -2153,10 +2177,16 @@ def _apply_committed_player_beat(
     #
     # Story 158-57: the result is CAPTURED (not discarded) so a refusal can be
     # surfaced to the player. ``mutation_result`` is applied=True on a
-    # successful use, applied=False on any of the four refusal reasons
-    # (not_owned / limit_exhausted / strain_over_max from use_ops,
-    # unknown_mutation from the pre-spine catalog guard) — one field, both
-    # origins, threaded through ``_PlayerBeatApplication`` below.
+    # successful use and applied=False on any refusal reason, from either of
+    # two origins — one field, both origins, threaded through
+    # ``_PlayerBeatApplication`` below. ``use_ops`` contributes three
+    # (not_owned / limit_exhausted / strain_over_max); ``_resolve_mutation_for_
+    # beat``'s own pre-spine guards contribute eight (beat_no_mutation_id /
+    # no_mutation_surface / non_awn_ruleset / no_actor_core / unknown_mutation
+    # / pc_defender_save_not_server_rollable / no_resolvable_defender /
+    # defender_missing_ability_scores). That function's docstring is the
+    # authoritative list — this comment is a pointer, not a second source of
+    # truth.
     mutation_result: UseMutationResult | None = None
     if _is_awn_mutation_beat(beat, pack):
         from sidequest.agents.orchestrator import BeatSelection
@@ -2172,6 +2202,8 @@ def _apply_committed_player_beat(
             actor=actor,
             snapshot=snapshot,
             pack=pack,
+            encounter=encounter,
+            cdef=cdef,
         )
 
     own_delta = apply_result.deltas.own if apply_result.deltas else 0

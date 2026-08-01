@@ -594,12 +594,78 @@ def _resolve_wwn_cast_for_beat(
         )
 
 
+def _negated_save_hint_lead(actor_name: str) -> str:
+    """The stable, actor-keyed lead of this module's negated-save hint.
+
+    Story 158-59 review round 2 [HIGH]: the MECHANICAL TRUTH line appended for
+    a won save is a STANDING INSTRUCTION ("do not narrate the effect landing"),
+    unlike every sibling hint in ``narrator_hints``, which states a fact about
+    an event. Its truth expires with the turn that produced it, and the WN/dice
+    path never clears the list — so one round later it asserts the opposite of
+    what the engine resolved. ``_drop_stale_negated_save_hints`` retires it, and
+    this function is the discriminator both sides share.
+
+    Two properties are load-bearing:
+
+    * **Built and matched from the same f-string.** The emit site composes the
+      hint from this lead; the purge site matches on it. They cannot drift.
+    * **Keyed by ACTOR, and sanitized here.** A sealed WN round applies every
+      committed player's beat in one walk (``wn_round.py``'s loop over commits),
+      so an unkeyed purge would let PC B's beat drop PC A's hint from the same
+      round. The name is run through ``sanitize_player_text`` *inside* the lead
+      so the purge key is byte-identical to what was emitted — the callers pass
+      raw names and never have to remember to sanitize.
+
+    A pathological character name could in principle forge another actor's lead
+    and cause that actor's hint to be dropped. That direction is fail-safe: the
+    narrator loses a true line, it is never handed a false one.
+    """
+    from sidequest.protocol.sanitize import sanitize_player_text
+    from sidequest.server.dispatch.wn_round import _SANITIZED_EMPTY_PLACEHOLDER
+
+    safe_actor = sanitize_player_text(actor_name) or _SANITIZED_EMPTY_PLACEHOLDER
+    return f"MECHANICAL TRUTH: the save against {safe_actor}'s mutation "
+
+
+def _drop_stale_negated_save_hints(encounter, actor_name: str) -> int:
+    """Retire ``actor_name``'s negated-save hint from a prior turn. Returns the
+    number dropped (0 on the overwhelmingly common path).
+
+    Called from two places, deliberately, because the hint has two producers:
+
+    * the top of ``_resolve_mutation_for_beat`` — covers BOTH entry points
+      (the dice path and ``apply_narration``'s beat loop), so a second mutation
+      use can never leave the first use's verdict standing beside it;
+    * the per-selection loop of each route that APPLIES a beat — the top of
+      ``dice.py::_apply_committed_player_beat`` and ``apply_narration``'s own
+      ``for sel in selections`` walk. These extend the scope from "until this
+      actor next uses a mutation" to "until this actor next acts at all", which
+      is the turn-scoping review round 2 asked for. Without them,
+      mutate-then-punch leaves the hint standing over an unrelated beat.
+
+    This does NOT touch the shared ``narrator_hints`` lifecycle: the other six
+    WN-path append sites are untouched, and their (pre-existing, reviewer-filed)
+    unbounded accumulation is 158-82 territory, not this story's.
+    """
+    lead = _negated_save_hint_lead(actor_name)
+    hints = encounter.narrator_hints
+    kept = [h for h in hints if not h.startswith(lead)]
+    dropped = len(hints) - len(kept)
+    if dropped:
+        # Mutate in place — ``narrator_hints`` is appended to by seven sites
+        # that all hold the same list object.
+        hints[:] = kept
+    return dropped
+
+
 def _resolve_mutation_for_beat(
     *,
     sel,
     actor,
     snapshot,
     pack,
+    encounter,
+    cdef,
 ) -> UseMutationResult:
     """Story 102-7 — drive ``use_mutation`` for a ``mutation_resolution`` beat.
 
@@ -617,11 +683,58 @@ def _resolve_mutation_for_beat(
     callers are unaffected: the narrator route (``apply_narration``) already
     ignores the return value, and threading its player-facing parity is a
     separate follow-up (out of scope here).
+
+    Story 158-59 — the target actually saves. ``encounter``/``cdef`` are now
+    required so the DEFENDER's saving throw can be resolved: the sole
+    authority is ``WithoutNumberRulesetModule.save_params`` on the BOUND
+    module (ADR-143 — bind the ruleset, don't balance it), server-rolled per
+    ADR-074 because the common defender is an NPC with no client to throw. A
+    defender that resolves to a SEATED PC is refused loudly instead — ADR-074
+    cuts both ways, and there is no live client-thrown WN save to route a
+    PC's saving throw into yet (158-59 Delivery Findings; same
+    refuse-until-a-story-defines-it precedent as 158-54's opposed_check).
+
+    Refusal reasons this function can return, all of them LOUD
+    (``awn.mutation.refused``) and all of them BEFORE any Strain is debited:
+    ``beat_no_mutation_id``, ``no_mutation_surface``, ``non_awn_ruleset``,
+    ``no_actor_core``, ``unknown_mutation``,
+    ``pc_defender_save_not_server_rollable`` (158-59),
+    ``no_resolvable_defender`` (158-59, review round 2), and
+    ``defender_missing_ability_scores`` (158-59, review round 2). ``use_ops``
+    contributes three more of its own (``not_owned``, ``limit_exhausted``,
+    ``strain_over_max``) on the returned result.
+
+    SIDE EFFECT — this function WRITES TO ``encounter.narrator_hints``. Review
+    round 2 [DOC]: that is not incidental to the function's contract and hiding
+    it here is how an unbounded append escaped notice. On entry it retires this
+    actor's stale negated-save hint (``_drop_stale_negated_save_hints``); on a
+    won save against a ``negates`` mutation it appends a fresh one. Both
+    transitions emit ``awn.mutation.save_hint`` so the GM panel can see the
+    hint's lifecycle rather than inferring it from the prose.
     """
     from sidequest.game.ruleset.awn import AwnRulesetModule
     from sidequest.game.ruleset.registry import get_ruleset_module
-    from sidequest.mutation.use_ops import UseMutationResult, use_mutation
-    from sidequest.telemetry.spans.awn import awn_mutation_refused_span
+    from sidequest.mutation.use_ops import SaveResult, UseMutationResult, use_mutation
+    from sidequest.protocol.sanitize import sanitize_player_text
+    from sidequest.server.dispatch.wn_round import _SANITIZED_EMPTY_PLACEHOLDER
+    from sidequest.telemetry.spans.awn import awn_mutation_refused_span, awn_mutation_save_hint_span
+    from sidequest.telemetry.spans.wn import wn_save_resolved_span
+
+    # Retire this actor's negated-save hint from a PRIOR turn before resolving
+    # anything: whatever verdict this call reaches, last turn's standing
+    # instruction is no longer true. Runs ahead of every guard below so a
+    # REFUSED use also clears it — a refusal means the mutation did not fire at
+    # all, which makes "narrate the save holding" just as wrong as a lost save
+    # does. See ``_drop_stale_negated_save_hints`` for why the purge is
+    # actor-keyed (multiplayer sealed rounds) and why it lives in two places.
+    _dropped = _drop_stale_negated_save_hints(encounter, actor.name)
+    if _dropped:
+        awn_mutation_save_hint_span(
+            actor=actor.name,
+            mutation_id=str(getattr(sel, "mutation_id", None) or ""),
+            op="dropped_stale",
+            count=_dropped,
+        )
 
     mutation_id = getattr(sel, "mutation_id", None)
     if not mutation_id:
@@ -655,6 +768,10 @@ def _resolve_mutation_for_beat(
             mutation_id=mutation_id,
             reason="non_awn_ruleset",
         )
+    # module is AwnRulesetModule only when rules was not None (see the
+    # ternary above) — narrow explicitly so pyright doesn't flag every
+    # rules.ruleset_config() below as an Optional access.
+    assert rules is not None
     core = snapshot.find_creature_core(actor.name)
     if core is None:
         awn_mutation_refused_span(actor=actor.name, mutation_id=mutation_id, reason="no_actor_core")
@@ -665,7 +782,7 @@ def _resolve_mutation_for_beat(
             reason="no_actor_core",
         )
     try:
-        catalog.positive_by_id(mutation_id)
+        md = catalog.positive_by_id(mutation_id)
     except KeyError:
         awn_mutation_refused_span(
             actor=actor.name, mutation_id=mutation_id, reason="unknown_mutation"
@@ -677,10 +794,126 @@ def _resolve_mutation_for_beat(
             reason="unknown_mutation",
         )
 
-    # v1 save handling matches the use_mutation tool: the narrator narrates
-    # the target's save from the returned save_stat; opposed-save dice wiring
-    # rides the dice protocol in a later plan. "fail" applies the full effect.
-    return use_mutation(
+    # The defender is derived from the encounter STRUCTURE — the same
+    # ``_opposite_side_first_actor`` idiom the strike/cast/shock paths use —
+    # not trusted from a narrator/client-supplied free-text field, because a
+    # save's defender is a mechanical fact, not a narration choice.
+    from sidequest.game.beat_kinds import _opposite_side_first_actor
+
+    target_name = _opposite_side_first_actor(encounter, actor.side) or ""
+
+    # 158-59: a save-vs mutation requires resolving the DEFENDER's saving
+    # throw BEFORE any cost is paid. Review round 1 [HIGH]: the defender-core
+    # and ability-score checks used to live INSIDE the save_resolver closure,
+    # which use_ops only calls AFTER Strain is already debited — a miss there
+    # raised an uncaught ValueError (not DiceDispatchError), so the player
+    # paid Strain, got no OTEL span, and the exception escaped straight to
+    # the websocket handler's disconnect path. Every guard below now runs
+    # HERE, before ``use_mutation`` is ever called, mirroring the
+    # PC-defender refusal shape immediately above it: refuse loud
+    # (``awn.mutation.refused``), pay no Strain, never raise. This also
+    # means a defender-resolution miss inherits 158-57's player-facing
+    # refusal frame (``wn_round.py``'s ``mutation_refusal`` threading) for
+    # free, same as every other refusal reason in this function.
+    defender_core = None
+    defender_stats: dict[str, int] | None = None
+    if md.save is not None and md.save.stat is not None:
+        pc_defender = next((c for c in snapshot.characters if c.core.name == target_name), None)
+        if pc_defender is not None:
+            awn_mutation_refused_span(
+                actor=actor.name,
+                mutation_id=mutation_id,
+                reason="pc_defender_save_not_server_rollable",
+            )
+            return UseMutationResult(
+                applied=False,
+                actor=actor.name,
+                mutation_id=mutation_id,
+                reason="pc_defender_save_not_server_rollable",
+            )
+        # No live actor on the opposite side at all — reachable in ordinary
+        # play: a sole opponent that broke and ran (narrator-named
+        # disengagement sets ``EncounterActor.withdrawn = True`` without
+        # resolving the encounter) leaves ``_opposite_side_first_actor``
+        # with nothing to return, so ``target_name == ""``. Nobody to save
+        # against is a refusal, not a crash.
+        defender_core = snapshot.find_creature_core(target_name)
+        if defender_core is None:
+            awn_mutation_refused_span(
+                actor=actor.name,
+                mutation_id=mutation_id,
+                reason="no_resolvable_defender",
+            )
+            return UseMutationResult(
+                applied=False,
+                actor=actor.name,
+                mutation_id=mutation_id,
+                reason="no_resolvable_defender",
+            )
+        # The opponent core exists but the confrontation authored no ability
+        # scores to save with (No Silent Fallbacks — never default the
+        # modifier to 0 and call that a save).
+        defender_stats = cdef.opponent_ability_scores()
+        if not defender_stats:
+            awn_mutation_refused_span(
+                actor=actor.name,
+                mutation_id=mutation_id,
+                reason="defender_missing_ability_scores",
+            )
+            return UseMutationResult(
+                applied=False,
+                actor=actor.name,
+                mutation_id=mutation_id,
+                reason="defender_missing_ability_scores",
+            )
+
+    def _save_resolver(stat: str, target: str) -> SaveResult:
+        # NPC defender only (a PC defender is refused above); defender_core
+        # and defender_stats are already resolved and validated above — this
+        # closure computes the roll, it does not re-validate (both guards
+        # live before use_mutation is called, never inside here, so a miss
+        # can never reach this point having already spent Strain). Server-
+        # side roll per ADR-074. The sole authority is
+        # ``WithoutNumberRulesetModule.save_params`` on the BOUND module
+        # (ADR-143 — bind the ruleset, don't balance it): no invented
+        # threshold, no converted die, no gate on the actor's own roll.
+        #
+        # COUPLING (review round 2 [RULE][SILENT], advisory): these two asserts
+        # hold only because the guard above gates on the SAME condition
+        # ``use_ops`` gates its ``save_resolver`` call on —
+        # ``md.save is not None and md.save.stat is not None`` at :720 here,
+        # ``use_ops.py:118`` there. The two lines are textually identical and
+        # share no helper, so editing either one alone silently desyncs them:
+        # ``defender_stats=None`` would reach ``_stat`` as an uncaught
+        # ``AttributeError`` AFTER Strain is spent (the round-1 bug class with a
+        # worse exception type), and ``defender_core=None`` would make
+        # ``status_roll_modifier`` return 0 — a silent, wrong, plausible save.
+        # If you change the gate in either file, change it in both.
+        assert defender_core is not None
+        assert defender_stats is not None
+        params = module.save_params(
+            stats=defender_stats,
+            save=stat,
+            level=int(getattr(defender_core, "level", 1) or 1),
+            label=f"{stat} save",
+            cfg=rules.ruleset_config(),
+            character_core=defender_core,
+        )
+        d20 = random.randint(1, params.sides)
+        success = (d20 + params.modifier) >= params.difficulty
+        wn_save_resolved_span(
+            slug=module.slug,
+            actor=target,
+            save=stat,
+            effect=mutation_id,
+            target=params.difficulty,
+            d20=d20,
+            modifier=params.modifier,
+            success=success,
+        )
+        return "success" if success else "fail"
+
+    result = use_mutation(
         state=state,
         catalog=catalog,
         module=module,
@@ -688,9 +921,81 @@ def _resolve_mutation_for_beat(
         core=core,
         actor=actor.name,
         mutation_id=mutation_id,
-        target_id=getattr(sel, "target", None) or "",
-        save_resolver=lambda stat, target: "fail",
+        target_id=target_name,
+        save_resolver=_save_resolver,
     )
+
+    # Review round 2 (SM SCOPE RULING follow-up): a successful save that
+    # negates the effect changes nothing the table can see unless the
+    # narrator is told — use_ops already blanks ``result.effect`` on a
+    # negated success, but nothing downstream ever read it (dice.py only
+    # threads ``mutation_result`` onward when ``not applied``; wn_round.py
+    # only reads ``mutation_refusal``). Reuse the EXACT MECHANICAL-TRUTH
+    # narrator-hint idiom 158-57 established for refusals (same seam,
+    # same precedent) so the narrator cannot write a full-effect hit over a
+    # save the defender won.
+    #
+    # The gate reads ``md.save.effect == "negates"`` — the SAME condition
+    # ``use_ops`` blanks the effect on — rather than inferring the negation
+    # from the blanked ``result.effect == ""``. ``UseMutationResult.effect``
+    # defaults to ``""`` and is copied from ``md.effect``, so an empty
+    # authored effect is indistinguishable from a negated one; a mutation
+    # with no ``effect`` text and a ``half`` save would otherwise earn a hint
+    # asserting a negation that never happened. Reviewer round 1 flagged that
+    # stringly-typed overload as non-blocking for ``magic_working``; it is not
+    # safe to build a MECHANICAL TRUTH claim on. A "half"/"partial"
+    # ``SaveVs.effect`` is still NOT honoured (158-82, out of scope) — those
+    # mutations land at full effect on a successful save, and claiming
+    # otherwise here would be the same Illusionism failure in the other
+    # direction, so they get no hint.
+    #
+    # ADR-047 sanitization (review round 2 [HIGH][SEC]). ``narrator_hints``
+    # reaches the narrator prompt UNSANITIZED via ``render_encounter_summary``
+    # (``encounter_render.py:44`` -> ``session_helpers.py:660``), so this is the
+    # prompt-injection choke point and every player-influenced field crossing it
+    # must be defanged. ``wn_round.py:624`` sanitizes these EXACT two fields
+    # before building its own MECHANICAL TRUTH hint into this same list; this
+    # seam now matches it, including the empty-after-sanitize placeholder (an
+    # all-injection name sanitizes to "", which would otherwise render as a
+    # missing noun that reads like a typo rather than a redaction).
+    #
+    # Both names need it, and an earlier version of this comment was wrong to
+    # say otherwise: the *lookup* is structural (``target_name`` comes from
+    # ``_opposite_side_first_actor`` reading ``enc.actors``, never a wire
+    # field), but the NAME ITSELF is not server-minted. An opponent seat
+    # originates as the intent router's free-text ``dispatch.params["opponent"]``
+    # (``agents/subsystems/confrontation.py``); ``encounter_lifecycle.py``
+    # canonicalizes it only on a roster hit and otherwise leaves it "untouched"
+    # (its own comment, :2163), and the bestiary-generics seat builds
+    # ``CreatureCore(name=actor.name, ...)`` (:565) taking only STATS from the
+    # authored row while keeping the router's string. ``actor.name`` is a
+    # player-authored PC name, stored unsanitized at chargen
+    # (``game/builder.py:3508``).
+    #
+    # ``mutation_id`` is the one field that needs no sanitizing: this branch is
+    # reachable only when ``catalog.positive_by_id`` resolved above, so it is a
+    # validated catalog key, not the raw wire value that makes ``wn_round.py``'s
+    # ``unknown_mutation`` hint sanitize. ``result.save_stat`` is a closed
+    # catalog enum.
+    #
+    # The actor's name is sanitized inside ``_negated_save_hint_lead`` rather
+    # than here, so the emitted text and the purge key are the same bytes.
+    negated = md.save is not None and md.save.effect == "negates"
+    if result.applied and result.save_result == "success" and negated:
+        safe_target = sanitize_player_text(target_name) or _SANITIZED_EMPTY_PLACEHOLDER
+        encounter.narrator_hints.append(
+            _negated_save_hint_lead(actor.name) + f"{mutation_id} SUCCEEDED — {safe_target} made "
+            f"their {result.save_stat} save and the effect was negated. Do not "
+            "narrate the mutation's effect landing — narrate the save holding "
+            "instead."
+        )
+        awn_mutation_save_hint_span(
+            actor=actor.name,
+            mutation_id=mutation_id,
+            op="emitted",
+            count=1,
+        )
+    return result
 
 
 def _all_opponents_mindless(opp_actors, pack: GenrePack | None) -> bool:
@@ -7066,6 +7371,26 @@ def _apply_narration_result_to_snapshot(
                 actor = enc.find_actor(sel.actor)
                 if actor is None:
                     raise ValueError(f"unknown actor {sel.actor!r} in beat selection")
+                # Story 158-59 review round 2 [HIGH]: the narrator route's twin
+                # of the purge at the top of ``dice.py::_apply_committed_player_
+                # beat``. Both routes reach ``_resolve_mutation_for_beat``, so
+                # both can emit the negated-save hint — and the hint is a
+                # standing instruction that expires with the turn that made it.
+                # Purging inside the resolver alone would only retire it when
+                # the SAME actor uses another mutation; doing it here retires it
+                # whenever that actor takes any beat at all, which is the
+                # turn-scoping the review asked for. Actor-keyed so one actor's
+                # selection cannot drop another's hint from the same narration.
+                _stale = _drop_stale_negated_save_hints(enc, actor.name)
+                if _stale:
+                    from sidequest.telemetry.spans.awn import awn_mutation_save_hint_span
+
+                    awn_mutation_save_hint_span(
+                        actor=actor.name,
+                        mutation_id=str(getattr(sel, "mutation_id", None) or ""),
+                        op="dropped_stale",
+                        count=_stale,
+                    )
                 beat = beat_by_id.get(sel.beat_id)
                 if beat is None:
                     if (
@@ -7240,6 +7565,8 @@ def _apply_narration_result_to_snapshot(
                         actor=actor,
                         snapshot=snapshot,
                         pack=pack,
+                        encounter=enc,
+                        cdef=cdef,
                     )
 
                 # ─── B/X morale per-beat hook (Task 9, architect feedback

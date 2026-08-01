@@ -123,6 +123,54 @@ def awn_mutation_refused_span(
         pass
 
 
+SPAN_AWN_MUTATION_SAVE_HINT = "awn.mutation.save_hint"
+SPAN_ROUTES[SPAN_AWN_MUTATION_SAVE_HINT] = SpanRoute(
+    event_type="state_transition",
+    component="awn",
+    extract=lambda span: {
+        "field": "mutation",
+        "actor": (span.attributes or {}).get("actor", ""),
+        "mutation_id": (span.attributes or {}).get("mutation_id", ""),
+        "op": (span.attributes or {}).get("op", ""),
+        "count": (span.attributes or {}).get("count", 0),
+    },
+)
+
+
+def awn_mutation_save_hint_span(
+    *,
+    actor: str,
+    mutation_id: str,
+    op: str,
+    count: int,
+    _tracer: trace.Tracer | None = None,
+    **attrs: Any,
+) -> None:
+    """The negated-save MECHANICAL TRUTH narrator hint's lifecycle.
+
+    Story 158-59 review round 2 [HIGH]: that hint is a *standing instruction*
+    ("do not narrate the effect landing"), so it is only true for the turn that
+    produced it — and the WN/dice path never clears ``narrator_hints``. A hint
+    left standing into the next round tells the narrator to narrate the OPPOSITE
+    of what ``awn.mutation.used`` recorded, and nothing surfaced the divergence.
+    This span is that surface: ``op="emitted"`` when a won save adds the hint,
+    ``op="dropped_stale"`` when the actor's next beat retires it. Pair it with
+    ``awn.mutation.used``'s ``save_result`` on the GM panel — an ``emitted``
+    with no matching ``dropped_stale`` before the next ``used`` is the lie
+    this story exists to prevent.
+    """
+    attributes: dict[str, Any] = {
+        "field": "mutation",
+        "actor": actor,
+        "mutation_id": mutation_id,
+        "op": op,
+        "count": count,
+        **attrs,
+    }
+    with Span.open(SPAN_AWN_MUTATION_SAVE_HINT, attributes, tracer_override=_tracer):
+        pass
+
+
 SPAN_AWN_MUTATION_MP_SPEND = "awn.mutation.mp_spend"
 SPAN_ROUTES[SPAN_AWN_MUTATION_MP_SPEND] = SpanRoute(
     event_type="state_transition",

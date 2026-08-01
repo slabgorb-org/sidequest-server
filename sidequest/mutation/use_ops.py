@@ -132,6 +132,19 @@ def use_mutation(
         save_stat=save_stat or "",
         save_result=save_result or "",
     )
+
+    # Story 158-59 (SM SCOPE RULING): honour ``SaveVs.effect`` on a
+    # successful save. "negates" is the only value with unambiguous
+    # semantics in this catalog — the effect simply does not land, so the
+    # player-facing surface (magic_working's "Effect: {effect}" narrator
+    # line) must not describe it happening. "half"/"partial" are NOT
+    # handled here: there is no numeric quantity on ``PositiveMutationDef``
+    # to derive a reduced effect from, and inventing one would be exactly
+    # the homebrew-math ADR-143 forbids. See the 158-59 Design Deviations.
+    landed_effect = md.effect
+    if save_result == "success" and md.save is not None and md.save.effect == "negates":
+        landed_effect = ""
+
     return UseMutationResult(
         applied=True,
         actor=actor,
@@ -140,5 +153,5 @@ def use_mutation(
         uses_remaining=uses_remaining,
         save_stat=save_stat,
         save_result=save_result,
-        effect=md.effect,
+        effect=landed_effect,
     )

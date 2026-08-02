@@ -15,6 +15,54 @@ import yaml
 
 
 @pytest.fixture(autouse=True)
+def _no_ambient_database_url(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Story 158-78: no test may inherit the developer's real Postgres database.
+
+    ``db_pool.get_pool()`` resolves ``SIDEQUEST_DATABASE_URL`` through
+    ``db_config.database_url()``. A developer shell (and ``just server``) exports
+    that variable pointing at the REAL ``sidequest`` database, so *any* test that
+    reached for Postgres without first binding an isolated database silently read
+    and wrote real saves. That is how 1,938 junk ``test-*``/``tool-test`` sessions
+    accumulated in the live database — and, because every xdist worker then shared
+    that one database, how those tests clobbered each other's session rows and
+    turned the default ``-n auto`` gate red.
+
+    This redirects the variable to the same per-worker throwaway database
+    ``migrated_db`` builds, so the whole suite lands on an isolated database
+    whether or not a test remembered to bind one. Twenty tests turned out to be
+    relying on the ambient value (the two that import ``pg_store_with`` from
+    outside ``tests/agents/tools/``, plus eighteen under ``tests/server/`` that
+    reach Postgres through the app); redirecting keeps them working while taking
+    the real database out of reach.
+
+    ``migrated_db`` is session-scoped, so the CREATE DATABASE + ``alembic upgrade
+    head`` cost is paid once per xdist worker, not per test; ``getfixturevalue``
+    defers it so it is only paid on workers that actually run.
+
+    Tests needing a *clean* database per test additionally request
+    ``pg_isolation`` below, which truncates and resets the pool.
+
+    No Silent Fallbacks: when no test Postgres is configured at all there is no
+    safe database to redirect to, so the variable is stripped instead and the
+    first pool access fails loud with ``MissingDatabaseUrlError`` rather than
+    quietly falling back to the developer's real one.
+
+    This is the Postgres analogue of ``_isolate_monster_manuals`` (story 162-1),
+    which keeps the suite out of the developer's real ``~/.sidequest``.
+    """
+    if not os.environ.get(_PG_ADMIN_ENV):
+        monkeypatch.delenv("SIDEQUEST_DATABASE_URL", raising=False)
+        return
+    target: str = request.getfixturevalue("migrated_db")
+    monkeypatch.setenv(
+        "SIDEQUEST_DATABASE_URL",
+        target.replace("postgresql+psycopg://", "postgresql://", 1),
+    )
+
+
+@pytest.fixture(autouse=True)
 def _reset_cost_safety_ledger() -> Iterator[None]:
     """Story 91-4: the cross-call-site cost ledger
     (``sidequest.agents.cost_safety``) is process-global by design — one
@@ -297,6 +345,42 @@ def migrated_db(worker_id: str) -> Iterator[str]:
                 (db_name,),
             )
             conn.execute(f'DROP DATABASE IF EXISTS "{db_name}"')
+
+
+@pytest.fixture
+def pg_isolation(migrated_db: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Bind the process-global pool to a per-worker throwaway db, clean per test.
+
+    Story 158-78: this was previously an autouse fixture private to
+    ``tests/agents/tools/conftest.py``, living next to the ``pg_store_with`` /
+    ``pg_empty_store`` helpers it makes safe. Autouse fixtures are
+    **directory-scoped**, so a module one level up that did
+    ``from tests.agents.tools.conftest import pg_store_with`` imported the helper
+    function and silently left its isolation behind. Hoisted here so any test in
+    the suite can request the same isolation the helpers require, wherever it
+    lives.
+
+    ADR-115 F1: the tool tests persist a snapshot, invoke a tool that mutates +
+    saves, then reload to assert the mutation stuck — a real ``PgSaveRepository``
+    over an isolated Postgres database.
+    """
+    import psycopg
+
+    from sidequest.game import db_pool
+
+    plain = migrated_db.replace("postgresql+psycopg://", "postgresql://", 1)
+    with psycopg.connect(plain, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+            "AND tablename <> 'alembic_version'"
+        ).fetchall()
+        if rows:
+            names = ", ".join(f'"{r[0]}"' for r in rows)
+            conn.execute(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+    monkeypatch.setenv("SIDEQUEST_DATABASE_URL", plain)
+    db_pool.close_pool()
+    yield
+    db_pool.close_pool()
 
 
 @pytest.fixture

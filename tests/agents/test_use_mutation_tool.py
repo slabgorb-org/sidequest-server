@@ -8,6 +8,10 @@ delegates to sidequest.mutation.use_ops.use_mutation — all rules live there.
 Harness mirrored from tests/agents/tools/test_adjust_system_strain_tool.py:
 same fixtures (pg_store_with, pg_empty_store), same ToolContext construction,
 same registry-bypass invocation pattern.
+
+This module lives OUTSIDE tests/agents/tools/, so it does not inherit that
+directory's autouse Postgres isolation — it must request it explicitly (story
+158-78; see the module-level ``_isolate_pg`` fixture below).
 """
 
 from __future__ import annotations
@@ -42,6 +46,16 @@ from sidequest.mutation.models import (
     StigmaTables,
 )
 from sidequest.mutation.state import CharacterMutationState, MutationState
+
+
+@pytest.fixture(autouse=True)
+def _isolate_pg(pg_isolation: None) -> None:
+    """Story 158-78: this module uses the ``pg_store_with``/``pg_empty_store``
+    helpers but sits outside ``tests/agents/tools/``, so it does not inherit that
+    directory's autouse isolation. Without this it bound the developer's real
+    database and raced every other unisolated worker on a shared session slug.
+    """
+
 
 # ---------------------------------------------------------------------------
 # Attribute map required by AwnConfig
